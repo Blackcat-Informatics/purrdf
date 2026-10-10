@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against a77b743bcc6f (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/xsd/src/exact/decimal.rs'.
+Recorded resolution for 'crates/xsd/src/exact/integer.rs'.
+[paudley/499-entailment-prepare-schema-invariant b40c598a6] Merge main's admitted native owners into schema-bound preparation

@@ -1,0 +1,5 @@
+CodeQL alert240 is declined as a false positive after independent source review. The flagged sink is the ignored, test-only seal_schema_vectors generator writing deliberately public proof/check fixture bytes; fixed cases() example.org inputs supply the certificate and proof-premise count. It is not a production logging path or secret-bearing input.
+
+The CodeRabbit docstring percentage warning is also declined as a nonbinding heuristic. The new public preparation budget, statistics, retry, obstruction and proof APIs document their behavior and typed refusal contracts. The percentage counts private functions and fixture code among309 touched functions without identifying an undocumented public contract. Adding boilerplate to satisfy that separate80% heuristic would not establish a missing API guarantee. Concrete documentation findings remain actionable; none is open in the current review.
+
+These feedback dispositions do not establish hosted acceptance or issue closure. Required final-head checks must finish successfully before protected integration.

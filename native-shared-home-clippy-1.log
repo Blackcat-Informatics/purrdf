@@ -1,0 +1,9 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/validate)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 22.17s

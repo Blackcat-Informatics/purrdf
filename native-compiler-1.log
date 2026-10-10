@@ -1,0 +1,129 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+    Checking hybrid-array v0.4.15
+   Compiling libc v0.2.186
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+    Checking regex-automata v0.4.14
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/deflate)
+    Checking digest v0.11.3
+    Checking hashbrown v0.17.1
+    Checking sha2 v0.11.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/iri)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/testkit)
+    Checking regex v1.12.4
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+    Checking crossbeam-epoch v0.9.18
+error[E0603]: module `storage` is private
+  --> crates/xsd/src/range/storage.rs:9:58
+   |
+ 9 | use crate::bigint::{LimbScratchError, scratch::Allocate, storage::Mag};
+   |                                                          ^^^^^^^  --- enum `Mag` is not publicly re-exported
+   |                                                          |
+   |                                                          private module
+   |
+note: the module `storage` is defined here
+  --> crates/xsd/src/bigint.rs:16:1
+   |
+16 | mod storage;
+   | ^^^^^^^^^^^^
+
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/stack)
+   Compiling rayon-core v1.13.0
+    Checking crossbeam-deque v0.8.6
+    Checking either v1.16.0
+    Checking inout v0.2.2
+    Checking rayon v1.12.0
+    Checking cmov v0.5.4
+error[E0599]: no method named `mul_pow10_using` found for reference `&bigint::BigInt` in the current scope
+   --> crates/xsd/src/exact/decimal.rs:599:44
+    |
+599 |                 .with_bigint(|value| value.mul_pow10_using(other.scale - self.scale, storage))?;
+    |                                            ^^^^^^^^^^^^^^^
+    |
+help: there is a method `mul_pow10_in` with a similar name
+    |
+599 -                 .with_bigint(|value| value.mul_pow10_using(other.scale - self.scale, storage))?;
+599 +                 .with_bigint(|value| value.mul_pow10_in(other.scale - self.scale, storage))?;
+    |
+
+error[E0599]: no method named `mul_pow10_using` found for reference `&bigint::BigInt` in the current scope
+   --> crates/xsd/src/exact/decimal.rs:604:44
+    |
+604 |                 .with_bigint(|value| value.mul_pow10_using(self.scale - other.scale, storage))?;
+    |                                            ^^^^^^^^^^^^^^^
+    |
+help: there is a method `mul_pow10_in` with a similar name
+    |
+604 -                 .with_bigint(|value| value.mul_pow10_using(self.scale - other.scale, storage))?;
+604 +                 .with_bigint(|value| value.mul_pow10_in(self.scale - other.scale, storage))?;
+    |
+
+    Checking ctutils v0.4.2
+error[E0277]: expected an `FnMut(&T, &T, &mut range::storage::Memory<'_>)` closure, found `impl FnMut(&T, &T, &mut Self) -> Result<Ordering, StorageError>`
+   --> crates/xsd/src/range/storage.rs:185:52
+    |
+185 |             sift(values, root, values.len(), self, &mut compare)?;
+    |             ----                                   ^^^^^^^^^^^^ expected an `FnMut(&T, &T, &mut range::storage::Memory<'_>)` closure, found `impl FnMut(&T, &T, &mut Self) -> Result<Ordering, StorageError>`
+    |             |
+    |             required by a bound introduced by this call
+    |
+    = note: expected a closure with signature `for<'a, 'b, 'c, 'd> fn(&'a _, &'b _, &'c mut Memory<'d>)`
+               found a closure with signature `fn(&_, &_, &mut Memory<'a>)`
+note: required by a bound in `range::storage::Memory::<'a>::sort::sift`
+   --> crates/xsd/src/range/storage.rs:162:32
+    |
+157 |         fn sift<T>(
+    |            ---- required by a bound in this function
+...
+162 |             compare: &mut impl FnMut(&T, &T, &mut Memory<'_>) -> Result<Ordering, StorageError>,
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `sift`
+
+error[E0277]: expected an `FnMut(&T, &T, &mut range::storage::Memory<'_>)` closure, found `impl FnMut(&T, &T, &mut Self) -> Result<Ordering, StorageError>`
+   --> crates/xsd/src/range/storage.rs:189:40
+    |
+189 |             sift(values, 0, end, self, &mut compare)?;
+    |             ----                       ^^^^^^^^^^^^ expected an `FnMut(&T, &T, &mut range::storage::Memory<'_>)` closure, found `impl FnMut(&T, &T, &mut Self) -> Result<Ordering, StorageError>`
+    |             |
+    |             required by a bound introduced by this call
+    |
+    = note: expected a closure with signature `for<'a, 'b, 'c, 'd> fn(&'a _, &'b _, &'c mut Memory<'d>)`
+               found a closure with signature `fn(&_, &_, &mut Memory<'a>)`
+note: required by a bound in `range::storage::Memory::<'a>::sort::sift`
+   --> crates/xsd/src/range/storage.rs:162:32
+    |
+157 |         fn sift<T>(
+    |            ---- required by a bound in this function
+...
+162 |             compare: &mut impl FnMut(&T, &T, &mut Memory<'_>) -> Result<Ordering, StorageError>,
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `sift`
+
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+   Compiling getrandom v0.3.4
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking aes-gcm v0.11.1
+    Checking structured-zstd v0.0.49
+Some errors have detailed explanations: E0277, E0599, E0603.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-xsd` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/ed25519)
+    Checking visual-hashing v1.0.0
+error: could not compile `purrdf-xsd` (lib test) due to 5 previous errors

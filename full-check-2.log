@@ -1,0 +1,146 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/helper-census)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shex)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-eval)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/json)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/conformance-kit)
+error[E0599]: no method named `reserve` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:110:20
+    |
+110 |             memory.reserve(links, 1)?;
+    |                    ^^^^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `reserve` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `copy` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:111:32
+    |
+111 |             let frame = memory.copy(frame)?;
+    |                                ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `copy` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `reserve` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:138:24
+    |
+138 |                 memory.reserve(&mut support, 1)?;
+    |                        ^^^^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `reserve` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `copy` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:139:36
+    |
+139 |                 let frame = memory.copy(&link.application.frame)?;
+    |                                    ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `copy` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `copy` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:150:38
+    |
+150 |             let class_steps = memory.copy(&bounds.class_steps)?;
+    |                                      ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `copy` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `copy` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:153:66
+    |
+153 |                     super::bounds::QualifierProof::Object(memory.copy(steps)?)
+    |                                                                  ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `copy` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `copy` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:157:32
+    |
+157 |             let roles = memory.copy(&bounds.roles)?;
+    |                                ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `copy` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `copy` found for mutable reference `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:169:31
+    |
+169 |                 frame: memory.copy(frame)?,
+    |                               ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, !, fn() -> std::result::Result<(), !>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `copy` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `reserve` found for mutable reference `&mut owl_dl::bounds::Products<'_, E, impl FnMut() -> Result<(), E>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:180:12
+    |
+180 |     memory.reserve(&mut head, input.len())?;
+    |            ^^^^^^^ method not found in `&mut owl_dl::bounds::Products<'_, E, impl FnMut() -> Result<(), E>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `reserve` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+error[E0599]: no method named `push` found for mutable reference `&mut owl_dl::bounds::Products<'_, E, impl FnMut() -> Result<(), E>>` in the current scope
+   --> crates/entail/src/owl_dl/support.rs:200:16
+    |
+200 |         memory.push(&mut chain, (current.role, current.filler, current.index))?;
+    |                ^^^^ method not found in `&mut owl_dl::bounds::Products<'_, E, impl FnMut() -> Result<(), E>>`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `VecReserve` which provides `push` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use purrdf_lex::walk::VecReserve;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-entail` (lib) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:94: check] Error 101

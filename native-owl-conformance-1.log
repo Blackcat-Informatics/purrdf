@@ -1,0 +1,64 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/text)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/columnar)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/geo)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/markdown)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/mime)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/json)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/conformance-kit)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/retrieval)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 49.47s
+     Running tests/owl2_conformance.rs (/opt/purrdf-schema-499-qualification/build/debug/build/purrdf-sparql-conformance/0d590d683f01daa7/out/owl2_conformance-0d590d683f01daa7)
+
+running 5 tests
+test regenerate_ledger ... ignored, regeneration path: run explicitly after a re-vendor
+test ledger_names_only_vendored_cases ... ok
+test w3c_owl2_inventory ... ok
+test the_four_original_divergences_match_the_verbatim_published_cases ... ok
+[w3c-owl2] 226 consistency + 36 inconsistency cases (DL/tableau lane only; this corpus does NOT exercise the OWL 2 RL rule table)
+[w3c-owl2] ledgered gaps by construct:
+OWL2-ENTAILMENT: agreed 262 ledgered 0 unledgered 0 stale 0 total 262
+[w3c-owl2] this corpus vendors 262 of the 482 consistency-shaped cases upstream; the other 220 are NOT graded here
+[w3c-owl2] of those 220: 0 the tableau could not decide when probed (non-terminating under the ceiling), 172 it decided when probed, 25 it withheld on, 23 carry no RDF/XML premise — a recorded measurement read from census.tsv's dl_probe column, not a live run
+OWL2-DL-EXCLUDED: total 220 non-terminating 0 decides 172 withholds 25 no-premise 23
+test owl2_dl_consistency_conformance ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/owl2_rl_conformance.rs (/opt/purrdf-schema-499-qualification/build/debug/build/purrdf-sparql-conformance/299ea9c98e4c7e5f/out/owl2_rl_conformance-299ea9c98e4c7e5f)
+
+running 12 tests
+[w3c-census] 489 upstream otest:TestCase rows
+[w3c-census]   rl_corpus    direct-semantics-only    5
+[w3c-census]   rl_corpus          graded-negative   23
+[w3c-census]   rl_corpus          graded-positive   27
+[w3c-census]   rl_corpus        no-rdfxml-premise    3
+[w3c-census]   rl_corpus   not-an-entailment-test  260
+[w3c-census]   rl_corpus       outside-rl-profile  171
+[w3c-census]   dl_corpus                   graded  262
+[w3c-census]   dl_corpus   not-a-consistency-test    7
+[w3c-census]   dl_corpus             not-vendored  220
+test census_accounts_for_every_upstream_case ... ok
+[w3c-owl2-rl] base independence: 101 documents swept — 96 declare xml:base, 5 use only absolute IRIs
+test no_vendored_document_needs_the_harness_base ... ok
+test every_negative_case_is_answered_under_an_unexhausted_certificate ... ok
+test regenerate_mechanism_golden ... ignored, regeneration path: writes the committed golden render
+test regenerate_rl_ledger ... ignored, regeneration path: run explicitly after a re-vendor
+test rl_ledger_names_only_vendored_cases ... ok
+test the_mechanism_golden_render_matches ... ok
+test every_previously_ledgered_case_names_the_mechanism_that_closed_it ... ok
+test w3c_owl2_rl_inventory ... ok
+test no_case_diverges_from_the_published_verdict ... ok
+[w3c-owl2-rl] 27 positive + 23 negative entailment cases, graded through the OWL 2 RL chase (this corpus DOES exercise the RL rule table; the DL/tableau lane is graded by owl2_conformance.rs)
+[w3c-owl2-rl] ledgered gaps by construct:
+OWL2-RL-ENTAILMENT: agreed 50 ledgered 0 unledgered 0 stale 0 total 50 actionable 0
+OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 (refuted 3, admitted 20) strict-table 12/18 refutation 8/1 freeze 1/2 comprehension 2/2 reflexivity 1/0 data-range 3/0 composite 0/0 withheld 0
+OWL2-RL-NEGATIVE: total 23 = refuted 3 + admitted 20 (premise-outside-rl 5, conclusion-outside-rl 10, construct-not-read 5, refutation-budget 0, freeze-budget 0, data-range-containment 0) + unsound 0 + withheld 0
+test owl2_rl_entailment_conformance ... ok
+test the_non_rl_premises_are_named_and_answer_undecided ... ok
+
+test result: ok. 10 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.77s
+

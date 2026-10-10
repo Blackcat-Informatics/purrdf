@@ -1,0 +1,14 @@
+{
+  "schema": "purrdf-wasm-identity-abi-v1",
+  "registered_output": "/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/target/identity-transport.HHIQvO/compiler-target/build/wasm32-unknown-unknown/debug/build/purrdf-wasm/89441654407424ed/out/purrdf_wasm-89441654407424ed.wasm",
+  "private_target_directory": "/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/target/identity-transport.HHIQvO/compiler-target",
+  "private_build_directory": "/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/target/identity-transport.HHIQvO/compiler-target/build",
+  "cargo_fresh": false,
+  "wasm_sha256": "1ee11f62869a45a43c8c54b51bad326f62cd1135875ffdff2dbab2be748946f1",
+  "rustc": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)",
+  "typescript_identity_contract": "passed",
+  "node_actual_identity_abi": "passed",
+  "bindgen_wasm_sha256": "4a584cfe8777672cd1100843f60dc897d6b4686d90a8cd1fe972ec8cfc1d4bff",
+  "bindgen_js_sha256": "92457da00a5a297df624ab9d153106de0572f2d39e797b002896cddff6f7ce55",
+  "bindgen_types_sha256": "f17cd85d679e8b04187a1b9de35c4006cdb149c42b267c07b376004dd784989a"
+}

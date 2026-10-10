@@ -1,0 +1,418 @@
+diff --git crates/xsd/src/bigint.rs crates/xsd/src/bigint.rs
+index 209198dc3..b164cacdf 100644
+--- crates/xsd/src/bigint.rs
++++ crates/xsd/src/bigint.rs
+@@ -18,7 +18,7 @@ mod storage;
+ mod tower_tests;
+ use scratch::{Allocate, Unbounded};
+ pub use scratch::{LimbScratch, LimbScratchError};
+-use storage::Mag;
++pub(crate) use storage::Mag;
+ 
+ /// Number of decimal digits processed per limb-sized chunk.
+ ///
+@@ -1463,8 +1463,14 @@ impl BigInt {
+     /// # Errors
+     /// Returns checked layout or physical native destination refusal.
+     pub fn prepare_decimal_digits(&self) -> Result<PreparedDecimalDigits, LimbScratchError> {
++        self.prepare_decimal_digits_using(&scratch::Fallible)
++    }
++
++    pub(crate) fn prepare_decimal_digits_using(
++        &self,
++        storage: &impl Allocate,
++    ) -> Result<PreparedDecimalDigits, LimbScratchError> {
+         let layout = self.decimal_render_layout(0)?;
+-        let storage = scratch::Fallible;
+         let mut groups = storage.destination(layout.group_capacity(), 0)?;
+         if self.is_zero() {
+             storage.push(&mut groups, 0)?;
+@@ -1475,7 +1481,7 @@ impl BigInt {
+                 if current.is_empty() {
+                     break;
+                 }
+-                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, &storage)?;
++                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, storage)?;
+                 storage.push(&mut groups, remainder)?;
+                 quotient = Some(next);
+             }
+@@ -1566,7 +1572,8 @@ impl BigInt {
+     /// Multiply by an exact power of ten.
+     #[must_use]
+     pub fn mul_pow10(&self, exp: u32) -> Self {
+-        self.mul(&Self::pow10(exp))
++        self.mul_pow10_using(exp, &Unbounded)
++            .expect("unbounded integer storage")
+     }
+ 
+     pub(crate) fn mul_pow10_using(
+@@ -1581,7 +1588,7 @@ impl BigInt {
+     /// # Errors
+     /// Refuses scratch limb/destination exhaustion without allocating.
+     pub fn mul_pow10_in(&self, exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+-        self.mul_in(&Self::pow10_in(exp, scratch)?, scratch)
++        self.mul_pow10_using(exp, scratch)
+     }
+ 
+     /// Exact multiplication by a machine factor.
+diff --git crates/xsd/src/exact/decimal.rs crates/xsd/src/exact/decimal.rs
+index e85796281..99e72716a 100644
+--- crates/xsd/src/exact/decimal.rs
++++ crates/xsd/src/exact/decimal.rs
+@@ -1059,6 +1059,31 @@ impl Decimal {
+         )
+     }
+ 
++    /// The shared total order with every new magnitude in caller-owned storage.
++    pub(crate) fn cmp_using(
++        &self,
++        other: &Self,
++        storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Ordering, crate::bigint::LimbScratchError> {
++        cmp_parts_admitted_using(
++            &self.unscaled,
++            self.scale,
++            &other.unscaled,
++            other.scale,
++            storage,
++            &mut |_| Ok(()),
++        )
++    }
++
++    pub(crate) fn round_to_integer_using(
++        &self,
++        rounding: Rounding,
++        storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Integer, crate::bigint::LimbScratchError> {
++        self.round_admitted_using(0, rounding, storage, &mut |_| Ok(()))
++            .map(|value| value.unscaled)
++    }
++
+     // ----- resource governance ---------------------------------------------
+ 
+     /// The coefficient's size in binary `u64` limbs.
+@@ -1645,6 +1670,7 @@ fn shape_parts(coefficient: &Integer, scale: u32) -> cost::Shape {
+ fn exact_exponent_admitted(
+     coefficient: &Integer,
+     scale: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
+     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+ ) -> Result<i64, crate::bigint::LimbScratchError> {
+     use crate::bigint::LimbScratchError::SizeOverflow;
+@@ -1656,7 +1682,7 @@ fn exact_exponent_admitted(
+             layout.temporary_bytes(),
+             0,
+         )?)?;
+-        let groups = coefficient.prepare_decimal_digits()?;
++        let groups = coefficient.prepare_decimal_digits_using(storage)?;
+         u64::try_from(groups.digits_len()).map_err(|_| SizeOverflow)?
+     };
+     Ok(i64::try_from(digits).map_err(|_| SizeOverflow)? - i64::from(scale))
+@@ -1724,8 +1750,8 @@ fn cmp_parts_admitted_using(
+     } else if bl > ah {
+         Ordering::Less
+     } else {
+-        let a = exact_exponent_admitted(left, ls, admit)?;
+-        let b = exact_exponent_admitted(right, rs, admit)?;
++        let a = exact_exponent_admitted(left, ls, storage, admit)?;
++        let b = exact_exponent_admitted(right, rs, storage, admit)?;
+         match a.cmp(&b) {
+             Ordering::Equal => {
+                 admit(aligned_parts_layout(left, ls, right, rs)?)?;
+@@ -1753,7 +1779,7 @@ fn cmp_magnitude_binary_admitted_using(
+     storage: &impl crate::bigint::scratch::Allocate,
+     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+ ) -> Result<Ordering, crate::bigint::LimbScratchError> {
+-    let decimal_exponent = exact_exponent_admitted(unscaled, scale, admit)?;
++    let decimal_exponent = exact_exponent_admitted(unscaled, scale, storage, admit)?;
+     let binade = i64::from(significand.ilog2()) + i64::from(exponent);
+     if super::binary::log2_of_pow10(decimal_exponent) + 2 <= binade {
+         return Ok(Ordering::Less);
+@@ -2156,15 +2182,8 @@ impl fmt::Debug for Decimal {
+ 
+ impl Ord for Decimal {
+     fn cmp(&self, other: &Self) -> Ordering {
+-        cmp_parts_admitted_using(
+-            &self.unscaled,
+-            self.scale,
+-            &other.unscaled,
+-            other.scale,
+-            &crate::bigint::scratch::Unbounded,
+-            &mut |_| Ok(()),
+-        )
+-        .expect("unbounded integer storage")
++        self.cmp_using(other, &crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
+     }
+ }
+ 
+diff --git crates/xsd/src/exact/integer.rs crates/xsd/src/exact/integer.rs
+index c4351fcde..62def2d12 100644
+--- crates/xsd/src/exact/integer.rs
++++ crates/xsd/src/exact/integer.rs
+@@ -248,6 +248,13 @@ impl Integer {
+         self.with_bigint(BigInt::prepare_decimal_digits)
+     }
+ 
++    pub(crate) fn prepare_decimal_digits_using(
++        &self,
++        storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
++        self.with_bigint(|value| value.prepare_decimal_digits_using(storage))
++    }
++
+     /// Checked render layout including sign, point and fractional padding.
+     /// # Errors
+     /// Returns physical address-space overflow without allocation.
+diff --git crates/xsd/tests/range_storage.rs crates/xsd/tests/range_storage.rs
+new file mode 100644
+index 000000000..90d3fdfc9
+--- /dev/null
++++ crates/xsd/tests/range_storage.rs
+@@ -0,0 +1,246 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Native range allocation/refusal controls over independently known value sets.
++
++use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
++use purrdf_xsd::range::{
++    self, Cardinality, DataRange, Facet, Satisfiability, Storage, StorageError,
++};
++use purrdf_xsd::{XsdDatatype, XsdValue};
++
++#[global_allocator]
++static ALLOCATOR: CountingAllocator = CountingAllocator;
++
++#[derive(Default)]
++struct Owner {
++    ceiling: Option<usize>,
++    work_ceiling: Option<u64>,
++    work: u64,
++    live: usize,
++    peak: usize,
++    allocations: u64,
++    refused: bool,
++}
++impl Storage for Owner {
++    fn work(&mut self, operations: u64) -> Result<(), StorageError> {
++        let next = self
++            .work
++            .checked_add(operations)
++            .ok_or(StorageError::Allocation)?;
++        if self.refused || self.work_ceiling.is_some_and(|ceiling| next > ceiling) {
++            self.refused = true;
++            return Err(StorageError::Refused);
++        }
++        self.work = next;
++        Ok(())
++    }
++    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
++        if bytes > self.live
++            && (self.refused || self.ceiling.is_some_and(|ceiling| bytes > ceiling))
++        {
++            self.refused = true;
++            return Err(StorageError::Refused);
++        }
++        self.live = bytes;
++        self.peak = self.peak.max(bytes);
++        Ok(())
++    }
++    fn allocated(&mut self) {
++        self.allocations += 1;
++    }
++}
++
++fn integer_interval(lower: &str, upper: &str) -> DataRange {
++    DataRange::Restriction {
++        base: XsdDatatype::Integer,
++        facets: vec![
++            Facet::MinInclusive(purrdf_xsd::parse(lower, XsdDatatype::Decimal).unwrap()),
++            Facet::MaxInclusive(purrdf_xsd::parse(upper, XsdDatatype::Decimal).unwrap()),
++        ],
++    }
++}
++
++#[test]
++fn long_exact_endpoint_products_are_admitted_and_all_scratch_is_released() {
++    // A huge coefficient and a fractional endpoint force the actual limb,
++    // comparison, ceil/floor and finite-extent operations, rather than just Vecs.
++    let whole = "9".repeat(1024);
++    let lower = format!("{whole}.1");
++    let upper = format!("1{}0.9", "0".repeat(1023));
++    let range = integer_interval(&lower, &upper);
++    // Both endpoints lie between the integers 10^1024-1 and 10^1024+1.
++    // Exactly 10^1024 belongs to this integer range.
++    let mut owner = Owner::default();
++    let window = CurrentThreadWindow::open();
++    assert_eq!(
++        range::try_cardinality(&range, &mut owner).unwrap(),
++        Cardinality::Exactly(1)
++    );
++    let measured = window.close();
++    assert_eq!(owner.live, 0);
++    assert_eq!(measured.retained_bytes, 0);
++    assert!(owner.allocations > 0 && owner.peak > 0 && owner.work > 0);
++    assert!(
++        measured.peak_working_bytes <= i64::try_from(owner.peak).unwrap(),
++        "actual native allocator peak {measured:?} exceeds original admission {}",
++        owner.peak
++    );
++    let mut refused = Owner {
++        ceiling: Some(0),
++        ..Owner::default()
++    };
++    let window = CurrentThreadWindow::open();
++    assert_eq!(
++        range::try_cardinality(&range, &mut refused),
++        Err(StorageError::Refused)
++    );
++    let measured = window.close();
++    assert_eq!(
++        measured.allocations, 0,
++        "refusal occurs before the native destination exists"
++    );
++    assert_eq!(refused.live, 0);
++}
++
++#[test]
++fn exact_boolean_decimal_binary_and_string_set_laws_survive_the_native_owner() {
++    let lower = integer_interval(
++        "-10000000000000000000000000000000000000000000000000000000000000000.9",
++        "-10000000000000000000000000000000000000000000000000000000000000000.1",
++    );
++    // There is no integer strictly between k-0.9 and k-0.1.
++    let mut owner = Owner::default();
++    assert_eq!(
++        range::try_cardinality(&lower, &mut owner).unwrap(),
++        Cardinality::Exactly(0)
++    );
++    let single = DataRange::OneOf(vec![XsdValue::String("é".repeat(128))]);
++    let whole = DataRange::Datatype(XsdDatatype::String);
++    assert_eq!(
++        range::try_containment(&single, &whole, &mut owner).unwrap(),
++        Satisfiability::Empty
++    );
++    assert_eq!(
++        range::try_cardinality(&DataRange::Datatype(XsdDatatype::Boolean), &mut owner).unwrap(),
++        Cardinality::Exactly(2)
++    );
++    let octets = DataRange::Restriction {
++        base: XsdDatatype::HexBinary,
++        facets: vec![Facet::Length(2)],
++    };
++    assert_eq!(
++        range::try_cardinality(&octets, &mut owner).unwrap(),
++        Cardinality::Exactly(65_536)
++    );
++    let window = integer_interval("-1.5", "2.5");
++    assert_eq!(
++        range::try_cardinality(&window, &mut owner).unwrap(),
++        Cardinality::Exactly(4)
++    );
++    assert_eq!(owner.live, 0);
++}
++
++#[test]
++fn unequal_scale_decimal_comparison_admits_the_actual_digit_scratch() {
++    // Equal leading positions with different scales enter exact comparison,
++    // including the original heap-backed decimal-digit division kernel. The
++    // lower endpoint .25 is strictly above the upper endpoint .125 regardless
++    // of the shared 513-digit integer part.
++    let whole = format!("1{}", "0".repeat(512));
++    let range = DataRange::Restriction {
++        base: XsdDatatype::Decimal,
++        facets: vec![
++            Facet::MinInclusive(
++                purrdf_xsd::parse(&format!("{whole}.25"), XsdDatatype::Decimal).unwrap(),
++            ),
++            Facet::MaxInclusive(
++                purrdf_xsd::parse(&format!("{whole}.125"), XsdDatatype::Decimal).unwrap(),
++            ),
++        ],
++    };
++    let mut owner = Owner::default();
++    let window = CurrentThreadWindow::open();
++    assert_eq!(
++        range::try_cardinality(&range, &mut owner).unwrap(),
++        Cardinality::Exactly(0)
++    );
++    let measured = window.close();
++    assert!(owner.allocations > 0);
++    assert_eq!(
++        measured.allocations, owner.allocations,
++        "every native digit group and quotient destination has original admission"
++    );
++    assert!(
++        measured.peak_working_bytes <= i64::try_from(owner.peak).unwrap(),
++        "actual digit scratch {measured:?} exceeds original admission {}",
++        owner.peak
++    );
++    assert_eq!(measured.retained_bytes, 0);
++    assert_eq!(owner.live, 0);
++}
++
++#[test]
++fn refusing_work_never_becomes_an_empty_or_complete_containment_answer() {
++    let range = DataRange::And(vec![
++        DataRange::Datatype(XsdDatatype::Integer),
++        integer_interval("0", "2"),
++    ]);
++    let mut owner = Owner {
++        work_ceiling: Some(3),
++        ..Owner::default()
++    };
++    assert_eq!(
++        range::try_containment(
++            &range,
++            &DataRange::Datatype(XsdDatatype::Decimal),
++            &mut owner
++        ),
++        Err(StorageError::Refused)
++    );
++    assert!(owner.refused);
++    assert_eq!(owner.live, 0);
++    owner.refused = false;
++    owner.work_ceiling = None;
++    assert_eq!(
++        range::try_containment(
++            &range,
++            &DataRange::Datatype(XsdDatatype::Decimal),
++            &mut owner
++        )
++        .unwrap(),
++        Satisfiability::Empty
++    );
++    assert_eq!(owner.live, 0);
++}
++
++#[test]
++fn original_allocation_failure_outranks_a_failed_cleanup_callback() {
++    struct Refuse {
++        birth: bool,
++        cleanup: bool,
++    }
++    impl Storage for Refuse {
++        fn work(&mut self, _: u64) -> Result<(), StorageError> {
++            Ok(())
++        }
++        fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
++            if bytes != 0 {
++                self.birth = true;
++                Err(StorageError::Allocation)
++            } else {
++                self.cleanup = true;
++                Err(StorageError::Refused)
++            }
++        }
++    }
++    let mut owner = Refuse {
++        birth: false,
++        cleanup: false,
++    };
++    assert_eq!(
++        range::try_cardinality(&DataRange::Datatype(XsdDatatype::Integer), &mut owner),
++        Err(StorageError::Allocation)
++    );
++    assert!(owner.birth && owner.cleanup);
++}

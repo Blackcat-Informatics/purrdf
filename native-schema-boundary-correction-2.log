@@ -1,0 +1,19 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Finished `test` profile [optimized] target(s) in 2.86s
+     Running tests/schema_cardinality_boundary.rs (/opt/purrdf-schema-499-qualification/build/debug/build/purrdf-entail/1fce5a73dbb18afd/out/schema_cardinality_boundary-1fce5a73dbb18afd)
+
+running 1 test
+
+thread 'largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal' (2894015) panicked at crates/entail/tests/schema_cardinality_boundary.rs:85:22:
+called `Result::unwrap()` on an `Err` value: Unsatisfiable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal ... FAILED
+
+failures:
+
+failures:
+    largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --test schema_cardinality_boundary`

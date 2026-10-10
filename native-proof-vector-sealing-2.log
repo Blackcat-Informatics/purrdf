@@ -1,0 +1,9 @@
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/validate)
+    Finished `test` profile [optimized] target(s) in 15.83s
+     Running unittests src/lib.rs (/opt/purrdf-schema-499-qualification/build/debug/build/purrdf-validate/084045befaa094c2/out/purrdf_validate-084045befaa094c2)
+
+running 1 test
+test regime::schema_vectors::tests::seal_schema_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 200 filtered out; finished in 0.01s
+

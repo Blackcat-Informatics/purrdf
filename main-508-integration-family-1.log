@@ -1,0 +1,35 @@
++ rustc -Vv
+rustc 1.100.0-nightly (4b6d04e70 2026-09-13)
+binary: rustc
+commit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad
+commit-date: 2026-09-13
+host: x86_64-unknown-linux-gnu
+release: 1.100.0-nightly
+LLVM version: 23.1.1
++ cargo fmt --all
++ cargo fmt --all -- --check
++ cargo clippy --locked -p purrdf-xsd -p purrdf-entail -p purrdf-validate -p purrdf-sparql-eval -p purrdf-capi --all-targets -- -D warnings
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/testkit)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/ed25519)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/iri)
+error: unnecessary qualification
+    --> crates/xsd/src/bigint.rs:1471:24
+     |
+1471 |         storage: &impl scratch::Allocate,
+     |                        ^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1471 -         storage: &impl scratch::Allocate,
+1471 +         storage: &impl Allocate,
+     |
+
+error: could not compile `purrdf-xsd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-xsd` (lib test) due to 1 previous error

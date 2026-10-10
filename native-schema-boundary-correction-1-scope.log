@@ -1,0 +1,6 @@
+Result=oom-kill
+OOMPolicy=stop
+MemoryPeak=17179869184
+MemorySwapPeak=0
+MemoryMax=17179869184
+MemorySwapMax=0

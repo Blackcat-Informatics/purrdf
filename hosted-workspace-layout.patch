@@ -1,0 +1,157 @@
+diff --git crates/entail/src/owl_dl/bounds.rs crates/entail/src/owl_dl/bounds.rs
+index e055c38ba..85a280e64 100644
+--- crates/entail/src/owl_dl/bounds.rs
++++ crates/entail/src/owl_dl/bounds.rs
+@@ -673,77 +673,6 @@ fn upper_bound(kb: &Kb, restriction: u32) -> Option<Bound> {
+     })
+ }
+ 
+-#[cfg(test)]
+-mod owner_tests {
+-    use super::*;
+-    use crate::reasoner::SchemaPreparationBudget;
+-    use crate::reasoner::schema_tests::shared_schema;
+-    use purrdf_alloc_probe::CurrentThreadWindow;
+-
+-    #[test]
+-    fn original_preparation_layouts_cover_allocator_peak_and_retained_evidence() {
+-        for contradictory in [false, true] {
+-            let dataset = shared_schema(8, 16, contradictory);
+-            // Input concepts, exact range tables and source strings precede this
+-            // measurement. Only the actual preparation owner is being measured.
+-            let mut kb = Kb::from_dataset(&dataset).unwrap();
+-            kb.finalize();
+-            let window = CurrentThreadWindow::open();
+-            let mut table = Preparation::default();
+-            table
+-                .extend_until(&kb, SchemaPreparationBudget::default(), &mut || {
+-                    Ok::<(), core::convert::Infallible>(())
+-                })
+-                .unwrap();
+-            let measured = window.sample();
+-            assert_eq!(
+-                measured.retained_bytes,
+-                i64::try_from(table.stats.retained_bytes).unwrap()
+-            );
+-            assert!(
+-                measured.peak_working_bytes <= i64::try_from(table.stats.peak_bytes).unwrap(),
+-                "{measured:?} vs {:?}",
+-                table.stats
+-            );
+-            assert_eq!(measured.allocations, table.stats.allocations);
+-            assert_eq!(table.guards.is_empty(), !contradictory);
+-            drop(table);
+-            assert_eq!(window.sample().retained_bytes, 0);
+-        }
+-    }
+-
+-    #[test]
+-    fn compiled_schema_guards_borrow_original_admitted_products_without_allocation() {
+-        let dataset = shared_schema(8, 16, true);
+-        let mut kb = Kb::from_dataset(&dataset).unwrap();
+-        kb.finalize();
+-        assert_ne!(
+-            kb.schema.guards.len(),
+-            0,
+-            "the source has a contradictory class"
+-        );
+-        let clauses = super::super::clause::derive(&kb);
+-        let window = CurrentThreadWindow::open();
+-        for (index, class) in clauses.schema_clauses(&kb.schema) {
+-            let ordinal = kb
+-                .schema
+-                .guards
+-                .binary_search_by_key(&class, |(held, _)| *held)
+-                .unwrap();
+-            assert!(core::ptr::eq(
+-                clauses.clause(index, &kb.schema),
+-                &raw const kb.schema.guards[ordinal].1,
+-            ));
+-            assert_eq!(clauses.schema_class(index, &kb.schema), Some(class));
+-            assert_eq!(clauses.triggered_by(class, &kb.schema).last(), Some(index));
+-            assert!(clauses.is_tbox(index));
+-            assert_eq!(clauses.reads(index), 0);
+-        }
+-        assert_eq!(window.sample().allocations, 0);
+-        assert_eq!(window.sample().retained_bytes, 0);
+-    }
+-}
+-
+ pub(super) enum Failure<E> {
+     Boundary(E),
+     Obstruction(SchemaObstruction),
+@@ -1140,3 +1069,74 @@ fn role_path<E>(
+     }
+     Ok(false)
+ }
++
++#[cfg(test)]
++mod owner_tests {
++    use super::*;
++    use crate::reasoner::SchemaPreparationBudget;
++    use crate::reasoner::schema_tests::shared_schema;
++    use purrdf_alloc_probe::CurrentThreadWindow;
++
++    #[test]
++    fn original_preparation_layouts_cover_allocator_peak_and_retained_evidence() {
++        for contradictory in [false, true] {
++            let dataset = shared_schema(8, 16, contradictory);
++            // Input concepts, exact range tables and source strings precede this
++            // measurement. Only the actual preparation owner is being measured.
++            let mut kb = Kb::from_dataset(&dataset).unwrap();
++            kb.finalize();
++            let window = CurrentThreadWindow::open();
++            let mut table = Preparation::default();
++            table
++                .extend_until(&kb, SchemaPreparationBudget::default(), &mut || {
++                    Ok::<(), core::convert::Infallible>(())
++                })
++                .unwrap();
++            let measured = window.sample();
++            assert_eq!(
++                measured.retained_bytes,
++                i64::try_from(table.stats.retained_bytes).unwrap()
++            );
++            assert!(
++                measured.peak_working_bytes <= i64::try_from(table.stats.peak_bytes).unwrap(),
++                "{measured:?} vs {:?}",
++                table.stats
++            );
++            assert_eq!(measured.allocations, table.stats.allocations);
++            assert_eq!(table.guards.is_empty(), !contradictory);
++            drop(table);
++            assert_eq!(window.sample().retained_bytes, 0);
++        }
++    }
++
++    #[test]
++    fn compiled_schema_guards_borrow_original_admitted_products_without_allocation() {
++        let dataset = shared_schema(8, 16, true);
++        let mut kb = Kb::from_dataset(&dataset).unwrap();
++        kb.finalize();
++        assert_ne!(
++            kb.schema.guards.len(),
++            0,
++            "the source has a contradictory class"
++        );
++        let clauses = super::super::clause::derive(&kb);
++        let window = CurrentThreadWindow::open();
++        for (index, class) in clauses.schema_clauses(&kb.schema) {
++            let ordinal = kb
++                .schema
++                .guards
++                .binary_search_by_key(&class, |(held, _)| *held)
++                .unwrap();
++            assert!(core::ptr::eq(
++                clauses.clause(index, &kb.schema),
++                &raw const kb.schema.guards[ordinal].1,
++            ));
++            assert_eq!(clauses.schema_class(index, &kb.schema), Some(class));
++            assert_eq!(clauses.triggered_by(class, &kb.schema).last(), Some(index));
++            assert!(clauses.is_tbox(index));
++            assert_eq!(clauses.reads(index), 0);
++        }
++        assert_eq!(window.sample().allocations, 0);
++        assert_eq!(window.sample().retained_bytes, 0);
++    }
++}

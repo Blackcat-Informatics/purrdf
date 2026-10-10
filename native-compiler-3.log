@@ -1,0 +1,308 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-algebra)
+error: method `admits` is never used
+   --> crates/xsd/src/range.rs:998:8
+    |
+968 | impl Lo {
+    | ------- method in this implementation
+...
+998 |     fn admits(&self, v: &Point) -> bool {
+    |        ^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `admits` is never used
+    --> crates/xsd/src/range.rs:1033:8
+     |
+1003 | impl Hi {
+     | ------- method in this implementation
+...
+1033 |     fn admits(&self, v: &Point) -> bool {
+     |        ^^^^^^
+
+error: methods `degenerate_point` and `holds` are never used
+    --> crates/xsd/src/range.rs:1106:8
+     |
+1061 | impl Interval {
+     | ------------- methods in this implementation
+...
+1106 |     fn degenerate_point(&self) -> Option<&Point> {
+     |        ^^^^^^^^^^^^^^^^
+...
+1112 |     fn holds(&self, v: &Point) -> bool {
+     |        ^^^^^
+
+error: associated functions `full` and `from_interval` are never used
+    --> crates/xsd/src/range.rs:1750:8
+     |
+1704 | impl FloatSet {
+     | ------------- associated functions in this implementation
+...
+1750 |     fn full(width: FloatWidth) -> Self {
+     |        ^^^^
+...
+1766 |     fn from_interval(width: FloatWidth, iv: Interval) -> Self {
+     |        ^^^^^^^^^^^^^
+
+error: associated items `full`, `singleton`, `from_interval`, and `membership` are never used
+    --> crates/xsd/src/range.rs:2098:8
+     |
+1996 | impl LengthSet {
+     | -------------- associated items in this implementation
+...
+2098 |     fn full(kind: LengthKind) -> Self {
+     |        ^^^^
+...
+2114 |     fn singleton(kind: LengthKind, value: XsdValue) -> Self {
+     |        ^^^^^^^^^
+...
+2122 |     fn from_interval(kind: LengthKind, iv: Interval) -> Self {
+     |        ^^^^^^^^^^^^^
+...
+2153 |     fn membership(&self, value: &XsdValue) -> bool {
+     |        ^^^^^^^^^^
+
+error: method `same` is never used
+    --> crates/xsd/src/range.rs:2285:8
+     |
+2282 | trait ListedValue: Clone + CloneOwned {
+     |       ----------- method in this trait
+...
+2285 |     fn same(&self, other: &Self) -> bool {
+     |        ^^^^
+
+error: function `holds_same` is never used
+    --> crates/xsd/src/range.rs:2305:4
+     |
+2305 | fn holds_same<T: ListedValue>(values: &[T], value: &T) -> bool {
+     |    ^^^^^^^^^^
+
+error: associated function `listed` is never used
+    --> crates/xsd/src/range.rs:2399:8
+     |
+2358 | impl<T: ListedValue> ListedSet<T> {
+     | --------------------------------- associated function in this implementation
+...
+2399 |     fn listed(size: Option<u64>, values: Vec<T>) -> Self {
+     |        ^^^^^^
+
+error: methods `is_inhabited`, `complement`, `intersect`, `union`, `satisfiability`, and `count` are never used
+    --> crates/xsd/src/range.rs:2631:8
+     |
+2563 | impl<A: Algebra> SpaceSet<A> {
+     | ---------------------------- methods in this implementation
+...
+2631 |     fn is_inhabited(&self) -> bool {
+     |        ^^^^^^^^^^^^
+...
+2643 |     fn complement(&self) -> Self {
+     |        ^^^^^^^^^^
+...
+2649 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+2655 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+...
+2661 |     fn satisfiability(&self) -> Satisfiability {
+     |        ^^^^^^^^^^^^^^
+...
+2667 |     fn count(&self) -> Cardinality {
+     |        ^^^^^
+
+error: associated items `full`, `complement`, `intersect`, and `union` are never used
+    --> crates/xsd/src/range.rs:2887:8
+     |
+2725 | impl Extent {
+     | ----------- associated items in this implementation
+...
+2887 |     fn full() -> Self {
+     |        ^^^^
+...
+2908 |     fn complement(&self) -> Self {
+     |        ^^^^^^^^^^
+...
+2914 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+2920 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+
+error: could not compile `purrdf-xsd` (lib test) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/datalog)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:1450:17
+     |
+1450 |         head: &[super::hyper::Ground<usize>],
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1450 -         head: &[super::hyper::Ground<usize>],
+1450 +         head: &[Ground<usize>],
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:2988:49
+     |
+2988 |         self.replay_clash_assuming(index, ctx, &super::graph::Assumptions::of_kb())
+     |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2988 -         self.replay_clash_assuming(index, ctx, &super::graph::Assumptions::of_kb())
+2988 +         self.replay_clash_assuming(index, ctx, &Assumptions::of_kb())
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:2995:23
+     |
+2995 |         assumptions: &super::graph::Assumptions<'_>,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2995 -         assumptions: &super::graph::Assumptions<'_>,
+2995 +         assumptions: &Assumptions<'_>,
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:3446:44
+     |
+3446 |         self.replay_partial_assuming(ctx, &super::graph::Assumptions::of_kb())
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3446 -         self.replay_partial_assuming(ctx, &super::graph::Assumptions::of_kb())
+3446 +         self.replay_partial_assuming(ctx, &Assumptions::of_kb())
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:3452:23
+     |
+3452 |         assumptions: &super::graph::Assumptions<'_>,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3452 -         assumptions: &super::graph::Assumptions<'_>,
+3452 +         assumptions: &Assumptions<'_>,
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:3535:47
+     |
+3535 |         self.replay_refutation_assuming(ctx, &super::graph::Assumptions::of_kb())
+     |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3535 -         self.replay_refutation_assuming(ctx, &super::graph::Assumptions::of_kb())
+3535 +         self.replay_refutation_assuming(ctx, &Assumptions::of_kb())
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:3541:23
+     |
+3541 |         assumptions: &super::graph::Assumptions<'_>,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3541 -         assumptions: &super::graph::Assumptions<'_>,
+3541 +         assumptions: &Assumptions<'_>,
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/proof.rs:3592:23
+     |
+3592 |         assumptions: &super::graph::Assumptions<'_>,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3592 -         assumptions: &super::graph::Assumptions<'_>,
+3592 +         assumptions: &Assumptions<'_>,
+     |
+
+error[E0063]: missing field `schema_obstruction` in initializer of `reasoner::certificate::DlCertificate`
+   --> crates/entail/src/reasoner/certificate.rs:288:9
+    |
+288 |         Self {
+    |         ^^^^ missing `schema_obstruction`
+
+error[E0621]: explicit lifetime required in the type of `kb`
+    --> crates/entail/src/owl_dl/hyper.rs:2147:22
+     |
+2147 |           let driver = Self::new(
+     |  ______________________^
+2148 | |             kb,
+2149 | |             Budget {
+2150 | |                 steps: u64::MAX,
+2151 | |                 work: u64::MAX,
+2152 | |             },
+2153 | |         );
+     | |_________^ lifetime `'a` required
+     |
+help: add explicit lifetime `'a` to the type of `kb`
+     |
+2117 |         kb: &'a owl_dl::Kb,
+     |              +++++++++++
+
+Some errors have detailed explanations: E0063, E0621.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `purrdf-entail` (lib) due to 10 previous errors
+error[E0616]: field `kb` of struct `reasoner::Reasoner` is private
+   --> crates/entail/src/owl_dl/bounds.rs:662:31
+    |
+662 |                     &reasoner.kb,
+    |                               ^^ private field
+
+error[E0616]: field `kb` of struct `reasoner::Reasoner` is private
+  --> crates/entail/src/owl_dl/proof/schema_tests.rs:98:13
+   |
+98 |     refused.kb.schema_recording_budget = Some(crate::reasoner::SchemaPreparationBudget {
+   |             ^^ private field
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/entail/src/reasoner/schema_tests.rs:626:17
+    |
+626 |     reasoner.kb.push_gci(class, maximum);
+    |                 ^^^^^^^^ -----  ------- expected `Concept`, found `u32`
+    |                          |
+    |                          expected `Concept`, found `u32`
+    |
+note: method defined here
+   --> crates/entail/src/owl_dl/mod.rs:468:19
+    |
+468 |     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
+    |                   ^^^^^^^^            ------------  ------------
+help: try wrapping the expression in a variant of `owl_dl::concept::Concept`
+    |
+626 |     reasoner.kb.push_gci(owl_dl::concept::Concept::Named(class), maximum);
+    |                          ++++++++++++++++++++++++++++++++     +
+626 |     reasoner.kb.push_gci(owl_dl::concept::Concept::Data(class), maximum);
+    |                          +++++++++++++++++++++++++++++++     +
+help: try wrapping the expression in a variant of `owl_dl::concept::Concept`
+    |
+626 |     reasoner.kb.push_gci(class, owl_dl::concept::Concept::Named(maximum));
+    |                                 ++++++++++++++++++++++++++++++++       +
+626 |     reasoner.kb.push_gci(class, owl_dl::concept::Concept::Data(maximum));
+    |                                 +++++++++++++++++++++++++++++++       +
+
+Some errors have detailed explanations: E0063, E0308, E0616, E0621.
+error: could not compile `purrdf-entail` (lib test) due to 13 previous errors
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shapes)

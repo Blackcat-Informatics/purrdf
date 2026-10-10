@@ -1,0 +1,172 @@
++ export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/scripts/wasm-test-runner.sh
++ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/scripts/wasm-test-runner.sh
++ cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test exact_wasm_determinism
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling rustversion v1.0.22
+   Compiling typenum v1.20.1
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hash)
+   Compiling syn v2.0.118
+   Compiling hybrid-array v0.4.15
+   Compiling cfg-if v1.0.4
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling once_cell v1.21.4
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+   Compiling digest v0.11.3
+   Compiling regex-syntax v0.8.11
+   Compiling sha2 v0.11.0
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/alloc-probe)
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 14.77s
+     Running tests/exact_wasm_determinism.rs (/opt/purrdf-schema-499-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-xsd/b02b0ba327fad33a/out/exact_wasm_determinism-b02b0ba327fad33a.wasm)
+
+running 3 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+ok
+test the_oracle_vectors_replay_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
++ cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-events)
+   Compiling digest v0.11.3
+   Compiling regex-automata v0.4.14
+   Compiling sha2 v0.11.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling regex v1.12.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/testkit)
+   Compiling rayon v1.12.0
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 43s
+     Running tests/numeric_wasm_determinism.rs (/opt/purrdf-schema-499-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/862cb291024e4bde/out/numeric_wasm_determinism-862cb291024e4bde.wasm)
+
+running 2 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=sparql-numeric-transcript digest=da3900a93723c4ac corpus_len=2727
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
++ make wasm-pkg
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/ed25519)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/datalog)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/json)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shex)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/columnar)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-eval)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/markdown)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/purrdf)
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-wasm)
+    Finished `release` profile [optimized] target(s) in 6m 46s
+cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+wasm-opt -Oz \
+	--enable-bulk-memory --enable-nontrapping-float-to-int \
+	--enable-sign-ext --enable-mutable-globals --enable-simd \
+	-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `release` profile [optimized] target(s) in 1.25s
+     Running `/opt/purrdf-schema-499-qualification/target/release/wasm-link crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`
+OK: wasm-link linked crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: stack pointer is global 0 (exported as purrdf_stack_pointer); purrdf_jspi_suspend is function 28, called only from $suspend (function 13894), which 1 call site(s) reach; 52 other import(s) behind trampolines with 408 reference(s) routed; purrdf_jspi_run wrapped by function 13919 (region top appended as its last parameter); 402 exported function(s) behind the poison gate (359 trapping, 43 inert release function(s); globals idle=3, poisoned=4, active=5, parked=6, outbound=7); validated under ["mutable-globals", "nontrapping-float-to-int", "sign-ext", "bulk-memory", "simd"]
+OK: verified 247496 SIMD opcode(s) present in the optimized wasm artifact
+OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)
++ cd crates/rdf-wasm/js
++ node --test tests/entail.test.mjs
+✔ entailCheckProofGoldenVectors runs the committed proof artifact ON WASM (43.781201ms)
+✔ an answer nobody recorded is never presented as verified ON WASM (4.154397ms)
+✔ the session records proofs only when asked ON WASM (2.292352ms)
+✔ entailCheckGoldenVectors runs the committed tri-host artifact ON WASM (57.225353ms)
+✔ an inconsistent input is refused WITH its certificate ON WASM (9.398221ms)
+✔ every golden case is byte-identical across the wasm/JS boundary (33.71808ms)
+✔ entailMaterialize's evaluation limits refuse naming this host's arguments (24.60119ms)
+✔ entailMaterialize and entailConsistency close over the import table (19.455333ms)
+✔ the conclusion-directed services take the evaluation limits, naming this host's argument (26.425106ms)
+✔ entailMaterialize closes under rdfs and always returns a report (10.181948ms)
+✔ entailMaterialize under simple is the identity closure (0.586152ms)
+✔ entailMaterialize is byte-stable across repeated calls (33.980902ms)
+✔ entailMaterialize rejects an unknown regime, naming the accepted set (0.488216ms)
+✔ entailMaterialize materializes every regime spelling (21.90764ms)
+✔ a rule document belongs to rif alone and is refused elsewhere (0.485475ms)
+✔ entailMaterialize rejects a malformed document (never a silent empty closure) (1.306091ms)
+✔ entailMaterialize throws on a reserved-vocabulary closure, naming it (0.421037ms)
+✔ entailMaterialize still closes an ordinary document neighbouring the reserved one (0.286772ms)
+✔ the rule inventories are the specification tables, and the gap is measurable (15.563878ms)
+✔ the rule inventories reject an unknown regime, naming the accepted set (0.67789ms)
+✔ entailExtensions names what this build adds beyond the specification table (7.232805ms)
+✔ entailConsistency decides consistency ON WASM, with its certificate (0.708519ms)
+✔ entailClassify reaches the full subsumption hierarchy ON WASM (0.802127ms)
+✔ entailRealize reaches the individuals' entailed types ON WASM (0.779457ms)
+✔ entailInstances retrieves instances for a class the schema never asserts them of ON WASM (0.67177ms)
+✔ entailEntails decides an axiom entailed nowhere by assertion ON WASM (0.630081ms)
+✔ entailEntails answers unknown (never false) on an exhausted budget ON WASM (0.581563ms)
+✔ entailProfile certifies the most restrictive profile first ON WASM (2.34085ms)
+✔ entailExtractModule extracts a locality module as canonical N-Quads ON WASM (0.565214ms)
+✔ entailExtractModule rejects an unknown method, naming the accepted set (0.285292ms)
+✔ entailJustify finds a minimal entailing subset ON WASM (2.179225ms)
+✔ entailExplainConclusion derives a chase conclusion never asserted ON WASM (13.316255ms)
+✔ the existential refusal is per conclusion, not per regime ON WASM (3.880635ms)
+✔ every DL reasoning service is reachable from the package root, not only ./pkg/ (0.285721ms)
+✔ every conclusion-directed entailment service is reachable from the package root (16.563248ms)
+✔ a variable in PREDICATE position is projected like any other (5.636843ms)
+✔ a conclusion nothing derives has no warrant, and says so (7.107629ms)
+✔ the two regimes defined by a missing input are refused by name (0.755478ms)
+✔ webont-imports-011 answers from its own premise, owl:imports intact (38.971694ms)
+✔ an unsupplied import throws by name rather than reasoning without it (1.767957ms)
+✔ the import arrays are parallel, and a length mismatch is refused (1.199354ms)
+✔ a malformed import table is refused by entry (1.581333ms)
+✔ wasm_entail_premise_iris: the three services honour premiseIris (1.569683ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 573.041121

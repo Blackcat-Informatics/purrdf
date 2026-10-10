@@ -1,0 +1,233 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-algebra)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/datalog)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+error: function `build_until` is never used
+    --> crates/entail/src/owl_dl/parser.rs:1092:15
+     |
+1092 | pub(crate) fn build_until<D: DatasetView>(
+     |               ^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: the loop variable `id` is used to index `self.entries`
+   --> crates/entail/src/owl_dl/bounds.rs:462:23
+    |
+462 |             for id in 0..kb.table.len() {
+    |                       ^^^^^^^^^^^^^^^^^
+    |
+note: for this index operation
+   --> crates/entail/src/owl_dl/bounds.rs:578:40
+    |
+578 |                     u64::from(matches!(self.entries[id], Entry::Clash(_)));
+    |                                        ^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_range_loop
+    = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+help: consider using an iterator and `.enumerate()`
+    |
+462 -             for id in 0..kb.table.len() {
+462 +             for (id, <item>) in self.entries.iter_mut().enumerate().take(kb.table.len()) {
+    |
+
+error: checked cast can be simplified
+   --> crates/entail/src/owl_dl/bounds.rs:802:30
+    |
+802 |             .filter(|&bytes| bytes <= isize::MAX as usize)
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `isize::try_from(bytes).is_ok()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#checked_conversions
+    = note: `-D clippy::checked-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::checked_conversions)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/owl_dl/bounds.rs:972:25
+    |
+972 |                         self.add(child, SchemaRule::Conjunct(from), memory)?
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.add(child, SchemaRule::Conjunct(from), memory)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/owl_dl/bounds.rs:984:25
+    |
+984 |                         self.add(kb.tbox[axiom].1, SchemaRule::Inclusion(axiom), memory)?
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.add(kb.tbox[axiom].1, SchemaRule::Inclusion(axiom), memory)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/bounds.rs:1013:17
+     |
+1013 |                 needed[self.seen[concept as usize].expect("source precedes its consequence")] = true
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `needed[self.seen[concept as usize].expect("source precedes its consequence")] = true;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/bounds.rs:1021:29
+     |
+1021 | ...                   require(child)
+     |                       ^^^^^^^^^^^^^^ help: add a `;` here: `require(child);`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/bounds.rs:1031:17
+     |
+1031 |                 memory.push(&mut proof, step)?
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `memory.push(&mut proof, step)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: use of `Option<Option<T>>`
+    --> crates/entail/src/owl_dl/graph.rs:1060:25
+     |
+1060 |     pub(crate) support: Option<Option<usize>>,
+     |                         ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider using `Option<usize>`, or a custom enum if you need to distinguish all 3 cases
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#option_option
+     = note: `-D clippy::option-option` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::option_option)]`
+
+error: struct constructor field order is inconsistent with struct definition field order
+   --> crates/entail/src/owl_dl/proof/schema.rs:173:9
+    |
+173 | /         bounds,
+174 | |         frame,
+175 | |         support,
+    | |_______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#inconsistent_struct_constructor
+    = note: `-D clippy::inconsistent-struct-constructor` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::inconsistent_struct_constructor)]`
+help: try
+    |
+173 ~         bounds,
+174 +         support,
+175 ~         frame,
+    |
+
+error: this function has too many arguments (8/7)
+    --> crates/entail/src/owl_dl/proof.rs:3585:5
+     |
+3585 | /     fn walk_closure(
+3586 | |         &self,
+3587 | |         ctx: &DlProofContext,
+3588 | |         outcome: BranchOutcome,
+...    |
+3593 | |         path: &mut Vec<(usize, usize)>,
+3594 | |     ) -> Result<(), DlProofError> {
+     | |_________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this parameter is a mutable reference but is not used mutably
+   --> crates/entail/src/owl_dl/bounds.rs:955:23
+    |
+955 |         implications: &mut Implications,
+    |                       ^----^^^^^^^^^^^^
+    |                        |
+    |                        help: consider removing this `mut`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+    = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: missing documentation for a struct
+   --> crates/entail/src/owl_dl/proof.rs:680:1
+    |
+680 | pub struct ClashStep {
+    | ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D missing-docs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: could not compile `purrdf-entail` (lib) due to 13 previous errors
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf)
+error: used `assert!` to check that a value is empty
+  --> crates/entail/src/owl_dl/proof/schema_tests.rs:70:5
+   |
+70 |     assert!(proof.clashes().is_empty());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+   |
+70 -     assert!(proof.clashes().is_empty());
+70 +     assert_eq!(proof.clashes(), []);
+   |
+
+error: redundant closure
+   --> crates/entail/src/reasoner/schema_tests.rs:185:23
+    |
+185 |             .flat_map(|run| run.clashes())
+    |                       ^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `super::super::owl_dl::proof::DlProof::clashes`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+   --> crates/entail/src/reasoner/schema_tests.rs:250:23
+    |
+250 |             .flat_map(|run| run.clashes())
+    |                       ^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `super::super::owl_dl::proof::DlProof::clashes`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+   --> crates/entail/src/reasoner/schema_tests.rs:655:27
+    |
+655 |                 .and_then(|receipt| receipt.schema_obstruction())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `super::proof::StopReceipt::schema_obstruction`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: this assertion has a constant value
+   --> crates/entail/src/reasoner/schema_tests.rs:741:5
+    |
+741 | /     assert!(
+742 | |         !cfg!(debug_assertions),
+743 | |         "qualify using the exact workspace release/O3 profile"
+744 | |     );
+    | |_____^
+    |
+    = help: consider moving this into a const block: `const { assert!(..) }`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assertions_on_constants
+    = note: `-D clippy::assertions-on-constants` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assertions_on_constants)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/reasoner/schema_tests.rs:794:21
+    |
+794 |                     bencher.iter(|| std::hint::black_box(Reasoner::new(dataset).unwrap()))
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `bencher.iter(|| std::hint::black_box(Reasoner::new(dataset).unwrap()));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/reasoner/schema_tests.rs:821:25
+    |
+821 |                         bencher.iter(|| std::hint::black_box(reasoner.consistency()))
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `bencher.iter(|| std::hint::black_box(reasoner.consistency()));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-entail` (lib test) due to 19 previous errors
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/shapes)

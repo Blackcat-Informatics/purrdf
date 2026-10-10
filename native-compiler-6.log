@@ -1,0 +1,45 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/validate)
+error: redundant clone
+   --> crates/validate/src/regime/schema_vectors.rs:268:27
+    |
+268 |                 Some(&read.clone().with_schema_obstruction(
+    |                           ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/validate/src/regime/schema_vectors.rs:268:23
+    |
+268 |                 Some(&read.clone().with_schema_obstruction(
+    |                       ^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: could not compile `purrdf-validate` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: cannot find `support` in `super`
+    --> crates/entail/src/owl_dl/graph.rs:2976:29
+     |
+2976 |             support: super::support::Cursor::Disabled,
+     |                             ^^^^^^^ could not find `support` in `super`
+     |
+help: consider importing one of these items
+     |
+2902 +     use crate::owl_dl::support::Cursor;
+     |
+2902 +     use std::collections::btree_map::Cursor;
+     |
+2902 +     use std::collections::btree_set::Cursor;
+     |
+2902 +     use std::collections::linked_list::Cursor;
+     |
+     = and 2 other candidates
+help: if you import `Cursor`, refer to it directly
+     |
+2976 -             support: super::support::Cursor::Disabled,
+2976 +             support: Cursor::Disabled,
+     |
+
+error: could not compile `purrdf-validate` (lib test) due to 1 previous error
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

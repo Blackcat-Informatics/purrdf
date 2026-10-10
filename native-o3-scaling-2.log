@@ -1,0 +1,86 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Finished `release` profile [optimized] target(s) in 1m 57s
+     Running unittests src/lib.rs (/opt/purrdf-schema-499-qualification/build/release/build/purrdf-entail/60eb99a8a912a169/out/purrdf_entail-60eb99a8a912a169)
+
+running 1 test
+test reasoner::schema_tests::schema_preparation_o3_scaling ... cold schema owners restrictions=1 instances=1 preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } allocations=15 traffic=3792 peak=2264 retained=1536
+schema owners restrictions=1 instances=1 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=267 traffic=38940 peak=35226 retained=0
+schema owners restrictions=1 instances=1 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 8, restrictions: 6, contradictions: 0, work: 149, allocations: 101, retained_bytes: 0, peak_bytes: 2304, obstruction: None } allocations=368 traffic=68404 peak=36984 retained=0
+cold schema owners restrictions=1 instances=16 preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } allocations=15 traffic=3792 peak=2264 retained=1536
+schema owners restrictions=1 instances=16 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=1170 traffic=75600 peak=48372 retained=0
+schema owners restrictions=1 instances=16 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 128, restrictions: 96, contradictions: 0, work: 2384, allocations: 1616, retained_bytes: 0, peak_bytes: 2304, obstruction: None } allocations=2786 traffic=547024 peak=50480 retained=0
+cold schema owners restrictions=1 instances=64 preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } allocations=15 traffic=3792 peak=2264 retained=1536
+schema owners restrictions=1 instances=64 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=3977 traffic=193488 peak=92004 retained=0
+schema owners restrictions=1 instances=64 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 512, restrictions: 384, contradictions: 0, work: 9536, allocations: 6464, retained_bytes: 0, peak_bytes: 2304, obstruction: None } allocations=10441 traffic=2079184 peak=94112 retained=0
+cold schema owners restrictions=8 instances=1 preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } allocations=29 traffic=16928 peak=9616 retained=6144
+schema owners restrictions=8 instances=1 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=1037 traffic=83444 peak=57318 retained=0
+schema owners restrictions=8 instances=1 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 22, restrictions: 48, contradictions: 0, work: 1612, allocations: 399, retained_bytes: 0, peak_bytes: 9696, obstruction: None } allocations=1436 traffic=416572 peak=66658 retained=0
+cold schema owners restrictions=8 instances=16 preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } allocations=29 traffic=16928 peak=9616 retained=6144
+schema owners restrictions=8 instances=16 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=6370 traffic=306250 peak=121762 retained=0
+schema owners restrictions=8 instances=16 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 352, restrictions: 768, contradictions: 0, work: 25792, allocations: 6384, retained_bytes: 0, peak_bytes: 9696, obstruction: None } allocations=12754 traffic=5636298 peak=131166 retained=0
+cold schema owners restrictions=8 instances=64 preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } allocations=29 traffic=16928 peak=9616 retained=6144
+schema owners restrictions=8 instances=64 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=23311 traffic=1051378 peak=359930 retained=0
+schema owners restrictions=8 instances=64 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 1408, restrictions: 3072, contradictions: 0, work: 103168, allocations: 25536, retained_bytes: 0, peak_bytes: 9696, obstruction: None } allocations=48847 traffic=22371570 peak=369334 retained=0
+cold schema owners restrictions=32 instances=1 preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } allocations=39 traffic=67232 peak=37456 retained=24576
+schema owners restrictions=32 instances=1 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=3609 traffic=238940 peak=134158 retained=0
+schema owners restrictions=32 instances=1 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 70, restrictions: 192, contradictions: 0, work: 17788, allocations: 1489, retained_bytes: 0, peak_bytes: 37776, obstruction: None } allocations=5098 traffic=4369444 peak=170954 retained=0
+cold schema owners restrictions=32 instances=16 preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } allocations=39 traffic=67232 peak=37456 retained=24576
+schema owners restrictions=32 instances=16 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=24099 traffic=1130674 peak=402570 retained=0
+schema owners restrictions=32 instances=16 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 1120, restrictions: 3072, contradictions: 0, work: 284608, allocations: 23824, retained_bytes: 0, peak_bytes: 37776, obstruction: None } allocations=47923 traffic=67218738 peak=439622 retained=0
+cold schema owners restrictions=32 instances=64 preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } allocations=39 traffic=67232 peak=37456 retained=24576
+schema owners restrictions=32 instances=64 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=89277 traffic=3998082 peak=1271770 retained=0
+schema owners restrictions=32 instances=64 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 4480, restrictions: 12288, contradictions: 0, work: 1138432, allocations: 95296, retained_bytes: 0, peak_bytes: 37776, obstruction: None } allocations=184573 traffic=268350338 peak=1308822 retained=0
+schema-preparation/cold-preparation/r1-n1 time:   [951.7 ns 1.134 µs 1.235 µs]  mad: 105.6 ns  (10 samples × 152878 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r1-n1 time:   [40.48 µs 57.59 µs 60.95 µs]  mad: 4.509 µs  (10 samples × 2541 iterations)
+schema-preparation/prepared/r1-n1 time:   [10.12 µs 12.44 µs 13.52 µs]  mad: 1.520 µs  (10 samples × 7724 iterations)
+schema-preparation/uncached/r1-n1 time:   [16.96 µs 20.25 µs 25.39 µs]  mad: 3.315 µs  (10 samples × 6238 iterations)
+schema-preparation/cold-preparation/r1-n16 time:   [665.5 ns 1.044 µs 1.081 µs]  mad: 40.07 ns  (10 samples × 94744 iterations)
+schema-preparation/cold-reasoner/r1-n16 time:   [36.86 µs 38.44 µs 45.28 µs]  mad: 1.877 µs  (10 samples × 2148 iterations)
+schema-preparation/prepared/r1-n16 time:   [71.00 µs 84.99 µs 92.22 µs]  mad: 8.367 µs  (10 samples × 1235 iterations)
+schema-preparation/uncached/r1-n16 time:   [222.5 µs 229.6 µs 238.6 µs]  mad: 7.139 µs  (10 samples × 439 iterations)
+schema-preparation/cold-preparation/r1-n64 time:   [684.6 ns 897.2 ns 974.1 ns]  mad: 78.12 ns  (10 samples × 102899 iterations)
+schema-preparation/cold-reasoner/r1-n64 time:   [78.05 µs 88.98 µs 114.2 µs]  mad: 11.85 µs  (10 samples × 1159 iterations)
+schema-preparation/prepared/r1-n64 time:   [361.8 µs 378.9 µs 413.8 µs]  mad: 19.64 µs  (10 samples × 267 iterations)
+schema-preparation/uncached/r1-n64 time:   [903.3 µs 935.8 µs 1.000 ms]  mad: 34.42 µs  (10 samples × 85 iterations)
+schema-preparation/cold-preparation/r8-n1 time:   [2.013 µs 2.155 µs 2.311 µs]  mad: 148.8 ns  (10 samples × 38557 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r8-n1 time:   [102.5 µs 108.0 µs 115.7 µs]  mad: 5.702 µs  (10 samples × 1055 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/prepared/r8-n1 time:   [78.72 µs 83.18 µs 90.26 µs]  mad: 4.913 µs  (10 samples × 1120 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+schema-preparation/uncached/r8-n1 time:   [139.7 µs 155.1 µs 175.1 µs]  mad: 16.12 µs  (10 samples × 759 iterations)
+schema-preparation/cold-preparation/r8-n16 time:   [2.444 µs 2.782 µs 2.796 µs]  mad: 19.92 ns  (10 samples × 35663 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r8-n16 time:   [91.88 µs 107.5 µs 120.6 µs]  mad: 13.30 µs  (10 samples × 977 iterations)
+schema-preparation/prepared/r8-n16 time:   [737.2 µs 766.1 µs 861.8 µs]  mad: 31.62 µs  (10 samples × 167 iterations)
+schema-preparation/uncached/r8-n16 time:   [1.407 ms 1.456 ms 1.594 ms]  mad: 56.30 µs  (10 samples × 68 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+schema-preparation/cold-preparation/r8-n64 time:   [2.822 µs 2.920 µs 3.646 µs]  mad: 149.1 ns  (10 samples × 30402 iterations)
+schema-preparation/cold-reasoner/r8-n64 time:   [178.2 µs 215.8 µs 250.8 µs]  mad: 35.39 µs  (10 samples × 431 iterations)
+schema-preparation/prepared/r8-n64 time:   [2.598 ms 2.709 ms 2.900 ms]  mad: 135.2 µs  (10 samples × 34 iterations)
+schema-preparation/uncached/r8-n64 time:   [3.546 ms 3.902 ms 4.147 ms]  mad: 259.5 µs  (10 samples × 20 iterations)
+schema-preparation/cold-preparation/r32-n1 time:   [5.690 µs 5.928 µs 6.081 µs]  mad: 184.0 ns  (10 samples × 18821 iterations)
+                         outliers: 2 of 10 (1 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r32-n1 time:   [240.8 µs 272.0 µs 320.0 µs]  mad: 33.47 µs  (10 samples × 314 iterations)
+schema-preparation/prepared/r32-n1 time:   [173.1 µs 185.7 µs 272.3 µs]  mad: 24.39 µs  (10 samples × 509 iterations)
+schema-preparation/uncached/r32-n1 time:   [336.0 µs 339.5 µs 378.6 µs]  mad: 2.636 µs  (10 samples × 286 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+schema-preparation/cold-preparation/r32-n16 time:   [5.639 µs 5.981 µs 6.865 µs]  mad: 415.9 ns  (10 samples × 15941 iterations)
+schema-preparation/cold-reasoner/r32-n16 time:   [334.8 µs 392.2 µs 414.7 µs]  mad: 37.77 µs  (10 samples × 260 iterations)
+schema-preparation/prepared/r32-n16 time:   [4.663 ms 4.915 ms 5.333 ms]  mad: 212.7 µs  (10 samples × 23 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+schema-preparation/uncached/r32-n16 time:   [8.067 ms 8.732 ms 8.864 ms]  mad: 112.7 µs  (10 samples × 11 iterations)
+                         outliers: 2 of 10 (2 low severe, 0 low mild, 0 high mild, 0 high severe)
+schema-preparation/cold-preparation/r32-n64 time:   [6.475 µs 7.504 µs 8.347 µs]  mad: 604.2 ns  (10 samples × 9714 iterations)
+schema-preparation/cold-reasoner/r32-n64 time:   [464.9 µs 508.1 µs 657.3 µs]  mad: 60.40 µs  (10 samples × 207 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/prepared/r32-n64 time:   [17.65 ms 18.55 ms 21.09 ms]  mad: 1.352 ms  (10 samples × 6 iterations)
+schema-preparation/uncached/r32-n64 time:   [41.34 ms 45.22 ms 48.94 ms]  mad: 3.400 ms  (10 samples × 3 iterations)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 710 filtered out; finished in 63.32s
+

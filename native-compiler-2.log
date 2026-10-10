@@ -1,0 +1,341 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+error: method `admits` is never used
+   --> crates/xsd/src/range.rs:997:8
+    |
+968 | impl Lo {
+    | ------- method in this implementation
+...
+997 |     fn admits(&self, v: &Point) -> bool {
+    |        ^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `admits` is never used
+    --> crates/xsd/src/range.rs:1031:8
+     |
+1002 | impl Hi {
+     | ------- method in this implementation
+...
+1031 |     fn admits(&self, v: &Point) -> bool {
+     |        ^^^^^^
+
+error: methods `degenerate_point` and `holds` are never used
+    --> crates/xsd/src/range.rs:1103:8
+     |
+1059 | impl Interval {
+     | ------------- methods in this implementation
+...
+1103 |     fn degenerate_point(&self) -> Option<&Point> {
+     |        ^^^^^^^^^^^^^^^^
+...
+1108 |     fn holds(&self, v: &Point) -> bool {
+     |        ^^^^^
+
+error: multiple associated items are never used
+    --> crates/xsd/src/range.rs:1312:8
+     |
+1133 | impl IntervalSet {
+     | ---------------- associated items in this implementation
+...
+1312 |     fn full() -> Self {
+     |        ^^^^
+...
+1317 |     fn point(v: Point) -> Self {
+     |        ^^^^^
+...
+1328 |     fn canonical(intervals: Vec<Interval>) -> Self {
+     |        ^^^^^^^^^
+...
+1335 |     fn holds(&self, v: &Point) -> bool {
+     |        ^^^^^
+...
+1340 |     fn complement(&self) -> Self {
+     |        ^^^^^^^^^^
+...
+1345 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+1350 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+...
+1358 |     fn sample(&self, limit: usize) -> Vec<u64> {
+     |        ^^^^^^
+
+error: methods `complement`, `intersect`, `union`, `is_empty`, `count`, and `holds` are never used
+    --> crates/xsd/src/range.rs:1399:8
+     |
+1395 | trait Algebra: Clone + CloneOwned {
+     |       ------- methods in this trait
+...
+1399 |     fn complement(&self) -> Self {
+     |        ^^^^^^^^^^
+...
+1403 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+1407 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+...
+1411 |     fn is_empty(&self) -> bool {
+     |        ^^^^^^^^
+...
+1415 |     fn count(&self) -> Cardinality {
+     |        ^^^^^
+...
+1419 |     fn holds(&self, value: &Self::Value) -> bool {
+     |        ^^^^^
+
+error: associated functions `full`, `point`, `for_datatype`, `from_interval`, and `window` are never used
+    --> crates/xsd/src/range.rs:1576:8
+     |
+1472 | impl DecimalSet {
+     | --------------- associated functions in this implementation
+...
+1576 |     fn full() -> Self {
+     |        ^^^^
+...
+1589 |     fn point(d: exact::Decimal) -> Self {
+     |        ^^^^^
+...
+1599 |     fn for_datatype(dt: XsdDatatype) -> Self {
+     |        ^^^^^^^^^^^^
+...
+1604 |     fn from_interval(iv: Interval) -> Self {
+     |        ^^^^^^^^^^^^^
+...
+1609 |     fn window(iv: &Interval) -> Option<IntWindow> {
+     |        ^^^^^^
+
+error: associated functions `full` and `from_interval` are never used
+    --> crates/xsd/src/range.rs:1785:8
+     |
+1740 | impl FloatSet {
+     | ------------- associated functions in this implementation
+...
+1785 |     fn full(width: FloatWidth) -> Self {
+     |        ^^^^
+...
+1800 |     fn from_interval(width: FloatWidth, iv: Interval) -> Self {
+     |        ^^^^^^^^^^^^^
+
+error: associated items `full`, `singleton`, `from_interval`, and `membership` are never used
+    --> crates/xsd/src/range.rs:2131:8
+     |
+2030 | impl LengthSet {
+     | -------------- associated items in this implementation
+...
+2131 |     fn full(kind: LengthKind) -> Self {
+     |        ^^^^
+...
+2146 |     fn singleton(kind: LengthKind, value: XsdValue) -> Self {
+     |        ^^^^^^^^^
+...
+2153 |     fn from_interval(kind: LengthKind, iv: Interval) -> Self {
+     |        ^^^^^^^^^^^^^
+...
+2183 |     fn membership(&self, value: &XsdValue) -> bool {
+     |        ^^^^^^^^^^
+
+error: method `same` is never used
+    --> crates/xsd/src/range.rs:2314:8
+     |
+2312 | trait ListedValue: Clone + CloneOwned {
+     |       ----------- method in this trait
+2313 |     /// Whether these denote one value in the same space.
+2314 |     fn same(&self, other: &Self) -> bool {
+     |        ^^^^
+
+error: function `holds_same` is never used
+    --> crates/xsd/src/range.rs:2333:4
+     |
+2333 | fn holds_same<T: ListedValue>(values: &[T], value: &T) -> bool {
+     |    ^^^^^^^^^^
+
+error: associated function `listed` is never used
+    --> crates/xsd/src/range.rs:2426:8
+     |
+2386 | impl<T: ListedValue> ListedSet<T> {
+     | --------------------------------- associated function in this implementation
+...
+2426 |     fn listed(size: Option<u64>, values: Vec<T>) -> Self {
+     |        ^^^^^^
+
+error: methods `is_inhabited`, `complement`, `intersect`, `union`, `satisfiability`, and `count` are never used
+    --> crates/xsd/src/range.rs:2657:8
+     |
+2590 | impl<A: Algebra> SpaceSet<A> {
+     | ---------------------------- methods in this implementation
+...
+2657 |     fn is_inhabited(&self) -> bool {
+     |        ^^^^^^^^^^^^
+...
+2668 |     fn complement(&self) -> Self {
+     |        ^^^^^^^^^^
+...
+2673 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+2678 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+...
+2683 |     fn satisfiability(&self) -> Satisfiability {
+     |        ^^^^^^^^^^^^^^
+...
+2688 |     fn count(&self) -> Cardinality {
+     |        ^^^^^
+
+error: associated items `full`, `complement`, `intersect`, and `union` are never used
+    --> crates/xsd/src/range.rs:2907:8
+     |
+2746 | impl Extent {
+     | ----------- associated items in this implementation
+...
+2907 |     fn full() -> Self {
+     |        ^^^^
+...
+2927 |     fn complement(&self) -> Self {
+     |        ^^^^^^^^^^
+...
+2932 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+2937 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+
+error: checked cast can be simplified
+   --> crates/xsd/src/range/storage.rs:246:26
+    |
+246 |             .filter(|&n| n <= isize::MAX as usize)
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `isize::try_from(n).is_ok()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#checked_conversions
+    = note: `-D clippy::checked-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::checked_conversions)]`
+
+error: checked cast can be simplified
+   --> crates/xsd/src/range/storage.rs:363:26
+    |
+363 |             .filter(|&n| n <= isize::MAX as usize);
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `isize::try_from(n).is_ok()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#checked_conversions
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3038:13
+     |
+3038 |             extent.decimal = SpaceSet::Exact(DecimalSet::datatype_with(datatype, memory)?)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `extent.decimal = SpaceSet::Exact(DecimalSet::datatype_with(datatype, memory)?);`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3041:13
+     |
+3041 |             extent.single = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Single, memory)?)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `extent.single = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Single, memory)?);`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3044:13
+     |
+3044 |             extent.double = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Double, memory)?)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `extent.double = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Double, memory)?);`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3048:13
+     |
+3048 | /             extent.text[space as usize] =
+3049 | |                 SpaceSet::Exact(LengthSet::full_with(space.kind(), memory)?)
+     | |____________________________________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+     |
+3048 |             extent.text[space as usize] =
+3049 ~                 SpaceSet::Exact(LengthSet::full_with(space.kind(), memory)?);
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3131:13
+     |
+3131 |             extent.double = float_restriction_with(FloatWidth::Double, facets, memory)?
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `extent.double = float_restriction_with(FloatWidth::Double, facets, memory)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3141:13
+     |
+3141 |             extent.text[space as usize] = length_restriction_with(space.kind(), facets, memory)?
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `extent.text[space as usize] = length_restriction_with(space.kind(), facets, memory)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/xsd/src/range.rs:3144:13
+     |
+3144 | /             extent.temporal[space as usize] =
+3145 | |                 temporal_restriction_with(base, space, facets, memory)?
+     | |_______________________________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+     |
+3144 |             extent.temporal[space as usize] =
+3145 ~                 temporal_restriction_with(base, space, facets, memory)?;
+     |
+
+error: could not compile `purrdf-xsd` (lib) due to 22 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: associated items `point`, `union`, and `sample` are never used
+    --> crates/xsd/src/range.rs:1317:8
+     |
+1133 | impl IntervalSet {
+     | ---------------- associated items in this implementation
+...
+1317 |     fn point(v: Point) -> Self {
+     |        ^^^^^
+...
+1350 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+...
+1358 |     fn sample(&self, limit: usize) -> Vec<u64> {
+     |        ^^^^^^
+
+error: methods `intersect` and `union` are never used
+    --> crates/xsd/src/range.rs:1403:8
+     |
+1395 | trait Algebra: Clone + CloneOwned {
+     |       ------- methods in this trait
+...
+1403 |     fn intersect(&self, other: &Self) -> Self {
+     |        ^^^^^^^^^
+...
+1407 |     fn union(&self, other: &Self) -> Self {
+     |        ^^^^^
+
+error: associated functions `full`, `point`, `for_datatype`, and `from_interval` are never used
+    --> crates/xsd/src/range.rs:1576:8
+     |
+1472 | impl DecimalSet {
+     | --------------- associated functions in this implementation
+...
+1576 |     fn full() -> Self {
+     |        ^^^^
+...
+1589 |     fn point(d: exact::Decimal) -> Self {
+     |        ^^^^^
+...
+1599 |     fn for_datatype(dt: XsdDatatype) -> Self {
+     |        ^^^^^^^^^^^^
+...
+1604 |     fn from_interval(iv: Interval) -> Self {
+     |        ^^^^^^^^^^^^^
+
+error: could not compile `purrdf-xsd` (lib test) due to 22 previous errors

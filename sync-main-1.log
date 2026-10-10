@@ -1,0 +1,10 @@
+Auto-merging crates/lex/src/walk.rs
+Auto-merging crates/rdf-core/src/small.rs
+Auto-merging crates/xsd/src/bigint.rs
+Auto-merging crates/xsd/src/exact/decimal.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/exact/decimal.rs
+Auto-merging crates/xsd/src/exact/integer.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/exact/integer.rs
+Recorded preimage for 'crates/xsd/src/exact/decimal.rs'
+Recorded preimage for 'crates/xsd/src/exact/integer.rs'
+Automatic merge failed; fix conflicts and then commit the result.

@@ -1,0 +1,156 @@
++ rustc -Vv
+rustc 1.100.0-nightly (4b6d04e70 2026-09-13)
+binary: rustc
+commit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad
+commit-date: 2026-09-13
+host: x86_64-unknown-linux-gnu
+release: 1.100.0-nightly
+LLVM version: 23.1.1
++ cargo fmt --all
++ cargo fmt --all -- --check
++ cargo clippy --locked -p purrdf-xsd -p purrdf-entail -p purrdf-validate -p purrdf-sparql-eval -p purrdf-capi --all-targets -- -D warnings
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/sparql-algebra)
+error[E0255]: the name `try_boxed` is defined multiple times
+    --> crates/rdf-core/src/small.rs:1456:1
+     |
+  60 |     Shared, SharedAllocError, SharedCloneError, SharedOwned, shared, try_boxed, try_boxed_one,
+     |                                                                      --------- previous import of the value `try_boxed` here
+...
+1456 | pub fn try_boxed<T>(value: T) -> Result<Box<T>, BoxAllocationError> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `try_boxed` redefined here
+     |
+     = note: `try_boxed` must be defined only once in the value namespace of this module
+help: you can use `as` to change the binding name of the import
+     |
+  60 |     Shared, SharedAllocError, SharedCloneError, SharedOwned, shared, try_boxed as other_try_boxed, try_boxed_one,
+     |                                                                                ++++++++++++++++++
+
+error: unused import: `try_boxed`
+  --> crates/rdf-core/src/small.rs:60:70
+   |
+60 |     Shared, SharedAllocError, SharedCloneError, SharedOwned, shared, try_boxed, try_boxed_one,
+   |                                                                      ^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0277]: expected an `Fn(small::BoxAllocationError)` closure, found `impl Fn(std::collections::TryReserveError) -> E`
+   --> crates/rdf-core/src/dataset_view.rs:755:35
+    |
+755 |                         .map_err(&storage_error)
+    |                          -------  ^^^^^^^^^^^^^ expected an `Fn(small::BoxAllocationError)` closure, found `impl Fn(std::collections::TryReserveError) -> E`
+    |                          |
+    |                          required by a bound introduced by this call
+    |
+    = note: expected a closure with signature `fn(small::BoxAllocationError)`
+               found a closure with signature `fn(std::collections::TryReserveError)`
+    = note: required for `&impl Fn(std::collections::TryReserveError) -> E` to implement `FnOnce(small::BoxAllocationError)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0277]: `?` couldn't convert the error to `governor::SilencedEvidenceAllocationError`
+   --> crates/rdf-core/src/governor.rs:630:51
+    |
+630 |         let lease = crate::small::try_boxed(lease)?;
+    |                     ------------------------------^ the trait `std::convert::From<small::BoxAllocationError>` is not implemented for `governor::SilencedEvidenceAllocationError`
+    |                     |
+    |                     this can't be annotated with `?` because it has type `Result<_, small::BoxAllocationError>`
+    |
+note: `governor::SilencedEvidenceAllocationError` needs to implement `From<small::BoxAllocationError>`
+   --> crates/rdf-core/src/governor.rs:575:1
+    |
+575 | pub enum SilencedEvidenceAllocationError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `governor::SilencedEvidenceAllocationError` implements trait `std::convert::From<T>`
+   --> crates/rdf-core/src/governor.rs:581:1
+    |
+581 | / purrdf_lex::variant_from!(SilencedEvidenceAllocationError {
+582 | |     Reserve(std::collections::TryReserveError),
+583 | |     Shared(crate::small::SharedAllocError),
+584 | | });
+    | |  ^
+    | |  |
+    | |__`std::convert::From<purrdf_lex::allocation::SharedAllocError>`
+    |    `std::convert::From<std::collections::TryReserveError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `?` couldn't convert the error to `std::collections::TryReserveError`
+    --> crates/rdf-core/src/ir/term_walk.rs:893:54
+     |
+ 893 |                         s: crate::small::try_boxed(s)?.into(),
+     |                            --------------------------^ the trait `std::convert::From<small::BoxAllocationError>` is not implemented for `std::collections::TryReserveError`
+     |                            |
+     |                            this can't be annotated with `?` because it has type `Result<_, small::BoxAllocationError>`
+     |
+note: `small::BoxAllocationError` needs to implement `Into<std::collections::TryReserveError>`
+    --> crates/rdf-core/src/small.rs:1439:1
+     |
+1439 | pub struct BoxAllocationError;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<small::BoxAllocationError>` is not implemented for `std::collections::TryReserveError`
+      but trait `From<std::collections::TryReserveErrorKind>` is implemented for it
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/mod.rs:153:1
+     |
+ 153 | const impl From<TryReserveErrorKind> for TryReserveError {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `std::collections::TryReserveErrorKind`, found `small::BoxAllocationError`
+
+error[E0277]: `?` couldn't convert the error to `std::collections::TryReserveError`
+    --> crates/rdf-core/src/ir/term_walk.rs:894:54
+     |
+ 894 |                         p: crate::small::try_boxed(p)?.into(),
+     |                            --------------------------^ the trait `std::convert::From<small::BoxAllocationError>` is not implemented for `std::collections::TryReserveError`
+     |                            |
+     |                            this can't be annotated with `?` because it has type `Result<_, small::BoxAllocationError>`
+     |
+note: `small::BoxAllocationError` needs to implement `Into<std::collections::TryReserveError>`
+    --> crates/rdf-core/src/small.rs:1439:1
+     |
+1439 | pub struct BoxAllocationError;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<small::BoxAllocationError>` is not implemented for `std::collections::TryReserveError`
+      but trait `From<std::collections::TryReserveErrorKind>` is implemented for it
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/mod.rs:153:1
+     |
+ 153 | const impl From<TryReserveErrorKind> for TryReserveError {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `std::collections::TryReserveErrorKind`, found `small::BoxAllocationError`
+
+error[E0277]: `?` couldn't convert the error to `std::collections::TryReserveError`
+    --> crates/rdf-core/src/ir/term_walk.rs:895:54
+     |
+ 895 |                         o: crate::small::try_boxed(o)?.into(),
+     |                            --------------------------^ the trait `std::convert::From<small::BoxAllocationError>` is not implemented for `std::collections::TryReserveError`
+     |                            |
+     |                            this can't be annotated with `?` because it has type `Result<_, small::BoxAllocationError>`
+     |
+note: `small::BoxAllocationError` needs to implement `Into<std::collections::TryReserveError>`
+    --> crates/rdf-core/src/small.rs:1439:1
+     |
+1439 | pub struct BoxAllocationError;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<small::BoxAllocationError>` is not implemented for `std::collections::TryReserveError`
+      but trait `From<std::collections::TryReserveErrorKind>` is implemented for it
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/mod.rs:153:1
+     |
+ 153 | const impl From<TryReserveErrorKind> for TryReserveError {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `std::collections::TryReserveErrorKind`, found `small::BoxAllocationError`
+
+Some errors have detailed explanations: E0255, E0277.
+For more information about an error, try `rustc --explain E0255`.
+error: could not compile `purrdf-core` (lib) due to 7 previous errors

@@ -1,0 +1,63 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+error[E0433]: cannot find `support` in `super`
+    --> crates/entail/src/owl_dl/graph.rs:2976:29
+     |
+2976 |             support: super::support::Cursor::Disabled,
+     |                             ^^^^^^^ could not find `support` in `super`
+     |
+help: consider importing one of these items
+     |
+2902 +     use crate::owl_dl::support::Cursor;
+     |
+2902 +     use std::collections::btree_map::Cursor;
+     |
+2902 +     use std::collections::btree_set::Cursor;
+     |
+2902 +     use std::collections::linked_list::Cursor;
+     |
+     = and 2 other candidates
+help: if you import `Cursor`, refer to it directly
+     |
+2976 -             support: super::support::Cursor::Disabled,
+2976 +             support: Cursor::Disabled,
+     |
+
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/validate)
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: cannot find module or crate `purrdf_xsd` in this scope
+ --> crates/validate/src/regime/schema_vectors.rs:9:5
+  |
+9 | use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_INTEGER, XSD_NON_NEGATIVE_INTEGER};
+  |     ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_xsd`
+  |
+help: there is a crate or module with a similar name
+  |
+9 - use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_INTEGER, XSD_NON_NEGATIVE_INTEGER};
+9 + use purrdf_hash::datatype::{XSD_BOOLEAN, XSD_INTEGER, XSD_NON_NEGATIVE_INTEGER};
+  |
+
+error[E0433]: cannot find module or crate `purrdf_xsd` in this scope
+   --> crates/validate/src/regime/schema_vectors.rs:100:13
+    |
+100 |             purrdf_xsd::datatype::XSD_DECIMAL
+    |             ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_xsd`
+    |
+help: there is a crate or module with a similar name
+    |
+100 -             purrdf_xsd::datatype::XSD_DECIMAL
+100 +             purrdf_hash::datatype::XSD_DECIMAL
+    |
+help: consider importing this module
+    |
+  6 + use purrdf_core::datatype;
+    |
+help: if you import `datatype`, refer to it directly
+    |
+100 -             purrdf_xsd::datatype::XSD_DECIMAL
+100 +             datatype::XSD_DECIMAL
+    |
+
+error: could not compile `purrdf-validate` (lib) due to 2 previous errors
+error: could not compile `purrdf-validate` (lib test) due to 2 previous errors

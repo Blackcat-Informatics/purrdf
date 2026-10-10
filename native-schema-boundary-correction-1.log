@@ -1,0 +1,19 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Finished `test` profile [optimized] target(s) in 38.10s
+     Running unittests src/lib.rs (/opt/purrdf-schema-499-qualification/build/debug/build/purrdf-entail/3da08415a3b5efb2/out/purrdf_entail-3da08415a3b5efb2)
+
+running 15 tests
+test reasoner::schema_tests::actual_long_datatype_temporaries_share_the_preparation_owner ... ok
+test reasoner::schema_tests::cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises ... ok
+test reasoner::schema_tests::a_class_name_does_not_assert_an_inhabitant_but_the_question_supplies_one ... ok
+test reasoner::schema_tests::asserted_subsumed_equivalent_role_derived_and_existential_membership_are_checked ... ok
+test reasoner::schema_tests::nominal_identification_and_distinct_successors_remain_per_individual ... ok
+test reasoner::schema_tests::nominal_names_do_not_supply_cached_distinctness_or_ignore_current_identification ... ok
+test reasoner::schema_tests::exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges ... ok
+test reasoner::schema_tests::retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof ... ok
+test reasoner::schema_tests::refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_source ... ok
+test reasoner::schema_tests::qualified_containment_is_directional_and_has_no_unrelated_transfer ... ok
+test reasoner::schema_tests::schema_preparation_o3_scaling ... ignored, report-only O3 time/allocation sweeps, run after semantic qualification
+test reasoner::schema_tests::stopping_an_existing_owner_does_not_publish_clear_or_detach_pins ... ok
+test reasoner::schema_tests::exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer ... ok
+test reasoner::schema_tests::shared_instances_prepare_once_and_warm_no_clash_calls_do_not_copy_proofs ... ok

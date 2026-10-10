@@ -1,0 +1,247 @@
++ cargo fmt --all
++ cargo clippy --locked -p purrdf-capi --all-targets -- -D warnings
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-capi)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.56s
++ cargo test --locked -p purrdf-capi --lib
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 12.28s
+     Running unittests src/lib.rs (/opt/purrdf-schema-499-qualification/build/debug/build/purrdf-capi/593a27ca50e18d97/out/purrdf-593a27ca50e18d97)
+
+running 104 tests
+test buffer::tests::null_args_are_safe ... ok
+test buffer::tests::data_exposes_bytes ... ok
+test entail::tests::a_malformed_document_is_an_error ... ok
+test entail::tests::a_failing_call_writes_no_buffer_to_free ... ok
+test entail::tests::a_failing_dl_call_writes_no_buffer_to_free ... ok
+test entail::tests::an_unknown_regime_names_the_accepted_set ... ok
+test entail::tests::capi_entail_premise_iris ... ok
+test entail::tests::an_absent_proof_is_never_presented_as_a_verified_one ... ok
+test entail::tests::capi_entail_refuses_a_premise_iri_that_is_not_absolute ... ok
+test entail::tests::an_inconsistent_input_is_refused_with_its_report ... ok
+test entail::tests::a_null_import_array_with_a_non_zero_count_is_refused_not_dereferenced ... ok
+test entail::tests::every_dl_service_reaches_the_pointer_surface ... ok
+test entail::tests::every_conclusion_directed_service_reaches_the_pointer_surface ... ok
+test entail::tests::every_regime_spelling_materializes ... ok
+test entail::tests::null_arguments_are_refused_not_dereferenced ... ok
+test entail::tests::null_dl_arguments_are_refused_not_dereferenced ... ok
+test entail::tests::the_c_entry_points_produce_and_check_a_proof ... ok
+test entail::tests::the_conclusion_directed_services_refuse_null_arguments ... ok
+test entail::tests::conclusion_services_take_the_evaluation_limits ... ok
+test entail::tests::materialize_emits_closure_and_report ... ok
+test entail::tests::the_dl_proof_golden_vector_matches ... ok
+test entail::tests::the_inventories_are_the_specification_tables ... ok
+test entail::tests::the_pointer_surface_hands_out_the_inventories ... ok
+test entail::tests::materialize_and_consistency_resolve_the_import_table ... ok
+test entail::tests::the_golden_proof_bytes_survive_the_c_abi ... ok
+test entail::tests::the_step_cap_crosses_the_abi ... ok
+test entail::tests::the_vendored_imports_case_answers_through_the_pointer_surface ... ok
+test error::tests::accessors_round_trip ... ok
+test error::tests::diagnostic_machine_record_preserves_typed_fields_and_large_anchors ... ok
+test error::tests::new_sanitizes_interior_nul ... ok
+test error::tests::null_is_safe ... ok
+test governor::tests::cancellation_handle_is_shared_and_latched ... ok
+test governor::tests::initializer_is_metered_without_a_finite_caller_ceiling ... ok
+test query::division_tests::a_dataset_starts_at_eighteen_digits_toward_zero ... ok
+test query::division_tests::a_governed_update_runs_under_the_policy ... ok
+test query::division_tests::a_null_policy_is_a_null_pointer ... ok
+test query::division_tests::a_scale_and_rounding_policy_rounds_the_quotient ... ok
+test entail::tests::the_pointer_surface_hands_out_two_buffers ... ok
+test query::division_tests::an_exact_policy_answers_a_terminating_quotient_and_leaves_the_rest_unbound ... ok
+test query::division_tests::an_unparseable_policy_is_refused_and_leaves_the_previous_one_in_force ... ok
+test query::division_tests::evidence_counts_an_absorbed_division_by_zero_per_code ... ok
+test query::division_tests::expression_error_discriminants_follow_the_kernel_code_order ... ok
+test query::tests::aggregate_namespace_computes_median_through_a_governed_update ... ok
+test query::tests::aggregate_namespace_computes_median_through_entailment_governed_query ... ok
+test query::tests::aggregate_namespace_computes_median_through_the_c_abi ... ok
+test entail::tests::the_pointer_surface_takes_the_evaluation_limits ... ok
+test query::tests::governed_entailment_query_exposes_a_closure_stop_without_report ... ok
+test query::division_tests::an_entailment_query_runs_under_the_policy ... ok
+test entail::tests::the_golden_vector_matches ... ok
+test query::tests::governed_entailment_query_carries_answer_and_report ... ok
+test query::tests::governed_query_carries_partial_certificate_and_evidence ... ok
+test query::tests::governed_query_observes_a_prefired_c_cancellation ... ok
+test query::tests::governed_update_trip_preserves_the_exact_dataset_arc ... ok
+test query::tests::now_reports_the_real_wall_clock_year ... ok
+test regex_profile::tests::a_neighbouring_name_is_refused_listing_the_accepted_names ... ok
+test regex_profile::tests::null_is_compatibility_and_each_exact_name_is_its_law ... ok
+test query::tests::omitted_aggregate_namespace_leaves_the_statistical_set_unregistered ... ok
+test regex_profile::tests::only_native_xpath_codes_are_regex_resource_refusals ... ok
+test shacl::tests::a_change_is_validated_against_the_graph_it_joins ... ok
+test shacl::tests::a_change_takes_the_disallow_set_and_the_subclass_parameter ... ok
+test shacl::tests::a_data_graph_link_resolves_through_the_import_table ... ok
+test shacl::tests::a_product_required_to_be_itself_validates_identically ... ok
+test shacl::tests::a_product_that_is_not_the_expected_one_is_refused ... ok
+test query::tests::governed_entailment_query_takes_the_evaluation_limits ... ok
+test shacl::tests::a_product_round_trips_to_the_same_verdict ... ok
+test shacl::tests::a_rebuilt_product_required_to_be_itself_validates_identically ... ok
+test shacl::tests::a_refused_product_carries_its_dimension_through_the_error_handle ... ok
+test shacl::tests::a_rebuilt_product_that_is_not_the_expected_one_is_refused ... ok
+test shacl::tests::capi_apply_rules_resolves_srl_imports ... ok
+test shacl::tests::capi_apply_rules_takes_a_generated_term_budget ... ok
+test shacl::tests::capi_check_rules ... ok
+test shacl::tests::capi_apply_rules ... ok
+test shacl::tests::capi_entail_limits ... ok
+test shacl::tests::capi_eval_node_expr_reports_the_mandatory_diagnostic ... ok
+test shacl::tests::capi_eval_node_expr ... ok
+test shacl::tests::capi_eval_node_expr_selectors ... ok
+test shacl::tests::capi_mandatory_diagnostics ... ok
+test shacl::tests::capi_apply_rules_takes_the_capacity_limits ... ok
+test shacl::tests::capi_rules_shapes_graph ... ok
+test shacl::tests::capi_validate_conformance_disallows ... ok
+test shacl::tests::capi_validate_evaluates_sparql_expr_beside_its_vocabulary_declaration ... ok
+test query::tests::governed_entailment_query_resolves_the_import_table ... ok
+test shacl::tests::capi_validate_subclass_of_in_shapes_graph ... ok
+test shacl::tests::entail_malformed_shapes_is_an_error ... ok
+test shacl::tests::entail_emits_materialized_ntriples ... ok
+test shacl::tests::malformed_shapes_is_an_error ... ok
+test shacl::tests::the_exported_change_entry_point_reports_its_scope_through_pointers ... ok
+test shacl::tests::the_exported_entry_point_binds_a_restore_through_pointers ... ok
+test shacl::tests::the_exported_rebuild_entry_point_binds_a_restore_through_pointers ... ok
+test shacl::tests::the_import_accessors_are_silent_on_other_errors ... ok
+test shacl::tests::the_shacl_prefix_idiom_resolves_with_no_table_and_a_header_import_does_not ... ok
+test shacl::tests::validate_emits_sarif_bytes ... ok
+test tests::a_null_element_is_refused_and_a_full_array_is_borrowed ... ok
+test tests::a_null_string_array_with_a_count_is_refused_by_name ... ok
+test tests::an_empty_string_array_may_be_null ... ok
+test xsd::tests::a_malformed_or_unmapped_lexical_is_refused_beside_its_valid_neighbour ... ok
+test xsd::tests::integers_past_i128_are_canonical_and_exact ... ok
+test xsd::tests::long_decimals_are_canonical_and_exact ... ok
+test xsd::tests::long_integers_compare_exactly ... ok
+test xsd::tests::malformed_and_incomparable_values_beside_their_valid_neighbours ... ok
+test xsd::tests::null_arguments_are_refused ... ok
+test shacl::tests::every_shapes_entry_point_gives_the_same_owl_imports_verdict ... ok
+test shacl::tests::capi_shapes_graph_001_honours_the_shapes_graph_iri ... ok
+test shacl::tests::capi_lint_shapes ... ok
+
+test result: ok. 104 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
++ export UV_PYTHON=3.13
++ UV_PYTHON=3.13
++ cd bindings/python
++ uv sync --locked --group dev --reinstall-package purrdf
+Using CPython 3.13.12
+Creating virtual environment at: .venv
+Resolved 107 packages in 6ms
+   Building purrdf @ file:///home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/bindings/python
+      Built purrdf @ file:///home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/bindings/python
+Prepared 1 package in 4m 55s
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 105 packages in 599ms
+ + alabaster==1.0.0
+ + annotated-types==0.7.0
+ + antlr4-python3-runtime==4.9.3
+ + arrow==1.4.0
+ + ast-serialize==0.6.0
+ + attrs==26.1.0
+ + babel==2.18.0
+ + backports-zstd==1.6.0
+ + certifi==2026.6.17
+ + cfgraph==0.2.1
+ + chardet==7.4.3
+ + charset-normalizer==3.4.7
+ + click==8.4.2
+ + curies==0.13.13
+ + deprecated==1.3.1
+ + deprecation==2.1.0
+ + docutils==0.22.4
+ + duckdb==1.5.5
+ + et-xmlfile==2.0.0
+ + fqdn==1.5.1
+ + graphviz==0.21
+ + greenlet==3.5.3
+ + hbreader==0.9.1
+ + html5rdf==1.2.1
+ + idna==3.18
+ + imagesize==2.0.0
+ + iniconfig==2.3.0
+ + isodate==0.7.2
+ + isoduration==20.11.0
+ + jinja2==3.1.6
+ + json-flattener==0.1.9
+ + jsonasobj==1.3.1
+ + jsonasobj2==1.0.4
+ + jsonpointer==3.1.1
+ + jsonschema==4.26.0
+ + jsonschema-specifications==2025.9.1
+ + librt==0.12.0
+ + linkml==1.11.1
+ + linkml-runtime==1.11.1
+ + markupsafe==3.0.3
+ + maturin==1.14.1
+ + mypy==2.1.0
+ + mypy-extensions==1.1.0
+ + numpy==2.5.0
+ + openpyxl==3.1.5
+ + owlrl==7.1.4
+ + packaging==26.2
+ + pandas==3.0.3
+ + parse==1.22.1
+ + pathspec==1.1.1
+ + pluggy==1.6.0
+ + prefixcommons==0.1.12
+ + prefixmaps==0.2.6
+ + prettytable==3.18.0
+ + purrdf==3.0.1 (from file:///home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/bindings/python)
+ + pyarrow==25.0.1
+ + pydantic==2.13.4
+ + pydantic-core==2.46.4
+ + pygments==2.20.0
+ + pyjsg==0.12.4
+ + pyparsing==3.3.2
+ + pyshacl==0.31.0
+ + pyshex==0.9.0
+ + pyshexc==0.10.3.post1
+ + pystow==0.8.19
+ + pytest==9.0.3
+ + pytest-logging==2015.11.4
+ + python-dateutil==2.9.0.post0
+ + pyyaml==6.0.3
+ + rdflib==7.6.0
+ + rdflib-jsonld==0.6.1
+ + rdflib-shim==1.0.3
+ + referencing==0.37.0
+ + requests==2.34.2
+ + rfc3339-validator==0.1.4
+ + rfc3987==1.3.8
+ + roman-numerals==4.1.0
+ + rpds-py==2026.6.3
+ + shexjsg==0.9.0
+ + six==1.17.0
+ + snowballstemmer==3.1.1
+ + sparqlslurper==0.5.1
+ + sparqlwrapper==2.0.0
+ + sphinx==9.1.0
+ + sphinx-click==6.2.0
+ + sphinxcontrib-applehelp==2.0.0
+ + sphinxcontrib-devhelp==2.0.0
+ + sphinxcontrib-htmlhelp==2.1.0
+ + sphinxcontrib-jsmath==1.0.1
+ + sphinxcontrib-qthelp==2.0.0
+ + sphinxcontrib-serializinghtml==2.0.0
+ + sqlalchemy==2.0.51
+ + sssom==0.4.17
+ + sssom-schema==1.0.0
+ + tqdm==4.68.3
+ + typing-extensions==4.15.0
+ + typing-inspection==0.4.2
+ + tzdata==2026.2
+ + uri-template==1.3.0
+ + urllib3==2.8.0
+ + validators==0.35.0
+ + watchdog==6.0.0
+ + wcwidth==0.8.2
+ + webcolors==25.10.0
+ + wrapt==2.2.2
++ uv run --locked pytest tests/test_entail_reasoning.py
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/bindings/python
+configfile: pyproject.toml
+collected 70 items
+
+tests/test_entail_reasoning.py ......................................... [ 58%]
+.............................                                            [100%]
+
+============================== 70 passed in 0.39s ==============================

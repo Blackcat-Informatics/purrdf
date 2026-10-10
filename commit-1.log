@@ -1,0 +1,13 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against 866765b3e88b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/499-entailment-prepare-schema-invariant d5ee0c862] Prepare schema-invariant cardinality contradictions once per class
+ 35 files changed, 7952 insertions(+), 1285 deletions(-)
+ create mode 100644 crates/entail/src/owl_dl/bounds.rs
+ create mode 100644 crates/entail/src/owl_dl/proof/schema.rs
+ create mode 100644 crates/entail/src/owl_dl/proof/schema_tests.rs
+ create mode 100644 crates/entail/src/owl_dl/support.rs
+ create mode 100644 crates/entail/src/reasoner/proof/current.rs
+ create mode 100644 crates/entail/src/reasoner/schema_tests.rs
+ create mode 100644 crates/entail/tests/schema_cardinality_boundary.rs
+ create mode 100644 crates/validate/src/regime/schema_vectors.rs
+ create mode 100644 crates/xsd/src/range/storage.rs
+ create mode 100644 crates/xsd/tests/range_storage.rs

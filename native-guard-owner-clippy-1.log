@@ -1,0 +1,32 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/validate)
+error: used `assert!` to check that a value is not empty
+   --> crates/entail/src/owl_dl/bounds.rs:719:9
+    |
+719 |         assert!(!kb.schema.guards.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+    |
+719 -         assert!(!kb.schema.guards.is_empty());
+719 +         assert_ne!(kb.schema.guards, [] as [(u32, owl_dl::clause::DlClause); 0]);
+    |
+
+error: implicit borrow as raw pointer
+   --> crates/entail/src/owl_dl/bounds.rs:730:17
+    |
+730 |                 &kb.schema.guards[ordinal].1,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+730 |                 &raw const kb.schema.guards[ordinal].1,
+    |                  +++++++++
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

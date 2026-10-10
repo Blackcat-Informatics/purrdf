@@ -1,0 +1,64 @@
+{
+  "issue": 499,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Entailment: prepare schema-invariant cardinality contradictions once per class",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "476": "OWL 2 DL: close the four ledgered W3C OWL 2 consistency divergences",
+    "452": "owl:propertyChainAxiom is a property-chain boundary; regular chains are not decided",
+    "493": "datalog: incremental maintenance of a materialized model under insertions and retractions (Z-set weights already compile)",
+    "488": "Datalog, chase and entailment: certified partial models and resumable evaluation instead of total refusal",
+    "479": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+    "364": "Post-v3.0: evaluation limits, host-parity additions and SHACL/SPARQL follow-ons from #356"
+  },
+  "related": [
+    {
+      "number": 385,
+      "title": "An alternative path of plain predicates is not translated, and a UNION in its place joins by position",
+      "state": "CLOSED"
+    },
+    {
+      "number": 173,
+      "title": "feat(entail): close the 16 ledgered W3C OWL 2 RL entailment-corpus gaps",
+      "state": "CLOSED"
+    },
+    {
+      "number": 106,
+      "title": "feat(cli): the purrdf CLI \u2014 convert / query / reason",
+      "state": "CLOSED"
+    },
+    {
+      "number": 187,
+      "title": "SEP-0007 variable substitution + defensible EXISTS",
+      "state": "CLOSED"
+    },
+    {
+      "number": 185,
+      "title": "Property-function (magic predicate) registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 182,
+      "title": "SPARQL breadth roadmap: extensions and standards beyond the W3C 1.2 surface",
+      "state": "CLOSED"
+    },
+    {
+      "number": 85,
+      "title": "Eliminate avoidable Rust allocations across core, query, validation, GTS, and bindings for 0.5.0",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 21,
+    "semantic-identity-loss": 1,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #499 + 0 comment(s) via github",
+    "link crawl: 6 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Entailment:', 'prepare', 'schema-invariant']: 7 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

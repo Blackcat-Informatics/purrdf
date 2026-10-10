@@ -1,0 +1,15 @@
+Merge main's admitted native owners into schema-bound preparation
+
+Resolve the exact integer and decimal overlap through the existing native
+copy, comparison, rounding and render kernels. Decimal digit scratch uses
+the selected original allocator; remove the obsolete core boxing body in
+favor of the shared lexical home.
+
+Preserve complete issue 499 preparation, independently checked current
+support and proofs, revision binding, typed refusal and retained ownership.
+The unequal-scale long-endpoint regression verifies actual allocation,
+peak admission and complete scratch release.
+
+Validate the actual combination through affected strict lint, 1739 native
+and C ABI cases, 70 freshly built Python cases, frozen numeric WASM cases,
+and the fresh optimized package's 43 public entailment/proof-checker cases.

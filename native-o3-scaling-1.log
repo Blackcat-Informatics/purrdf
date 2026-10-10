@@ -1,0 +1,154 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/hash)
+   Compiling crossbeam-utils v0.8.21
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-epoch v0.9.18
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/lex)
+   Compiling cfg-if v1.0.4
+   Compiling rayon-core v1.13.0
+   Compiling digest v0.11.3
+   Compiling crossbeam-deque v0.8.6
+   Compiling regex-automata v0.4.14
+   Compiling sha2 v0.11.0
+   Compiling libc v0.2.186
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-events)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/xsd)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/deflate)
+   Compiling either v1.16.0
+   Compiling hashbrown v0.17.1
+   Compiling rayon v1.12.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/testkit)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/alloc-probe)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/cdt)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/499-entailment-prepare-schema-invariant/crates/entail)
+    Finished `release` profile [optimized] target(s) in 3m 08s
+     Running unittests src/lib.rs (/opt/purrdf-schema-499-qualification/build/release/build/purrdf-entail/60eb99a8a912a169/out/purrdf_entail-60eb99a8a912a169)
+
+running 1 test
+test reasoner::schema_tests::schema_preparation_o3_scaling ... cold schema owners restrictions=1 instances=1 preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } allocations=15 traffic=3792 peak=2264 retained=1536
+schema owners restrictions=1 instances=1 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=267 traffic=38940 peak=35226 retained=0
+schema owners restrictions=1 instances=1 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 8, restrictions: 6, contradictions: 0, work: 149, allocations: 101, retained_bytes: 0, peak_bytes: 2304, obstruction: None } allocations=368 traffic=68404 peak=36984 retained=0
+cold schema owners restrictions=1 instances=16 preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } allocations=15 traffic=3792 peak=2264 retained=1536
+schema owners restrictions=1 instances=16 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=1170 traffic=75600 peak=48372 retained=0
+schema owners restrictions=1 instances=16 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 128, restrictions: 96, contradictions: 0, work: 2384, allocations: 1616, retained_bytes: 0, peak_bytes: 2304, obstruction: None } allocations=2786 traffic=547024 peak=50480 retained=0
+cold schema owners restrictions=1 instances=64 preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } allocations=15 traffic=3792 peak=2264 retained=1536
+schema owners restrictions=1 instances=64 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=3977 traffic=193488 peak=92004 retained=0
+schema owners restrictions=1 instances=64 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 2, contradictions: 0, work: 32, allocations: 15, retained_bytes: 1536, peak_bytes: 2304, obstruction: None } repeated=SchemaPreparationStats { classes: 512, restrictions: 384, contradictions: 0, work: 9536, allocations: 6464, retained_bytes: 0, peak_bytes: 2304, obstruction: None } allocations=10441 traffic=2079184 peak=94112 retained=0
+cold schema owners restrictions=8 instances=1 preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } allocations=29 traffic=16928 peak=9616 retained=6144
+schema owners restrictions=8 instances=1 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=1037 traffic=83444 peak=57318 retained=0
+schema owners restrictions=8 instances=1 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 22, restrictions: 48, contradictions: 0, work: 1612, allocations: 399, retained_bytes: 0, peak_bytes: 9696, obstruction: None } allocations=1436 traffic=416572 peak=66658 retained=0
+cold schema owners restrictions=8 instances=16 preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } allocations=29 traffic=16928 peak=9616 retained=6144
+schema owners restrictions=8 instances=16 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=6370 traffic=306250 peak=121762 retained=0
+schema owners restrictions=8 instances=16 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 352, restrictions: 768, contradictions: 0, work: 25792, allocations: 6384, retained_bytes: 0, peak_bytes: 9696, obstruction: None } allocations=12754 traffic=5636298 peak=131166 retained=0
+cold schema owners restrictions=8 instances=64 preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } allocations=29 traffic=16928 peak=9616 retained=6144
+schema owners restrictions=8 instances=64 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=23311 traffic=1051378 peak=359930 retained=0
+schema owners restrictions=8 instances=64 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 16, contradictions: 0, work: 179, allocations: 29, retained_bytes: 6144, peak_bytes: 9696, obstruction: None } repeated=SchemaPreparationStats { classes: 1408, restrictions: 3072, contradictions: 0, work: 103168, allocations: 25536, retained_bytes: 0, peak_bytes: 9696, obstruction: None } allocations=48847 traffic=22371570 peak=369334 retained=0
+cold schema owners restrictions=32 instances=1 preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } allocations=39 traffic=67232 peak=37456 retained=24576
+schema owners restrictions=32 instances=1 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=3609 traffic=238940 peak=134158 retained=0
+schema owners restrictions=32 instances=1 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 70, restrictions: 192, contradictions: 0, work: 17788, allocations: 1489, retained_bytes: 0, peak_bytes: 37776, obstruction: None } allocations=5098 traffic=4369444 peak=170954 retained=0
+cold schema owners restrictions=32 instances=16 preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } allocations=39 traffic=67232 peak=37456 retained=24576
+schema owners restrictions=32 instances=16 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=24099 traffic=1130674 peak=402570 retained=0
+schema owners restrictions=32 instances=16 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 1120, restrictions: 3072, contradictions: 0, work: 284608, allocations: 23824, retained_bytes: 0, peak_bytes: 37776, obstruction: None } allocations=47923 traffic=67218738 peak=439622 retained=0
+cold schema owners restrictions=32 instances=64 preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } allocations=39 traffic=67232 peak=37456 retained=24576
+schema owners restrictions=32 instances=64 uncached=false preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 0, restrictions: 0, contradictions: 0, work: 0, allocations: 0, retained_bytes: 0, peak_bytes: 0, obstruction: None } allocations=89277 traffic=3998082 peak=1271770 retained=0
+schema owners restrictions=32 instances=64 uncached=true preparation=SchemaPreparationStats { classes: 3, restrictions: 64, contradictions: 0, work: 1427, allocations: 39, retained_bytes: 24576, peak_bytes: 37776, obstruction: None } repeated=SchemaPreparationStats { classes: 4480, restrictions: 12288, contradictions: 0, work: 1138432, allocations: 95296, retained_bytes: 0, peak_bytes: 37776, obstruction: None } allocations=184573 traffic=268350338 peak=1308822 retained=0
+schema-preparation/cold-preparation/r1-n1 time:   [538.5 ns 576.2 ns 579.7 ns]  mad: 2.556 ns  (10 samples × 251117 iterations)
+                         outliers: 2 of 10 (2 low severe, 0 low mild, 0 high mild, 0 high severe)
+schema-preparation/cold-preparation/r1-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r1-n1 time:   [22.43 µs 22.72 µs 22.92 µs]  mad: 246.9 ns  (10 samples × 4384 iterations)
+schema-preparation/cold-reasoner/r1-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r1-n1 time:   [11.64 µs 11.71 µs 11.82 µs]  mad: 67.95 ns  (10 samples × 8328 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+schema-preparation/prepared/r1-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r1-n1 time:   [17.38 µs 17.41 µs 17.71 µs]  mad: 100.4 ns  (10 samples × 5948 iterations)
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+schema-preparation/uncached/r1-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r1-n16 time:   [659.2 ns 674.7 ns 694.2 ns]  mad: 16.54 ns  (10 samples × 152305 iterations)
+schema-preparation/cold-preparation/r1-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r1-n16 time:   [34.85 µs 35.16 µs 38.05 µs]  mad: 340.5 ns  (10 samples × 2602 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+schema-preparation/cold-reasoner/r1-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r1-n16 time:   [66.02 µs 66.08 µs 66.23 µs]  mad: 72.83 ns  (10 samples × 1465 iterations)
+schema-preparation/prepared/r1-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r1-n16 time:   [149.6 µs 150.1 µs 151.1 µs]  mad: 619.3 ns  (10 samples × 666 iterations)
+schema-preparation/uncached/r1-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r1-n64 time:   [562.3 ns 563.3 ns 563.6 ns]  mad: 630.5 ps  (10 samples × 176804 iterations)
+schema-preparation/cold-preparation/r1-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r1-n64 time:   [76.00 µs 76.13 µs 76.15 µs]  mad: 44.26 ns  (10 samples × 1314 iterations)
+schema-preparation/cold-reasoner/r1-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r1-n64 time:   [225.8 µs 227.1 µs 232.5 µs]  mad: 1.508 µs  (10 samples × 434 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+schema-preparation/prepared/r1-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r1-n64 time:   [559.6 µs 617.7 µs 732.6 µs]  mad: 52.25 µs  (10 samples × 183 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+schema-preparation/uncached/r1-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r8-n1 time:   [2.650 µs 2.693 µs 2.737 µs]  mad: 29.60 ns  (10 samples × 34867 iterations)
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 0 high mild, 1 high severe)
+schema-preparation/cold-preparation/r8-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r8-n1 time:   [78.48 µs 104.0 µs 116.4 µs]  mad: 12.74 µs  (10 samples × 1132 iterations)
+schema-preparation/cold-reasoner/r8-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r8-n1 time:   [80.44 µs 83.83 µs 94.64 µs]  mad: 3.592 µs  (10 samples × 1133 iterations)
+schema-preparation/prepared/r8-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r8-n1 time:   [128.7 µs 138.3 µs 150.1 µs]  mad: 9.590 µs  (10 samples × 739 iterations)
+schema-preparation/uncached/r8-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r8-n16 time:   [1.847 µs 2.071 µs 2.268 µs]  mad: 211.3 ns  (10 samples × 38464 iterations)
+schema-preparation/cold-preparation/r8-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r8-n16 time:   [87.64 µs 89.50 µs 104.7 µs]  mad: 3.729 µs  (10 samples × 1146 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r8-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r8-n16 time:   [531.4 µs 637.0 µs 687.5 µs]  mad: 59.91 µs  (10 samples × 142 iterations)
+schema-preparation/prepared/r8-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r8-n16 time:   [1.028 ms 1.347 ms 1.422 ms]  mad: 82.44 µs  (10 samples × 71 iterations)
+schema-preparation/uncached/r8-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r8-n64 time:   [1.729 µs 1.810 µs 2.635 µs]  mad: 90.39 ns  (10 samples × 44178 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/cold-preparation/r8-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r8-n64 time:   [165.9 µs 174.7 µs 179.2 µs]  mad: 4.699 µs  (10 samples × 635 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r8-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r8-n64 time:   [2.340 ms 3.144 ms 3.279 ms]  mad: 318.5 µs  (10 samples × 24 iterations)
+schema-preparation/prepared/r8-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r8-n64 time:   [5.512 ms 5.928 ms 6.600 ms]  mad: 457.5 µs  (10 samples × 23 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+schema-preparation/uncached/r8-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r32-n1 time:   [4.259 µs 4.594 µs 5.523 µs]  mad: 359.8 ns  (10 samples × 14150 iterations)
+schema-preparation/cold-preparation/r32-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r32-n1 time:   [187.4 µs 200.5 µs 207.7 µs]  mad: 9.750 µs  (10 samples × 463 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/cold-reasoner/r32-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r32-n1 time:   [173.7 µs 203.2 µs 243.9 µs]  mad: 30.36 µs  (10 samples × 496 iterations)
+schema-preparation/prepared/r32-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r32-n1 time:   [293.6 µs 302.8 µs 313.4 µs]  mad: 9.343 µs  (10 samples × 323 iterations)
+schema-preparation/uncached/r32-n1: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r32-n16 time:   [4.579 µs 5.196 µs 5.890 µs]  mad: 618.2 ns  (10 samples × 24898 iterations)
+schema-preparation/cold-preparation/r32-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r32-n16 time:   [285.7 µs 303.4 µs 315.3 µs]  mad: 10.91 µs  (10 samples × 386 iterations)
+schema-preparation/cold-reasoner/r32-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r32-n16 time:   [3.387 ms 4.100 ms 4.938 ms]  mad: 787.0 µs  (10 samples × 27 iterations)
+schema-preparation/prepared/r32-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r32-n16 time:   [6.192 ms 6.364 ms 6.733 ms]  mad: 194.2 µs  (10 samples × 12 iterations)
+schema-preparation/uncached/r32-n16: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-preparation/r32-n64 time:   [5.514 µs 5.883 µs 6.143 µs]  mad: 271.0 ns  (10 samples × 16214 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+schema-preparation/cold-preparation/r32-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/cold-reasoner/r32-n64 time:   [229.0 µs 233.1 µs 238.8 µs]  mad: 5.384 µs  (10 samples × 303 iterations)
+schema-preparation/cold-reasoner/r32-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/prepared/r32-n64 time:   [9.204 ms 10.90 ms 12.84 ms]  mad: 1.721 ms  (10 samples × 10 iterations)
+schema-preparation/prepared/r32-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+schema-preparation/uncached/r32-n64 time:   [24.95 ms 25.29 ms 26.46 ms]  mad: 511.1 µs  (10 samples × 5 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+schema-preparation/uncached/r32-n64: FAILED: no benchmark store: set PURRDF_BENCH_HOME, or build the binary with cargo so its CARGO_TARGET_TMPDIR places the store
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 710 filtered out; finished in 61.35s
+
