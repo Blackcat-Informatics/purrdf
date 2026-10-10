@@ -184,6 +184,10 @@ fn honest<T>(answer: &purrdf_entail::Certified<T>) -> &purrdf_entail::DlCertific
             "`DecidedWithinBoundaries` beside no boundaries should have derived `Decided`"
         ),
         DlCompleteness::BudgetExhausted => {}
+        DlCompleteness::StorageRefused => {
+            assert!(certificate.storage_refusal().is_some());
+            assert!(!certificate.completeness().is_decided());
+        }
     }
     assert!(
         certificate.steps()
@@ -948,8 +952,7 @@ fn the_work_cap_can_be_narrowed_and_never_widened() {
 }
 
 #[test]
-fn an_ontology_carrying_a_bounded_construct_is_never_reported_decided() {
-    // A property chain is read as a boundary rather than as a role assertion.
+fn a_short_property_chain_is_refused_before_any_certificate() {
     let dataset = ds(&[
         typed(N::E("q"), N::V(OBJECT_PROPERTY)),
         (N::E("chained"), N::V(PROPERTY_CHAIN), N::B("cell0")),
@@ -957,21 +960,11 @@ fn an_ontology_carrying_a_bounded_construct_is_never_reported_decided() {
         (N::B("cell0"), N::V(REST), N::V(NIL)),
         typed(N::E("A"), N::V(OWL_CLASS)),
     ]);
-    let reasoner = Reasoner::new(&dataset).expect("reverse-map");
-    let answer = reasoner.classify().expect("consistent");
-    let certificate = honest(&answer);
-    assert_eq!(
-        certificate.completeness(),
-        DlCompleteness::DecidedWithinBoundaries,
-        "a run that met a boundary has not decided the whole ontology"
-    );
-    assert!(certificate.completeness().is_decided());
-    let names: Vec<&str> = certificate
-        .boundaries()
-        .iter()
-        .map(|boundary| boundary.construct().as_str())
-        .collect();
-    assert_eq!(names, vec!["property-chain"]);
+    assert!(matches!(
+        Reasoner::new(&dataset),
+        Err(purrdf_entail::EntailError::RoleHierarchy(error)) if matches!(error.classification(),
+            purrdf_entail::RoleHierarchyError::ShortChain { .. })
+    ));
 }
 
 #[test]
@@ -1683,18 +1676,19 @@ fn cell(index: usize) -> &'static str {
 }
 
 #[test]
-fn a_property_chain_blocks_dl_because_regularity_is_not_decided() {
+fn a_regular_property_chain_is_decided_for_dl_but_excluded_from_ql() {
     let dataset = ds(&[
         (N::E("chained"), N::V(PROPERTY_CHAIN), N::B("cell0")),
         (N::B("cell0"), N::V(FIRST), N::E("q")),
-        (N::B("cell0"), N::V(REST), N::V(NIL)),
+        (N::B("cell0"), N::V(REST), N::B("cell1")),
+        (N::B("cell1"), N::V(FIRST), N::E("r")),
+        (N::B("cell1"), N::V(REST), N::V(NIL)),
     ]);
     let certificate = profile(&dataset);
-    assert!(!certificate.certifies(OwlProfile::Dl));
-    let reason = certificate.violations_of(OwlProfile::Dl)[0].reason();
     assert!(
-        reason.contains("REGULAR"),
-        "the reason names the check that is missing: {reason}"
+        certificate.certifies(OwlProfile::Dl),
+        "{:?}",
+        certificate.violations()
     );
     // …and QL excludes chains outright, while EL and RL admit them.
     assert!(!certificate.certifies(OwlProfile::Ql));

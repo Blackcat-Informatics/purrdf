@@ -141,7 +141,9 @@ pub(crate) fn checked(dataset: &RdfDataset, answer: &Certified<Verdict>) -> Serv
     let decoded = ServiceProof::decode(&encoded).expect("native canonical proof");
     assert_eq!(decoded.encode(), encoded);
     let mut checker = Reasoner::with_proofs(dataset).expect("consumer-owned source");
-    checker.prepare(decoded.question());
+    checker
+        .prepare(decoded.question())
+        .expect("query preparation");
     let context = checker.proof_context().expect("independent context");
     let replay = decoded
         .verify(
@@ -597,7 +599,7 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
     let dataset = shared_schema(1, 0, false);
     let mut reasoner = Reasoner::new(&dataset).unwrap();
     assert!(reasoner.schema_bounds(&term("A")).is_none());
-    let class = reasoner.concept_of(&term("A"));
+    let class = reasoner.concept_of(&term("A")).expect("query preparation");
     let class = reasoner.kb.table.concept(class).clone();
     let lower = (0..reasoner.kb.table.len())
         .find_map(|id| match *reasoner.kb.table.decomp(id as u32) {
@@ -609,7 +611,7 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
     let filler = reasoner.kb.table.concept(lower.1).clone();
     let maximum = crate::owl_dl::concept::Concept::Max(0, lower.0, Box::new(filler));
     reasoner.kb.push_gci(class, maximum);
-    reasoner.kb.finalize();
+    reasoner.kb.finalize().expect("fixture preparation");
     assert!(reasoner.schema_bounds(&term("A")).is_some());
 }
 

@@ -2385,7 +2385,9 @@ mod tests {
     /// and their own copy of the question, with nothing the producer shipped.
     fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext {
         let mut checker = Reasoner::with_proofs(ontology).expect("the fixture reverse-maps");
-        checker.prepare(question);
+        checker
+            .prepare(question)
+            .expect("the fixture question prepares");
         checker
             .proof_context()
             .expect("a recording reasoner checks proofs")
@@ -3956,27 +3958,27 @@ mod tests {
         let expected: Vec<(&str, String)> = [
             (
                 "consistency",
-                "991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76",
+                "829f99dde741e68af378c1e216190ccf0153999d6994a8975b6db2c39dd6093b",
             ),
             (
                 "class-satisfiability",
-                "52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242",
+                "ab043898d5ecbf9f7208a8ff1309e4d959f7496c660e14eabcb878489d1b2bc8",
             ),
             (
                 "instance-retrieval",
-                "e7c47de1c95e29d144ce16497a4088df7f6ad0a18b525bafc02f8ac7976eef06",
+                "06f904105e4067b818e7dda54feadc97710f7a29804c297f0eae1ef360706940",
             ),
             (
                 "axiom-entailment",
-                "dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9",
+                "679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879",
             ),
             (
                 "classification",
-                "808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6",
+                "dc44d5f862b98a2a33dd20bf19eb15885f26107b8f7ef01dfda193bf0753a812",
             ),
             (
                 "realization",
-                "f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd",
+                "163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76",
             ),
             (
                 "module-extraction",
@@ -3984,7 +3986,7 @@ mod tests {
             ),
             (
                 "undecided",
-                "056c64076cc2db1b59f545d4fa5a333a9c707a3d40a1e52504d9aae0b5549a56",
+                "d76dcdbdef9640671777de1c592a3f2f542b2c7460f517abc00fbe19d68d6251",
             ),
         ]
         .into_iter()
