@@ -134,8 +134,12 @@ struct Tableau<'a> {
 pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> Decision {
     let mut t = Tableau::new(kb, budget);
     let st = t.g.init_state(assumptions);
-    match t.solve(st) {
+    match t.solve(st).and_then(|answer| {
+        t.check_work()?;
+        Ok(answer)
+    }) {
         Ok(consistent) => Decision {
+            storage_refusal: t.g.storage_refusal(),
             consistent,
             steps: t.steps,
             work: t.g.work().spent(),
@@ -146,10 +150,11 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> 
             peak_depth: t.peak_depth,
         },
         Err(Exhausted) => Decision {
+            storage_refusal: t.g.storage_refusal(),
             consistent: false,
             steps: t.steps,
             work: t.g.work().spent(),
-            exhausted: !t.stopped,
+            exhausted: !t.stopped && t.g.storage_refusal().is_none(),
             stopped: t.stopped,
             peak_nodes: t.peak_nodes,
             disjunctions: t.disjunctions,
@@ -166,6 +171,14 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> 
 /// cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
     let decision = decide(kb, assumptions, Budget::for_kb(kb));
+    decision_result(decision)
+}
+
+/// Preserve physical and cancellation refusals before interpreting a semantic verdict.
+fn decision_result(decision: Decision) -> Result<bool, EntailError> {
+    if let Some(original) = decision.storage_refusal {
+        return Err(super::roles::RoleHierarchyError::Storage(original).into());
+    }
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
@@ -288,8 +301,8 @@ impl<'a> Tableau<'a> {
     /// The meter is [`Graph`]'s, so this reference procedure is bounded by the SAME counted
     /// work the hypertableau is, charged at the same shared graph operations — which is what
     /// keeps the differential a difference of calculus rather than of budget.
-    fn check_work(&self) -> Result<(), Exhausted> {
-        if self.g.work().exhausted() {
+    fn check_work(&mut self) -> Result<(), Exhausted> {
+        if self.g.refused(&mut self.stopped) {
             return Err(Exhausted);
         }
         Ok(())
@@ -1066,6 +1079,23 @@ mod tests {
     use super::*;
     use crate::owl_dl::concept::{Concept, Role};
 
+    #[test]
+    fn original_storage_refusal_is_not_semantic_inconsistency() {
+        let kb = Kb::empty();
+        let mut decision = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        assert!(decision_result(decision).unwrap());
+        decision.storage_refusal = Some(purrdf_lex::allocation::StorageError::AdmissionFailed);
+        decision.consistent = false;
+        assert!(matches!(
+            decision_result(decision),
+            Err(EntailError::RoleHierarchy(
+                super::super::roles::RoleHierarchyError::Storage(
+                    purrdf_lex::allocation::StorageError::AdmissionFailed
+                )
+            ))
+        ));
+    }
+
     /// A minimal KB builder for tableau primitives (no RDF parsing).
     struct Builder {
         kb: Kb,
@@ -1104,7 +1134,7 @@ mod tests {
         }
 
         fn finish(mut self) -> Kb {
-            self.kb.finalize();
+            self.kb.finalize().expect("fixture preparation");
             self.kb
         }
     }

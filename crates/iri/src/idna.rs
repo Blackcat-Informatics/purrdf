@@ -59,6 +59,7 @@
 //! assert!(idna::is_idn_hostname("B\u{fc}cher.example"));
 //! ```
 
+use purrdf_lex::assoc;
 use purrdf_lex::unicode::{ccc, is_nfc, nfc};
 
 use crate::idna_tables::{
@@ -167,7 +168,7 @@ pub fn map(text: &str) -> String {
             mapped.push(c);
             continue;
         }
-        match lookup_mapping(NFKC_CASEFOLD, c) {
+        match assoc::get_sorted(NFKC_CASEFOLD, &c).copied() {
             Some(image) if image.contains(&'.') && image != ['.'] => mapped.push(c),
             Some(image) => mapped.extend(image.iter().map(|&m| full_stop(m))),
             None => mapped.push(full_stop(c)),
@@ -536,13 +537,6 @@ fn bidi_rule(chars: &[char]) -> bool {
 fn lookup<T: Copy>(table: &[(u32, T)], c: char) -> T {
     let after = table.partition_point(|&(start, _)| start <= u32::from(c));
     table[after - 1].1
-}
-
-fn lookup_mapping(table: &'static [(char, &'static [char])], c: char) -> Option<&'static [char]> {
-    table
-        .binary_search_by_key(&c, |&(key, _)| key)
-        .ok()
-        .map(|i| table[i].1)
 }
 
 fn full_stop(c: char) -> char {

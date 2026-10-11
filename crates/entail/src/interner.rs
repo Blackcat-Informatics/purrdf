@@ -53,9 +53,12 @@ impl Interner {
     }
 
     /// The id already assigned to `iri`, if it has been interned (lookup only).
-    #[cfg(test)]
     pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
-        self.id_of(&TermValue::Iri(iri.to_owned()))
+        // Vocabulary lookup borrows spelling without a temporary owned term.
+        self.values.iter().enumerate().find_map(|(index, value)| {
+            matches!(value, TermValue::Iri(value) if value == iri)
+                .then(|| u32::try_from(index).expect("interned term count fits u32"))
+        })
     }
 
     /// Borrowed term lookup at the sole interner home.

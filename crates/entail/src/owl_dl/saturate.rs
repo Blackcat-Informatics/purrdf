@@ -175,21 +175,21 @@ impl Taxonomy {
 /// `seeds` fixes the contexts the answer is READ from; the saturation creates whatever
 /// further contexts the existential rule needs, so a filler concept is reasoned about even
 /// when the caller never named it.
-pub(crate) fn saturate(kb: &Kb, seeds: &[u32]) -> Taxonomy {
+pub(crate) fn saturate(kb: &Kb, seeds: &[u32]) -> Result<Taxonomy, crate::EntailError> {
     let normalized = Normalized::of_kb(kb);
     let mut engine = Engine::new(&normalized, kb.top, kb.bottom);
     for &seed in seeds {
         engine.context(seed);
     }
-    let stopped = !engine.run(kb);
-    Taxonomy {
+    let stopped = !engine.run(kb)?;
+    Ok(Taxonomy {
         slot_of: engine.slot_of,
         supers: engine.supers,
         top: kb.top,
         bottom: kb.bottom,
         complete: normalized.complete,
         stopped,
-    }
+    })
 }
 
 /// The knowledge base as the four normalized axiom forms the rule table joins over.
@@ -341,6 +341,17 @@ impl Normalized {
     ///
     /// See the [module docs](self) for the three conditions and the argument for each.
     fn fragment_holds(&self, kb: &Kb) -> bool {
+        if kb.role_program.as_ref().is_some_and(|program| {
+            program.source.chains.iter().any(|chain| {
+                !matches!(chain.head, Role::Named(_))
+                    || chain
+                        .body
+                        .iter()
+                        .any(|role| !matches!(role, Role::Named(_)))
+            })
+        }) {
+            return false;
+        }
         if !kb.inverses.is_empty() || !kb.disjoint_roles.is_empty() || !kb.asymmetric.is_empty() {
             return false;
         }
@@ -533,27 +544,76 @@ impl<'a> Engine<'a> {
     /// this calculus has no rounds — the queue is the loop — and one item is a handful of
     /// map lookups, so it is the finest boundary that exists here and the cheapest one to
     /// take.
-    fn run(&mut self, kb: &Kb) -> bool {
+    fn run(&mut self, kb: &Kb) -> Result<bool, crate::EntailError> {
         // An empty initial queue is still a classification boundary. Observe a signal
         // that fired before entry instead of reporting an unexamined empty queue as a
         // completed fixpoint.
         if kb.stopped() {
-            return false;
+            return Ok(false);
         }
-        while let Some(work) = self.queue.pop_front() {
-            if kb.stopped() {
-                return false;
+        loop {
+            while let Some(work) = self.queue.pop_front() {
+                if kb.stopped() {
+                    return Ok(false);
+                }
+                match work {
+                    Work::Concept { context, concept } => self.on_concept(context, concept),
+                    Work::Edge {
+                        subject,
+                        role,
+                        object,
+                    } => self.on_edge(subject, role, object),
+                }
             }
-            match work {
-                Work::Concept { context, concept } => self.on_concept(context, concept),
-                Work::Edge {
-                    subject,
-                    role,
-                    object,
-                } => self.on_edge(subject, role, object),
+            if let Some(program) = &kb.role_program
+                && kb.inverses.is_empty()
+                && program.source.chains.iter().all(|chain| {
+                    matches!(chain.head, Role::Named(_))
+                        && chain.body.iter().all(|role| matches!(role, Role::Named(_)))
+                })
+            {
+                let mut resident = purrdf_lex::allocation::Resident;
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+                memory.try_scope(|memory| {
+                    let edges = memory.collect(self.outgoing.iter().enumerate().flat_map(
+                        |(source, targets)| {
+                            targets
+                                .iter()
+                                .map(move |&(role, target)| (source, target, role))
+                        },
+                    ))?;
+                    let relation = program.source.close_edges(
+                        &edges,
+                        (
+                            self.supers.len(),
+                            kb.interner
+                                .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
+                                .map(Role::Named),
+                        ),
+                        |_| true,
+                        || {
+                            if kb.stopped() {
+                                Err(super::roles::RoleHierarchyError::Stopped)
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        memory,
+                    )?;
+                    for &(role, subject, object) in &relation {
+                        if let Role::Named(role) = role {
+                            self.add_edge(subject, role, object);
+                        }
+                    }
+                    memory.release_vec(relation)?;
+                    memory.release_vec(edges)?;
+                    Ok::<_, super::roles::RoleHierarchyError>(())
+                })?;
+            }
+            if self.queue.is_empty() {
+                return Ok(true);
             }
         }
-        true
     }
 
     /// Apply every rule triggered by `concept ∈ S(context)`.

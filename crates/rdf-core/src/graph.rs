@@ -32,11 +32,7 @@ pub enum GraphError {
     Storage(StorageError),
 }
 
-impl From<StorageError> for GraphError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(GraphError { Storage(StorageError) });
 
 impl core::fmt::Display for GraphError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

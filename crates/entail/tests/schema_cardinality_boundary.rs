@@ -111,7 +111,9 @@ fn largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
                 );
             }
             let mut consumer = Reasoner::with_proofs(&dataset).unwrap();
-            consumer.prepare(proof.question());
+            consumer
+                .prepare(proof.question())
+                .expect("query preparation");
             let context = consumer.proof_context().unwrap();
             let replay = proof
                 .verify(

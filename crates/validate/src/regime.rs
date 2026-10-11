@@ -1822,6 +1822,7 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
         DlCompleteness::Decided => "decided",
         DlCompleteness::DecidedWithinBoundaries => "decided-within-boundaries",
         DlCompleteness::BudgetExhausted => "budget-exhausted",
+        DlCompleteness::StorageRefused => "storage-refused",
     };
     let _ = writeln!(out, "completeness {completeness}");
     if let Some(obstruction) = certificate.schema_obstruction() {
@@ -1834,6 +1835,15 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
             }
             SchemaObstruction::Allocation => out.push_str("schema-preparation allocation\n"),
         }
+    }
+    if let Some(error) = certificate.storage_refusal() {
+        let kind = match error {
+            purrdf_lex::allocation::StorageError::SizeOverflow => "size-overflow",
+            purrdf_lex::allocation::StorageError::AllocationFailed => "allocation-failed",
+            purrdf_lex::allocation::StorageError::AdmissionFailed => "admission-failed",
+            purrdf_lex::allocation::StorageError::FormattingFailed => "formatting-failed",
+        };
+        let _ = writeln!(out, "storage-refusal {kind}");
     }
     for boundary in certificate.boundaries() {
         let _ = writeln!(
@@ -4317,6 +4327,8 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
     }
     let mut exhausted = None;
     let mut schema_obstruction = None;
+    let mut storage_refusal = None;
+    let mut storage_refused = false;
     let mut boundaries = Vec::new();
     let mut counters: [Option<u64>; 8] = [None; 8];
     const COUNTERS: [&str; 8] = [
@@ -4334,6 +4346,10 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
             exhausted = Some(match value {
                 "decided" | "decided-within-boundaries" => false,
                 "budget-exhausted" => true,
+                "storage-refused" => {
+                    storage_refused = true;
+                    false
+                }
                 other => return Err(format!("unknown DL completeness \"{other}\"")),
             });
         } else if let Some(rest) = line.strip_prefix("schema-preparation ") {
@@ -4357,6 +4373,18 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
                 return Err("extra schema preparation obstruction arguments".to_owned());
             }
             schema_obstruction = Some(obstruction);
+        } else if let Some(value) = line.strip_prefix("storage-refusal ") {
+            use purrdf_lex::allocation::StorageError;
+            let error = match value {
+                "size-overflow" => StorageError::SizeOverflow,
+                "allocation-failed" => StorageError::AllocationFailed,
+                "admission-failed" => StorageError::AdmissionFailed,
+                "formatting-failed" => StorageError::FormattingFailed,
+                other => return Err(format!("unknown DL storage refusal \"{other}\"")),
+            };
+            if storage_refusal.replace(error).is_some() {
+                return Err("the certificate states storage-refusal twice".to_owned());
+            }
         } else if let Some(rest) = line.strip_prefix("boundary ") {
             let name = rest.split_once(' ').map_or(rest, |(name, _)| name);
             let construct = purrdf_entail::Construct::of_name(name)
@@ -4383,17 +4411,24 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
     for (at, value) in counters.iter().enumerate() {
         read[at] = value.ok_or_else(|| format!("the certificate states no `{}`", COUNTERS[at]))?;
     }
-    if schema_obstruction.is_some() && !exhausted {
+    if schema_obstruction.is_some() && !exhausted && !storage_refused {
         return Err(
             "a schema preparation obstruction requires incomplete certification".to_owned(),
         );
+    }
+    if storage_refused != storage_refusal.is_some() {
+        return Err("storage-refused completeness requires exactly one physical cause".to_owned());
     }
     let certificate = DlCertificate::stated(
         exhausted, false, boundaries, read[0], read[1], read[2], read[3], read[4], read[5],
         read[6], read[7],
     );
-    Ok(match schema_obstruction {
+    let certificate = match schema_obstruction {
         Some(obstruction) => certificate.with_schema_obstruction(obstruction),
+        None => certificate,
+    };
+    Ok(match storage_refusal {
+        Some(error) => certificate.with_stated_storage_refusal(error),
         None => certificate,
     })
 }
@@ -4646,7 +4681,9 @@ pub fn check_dl_proof(
     // the `refutation-encoding` and `reverse-mapping` entries the report names.
     let mut reasoner = Reasoner::with_proofs(&dataset).map_err(|e| format!("reasoner: {e}"))?;
     let question = proof_question(&reasoner, asked, argument)?;
-    reasoner.prepare(&question);
+    reasoner
+        .prepare(&question)
+        .map_err(|error| format!("question preparation: {error}"))?;
     let context = reasoner
         .proof_context()
         .map_err(|error| format!("checking context: {error}"))?;
@@ -5046,6 +5083,36 @@ pub fn check_absent_proof_is_not_verifiable() -> Result<(), String> {
 mod tests {
     use super::*;
     use purrdf_core::TermBox;
+
+    #[test]
+    fn physical_dl_refusals_round_trip_without_a_decided_certificate() {
+        use purrdf_lex::allocation::StorageError;
+        let healthy = DlCertificate::stated(false, false, Vec::new(), 0, 0, 0, 0, 0, 0, 0, 0);
+        for error in [
+            StorageError::SizeOverflow,
+            StorageError::AllocationFailed,
+            StorageError::AdmissionFailed,
+            StorageError::FormattingFailed,
+        ] {
+            let refused = healthy.clone().with_stated_storage_refusal(error);
+            let text = render_dl_certificate("consistency", &refused);
+            let parsed = parse_dl_certificate(&text).expect("typed physical refusal");
+            assert_eq!(parsed.completeness(), DlCompleteness::StorageRefused);
+            assert_eq!(parsed.storage_refusal(), Some(error));
+            let cause = text
+                .lines()
+                .find(|line| line.starts_with("storage-refusal "))
+                .expect("original physical cause");
+            assert!(parse_dl_certificate(&text.replace(cause, "")).is_err());
+            assert!(
+                parse_dl_certificate(
+                    &text.replace("completeness storage-refused", "completeness decided")
+                )
+                .is_err()
+            );
+            assert!(parse_dl_certificate(&format!("{text}{cause}\n")).is_err());
+        }
+    }
 
     /// The backward re-derivation runs on the PRODUCTION surface and says so.
     ///
