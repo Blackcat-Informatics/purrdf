@@ -706,6 +706,51 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             );
         }
     }
+    // Universal restrictions over regular role languages use a finite closure
+    // of internal state labels. These labels travel with blocking signatures;
+    // no completion edge or RDF name stands in for an automaton continuation.
+    if let Some(program) = &kb.role_program {
+        for obligation in &program.obligations {
+            let machine = &program.machines[obligation.machine];
+            out.push_triggered(
+                obligation.source,
+                Vec::new(),
+                vec![vec![HeadAtom::Concept {
+                    var: 0,
+                    concept: obligation.states[machine.initial],
+                }]],
+            );
+            out.push_triggered(
+                obligation.states[machine.accepting],
+                Vec::new(),
+                vec![vec![HeadAtom::Concept {
+                    var: 0,
+                    concept: obligation.filler,
+                }]],
+            );
+            for edge in &machine.transitions {
+                let (body, target) = match edge.letter {
+                    Some(role) => (
+                        vec![BodyAtom::Role {
+                            from: 0,
+                            to: 1,
+                            role,
+                        }],
+                        1,
+                    ),
+                    None => (Vec::new(), 0),
+                };
+                out.push_triggered(
+                    obligation.states[edge.from],
+                    body,
+                    vec![vec![HeadAtom::Concept {
+                        var: target,
+                        concept: obligation.states[edge.to],
+                    }]],
+                );
+            }
+        }
+    }
     // The absorbed TBox, verbatim: [`crate::owl_dl::absorb`] has already decided each
     // inclusion's guard, so emission is a translation and not a second place the encoding is
     // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a
@@ -1116,7 +1161,7 @@ mod tests {
         let id = kb.table.intern(concept);
         kb.abox_types.push((1, id));
         kb.individuals.insert(1);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -1366,7 +1411,7 @@ mod tests {
     fn the_absorbed_tbox_becomes_triggered_atomic_clauses() {
         let mut kb = Kb::empty();
         kb.push_gci(Concept::Named(10), Concept::Named(11));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let named = kb.table.intern(Concept::Named(10));
         let clauses = derive(&kb);
         let triggered: Vec<usize> = clauses.triggered_by(named, &kb.schema).collect();
@@ -1390,7 +1435,7 @@ mod tests {
             Concept::Some(Role::Named(20), Box::new(Concept::Named(10))),
             Concept::Named(11),
         );
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let filler = kb.table.intern(Concept::Named(10));
         let clauses = derive(&kb);
         assert!(
@@ -1450,7 +1495,7 @@ mod tests {
         kb.asymmetric.insert(21);
         kb.disjoint_roles.insert((20, 21));
         kb.disjoint_roles.insert((21, 20));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let clauses = derive(&kb);
         // Only what nothing can trigger is tried everywhere: `⊤ ⊑ A` and the nominal guard.
         assert_eq!(

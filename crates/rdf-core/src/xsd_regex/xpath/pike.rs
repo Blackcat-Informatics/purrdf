@@ -78,6 +78,10 @@ pub(super) const fn copy_steps(cells: usize) -> u128 {
 
 /// The static position of one node in the program tree.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent immutable algebra propositions can hold together; they are not states of one machine."
+)]
 pub(super) struct Link {
     /// The node whose operand this node is, or [`ROOT`].
     pub(super) parent: usize,
@@ -97,10 +101,22 @@ pub(super) struct Link {
     pub(super) empty: bool,
     /// Whether this node can match the empty string at some input position.
     pub(super) nullable: bool,
+    /// Whether this node consumes exactly one character and sets no capture:
+    /// a character atom, or a choice between such nodes. Every alternative
+    /// of such a node that matches a character continues identically.
+    pub(super) single: bool,
+    /// Whether this node is a [`Self::single`] node or a capture of such a
+    /// run body: one iteration of it consumes one character and sets each
+    /// enclosing capture of the chain to that character.
+    pub(super) run: bool,
 }
 
 /// Static facts about a compiled program that its matchers read.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent immutable program declarations select different matcher capabilities, not mutually exclusive states."
+)]
 pub(super) struct Links {
     /// One link per node of the program arena.
     pub(super) nodes: Vec<Link>,
@@ -116,6 +132,14 @@ pub(super) struct Links {
     /// string everywhere, which the thread machine's empty-iteration rule
     /// tracks.
     pub(super) chains: bool,
+    /// Whether some repetition stores its count and distinguishes many
+    /// counts, which an input may keep from deciding anything
+    /// ([`super::r#match::Ctx::large`]).
+    pub(super) large: bool,
+    /// Those of them, ascending, whose body cannot match the empty string
+    /// and whose bounds fit `u64`: the set machine may keep their counts
+    /// relative to an offset.
+    pub(super) normal: Vec<u32>,
 }
 
 /// Whether a repetition's later choices can depend on how many iterations it
@@ -125,7 +149,7 @@ pub(super) struct Links {
 /// next, so only the values below the maximum (or, without a finite maximum,
 /// below the minimum, which [`stored`] saturates) are distinguished. `?`, `*`,
 /// `+` and `{1}` therefore store nothing.
-const fn counted(min: Count, max: Option<Count>) -> bool {
+pub(super) const fn counted(min: Count, max: Option<Count>) -> bool {
     match (min, max) {
         (_, Some(Count::Finite(max))) => max >= 2,
         (Count::Finite(min), None | Some(Count::AboveU64)) => min >= 2,
@@ -134,11 +158,12 @@ const fn counted(min: Count, max: Option<Count>) -> bool {
 }
 
 /// The count a repetition stores before another iteration: without a finite
-/// maximum, every count from one below the minimum on completes that next
-/// iteration at or above the minimum and so makes the same choices.
+/// maximum that can bind ([`Ctx::bounds`]), every count from one below the
+/// minimum on (from zero, for a minimum of zero) completes that next iteration
+/// at or above the minimum and so makes the same choices.
 const fn stored(min: Count, max: Option<Count>, count: u64) -> u64 {
     match (min, max) {
-        (Count::Finite(min), None | Some(Count::AboveU64)) if min > 0 && count >= min => min - 1,
+        (Count::Finite(min), None | Some(Count::AboveU64)) if count >= min => min.saturating_sub(1),
         _ => count,
     }
 }
@@ -269,8 +294,8 @@ pub(super) fn analyze(
 ) -> Result<Links, Error> {
     let count = nodes.len();
     // A link is five cells: its parent, its two nesting depths, its set and
-    // innermost counted repetitions and its two nullability facts; the order
-    // is one more.
+    // innermost counted repetitions and its four boolean facts; the order is
+    // one more.
     budget.charge_wide(Resource::CompileSlots, count as u128 * 5)?;
     budget.charge_wide(Resource::CompileSlots, count as u128)?;
     budget.charge_wide(Resource::CompileSteps, count as u128 * 3)?;
@@ -286,6 +311,8 @@ pub(super) fn analyze(
             outer: ROOT,
             empty: false,
             nullable: false,
+            single: false,
+            run: false,
         },
     );
     let mut order = Vec::new();
@@ -310,8 +337,16 @@ pub(super) fn analyze(
         });
         links[node].empty = empty;
         links[node].nullable = nullable;
+        let single = match nodes[node] {
+            Node::Character(_) => true,
+            Node::Choice(left, right) => links[left].single && links[right].single,
+            _ => false,
+        };
+        links[node].single = single;
+        links[node].run =
+            single || matches!(nodes[node], Node::Capture { body, .. } if links[body].run);
     }
-    let (mut stall_depth, mut counter_depth, mut chains) = (0, 0, false);
+    let (mut stall_depth, mut counter_depth, mut chains, mut large) = (0, 0, false, false);
     for &node in &order {
         let link = links[node];
         stall_depth = stall_depth.max(link.stall);
@@ -320,6 +355,7 @@ pub(super) fn analyze(
             Node::Repeat { body, min, max, .. } => {
                 let stored = counted(min, max);
                 chains |= stored && links[body].empty;
+                large |= stored && rank(nodes, &links, node).1 > super::r#match::LARGE_COUNT;
                 let set = if stored
                     && (link.set == ROOT
                         || rank(nodes, &links, node) >= rank(nodes, &links, link.set))
@@ -346,6 +382,25 @@ pub(super) fn analyze(
     }
     budget.release_vec(order)?;
     budget.release_compile_slots(count as u64);
+    let mut normal = Vec::new();
+    if large {
+        for (node, entry) in nodes.iter().enumerate() {
+            let Node::Repeat { body, min, max, .. } = *entry else {
+                continue;
+            };
+            if counted(min, max)
+                && rank(nodes, &links, node).1 > super::r#match::LARGE_COUNT
+                && !links[body].nullable
+                && min != Count::AboveU64
+                && max != Some(Count::AboveU64)
+            {
+                budget.charge_wide(Resource::CompileSlots, 1)?;
+                let required = normal.len() + 1;
+                budget.reserve(&mut normal, required)?;
+                normal.push(u32::try_from(node).expect("an admitted program's nodes fit u32"));
+            }
+        }
+    }
     Ok(Links {
         nodes: links,
         backreferences,
@@ -353,6 +408,8 @@ pub(super) fn analyze(
         counter_depth,
         anchors,
         chains,
+        large,
+        normal,
     })
 }
 
@@ -1104,10 +1161,8 @@ impl<'a> Pike<'a> {
     /// [`Frame::Posts`] ([`Chain::Posts`]), and the work is independent of the
     /// minimum either way.
     fn chain(&mut self, repeat: usize, count: u64) -> Result<Chain, Error> {
-        let Node::Repeat { min, max, .. } = self.ctx.program.nodes[repeat] else {
-            unreachable!("only a repetition iterates");
-        };
-        let span = self.ctx.program.window(repeat);
+        let (min, max) = self.ctx.bounds(repeat);
+        let span = self.ctx.window(repeat);
         if !self.chains(repeat) || decide_count(min, max, span, count, true).0 {
             return Ok(Chain::Iterate);
         }
@@ -1325,18 +1380,12 @@ impl<'a> Pike<'a> {
     /// completed `count` iterations, in its greedy or reluctant order.
     fn check(&mut self, node: usize, count: u64, stalled: bool) -> Result<Option<Pc>, Error> {
         let program = self.ctx.program;
-        let Node::Repeat {
-            body,
-            min,
-            max,
-            greedy,
-            ..
-        } = program.nodes[node]
-        else {
+        let Node::Repeat { body, greedy, .. } = program.nodes[node] else {
             unreachable!("only a repetition chooses its iterations");
         };
+        let (min, max) = self.ctx.bounds(node);
         let link = program.links.nodes[node];
-        let span = program.window(node);
+        let span = self.ctx.window(node);
         let (can_stop, can_repeat) = decide_count(min, max, span, count, stalled);
         if !can_repeat {
             return Ok(can_stop.then_some(Pc::Exit(node)));

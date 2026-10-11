@@ -188,10 +188,26 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
     /// This never observes or adopts a resident factory's returned payload.
     ///
     /// # Errors
-    /// Returns the body's first error. Refund failure cannot replace it.
-    /// Any returned error payload must retain its own original owner independently
+    /// Returns the body's first physical failure. Refund failure after that
+    /// failure cannot replace it; successful child payload keeps its original grant.
+    pub fn scope<T>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        self.try_scope(body)
+    }
+
+    /// Scope native construction while preserving its original typed domain error.
+    /// Failed local payloads die before their original grant delta is released.
+    ///
+    /// # Errors
+    /// Returns the first domain failure; a refund refusal never replaces it.
+    /// Any returned error payload retains its own original owner independently
     /// of the released child buffers, just as a successful retained payload does.
-    pub fn scope<T, E>(&mut self, body: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
+    pub fn try_scope<T, E>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
         let baseline = self.live;
         match body(self) {
             Ok(value) => Ok(value),
@@ -482,7 +498,7 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         values: impl IntoIterator<Item = T>,
         mut make: impl FnMut(T, &mut Self) -> Result<U, E>,
     ) -> Result<Vec<U>, E> {
-        self.scope(|memory| {
+        self.try_scope(|memory| {
             let values = values.into_iter();
             let mut output = Vec::new();
             memory.reserve(&mut output, values.size_hint().0)?;

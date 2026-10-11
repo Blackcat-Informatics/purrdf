@@ -743,7 +743,7 @@ impl Case {
             )
             .expect("registering literals polls no stop signal");
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let mut named = vec![NOT_A_CLASS; kb.table.len()];
         let mut neg_named = vec![NOT_A_CLASS; kb.table.len()];
         for (id, index) in pinned {
@@ -1136,7 +1136,7 @@ fn mentions_the_data_domain(c: &Concept) -> bool {
         Concept::And(members) | Concept::Or(members) => {
             members.iter().any(mentions_the_data_domain)
         }
-        Concept::Top | Concept::Bottom | Concept::Named(_) => false,
+        Concept::Top | Concept::Bottom | Concept::Named(_) | Concept::RoleState { .. } => false,
     }
 }
 
@@ -1417,6 +1417,7 @@ fn forces_unnamed_element(c: &Concept, asserted: bool) -> bool {
         Concept::Top
         | Concept::Bottom
         | Concept::Named(_)
+        | Concept::RoleState { .. }
         | Concept::Nominal(_)
         | Concept::SelfRestriction(_)
         | Concept::Data(_) => false,

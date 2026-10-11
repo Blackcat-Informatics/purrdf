@@ -760,7 +760,7 @@ fn hash_coefficient(
         .map_err(|_| GeoError::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))?;
     budget.reserve(bytes)?;
     let rendered = budget.progress.with_storage(0, |memory| {
-        memory.scope(|memory| {
+        memory.try_scope(|memory| {
             let mut text = String::new();
             memory
                 .reserve_string(&mut text, digits.len())

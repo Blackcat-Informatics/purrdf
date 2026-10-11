@@ -1084,7 +1084,7 @@ mod owner_tests {
             // Input concepts, exact range tables and source strings precede this
             // measurement. Only the actual preparation owner is being measured.
             let mut kb = Kb::from_dataset(&dataset).unwrap();
-            kb.finalize();
+            kb.finalize().expect("fixture preparation");
             let window = CurrentThreadWindow::open();
             let mut table = Preparation::default();
             table
@@ -1113,7 +1113,7 @@ mod owner_tests {
     fn compiled_schema_guards_borrow_original_admitted_products_without_allocation() {
         let dataset = shared_schema(8, 16, true);
         let mut kb = Kb::from_dataset(&dataset).unwrap();
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert_ne!(
             kb.schema.guards.len(),
             0,

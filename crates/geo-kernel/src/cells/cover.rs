@@ -208,7 +208,7 @@ impl CellCover {
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Vec<CellRange>, GeoError> {
         validate_level(stored_level)?;
-        memory.scope(|memory| {
+        memory.try_scope(|memory| {
             let mut ranges = Vec::new();
             memory
                 .reserve(&mut ranges, self.cells().len())

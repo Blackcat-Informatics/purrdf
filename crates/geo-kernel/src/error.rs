@@ -521,7 +521,7 @@ impl GeoError {
         };
         // The exhaustive number-bearing variants above use at most two ratios;
         // this stack array therefore covers the complete diagnostic law.
-        memory.scope(|memory| {
+        memory.try_scope(|memory| {
             let mut prepared: [Option<PreparedDecimalDigits>; 4] = core::array::from_fn(|_| None);
             let mut retained = 0usize;
             for (slot, input) in prepared.iter_mut().zip(&inputs) {

@@ -318,7 +318,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
         .collect();
     let roles = intern_queried_roles(&mut kb, &v, &resolved);
     let tasks = intern_tasks(&mut kb.table, &v, &named_classes, raw_tasks);
-    kb.finalize();
+    kb.finalize()?;
     if (has_definitions || has_bottom_constraints) && !kb.is_consistent()? {
         return Err(EntailError::Unsatisfiable);
     }
@@ -336,7 +336,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     // above because an inconsistent knowledge base entails everything and this calculus
     // reads the TBox only.
     let seeds: Vec<u32> = named_cid.values().copied().collect();
-    let taxonomy = saturate(&kb, &seeds);
+    let taxonomy = saturate(&kb, &seeds)?;
     // A saturation the caller stopped is not a smaller taxonomy — it is no answer at all
     // here, because the injections below read it as the WHOLE subsumption relation.
     if taxonomy.was_stopped() {

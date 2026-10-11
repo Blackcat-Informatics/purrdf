@@ -32,6 +32,14 @@ name = "purrdf_rdf"
 crate-type = ["rlib"]
 path = "src/lib.rs"
 
+[[test]]
+name = "turtle_chains"
+harness = false
+
+[[bench]]
+name = "turtle_chains"
+harness = false
+
 [dependencies]
 # The ring-fenced kernel: owns the IR, value
 # model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,

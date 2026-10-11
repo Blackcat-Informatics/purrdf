@@ -636,7 +636,7 @@ pub(crate) fn curve_boundary_points_with_memory<S: purrdf_lex::allocation::Admis
     compare: &mut impl FnMut(&Coord, &Coord) -> Result<Ordering, GeoError>,
     copy: &mut impl FnMut(&Coord) -> Result<Coord, GeoError>,
 ) -> Result<Vec<Coord>, GeoError> {
-    memory.scope(|memory| {
+    memory.try_scope(|memory| {
         let mut endpoints = curve_endpoints_with_memory(geometry, memory, compare)?;
         purrdf_lex::walk::try_sort_unstable_by(&mut endpoints, |left, right| compare(left, right))?;
         let mut boundary = Vec::new();
@@ -665,7 +665,7 @@ fn curve_endpoints_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized
     compare: &mut impl FnMut(&Coord, &Coord) -> Result<Ordering, GeoError>,
 ) -> Result<Vec<&'a Coord>, GeoError> {
     use core::ops::ControlFlow;
-    memory.scope(|memory| {
+    memory.try_scope(|memory| {
         let mut endpoints = Vec::new();
         let mut failure = None;
         let _ = crate::geom::visit_leaves_with_memory_using(geometry, memory, |leaf, memory| {

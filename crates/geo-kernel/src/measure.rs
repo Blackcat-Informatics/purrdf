@@ -135,7 +135,7 @@ impl<'a> BorrowedParts<'a> {
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {
         use core::ops::ControlFlow;
-        memory.scope(|memory| {
+        memory.try_scope(|memory| {
             let mut parts = Self {
                 points: Vec::new(),
                 lines: Vec::new(),

@@ -1205,3 +1205,94 @@ fn query_answers_the_counted_repetition_shapes_at_the_production_defaults_like_t
         }
     }
 }
+
+#[test]
+fn query_answers_large_counts_of_one_class_or_one_group_at_the_production_defaults() {
+    // Each shape was refused at these sizes: a large maximum or an exact count
+    // kept a distinct state at every position.
+    let mut prose = purrdf_testkit::text::word_prose(4 << 20);
+    prose.truncate(4 << 20);
+    let ab = purrdf_testkit::text::binary_text(4 << 20, 7);
+    let mut turtle = String::from("@prefix ex: <http://example.org/> .\n");
+    for (subject, value) in [
+        ("prose", prose.clone()),
+        ("prose_lt", format!("{prose}<")),
+        ("prose_bang", format!("{prose}!")),
+        ("ab", ab.clone()),
+        ("ab_longer", format!("{ab}a")),
+        (
+            "ab_broken",
+            format!("{}c{}", &ab[..3_999_999], &ab[..194_305]),
+        ),
+    ] {
+        writeln!(turtle, "ex:{subject} ex:v \"{value}\" .").unwrap();
+    }
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", &turtle);
+    // `\\` is the SPARQL escape of one backslash.
+    let cases = [
+        (r"^[\\s\\S]{0,10000000}$", "prose", true),
+        (r"^[^\\n]{0,10000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose_lt", false),
+        (r"^[\\p{L} ]{1,5000000}$", "prose", true),
+        (r"^(\\w+\\s?){1,5000000}$", "prose", true),
+        (r"^(\\w+\\s?){1,5000000}$", "prose_bang", false),
+        ("^(a|b){4194304}$", "ab", true),
+        ("^(a|b){4194304}$", "ab_longer", false),
+        ("(a|b){4000000}", "ab", true),
+        ("(a|b){4000000}", "ab_broken", false),
+    ];
+    let mut rows = String::new();
+    for (index, (pattern, subject, _)) in cases.iter().enumerate() {
+        write!(
+            rows,
+            " ({index} <http://example.org/{subject}> \"{pattern}\")"
+        )
+        .unwrap();
+    }
+    let query = format!(
+        "SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{{rows} }} \
+         ?s <http://example.org/v> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i"
+    );
+    let expected: Vec<String> = std::iter::once("r".to_owned())
+        .chain(cases.iter().map(|&(_, _, matched)| matched.to_string()))
+        .collect();
+    for law in [XPATH_20, XPATH_31] {
+        let out = run_under(
+            &["query", "--data", &data, "--results-format", "csv"],
+            Some(law),
+            &[&query],
+        );
+        assert_ok(&out, &format!("query under {law}"));
+        let answers: Vec<String> = stdout(&out)
+            .lines()
+            .map(|line| line.trim().to_owned())
+            .collect();
+        assert_eq!(answers, expected, "{law}");
+    }
+    // The only match of the large counted group over two mebibytes, replaced
+    // with its last iteration's capture.
+    let half = &prose[..2 << 20];
+    let last = &half[half.trim_end_matches(' ').rfind(' ').unwrap() + 1..];
+    let replace_data = write_file(
+        dir.path(),
+        "half.ttl",
+        &format!("@prefix ex: <http://example.org/> .\nex:half ex:v \"{half}\" .\n"),
+    );
+    let query = "SELECT ?r WHERE { <http://example.org/half> <http://example.org/v> ?v \
+                 BIND(REPLACE(?v, \"^(\\\\w+\\\\s?){1,5000000}$\", \"[$1]\") AS ?r) }";
+    for law in [XPATH_20, XPATH_31] {
+        let out = run_under(
+            &["query", "--data", &replace_data, "--results-format", "csv"],
+            Some(law),
+            &[query],
+        );
+        assert_ok(&out, &format!("REPLACE under {law}"));
+        assert_eq!(
+            stdout(&out).trim(),
+            format!("r\r\n[{last}]").trim(),
+            "{law}"
+        );
+    }
+}

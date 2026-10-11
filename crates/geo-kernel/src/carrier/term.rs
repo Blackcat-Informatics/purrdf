@@ -24,7 +24,7 @@ pub fn literal_from_display_metered(
     let mut progress = crate::context::WorkProgress::integer(observer);
     progress
         .with_storage(0, |memory| {
-            memory.scope(|memory| {
+            memory.try_scope(|memory| {
                 let lexical = memory.format(&lexical)?;
                 let datatype = memory.format(&datatype)?;
                 Ok(TermValue::typed_literal(lexical, datatype))

@@ -26,9 +26,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use purrdf_hash::fnv;
+use purrdf_lex::walk::WorkList;
 
 use crate::model::RdfTextDirection;
-use crate::{DatasetView, FastMap, GraphMatch, RdfDataset, TermId, TermRef};
+use crate::{FastMap, FastSet, RdfDataset, TermId, TermRef};
 use purrdf_iri::{PrefixMap, contract_where};
 use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri};
@@ -45,6 +46,13 @@ fn xsd(local: &str) -> String {
 
 /// Render a frozen dataset as canonical, review-friendly Turtle. `prefixes` supplies
 /// the candidate prefix bindings; only those actually used appear in the header.
+///
+/// Blank property lists and collections render over a heap work list. Lines
+/// retain four spaces per nesting level through level forty, then saturate;
+/// the permanent structural-key depth guard is forty as well. Neither policy
+/// truncates statements or rejects a deeper blank-node chain. As a graph-only
+/// renderer, this folds graph slots together; dataset serialization uses the
+/// native TriG writer to preserve named graphs.
 pub fn render(dataset: &RdfDataset, prefixes: &[(String, String)]) -> String {
     // Longest-namespace-first so the most specific prefix wins on abbreviation.
     let mut prefixes: Vec<(String, String)> = prefixes.to_vec();
@@ -55,6 +63,41 @@ pub fn render(dataset: &RdfDataset, prefixes: &[(String, String)]) -> String {
 /// A predicate→objects map (both ordered) for one subject.
 type Props = BTreeMap<TermId, BTreeSet<ObjKey>>;
 
+/// Each subject's predicate→objects multiset, as raw `TermId`s.
+type RawProps = FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>;
+
+/// The deepest nesting level whose lines indent further than the one around them.
+///
+/// An inline blank node or a continuation object indents one level (four spaces)
+/// past the line that opens it, so without a ceiling a chain of `n` singly
+/// referenced blank nodes would write `O(n²)` bytes of indentation. Past this many
+/// levels a nested `[ … ]` keeps the indentation of the level above it: the text is
+/// the same Turtle, and its size stays linear in the graph.
+const MAX_INDENT_LEVELS: usize = ContentKeys::MAX_DEPTH;
+
+/// One step of the renderer's output walk: text to write, or a term or a subject's
+/// property lines still to expand. The walk keeps what is still to be written on a
+/// heap work list, so a nested inline blank node, collection or triple term costs
+/// list entries rather than machine stack, however deep the nesting.
+enum Emit {
+    /// Fixed text.
+    Static(&'static str),
+    /// Text built for this position.
+    Text(String),
+    /// The indentation of a line at this nesting level.
+    Indent(usize),
+    /// A subject term at the head of its top-level block.
+    Subject(TermId),
+    /// An object term, whose continuation lines indent by `depth`.
+    Object { id: TermId, depth: usize },
+    /// A subject's property lines at `depth`; `top` ends the last one with ` .`.
+    Props {
+        subj: TermId,
+        depth: usize,
+        top: bool,
+    },
+}
+
 struct Renderer<'a> {
     dataset: &'a RdfDataset,
     prefixes: Vec<(String, String)>,
@@ -62,9 +105,10 @@ struct Renderer<'a> {
     prefix_map: PrefixMap,
     /// Each subject's properties.
     by_subject: FastMap<TermId, Props>,
-    /// Times each blank `TermId` appears as an object.
-    object_refs: FastMap<TermId, usize>,
-    /// `_:bN` labels for shared/cyclic blanks that cannot inline.
+    /// The blank nodes written inline, as `[ … ]` or a collection, where their one
+    /// reference stands ([`inline_blanks`]).
+    inline: FastSet<TermId>,
+    /// `_:bN` labels for every other blank node.
     shared_labels: FastMap<TermId, String>,
     /// Prefixes actually used during rendering.
     used_prefixes: RefCell<BTreeSet<String>>,
@@ -72,6 +116,8 @@ struct Renderer<'a> {
     rdf_type: Option<TermId>,
     rdf_reifies: Option<TermId>,
     rdf_rest: Option<TermId>,
+    rdf_first: Option<TermId>,
+    rdf_nil: Option<TermId>,
 }
 
 impl<'a> Renderer<'a> {
@@ -81,36 +127,53 @@ impl<'a> Renderer<'a> {
         // the ordering of blank/triple objects is a pure function of their subtree
         // CONTENT (computed in phase 2), never of `TermId` interning order — that is
         // what makes the render idempotent regardless of how the parser interned terms.
-        let mut raw: FastMap<TermId, BTreeMap<TermId, Vec<TermId>>> = FastMap::default();
+        let mut raw: RawProps = FastMap::default();
         let mut object_refs: FastMap<TermId, usize> = FastMap::default();
         // The RDF 1.2 statement layer (reifier bindings + annotations) lives in SIDE
         // TABLES, not `quads` — so the canonical renderer must fold in `reifier_quads`
         // (`<reifier> rdf:reifies << s p o >>`) and `annotation_quads`
         // (`<reifier> <pred> <value>`) alongside the base quads, or it silently drops the
-        // whole statement layer (bug 2). Folding them in here — rather than a
+        // whole statement layer. Folding them in here — rather than a
         // separate emission pass — keeps a reifier subject's `rdf:reifies` edge and its
         // annotations on ONE flat top-level subject (`<reifier> rdf:reifies << s p o >> ;
         // <ann> <v> .`), which round-trips idempotently: the quoted triple term renders as
         // `<< s p o >>` (never as a nested blank), so re-parsing reproduces the same side
         // tables without growing the graph.
-        let rows = dataset
+        let rows: Vec<(TermId, TermId, TermId)> = dataset
             .quads()
             .map(|q| (q.s, q.p, q.o))
             .chain(dataset.reifier_quads().map(|q| (q.s, q.p, q.o)))
-            .chain(dataset.annotation_quads().map(|q| (q.s, q.p, q.o)));
-        for (s, p, o) in rows {
+            .chain(dataset.annotation_quads().map(|q| (q.s, q.p, q.o)))
+            .collect();
+        for &(s, p, o) in &rows {
             raw.entry(s).or_default().entry(p).or_default().push(o);
             if matches!(dataset.resolve(o), TermRef::Blank { .. }) {
                 *object_refs.entry(o).or_default() += 1;
             }
         }
+        let positions = || rows.iter().flat_map(|&(s, _, o)| [s, o]);
 
         // Phase 2: a content-derived ordering key for every blank/triple term, walked
-        // recursively over `raw` (the sorted (predicate, object-key) pairs of a blank's
+        // over `raw` (the sorted (predicate, object-key) pairs of a blank's
         // properties), bounded against cycles. Grounded objects use their own lexical
         // key, so the result distinguishes sibling restrictions by their actual content
         // (`owl:onProperty`/`owl:someValuesFrom`/…) rather than by interning order.
-        let content = ContentKeys::new(dataset, &raw);
+        // Singleton edges need no ordering key. Avoid spending the permanent
+        // depth budget repeatedly on every suffix of a million-node chain.
+        let quoted = quoted_blanks(dataset, positions());
+        let inline = inline_blanks(&raw, &object_refs, &quoted);
+        let competing = raw
+            .values()
+            .flat_map(BTreeMap::values)
+            .filter(|objects| objects.len() > 1)
+            .flatten()
+            .copied();
+        let labelled = raw.keys().copied().filter(|id| !inline.contains(id));
+        let content = ContentKeys::new(
+            dataset,
+            &raw,
+            competing.chain(labelled).chain(quoted.iter().copied()),
+        );
 
         // Materialize the ordered `Props`: grounded objects keep their lexical key,
         // blank/triple objects sort by the content key computed above.
@@ -122,7 +185,7 @@ impl<'a> Renderer<'a> {
                     .map(|(&p, objs)| {
                         let set: BTreeSet<ObjKey> = objs
                             .iter()
-                            .map(|&o| ObjKey::new(dataset, o, &content))
+                            .map(|&o| ObjKey::new(dataset, o, &content, objs.len() > 1))
                             .collect();
                         (p, set)
                     })
@@ -131,23 +194,29 @@ impl<'a> Renderer<'a> {
             })
             .collect();
 
-        // Deterministic labels for blanks that cannot inline (referenced 0 or >1
-        // times as an object), ordered by a structural signature so the labeling is
-        // idempotent and stable under graph isomorphism for non-symmetric graphs.
+        // Deterministic labels for every blank that does not inline, ordered by a
+        // structural signature so the labeling is idempotent and stable under graph
+        // isomorphism for non-symmetric graphs.
         let mut shared: Vec<TermId> = by_subject
             .keys()
             .copied()
             .chain(object_refs.keys().copied())
+            .chain(quoted.iter().copied())
             .filter(|id| matches!(dataset.resolve(*id), TermRef::Blank { .. }))
-            .filter(|id| object_refs.get(id).copied().unwrap_or(0) != 1)
+            .filter(|id| !inline.contains(id))
             .collect();
         shared.sort();
         shared.dedup();
         let sigs = blank_signatures(dataset, &by_subject, &shared);
-        // Order labels by the structural-signature hash; on a hash tie fall back to the
-        // fuller content key (still pure graph content), NEVER to `id.index()`, so the
-        // `_:bN` numbering is idempotent under any interning order.
-        shared.sort_by_cached_key(|id| (sigs.get(id).copied().unwrap_or(0), content.key_for(*id)));
+        // Structural keys lead. At the permanent guard or a symmetric tie,
+        // authored blank identity breaks ties independently of interning order.
+        shared.sort_by_cached_key(|id| {
+            (
+                sigs.get(id).copied().unwrap_or(0),
+                content.key_for(*id),
+                format!("{:?}", dataset.term_value(*id)),
+            )
+        });
         let shared_labels = shared
             .into_iter()
             .enumerate()
@@ -160,18 +229,22 @@ impl<'a> Renderer<'a> {
             prefixes,
             prefix_map,
             by_subject,
-            object_refs,
+            inline,
             shared_labels,
             used_prefixes: RefCell::new(BTreeSet::new()),
             rdf_type: None,
             rdf_reifies: None,
             rdf_rest: None,
+            rdf_first: None,
+            rdf_nil: None,
         };
         // Resolve the well-known predicate ids by scanning the term table (they may
         // be absent, in which case the sentinel never matches a real predicate).
         r.rdf_type = r.find_iri(&rdf("type"));
         r.rdf_reifies = r.find_iri(&rdf("reifies"));
         r.rdf_rest = r.find_iri(&rdf("rest"));
+        r.rdf_first = r.find_iri(&rdf("first"));
+        r.rdf_nil = r.find_iri(&rdf("nil"));
         r
     }
 
@@ -189,8 +262,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn is_inline_bnode(&self, id: TermId) -> bool {
-        matches!(self.dataset.resolve(id), TermRef::Blank { .. })
-            && self.object_refs.get(&id).copied().unwrap_or(0) == 1
+        self.inline.contains(&id)
     }
 
     fn render(&self) -> String {
@@ -203,13 +275,21 @@ impl<'a> Renderer<'a> {
         tops.sort_by_cached_key(|id| self.subject_sort_key(*id));
 
         let mut body = String::new();
+        let mut pending = WorkList::<Emit, 16>::new();
         for (i, subj) in tops.iter().enumerate() {
             if i > 0 {
                 body.push('\n');
             }
-            body.push_str(&self.subject_label(*subj, 0));
-            body.push('\n');
-            self.render_props(*subj, 1, &mut body, true);
+            pending.extend([
+                Emit::Props {
+                    subj: *subj,
+                    depth: 1,
+                    top: true,
+                },
+                Emit::Static("\n"),
+                Emit::Subject(*subj),
+            ]);
+            self.emit(&mut pending, &mut body);
         }
 
         let used = self.used_prefixes.borrow();
@@ -226,8 +306,44 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_props(&self, subj: TermId, depth: usize, out: &mut String, top: bool) {
-        let indent = "    ".repeat(depth);
+    /// Write everything on `pending` onto `out`, in document order: the list holds the
+    /// steps still to write, the next on top, and a step that opens a nested term or
+    /// a subject's property lines writes what precedes its parts and leaves its parts,
+    /// and what follows them, on the list.
+    fn emit(&self, pending: &mut WorkList<Emit, 16>, out: &mut String) {
+        while let Some(step) = pending.pop() {
+            match step {
+                Emit::Static(text) => out.push_str(text),
+                Emit::Text(text) => out.push_str(&text),
+                Emit::Indent(depth) => {
+                    for _ in 0..depth.min(MAX_INDENT_LEVELS) {
+                        out.push_str("    ");
+                    }
+                }
+                // A quoted-triple subject renders through the `<<( s p o )>>` path
+                // rather than flattening to `[]`, which would drop the asserted
+                // statement's subject identity; an IRI or blank subject renders as
+                // its label.
+                Emit::Subject(id) => match self.dataset.resolve(id) {
+                    TermRef::Triple { .. } => pending.push(Emit::Object { id, depth: 0 }),
+                    _ => out.push_str(&self.term_label(id)),
+                },
+                Emit::Object { id, depth } => self.expand_object(id, depth, out, pending),
+                Emit::Props { subj, depth, top } => {
+                    self.expand_props(subj, depth, top, pending);
+                }
+            }
+        }
+    }
+
+    /// Leave a subject's property lines on `pending`, the first on top.
+    fn expand_props(
+        &self,
+        subj: TermId,
+        depth: usize,
+        top: bool,
+        pending: &mut WorkList<Emit, 16>,
+    ) {
         let Some(props) = self.by_subject.get(&subj) else {
             return;
         };
@@ -244,9 +360,10 @@ impl<'a> Renderer<'a> {
             )
         });
 
+        let mut lines: Vec<Emit> = Vec::new();
         let last_pred = preds.len().saturating_sub(1);
         for (pi, pred) in preds.iter().enumerate() {
-            let objs: Vec<&ObjKey> = props[pred].iter().collect();
+            let objs = &props[pred];
             let pred_str = if Some(*pred) == self.rdf_type {
                 "a".to_string()
             } else {
@@ -257,44 +374,81 @@ impl<'a> Renderer<'a> {
                 // First object sits on the predicate line (indent `depth`);
                 // continuation objects sit one level deeper, so a nested `[ … ]`
                 // closes in alignment with its own opening line.
-                let obj_depth = if oi == 0 { depth } else { depth + 1 };
-                let rendered = self.render_object(obj.id, obj_depth);
-                let terminator = if pi == last_pred && oi == last_obj {
-                    if top { " ." } else { " ;" }
-                } else if oi == last_obj {
-                    " ;"
+                let (lead, obj_depth) = if oi == 0 {
+                    (format!("{pred_str} "), depth)
                 } else {
-                    " ,"
+                    (String::new(), depth + 1)
                 };
-                if oi == 0 {
-                    let _ = writeln!(out, "{indent}{pred_str} {rendered}{terminator}");
+                let terminator = if pi == last_pred && oi == last_obj {
+                    if top { " .\n" } else { " ;\n" }
+                } else if oi == last_obj {
+                    " ;\n"
                 } else {
-                    let _ = writeln!(out, "{indent}    {rendered}{terminator}");
-                }
+                    " ,\n"
+                };
+                lines.extend([
+                    Emit::Indent(obj_depth),
+                    Emit::Text(lead),
+                    Emit::Object {
+                        id: obj.id,
+                        depth: obj_depth,
+                    },
+                    Emit::Static(terminator),
+                ]);
             }
         }
+        pending.extend(lines.into_iter().rev());
     }
 
-    fn render_object(&self, id: TermId, depth: usize) -> String {
+    /// Write an object term, or what opens it, onto `out`, and leave its parts and
+    /// what closes it on `pending`.
+    fn expand_object(
+        &self,
+        id: TermId,
+        depth: usize,
+        out: &mut String,
+        pending: &mut WorkList<Emit, 16>,
+    ) {
         match self.dataset.resolve(id) {
-            TermRef::Iri(iri) => self.iri(iri),
+            TermRef::Iri(iri) => out.push_str(&self.iri(iri)),
             TermRef::Literal {
                 lexical,
                 datatype,
                 language,
                 direction,
-            } => self.literal(lexical, datatype, language, direction),
+            } => out.push_str(&self.literal(lexical, datatype, language, direction)),
             TermRef::Blank { .. } => {
-                if self.is_inline_bnode(id) {
-                    if let Some(list) = self.try_collection(id) {
-                        return self.render_collection(&list, depth);
+                if !self.is_inline_bnode(id) {
+                    match self.shared_labels.get(&id) {
+                        Some(label) => out.push_str(label),
+                        None => out.push_str("[]"),
                     }
-                    self.render_inline_bnode(id, depth)
+                } else if let Some(list) = self.try_collection(id) {
+                    if list.is_empty() {
+                        out.push_str("()");
+                        return;
+                    }
+                    out.push_str("( ");
+                    pending.push(Emit::Static(" )"));
+                    for (i, member) in list.iter().enumerate().rev() {
+                        pending.push(Emit::Object { id: *member, depth });
+                        if i > 0 {
+                            pending.push(Emit::Static(" "));
+                        }
+                    }
+                } else if self.by_subject.get(&id).is_none_or(BTreeMap::is_empty) {
+                    out.push_str("[]");
                 } else {
-                    self.shared_labels
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_else(|| "[]".to_string())
+                    out.push_str("[\n");
+                    pending.extend([
+                        Emit::Static("]"),
+                        Emit::Indent(depth),
+                        Emit::Props {
+                            subj: id,
+                            depth: depth + 1,
+                            top: false,
+                        },
+                    ]);
                 }
             }
             TermRef::Triple { s, p, o } => {
@@ -303,24 +457,17 @@ impl<'a> Renderer<'a> {
                 // (and mints a reifier), so re-parsing it would grow the graph and break
                 // the `rdf:reifies` object. A triple term denotes the triple without
                 // asserting it, exactly as the gts codec serializer emits it.
-                format!(
-                    "{TRIPLE_TERM_OPEN} {} {} {} {TRIPLE_TERM_CLOSE}",
-                    self.render_object(s, depth),
-                    self.term_label(p),
-                    self.render_object(o, depth)
-                )
+                out.push_str(TRIPLE_TERM_OPEN);
+                out.push(' ');
+                pending.extend([
+                    Emit::Static(TRIPLE_TERM_CLOSE),
+                    Emit::Static(" "),
+                    Emit::Object { id: o, depth },
+                    Emit::Text(format!(" {} ", self.term_label(p))),
+                    Emit::Object { id: s, depth },
+                ]);
             }
         }
-    }
-
-    fn render_inline_bnode(&self, id: TermId, depth: usize) -> String {
-        if self.by_subject.get(&id).is_none_or(BTreeMap::is_empty) {
-            return "[]".to_string();
-        }
-        let mut inner = String::new();
-        self.render_props(id, depth + 1, &mut inner, false);
-        let close_indent = "    ".repeat(depth);
-        format!("[\n{inner}{close_indent}]")
     }
 
     /// A well-formed `rdf:List` headed by `id` ([`DatasetView::rdf_list_strict`])
@@ -329,7 +476,29 @@ impl<'a> Renderer<'a> {
     /// the members.
     fn try_collection(&self, id: TermId) -> Option<Vec<TermId>> {
         let rdf_rest = self.rdf_rest?;
-        let members = self.dataset.rdf_list_strict(id, GraphMatch::Any).ok()?;
+        let props = self.by_subject.get(&id)?;
+        if props.len() != 2 || !props.contains_key(&rdf_rest) {
+            return None;
+        }
+        let first = self.rdf_first?;
+        let nil = self.rdf_nil;
+        let edge = |cell, predicate| {
+            crate::collections::SoleObject::of(
+                self.by_subject
+                    .get(&cell)
+                    .into_iter()
+                    .filter_map(|props| props.get(&predicate))
+                    .flatten()
+                    .map(|object| object.id),
+            )
+        };
+        let members = crate::collections::walk_rdf_list(
+            id,
+            nil,
+            |cell| edge(cell, first),
+            |cell| edge(cell, rdf_rest),
+        )
+        .ok()?;
         let mut cell = id;
         for _ in &members {
             let props = self.by_subject.get(&cell)?;
@@ -339,17 +508,6 @@ impl<'a> Renderer<'a> {
             cell = props.get(&rdf_rest)?.iter().next()?.id;
         }
         Some(members)
-    }
-
-    fn render_collection(&self, items: &[TermId], depth: usize) -> String {
-        if items.is_empty() {
-            return "()".to_string();
-        }
-        let rendered: Vec<String> = items
-            .iter()
-            .map(|t| self.render_object(*t, depth))
-            .collect();
-        format!("( {} )", rendered.join(" "))
     }
 
     // ── term formatting ──────────────────────────────────────────────────────
@@ -372,17 +530,6 @@ impl<'a> Renderer<'a> {
                 .cloned()
                 .unwrap_or_else(|| "[]".to_string()),
             _ => "[]".to_string(),
-        }
-    }
-
-    /// A subject term's label. Like [`term_label`](Self::term_label) for an IRI or
-    /// blank-node subject, but renders an RDF-1.2 quoted-triple subject via the
-    /// `<< s p o >>` path instead of silently flattening it to `[]` (which would drop
-    /// the asserted statement's subject identity from the graph).
-    fn subject_label(&self, id: TermId, depth: usize) -> String {
-        match self.dataset.resolve(id) {
-            TermRef::Triple { .. } => self.render_object(id, depth),
-            _ => self.term_label(id),
         }
     }
 
@@ -466,8 +613,8 @@ impl<'a> Renderer<'a> {
 /// independent of `TermId` interning order — which is what makes the render idempotent.
 /// Recursion is bounded by a `seen` set so cyclic blank graphs terminate (a back-edge
 /// to an in-progress node renders as a fixed `^` marker), and a depth budget caps
-/// pathological chains; ties under the budget are harmless because they only affect
-/// sort order between structurally indistinguishable subtrees.
+/// pathological chains. Equal bounded keys fall back to authored term identity,
+/// preserving row and interning permutation determinism without lifting the guard.
 struct ContentKeys {
     keys: FastMap<TermId, String>,
 }
@@ -475,24 +622,21 @@ struct ContentKeys {
 impl ContentKeys {
     const MAX_DEPTH: usize = 40;
 
-    fn new(dataset: &RdfDataset, raw: &FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>) -> Self {
-        // `keys` doubles as the memoization cache: every acyclic blank/triple term
-        // `compute_content_key` fully resolves is inserted, so a single traversal from
-        // the top-level subjects/objects populates keys for ALL reachable nested
-        // blank/triple terms (not just `q.s`/`q.o`) and never recomputes a shared
-        // subtree. Cyclic / depth-capped subtrees are deliberately left out (see the
-        // `cacheable` flag in `compute_content_key`).
+    /// Content keys for blank/triple objects that compete for ordering.
+    fn new(dataset: &RdfDataset, raw: &RawProps, positions: impl Iterator<Item = TermId>) -> Self {
+        // Each descent stops at the permanent blank guard, plus at most the
+        // frozen dataset's MAX_TERM_NESTING_DEPTH consecutive quoted levels.
+        // Cached suffixes are not reused during descent: leaf-first traversal
+        // could otherwise cross the guard and grow a key with the entire chain.
         let mut keys: FastMap<TermId, String> = FastMap::default();
-        for q in dataset.quads() {
-            for term in [q.s, q.o] {
-                if matches!(
-                    dataset.resolve(term),
-                    TermRef::Blank { .. } | TermRef::Triple { .. }
-                ) && !keys.contains_key(&term)
-                {
-                    let mut seen = BTreeSet::new();
-                    compute_content_key(dataset, raw, term, &mut seen, 0, &mut keys);
-                }
+        for term in positions {
+            if matches!(
+                dataset.resolve(term),
+                TermRef::Blank { .. } | TermRef::Triple { .. }
+            ) && !keys.contains_key(&term)
+            {
+                let mut seen = BTreeSet::new();
+                compute_content_key(dataset, raw, term, &mut seen, 0, &mut keys);
             }
         }
         Self { keys }
@@ -514,22 +658,15 @@ impl ContentKeys {
 /// interning-order-dependent value when the same node is later reached from a different
 /// root, reintroducing the very non-determinism this fold exists to remove). Only fully
 /// resolved acyclic subtrees are written to `cache`; cyclic / over-budget blank graphs
-/// fall through to the `id.index()` tiebreak in [`ObjKey`], exactly as before this fix.
+/// fall through to the value-based identity tiebreak in [`ObjKey`].
 fn compute_content_key(
     dataset: &RdfDataset,
-    raw: &FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>,
+    raw: &RawProps,
     id: TermId,
     seen: &mut BTreeSet<TermId>,
     depth: usize,
     cache: &mut FastMap<TermId, String>,
 ) -> (String, bool) {
-    // A memoized key is always a fully-resolved acyclic blank/triple key (leaf terms are
-    // never cached), so reusing it is sound and cannot be a live back-edge: a node is
-    // only inserted AFTER `seen.remove`, hence a cached id is never simultaneously in
-    // `seen`.
-    if let Some(k) = cache.get(&id) {
-        return (k.clone(), true);
-    }
     match dataset.resolve(id) {
         TermRef::Iri(iri) => (format!("I{iri}"), true),
         TermRef::Literal {
@@ -597,15 +734,127 @@ fn compute_content_key(
     }
 }
 
+/// The blank nodes that occur inside a triple term reachable from `positions`, at any
+/// depth.
+///
+/// Turtle writes a blank node inside a triple term only as a label (`ttSubject` and
+/// `ttObject` admit `BlankNode`, never a `[ … ]` property list), and an anonymous
+/// `[]` there would mint a fresh node on every read, so each of these is labelled.
+fn quoted_blanks(dataset: &RdfDataset, positions: impl Iterator<Item = TermId>) -> FastSet<TermId> {
+    let mut quoted = FastSet::default();
+    let mut walked = FastSet::default();
+    let mut pending = WorkList::<TermId, 16>::new();
+    pending.extend(positions.filter(|id| matches!(dataset.resolve(*id), TermRef::Triple { .. })));
+    while let Some(id) = pending.pop() {
+        match dataset.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                if walked.insert(id) {
+                    pending.extend([s, p, o]);
+                }
+            }
+            TermRef::Blank { .. } => {
+                quoted.insert(id);
+            }
+            TermRef::Iri(_) | TermRef::Literal { .. } => {}
+        }
+    }
+    quoted
+}
+
+/// The blank nodes the renderer writes inline, where their one reference stands.
+///
+/// A blank node inlines when it is the object of exactly one row and occurs in no
+/// triple term ([`quoted_blanks`]): the `[ … ]` (or collection) at that position is
+/// then the whole of what the document says about it. That rule alone would also
+/// inline the members of a cycle of such nodes (`_:a :p _:b . _:b :p _:a`, or a node
+/// that is its own one object), whose blocks no top-level subject ever reaches, so
+/// the cycle would vanish from the output. Every node on such a cycle is labelled
+/// instead, which makes it a top-level subject; whatever hangs off the cycle still
+/// inlines beneath it. Every walk here runs over a work list.
+fn inline_blanks(
+    raw: &RawProps,
+    object_refs: &FastMap<TermId, usize>,
+    quoted: &FastSet<TermId>,
+) -> FastSet<TermId> {
+    let mut inline: FastSet<TermId> = object_refs
+        .iter()
+        .filter(|&(id, &refs)| refs == 1 && !quoted.contains(id))
+        .map(|(&id, _)| id)
+        .collect();
+    let objects_of = |subject: TermId| {
+        raw.get(&subject)
+            .into_iter()
+            .flat_map(|preds| preds.values().flatten().copied())
+    };
+
+    // Everything a top-level subject (any subject that does not inline) reaches
+    // through inline objects is written in its block.
+    let mut reached: FastSet<TermId> = FastSet::default();
+    let mut pending = WorkList::<TermId, 16>::new();
+    pending.extend(
+        raw.keys()
+            .copied()
+            .filter(|subject| !inline.contains(subject)),
+    );
+    while let Some(subject) = pending.pop() {
+        for object in objects_of(subject) {
+            if inline.contains(&object) && reached.insert(object) {
+                pending.push(object);
+            }
+        }
+    }
+    let unreached: FastSet<TermId> = inline.difference(&reached).copied().collect();
+    if unreached.is_empty() {
+        return inline;
+    }
+
+    // Each unreached node's one reference comes from another unreached node, so they
+    // form cycles with trees hanging off them. Peel the trees from their leaves up;
+    // what remains is exactly the nodes on a cycle.
+    let mut parent: FastMap<TermId, TermId> = FastMap::default();
+    let mut children: FastMap<TermId, usize> = FastMap::default();
+    for &node in &unreached {
+        for object in objects_of(node) {
+            if unreached.contains(&object) {
+                parent.insert(object, node);
+                *children.entry(node).or_default() += 1;
+            }
+        }
+    }
+    let mut on_cycle = unreached;
+    let mut leaves = WorkList::<TermId, 16>::new();
+    leaves.extend(
+        on_cycle
+            .iter()
+            .copied()
+            .filter(|node| !children.contains_key(node)),
+    );
+    while let Some(leaf) = leaves.pop() {
+        on_cycle.remove(&leaf);
+        if let Some(&up) = parent.get(&leaf)
+            && let Some(left) = children.get_mut(&up)
+        {
+            *left -= 1;
+            if *left == 0 {
+                leaves.push(up);
+            }
+        }
+    }
+    inline.retain(|node| !on_cycle.contains(node));
+    inline
+}
+
 /// An object term keyed for deterministic sorting, carrying its `TermId`.
 #[derive(Clone)]
 struct ObjKey {
     id: TermId,
     key: (u8, String),
+    /// A value-based tie breaker when the bounded structural keys coincide.
+    identity: String,
 }
 
 impl ObjKey {
-    fn new(dataset: &RdfDataset, id: TermId, content: &ContentKeys) -> Self {
+    fn new(dataset: &RdfDataset, id: TermId, content: &ContentKeys, competing: bool) -> Self {
         let key = match dataset.resolve(id) {
             TermRef::Iri(iri) => (0, iri.to_owned()),
             TermRef::Literal {
@@ -630,13 +879,18 @@ impl ObjKey {
             TermRef::Blank { .. } => (2, content.key_for(id)),
             TermRef::Triple { .. } => (3, content.key_for(id)),
         };
-        Self { id, key }
+        let identity = if competing {
+            format!("{:?}", dataset.term_value(id))
+        } else {
+            String::new()
+        };
+        Self { id, key, identity }
     }
 }
 
 impl PartialEq for ObjKey {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.cmp(other).is_eq()
     }
 }
 impl Eq for ObjKey {}
@@ -649,7 +903,7 @@ impl Ord for ObjKey {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.key
             .cmp(&other.key)
-            .then(self.id.index().cmp(&other.id.index()))
+            .then(self.identity.cmp(&other.identity))
     }
 }
 
@@ -780,6 +1034,34 @@ fn is_turtle_double(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_key_equality_and_order_agree_for_singletons_and_competitors() {
+        use crate::{BlankScope, RdfDatasetBuilder};
+        let mut builder = RdfDatasetBuilder::new();
+        let a = builder.intern_blank("a", BlankScope::DEFAULT);
+        let b = builder.intern_blank("b", BlankScope::DEFAULT);
+        let predicate = builder.intern_iri("http://example.org/p");
+        let end = builder.intern_iri("http://example.org/end");
+        builder.push_quad(a, predicate, end, None);
+        builder.push_quad(b, predicate, end, None);
+        let dataset = builder.freeze().unwrap();
+        let raw: RawProps = [a, b]
+            .into_iter()
+            .map(|id| (id, BTreeMap::from([(predicate, vec![end])])))
+            .collect();
+        for competing in [false, true] {
+            let content =
+                ContentKeys::new(&dataset, &raw, [a, b].into_iter().filter(|_| competing));
+            let first = ObjKey::new(&dataset, a, &content, competing);
+            let second = ObjKey::new(&dataset, b, &content, competing);
+            assert_eq!(first == second, first.cmp(&second).is_eq());
+            assert_eq!(second == first, second.cmp(&first).is_eq());
+            assert_eq!(first == second, !competing);
+            let objects = BTreeSet::from([first, second]);
+            assert_eq!(objects.len(), if competing { 2 } else { 1 });
+        }
+    }
 
     /// Turtle's empty prefix is a prefix, and a namespace whose local part is not a
     /// `PN_LOCAL` yields to a shorter one that gives a valid name; an IRI no namespace

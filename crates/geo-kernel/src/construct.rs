@@ -155,7 +155,7 @@ fn produce_metered(
             let numerical = RefCell::new(WorkProgress::new(Some(observer)));
             let arithmetic = Arithmetic::admitted(&context, &numerical);
             let value = crate::context::with_policy_memory(&context, outer, |memory| {
-                memory.scope(|memory| {
+                memory.try_scope(|memory| {
                     let geometry = produce(literal.geometry(), memory, &arithmetic)?;
                     Ok(geometry
                         .map(|geometry| GeometryLiteral::new(literal.crs().clone(), geometry)))

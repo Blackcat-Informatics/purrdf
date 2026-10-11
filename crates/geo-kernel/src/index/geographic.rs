@@ -747,7 +747,7 @@ fn frame_term(
     let maximum = term_inventory(term, context, progress)?;
     let mut resident = 0;
     super::projection::native_memory(context, progress, &mut resident, |memory| {
-        memory.scope(|memory| {
+        memory.try_scope(|memory| {
             let mut bytes = Vec::new();
             term.canonical_bytes_with_memory(&mut bytes, memory)?;
             frame_le_into(hash, &bytes);

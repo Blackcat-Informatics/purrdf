@@ -338,6 +338,9 @@ impl Materialization<'_> {
     }
 }
 
+/// The typed refusal of an object-property hierarchy before reasoning starts.
+pub use owl_dl::roles::RoleHierarchyError;
+
 /// Why a closure could not be produced.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -347,6 +350,9 @@ pub enum EntailError {
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
     /// class-expression graph or an unrecognized RIF construct).
     Parse(String),
+    /// An object-property hierarchy is malformed, nonregular, or physically
+    /// refused before the regular-language program could be constructed.
+    RoleHierarchy(RoleHierarchyError),
     /// A PROOF-CARRYING operation was asked of a reasoner that records no proofs.
     ///
     /// Recording is opt-in: [`Reasoner::new`] answers questions and keeps no evidence, while
@@ -557,11 +563,21 @@ impl EntailError {
     }
 }
 
+impl From<RoleHierarchyError> for EntailError {
+    fn from(error: RoleHierarchyError) -> Self {
+        match error {
+            RoleHierarchyError::Stopped => Self::Stopped,
+            error => Self::RoleHierarchy(error),
+        }
+    }
+}
+
 impl std::fmt::Display for EntailError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
+            Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
             Self::ProofsNotRecorded => write!(
                 f,
                 "this reasoner records no proofs, so it has no ontology identity to check one \
@@ -697,6 +713,7 @@ impl std::error::Error for EntailError {
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
+            Self::RoleHierarchy(inner) => Some(inner),
             Self::Build(_)
             | Self::SourceRead(_)
             | Self::Parse(_)

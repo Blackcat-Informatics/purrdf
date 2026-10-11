@@ -563,6 +563,7 @@ impl Hyper<'_> {
     fn run(&mut self, st: State) -> Decision {
         if self.g.kb().schema.stats.obstruction.is_some() {
             return Decision {
+                storage_refusal: self.g.storage_refusal(),
                 consistent: false,
                 steps: 0,
                 work: 0,
@@ -573,8 +574,12 @@ impl Hyper<'_> {
                 peak_depth: 0,
             };
         }
-        match self.solve(st) {
+        match self.solve(st).and_then(|answer| {
+            self.check_work()?;
+            Ok(answer)
+        }) {
             Ok(consistent) => Decision {
+                storage_refusal: self.g.storage_refusal(),
                 consistent,
                 steps: self.steps,
                 work: self.g.work().spent(),
@@ -592,10 +597,11 @@ impl Hyper<'_> {
             // measurements a reader of a `budget-exhausted` certificate most needs: they say
             // whether the rounds went into a graph, into a branch factor or into a depth.
             Err(Exhausted) => Decision {
+                storage_refusal: self.g.storage_refusal(),
                 consistent: false,
                 steps: self.steps,
                 work: self.g.work().spent(),
-                exhausted: !self.stopped,
+                exhausted: !self.stopped && self.g.storage_refusal().is_none(),
                 stopped: self.stopped,
                 peak_nodes: self.peak_nodes,
                 disjunctions: self.disjunctions,
@@ -613,6 +619,9 @@ impl Hyper<'_> {
 /// round cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
     let decision = decide(kb, assumptions, Budget::for_kb(kb));
+    if let Some(original) = decision.storage_refusal {
+        return Err(super::roles::RoleHierarchyError::Storage(original).into());
+    }
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
@@ -1114,7 +1123,14 @@ impl<'a> Hyper<'a> {
                 st.clash = true;
                 return Ok(false);
             }
-            let affected = if self.g.kb().rematches_everything() {
+            // A chain can expose a new match at an arbitrarily distant prefix
+            // root. The bounded-radius/transitive-bit region is valid only for
+            // its original role grammar. Regular languages use the complete
+            // root set, without a role-count or path-length bitmask cutoff.
+            let affected = if self.g.kb().rematches_everything()
+                || self.g.kb().role_program.is_some()
+                || self.g.has_universal_role()
+            {
                 (0..st.nodes.len())
                     .filter(|&x| find(st, x) == x)
                     .map(|node| Affected {
@@ -1173,8 +1189,8 @@ impl<'a> Hyper<'a> {
     /// one place they become a decision. Every enumerator polls the same meter and stops, so
     /// the search reaches this within a bounded amount of work of the cap rather than after
     /// whatever the enumeration in flight would have cost.
-    fn check_work(&self) -> Result<(), Exhausted> {
-        if self.g.work().exhausted() {
+    fn check_work(&mut self) -> Result<(), Exhausted> {
+        if self.g.refused(&mut self.stopped) {
             return Err(Exhausted);
         }
         Ok(())
@@ -1264,6 +1280,16 @@ impl<'a> Hyper<'a> {
     /// triggers ([`ClauseSet::untriggered`]).
     fn untriggered_at(&self, st: &State, x: usize) -> Vec<usize> {
         let mut open: Vec<usize> = self.clauses.untriggered().to_vec();
+        if self.g.kb().role_program.is_some() || self.g.has_universal_role() {
+            // A chain may realize a role without an incident edge carrying that
+            // role's name. The primitive edge index is not a complete filter for
+            // language-valued guards. The fixed universal role also has no
+            // authored edge requirement; the actual matcher checks every guard.
+            open.extend(self.clauses.all_edge_triggered());
+            open.sort_unstable();
+            open.dedup();
+            return open;
+        }
         for &edge in st.class_edges(x) {
             let (from, to, property) = st.edges[edge];
             if find(st, from) == x {
@@ -3147,7 +3173,7 @@ mod tests {
         kb.abox_types.push((IND, wide));
         kb.abox_types.push((IND, narrow));
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3174,7 +3200,7 @@ mod tests {
         kb.abox_types.push((U, min3));
         kb.individuals.insert(SPY);
         kb.individuals.insert(U);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3239,7 +3265,7 @@ mod tests {
             kb.individuals.insert(y);
         }
         kb.abox_types.push((X + len, some_e));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3328,7 +3354,7 @@ mod tests {
                 kb.individuals.insert(X + i);
             }
             kb.abox_types.push((X + len, c));
-            kb.finalize();
+            kb.finalize().expect("fixture preparation");
             kb
         };
         for len in [1, 2, 3, 4, 8, 16] {
@@ -3359,7 +3385,7 @@ mod tests {
         const R: u32 = 60;
         let mut kb = Kb::empty();
         kb.transitive.insert(R);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let g = crate::owl_dl::graph::Graph::new(&kb, u64::MAX);
         let mut st = g.init_state(&Assumptions::of_kb());
         for index in 0..6 {
@@ -3445,7 +3471,7 @@ mod tests {
             kb.abox_roles.push((X + i - 1, R, X + i));
             kb.individuals.insert(X + i);
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         for full in [false, true] {
             kb.full_rematch = full;
             let mut h = Hyper::new(&kb, Budget::for_kb(&kb));
@@ -3502,7 +3528,7 @@ mod tests {
                 kb.abox_roles.push((a, R, a + k));
             }
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3660,7 +3686,7 @@ mod tests {
                 let pick = usize::try_from(next(fillers.len() as u64)).expect("in range");
                 place(at, fillers[pick].clone(), &mut kb);
             }
-            kb.finalize();
+            kb.finalize().expect("fixture preparation");
             let cap = Budget::for_kb(&kb);
             let delta = decide(&kb, &Assumptions::of_kb(), cap);
             kb.full_rematch = true;
@@ -3875,7 +3901,7 @@ mod tests {
             Concept::Some(Role::Named(R), Box::new(Concept::Top)),
         );
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3891,7 +3917,7 @@ mod tests {
             .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
         kb.abox_types.push((IND, disjunction));
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3964,7 +3990,7 @@ mod tests {
             .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
         kb.abox_types.push((IND, disjunction));
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let generating = kb.table.intern(Concept::Named(A));
         let inert = kb.table.intern(Concept::Named(B));
         assert!(
@@ -4011,7 +4037,7 @@ mod tests {
             Concept::Named(B),
             Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
         );
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let a = kb.table.intern(Concept::Named(A));
         let b = kb.table.intern(Concept::Named(B));
         let c = kb.table.intern(Concept::Named(C));
@@ -4042,7 +4068,7 @@ mod tests {
         let conjunction = kb
             .table
             .intern(Concept::And(vec![Concept::Named(A), Concept::Named(C)]));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert!(!kb.generates(mixed), "C is a way out of the disjunction");
         assert!(kb.generates(both), "both alternatives mint");
         assert!(
@@ -4072,7 +4098,7 @@ mod tests {
             kb.abox_types.push((individual, A));
             kb.individuals.insert(individual);
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let b = kb.table.intern(Concept::Named(B));
 
         let budget = Budget {

@@ -57,7 +57,7 @@ pub(crate) fn visit_leaves_with_memory_using<'a, S: Admission + ?Sized, B>(
     memory: &mut Memory<'_, S>,
     mut visit: impl FnMut(&'a Geometry, &mut Memory<'_, S>) -> core::ops::ControlFlow<B>,
 ) -> Result<core::ops::ControlFlow<B>, StorageError> {
-    memory.scope(|memory| {
+    memory.try_scope(|memory| {
         let mut leaves = Leaves::new_with_memory(root, memory)?;
         while let Some(node) = leaves.next_with_memory(memory)? {
             if let core::ops::ControlFlow::Break(answer) = visit(node, memory) {
@@ -82,7 +82,7 @@ pub(crate) fn visit_leaves_with_progress<'a, 'observer>(
 ) -> Result<(), crate::GeoError> {
     let leaves = progress
         .with_storage(0, |memory| {
-            memory.scope(|memory| Leaves::new_with_memory(root, memory))
+            memory.try_scope(|memory| Leaves::new_with_memory(root, memory))
         })
         .map_err(crate::GeoError::Storage)?;
     visit_with_progress(leaves, progress, visit)
@@ -178,7 +178,7 @@ pub(crate) fn try_fold_with_memory<'a, T, E, S: Admission + ?Sized>(
     mut leaf: impl FnMut(&'a Geometry, &mut Memory<'_, S>) -> Result<T, E>,
     mut collection: impl FnMut(&'a Geometry, Vec<T>, &mut Memory<'_, S>) -> Result<T, E>,
 ) -> Result<T, FoldError<E>> {
-    memory.scope(|memory| {
+    memory.try_scope(|memory| {
         let mut steps: Vec<Step<'a>> = Vec::new();
         let mut answers: Vec<T> = Vec::new();
         memory
@@ -331,7 +331,7 @@ impl Geometry {
             })
         };
         if !has_members(self) {
-            return memory.scope(|memory| leaf(self, memory));
+            return memory.try_scope(|memory| leaf(self, memory));
         }
         try_fold_with_memory(self, memory, leaf, |node, copies, _| {
             Ok(Self {
@@ -607,7 +607,7 @@ pub(crate) fn visit_coords_with_progress<'a, 'observer>(
 ) -> Result<(), crate::GeoError> {
     let coords = progress
         .with_storage(0, |memory| {
-            memory.scope(|memory| Coords::new_with_memory(root, memory))
+            memory.try_scope(|memory| Coords::new_with_memory(root, memory))
         })
         .map_err(crate::GeoError::Storage)?;
     visit_with_progress(coords, progress, visit)
@@ -705,7 +705,7 @@ pub(crate) fn visit_coords_with_memory_using<'a, S: Admission + ?Sized, B>(
     memory: &mut Memory<'_, S>,
     mut visit: impl FnMut(&'a Coord, &mut Memory<'_, S>) -> core::ops::ControlFlow<B>,
 ) -> Result<core::ops::ControlFlow<B>, StorageError> {
-    memory.scope(|memory| {
+    memory.try_scope(|memory| {
         let mut coords = Coords::new_with_memory(root, memory)?;
         while let Some(coord) = coords.next_with_memory(memory)? {
             if let core::ops::ControlFlow::Break(answer) = visit(coord, memory) {
