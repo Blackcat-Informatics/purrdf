@@ -24,6 +24,22 @@
 use core::borrow::Borrow;
 use core::mem;
 
+/// The value paired with `key` in a table of strictly ascending, unique keys.
+///
+/// Unlike [`get`], this reads a sorted table rather than a document-ordered
+/// association list. The caller guarantees sorted, unique keys. The returned
+/// value is borrowed from the table; lookup allocates nothing.
+pub fn get_sorted<'a, K, V, Q>(pairs: &'a [(K, V)], key: &Q) -> Option<&'a V>
+where
+    K: Borrow<Q>,
+    Q: Ord + ?Sized,
+{
+    pairs
+        .binary_search_by(|(candidate, _)| candidate.borrow().cmp(key))
+        .ok()
+        .map(|index| &pairs[index].1)
+}
+
 /// The value of the first pair whose key is `key`, or `None`.
 pub fn get<'a, K, V, Q>(pairs: &'a [(K, V)], key: &Q) -> Option<&'a V>
 where
@@ -63,7 +79,24 @@ pub fn insert<K: PartialEq, V>(pairs: &mut Vec<(K, V)>, key: K, value: V) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::{get, get_mut, insert};
+    use super::{get, get_mut, get_sorted, insert};
+
+    #[test]
+    fn sorted_lookup_agrees_with_linear_lookup_for_present_and_absent_keys() {
+        let pairs = [(2_u32, "first"), (5, "middle"), (9, "last")];
+        for key in 0..=12 {
+            let expected = pairs
+                .iter()
+                .find(|(candidate, _)| candidate == &key)
+                .map(|(_, value)| value);
+            assert_eq!(get_sorted(&pairs, &key), expected);
+        }
+        assert_eq!(get_sorted::<u32, &str, u32>(&[], &2), None);
+        let owned = [("alpha".to_owned(), 1), ("omega".to_owned(), 2)];
+        assert_eq!(get_sorted(&owned, "alpha"), Some(&1));
+        assert_eq!(get_sorted(&owned, "omega"), Some(&2));
+        assert_eq!(get_sorted(&owned, "delta"), None);
+    }
 
     #[test]
     fn get_answers_the_first_pair_with_the_key() {

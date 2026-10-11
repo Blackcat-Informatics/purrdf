@@ -53,6 +53,15 @@ pub fn word_prose(bytes: usize) -> String {
     text
 }
 
+/// Exactly `bytes` deterministic ASCII `a` and `b` characters, about half each.
+#[must_use]
+pub fn binary_text(bytes: usize, seed: u64) -> String {
+    crate::rng::splitmix64_bytes(bytes, seed)
+        .iter()
+        .map(|byte| if byte & 1 == 0 { 'a' } else { 'b' })
+        .collect()
+}
+
 /// `text` as a double-quoted SPARQL string literal, with each backslash
 /// doubled; `text` must hold no double quote or line break.
 #[must_use]
