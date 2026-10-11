@@ -377,12 +377,6 @@ jobs:
         if: matrix.shard == 'lib'
         uses: ./.github/actions/binaryen-toolchain
 
-      - name: Provision the owned native profiling fixture parent
-        if: matrix.shard == 'integration-5'
-        run: |
-          sudo mkdir -p /opt/purrdf-native-profile-tests
-          sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
-
       - name: Run workspace tests (this shard; the seven include the doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
         # vector path of each family this job requires; the distance, kNN and HNSW
@@ -678,6 +672,32 @@ jobs:
         # uses both builds, and shadow-stack/host-clock probes use the baseline.
         run: make wasm-test
 
+  geo-determinism:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown
+
+      - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+        uses: ./.github/actions/wasm-toolchain
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Compare native, portable WASM and SIMD WASM geographic laws
+        run: make geo-determinism
+
   # Native schema oracles need no wasm package and run in parallel.
   wasm-schema-oracles:
     runs-on: ubuntu-latest
@@ -925,6 +945,14 @@ jobs:
           PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: cargo test --locked -p purrdf-core --lib distance
 
+      - name: Replay certified geographic and cell laws on NEON
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: numeric:portable,numeric:neon
+        run: |
+          cargo test --locked -p purrdf-xsd --test certified_numerical
+          cargo test --locked -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
+          cargo test --locked -p purrdf-geo --test determinism
+
       - name: Run the kNN kernels and their pinned cross-target answers on aarch64
         env:
           PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
@@ -1042,6 +1070,14 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
             --test binary_arithmetic
 
+      - name: Replay certified geographic and cell laws on i686
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: numeric:portable,numeric:sse2
+        run: |
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-xsd --test certified_numerical
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo --test determinism
+
       # i586 has no SSE2, so every binary64 and binary32 operation runs on the x87,
       # which rounds to its register precision and again on every store. Every
       # result-affecting operation in the workspace computes through `purrdf_xsd::ieee`,
@@ -1066,6 +1102,14 @@ jobs:
             --test binary_arithmetic
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
             --test float_environment_x87 --test float_environment_x87_rayon
+
+      - name: Replay certified geographic and cell laws on i586 x87
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: numeric:portable
+        run: |
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --test certified_numerical
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo --test determinism
 
   # Type-checking the Windows path cannot verify CreateFileW access rights or
   # timestamp resolution. Exercise file, directory, hardlink, and read-only
@@ -1449,8 +1493,6 @@ jobs:
           sudo mkdir -p "$campaign"
           sudo chown -R "$(id -u):$(id -g)" "$campaign"
           date +%s%N > "$campaign/setup-start.txt"
-          sudo mkdir -p /opt/purrdf-native-profile-tests
-          sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
           mkdir -p "$campaign/resources"
           cp "$campaign/setup-start.txt" "$campaign/resources/setup-start.txt"
           df -h /opt > "$campaign/resources/setup-disk-before.txt"

@@ -1411,14 +1411,15 @@ impl PreparedEdge {
 pub struct PreparedCurve {
     edges: crate::PreparedValues<PreparedEdge>,
 }
-impl PreparedCurve {
-    /// Retain ordered explicitly modeled edges. No shorter path is substituted.
-    #[must_use]
-    pub fn new(edges: Vec<PreparedEdge>) -> Self {
-        Self {
-            edges: edges.into(),
-        }
+purrdf_lex::constructors! {
+    impl PreparedCurve {
+        /// Retain ordered explicitly modeled edges. No shorter path is substituted.
+        #[must_use]
+        pub fn new(edges: Vec<PreparedEdge>) -> Self { .. };
     }
+}
+
+impl PreparedCurve {
     /// Retain an originally admitted ordered array without a new allocation.
     #[must_use]
     pub fn from_prepared_values(edges: crate::PreparedValues<PreparedEdge>) -> Self {
@@ -2866,9 +2867,7 @@ impl<'a, 'observer> PreparationAdmission<'a, 'observer> {
                     },
                 ));
             }
-            let buffers = usize::try_from(self.limits.max_scratch_destinations).map_err(|_| {
-                GeoError::Storage(purrdf_lex::allocation::StorageError::SizeOverflow)
-            })?;
+            let buffers = crate::context::scratch_destination_count(self.limits);
             let bytes = self.progress.integer_scratch_layout(buffers, limbs)?;
             let bytes = u64::try_from(bytes).map_err(|_| {
                 GeoError::Storage(purrdf_lex::allocation::StorageError::SizeOverflow)

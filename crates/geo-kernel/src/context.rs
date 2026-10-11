@@ -17,6 +17,15 @@ use std::rc::Rc;
 
 use crate::{ExecutionPolicy, GeoError, GeographicReference};
 
+/// The initial numerical working set, capped by the caller's slot ceiling.
+/// Coefficient producers separately request their complete actual order,
+/// including live outer coefficients when a centered expansion is needed.
+pub(crate) fn scratch_destination_count(limits: &crate::ExecutionLimits) -> usize {
+    limits
+        .max_scratch_destinations
+        .min(crate::ExecutionLimits::GEOMETRY.max_scratch_destinations) as usize
+}
+
 pub(crate) fn scratch_limb_capacity(
     source_bits: u64,
     max_precision_bits: u32,
@@ -1726,7 +1735,7 @@ impl MetricContext {
         Ok(())
     }
 
-    /// Prepare bounded destinations once for every admitted numerical precision.
+    /// Prepare the initial numerical working set, within the caller's ceilings.
     /// This worker counts the entire heap once; nested children borrow that
     /// arena and their reduced budgets exclude its parent-owned heap. Checkout
     /// locks never span arithmetic, callbacks, or suspension.
@@ -1742,10 +1751,7 @@ impl MetricContext {
     /// # Errors
     /// Refuses overflow, cancellation, or workspace exhaustion before allocation.
     pub fn prepare_integer_scratch_for(&mut self, source_bits: u64) -> Result<(), GeoError> {
-        self.prepare_integer_scratch_with_capacity(
-            source_bits,
-            self.policy.limits().max_scratch_destinations as usize,
-        )
+        self.prepare_integer_scratch_with_capacity(source_bits, self.initial_scratch_destinations())
     }
 
     /// Explicitly admit a larger reusable destination count before a retained
@@ -1757,7 +1763,12 @@ impl MetricContext {
         source_bits: u64,
         buffers: usize,
     ) -> Result<(), GeoError> {
-        self.prepare_integer_scratch_observed(source_bits, buffers, None)?;
+        self.prepare_integer_scratch_observed(
+            source_bits,
+            buffers,
+            self.initial_scratch_precision(),
+            None,
+        )?;
         self.integer_scratch_reusable = true;
         Ok(())
     }
@@ -1769,9 +1780,40 @@ impl MetricContext {
     ) -> Result<(), GeoError> {
         self.prepare_integer_scratch_observed(
             source_bits,
-            self.policy.limits().max_scratch_destinations as usize,
+            self.initial_scratch_destinations(),
+            self.initial_scratch_precision(),
             Some(progress),
         )
+    }
+
+    fn initial_scratch_precision(&self) -> u32 {
+        self.policy
+            .limits()
+            .max_precision_bits
+            .min(crate::ExecutionLimits::GEOMETRY.max_precision_bits)
+    }
+
+    fn initial_scratch_destinations(&self) -> usize {
+        scratch_destination_count(self.policy.limits())
+    }
+
+    /// Admit the attempted proof's working set before constructing arithmetic.
+    /// A resource ceiling is not a request to allocate its maximum. Wider proof
+    /// attempts grow here, with the old arena still charged until replacement.
+    pub(crate) fn prepare_integer_scratch_at_precision_observed(
+        &mut self,
+        source_bits: u64,
+        precision_bits: u32,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<(), GeoError> {
+        if precision_bits > self.policy.limits().max_precision_bits {
+            return Err(GeoError::PrecisionExhausted {
+                bits: self.policy.limits().max_precision_bits,
+            });
+        }
+        let precision_bits = precision_bits.max(self.initial_scratch_precision());
+        let buffers = scratch_destination_count(self.policy.limits());
+        self.prepare_integer_scratch_observed(source_bits, buffers, precision_bits, Some(progress))
     }
 
     /// Keep an explicitly completed preparation's worker arena across calls.
@@ -1812,10 +1854,42 @@ impl MetricContext {
         self.prepare_integer_scratch_for_observed(cost.output_bits, progress)
     }
 
+    /// Admit a producer's complete requested shape between numerical attempts.
+    /// The failed attempt's values must already have died. Resource/cancellation
+    /// failures and a caller slot ceiling remain original operational failures.
+    pub(crate) fn grow_requested_integer_scratch(
+        &mut self,
+        error: &GeoError,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<bool, GeoError> {
+        let GeoError::NumericalScratch(LimbScratchError::Destinations { required, admitted }) =
+            error.original()
+        else {
+            return Ok(false);
+        };
+        if required <= admitted
+            || *required > self.policy.limits().max_scratch_destinations as usize
+            || self
+                .integer_scratch
+                .as_ref()
+                .is_some_and(|scratch| *required <= scratch.destination_capacity())
+        {
+            return Ok(false);
+        }
+        self.prepare_integer_scratch_observed(
+            0,
+            *required,
+            self.initial_scratch_precision(),
+            Some(progress),
+        )?;
+        Ok(true)
+    }
+
     fn prepare_integer_scratch_observed(
         &mut self,
         source_bits: u64,
         buffers: usize,
+        precision_bits: u32,
         progress: Option<&mut WorkProgress<'_>>,
     ) -> Result<(), GeoError> {
         self.checkpoint()?;
@@ -1824,7 +1898,16 @@ impl MetricContext {
                 "scratch destination request exceeds admitted execution policy",
             ));
         }
-        let limbs = scratch_limb_capacity(source_bits, self.policy.limits().max_precision_bits)?;
+        let limbs = scratch_limb_capacity(source_bits, precision_bits)?.max(
+            self.integer_scratch
+                .as_ref()
+                .map_or(0, LimbScratch::limb_capacity),
+        );
+        let buffers = buffers.max(
+            self.integer_scratch
+                .as_ref()
+                .map_or(0, LimbScratch::destination_capacity),
+        );
         if self.integer_scratch.as_ref().is_some_and(|scratch| {
             scratch.limb_capacity() >= limbs && scratch.destination_capacity() >= buffers
         }) {
@@ -1847,8 +1930,8 @@ impl MetricContext {
         } else {
             0
         };
-        // Up to 128 integral coefficients retain two endpoints each, along
-        // with generated constants and bounded simultaneous solver scratch.
+        // The attempted proof's coefficients and simultaneous temporaries are
+        // admitted together, independently of unused caller resource ceilings.
         let bytes = match progress.as_ref() {
             Some(progress) => progress.integer_scratch_layout(buffers, limbs)?,
             None => {
@@ -2521,6 +2604,114 @@ mod integer_observer_tests;
 mod tests {
     use super::{MetricContext, MetricWorkObserver};
     use crate::{ExecutionLimits, ExecutionPolicy, GeoError, GeographicReference};
+
+    #[test]
+    fn relaxed_scratch_ceilings_admit_only_the_attempted_working_set() {
+        let mut bounded = MetricContext::wgs84().unwrap();
+        bounded.prepare_integer_scratch_for(128).unwrap();
+        let mut relaxed =
+            MetricContext::new(GeographicReference::wgs84(), ExecutionPolicy::unbounded()).unwrap();
+        relaxed.prepare_integer_scratch_for(128).unwrap();
+        assert_eq!(bounded.workspace_peak(), relaxed.workspace_peak());
+        assert_eq!(
+            bounded.integer_scratch().unwrap().limb_capacity(),
+            relaxed.integer_scratch().unwrap().limb_capacity()
+        );
+        let initial = relaxed.workspace_peak();
+        let mut progress = super::WorkProgress::new(None);
+        relaxed
+            .prepare_integer_scratch_at_precision_observed(128, 2048, &mut progress)
+            .unwrap();
+        assert!(relaxed.workspace_peak() > initial);
+        let value = crate::Int::one()
+            .shl_in(8192, relaxed.integer_scratch().unwrap())
+            .unwrap();
+        assert_eq!(value, crate::Int::one().shl(8192));
+        assert_eq!(relaxed.policy(), ExecutionPolicy::unbounded());
+
+        let original = crate::Rat::from_int(crate::Int::one().shl(1024));
+        let cost = purrdf_xsd::integer::ExactArithmeticCost::for_operation(
+            purrdf_xsd::integer::ExactOperation::Linear,
+            1025,
+            1,
+        )
+        .unwrap();
+        let mut preparation = super::PreparationBudget::new(ExecutionPolicy::unbounded());
+        preparation
+            .exact_values_observed(
+                cost,
+                |values, _| {
+                    assert_eq!(values.original(&original).unwrap(), original);
+                    Ok(())
+                },
+                None,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn requested_scratch_growth_preserves_live_values_and_refuses_before_allocation() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_xsd::integer::LimbScratchError;
+
+        let mut context =
+            MetricContext::new(GeographicReference::wgs84(), ExecutionPolicy::unbounded()).unwrap();
+        context.prepare_integer_scratch_for(128).unwrap();
+        let request = GeoError::NumericalScratch(LimbScratchError::Destinations {
+            required: 900,
+            admitted: 768,
+        });
+        let mut progress = super::WorkProgress::new(None);
+        let live = crate::Int::one()
+            .shl_in(400, context.integer_scratch().unwrap())
+            .unwrap();
+        let baseline = context.current_workspace_bytes();
+        let measured = CurrentThreadWindow::open();
+        assert!(matches!(
+            context.grow_requested_integer_scratch(&request, &mut progress),
+            Err(GeoError::NumericalScratch(LimbScratchError::Retained {
+                held_destinations: 1,
+                destinations: 768,
+            }))
+        ));
+        assert_eq!(measured.close().allocations, 0);
+        assert_eq!(context.current_workspace_bytes(), baseline);
+        assert_eq!(live.bit_len(), 401);
+        drop(live);
+        assert!(
+            context
+                .grow_requested_integer_scratch(&request, &mut progress)
+                .unwrap()
+        );
+        assert_eq!(
+            context.integer_scratch().unwrap().destination_capacity(),
+            900
+        );
+        assert!(
+            !context
+                .grow_requested_integer_scratch(&request, &mut progress)
+                .unwrap()
+        );
+
+        let policy = ExecutionPolicy::new(ExecutionLimits {
+            max_workspace_bytes: baseline,
+            ..ExecutionLimits::UNBOUNDED
+        })
+        .unwrap();
+        let mut bounded = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+        bounded.prepare_integer_scratch_for(128).unwrap();
+        let measured = CurrentThreadWindow::open();
+        assert!(matches!(
+            bounded.grow_requested_integer_scratch(&request, &mut progress),
+            Err(GeoError::MemoryExhausted { .. })
+        ));
+        assert_eq!(measured.close().allocations, 0);
+        assert_eq!(bounded.current_workspace_bytes(), baseline);
+        assert_eq!(
+            bounded.integer_scratch().unwrap().destination_capacity(),
+            768
+        );
+    }
 
     #[test]
     fn sequential_children_share_wide_immutable_reference_operands_without_allocating() {

@@ -3,8 +3,8 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, sixteen subcommands ([`Command`]), and two global flags
-//! (`--loss-ledger`, `--jsonld-options`). The format / regime / results-format
+//! One pipeline, seventeen subcommands ([`Command`]), and three global flags
+//! (`--loss-ledger`, `--jsonld-options`, `--geo-profile`). The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -322,7 +322,7 @@ impl Cli {
     }
 }
 
-/// The sixteen pipeline subcommands.
+/// The seventeen pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Execute a strict geographic scalar, batch, conversion, cover or index request.
@@ -330,7 +330,7 @@ pub(crate) enum Command {
         /// Request JSON source; `-` reads standard input.
         #[arg(default_value = "-")]
         input: String,
-        /// Canonical typed response; `-` writes standard output.
+        /// Canonical response; `-` writes stdout. Operational failures use stderr.
         #[arg(default_value = "-")]
         output: String,
     },

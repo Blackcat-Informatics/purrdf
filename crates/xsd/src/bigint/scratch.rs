@@ -16,6 +16,14 @@ use super::storage::Mag;
 /// allocation is made after a scratch arena has been constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimbScratchError {
+    /// An upcoming complete working set needs more simultaneous destinations.
+    /// This is detected before constructing that working set.
+    Destinations {
+        /// Total destinations required, including values already live.
+        required: usize,
+        /// Total destinations in the installed arena.
+        admitted: usize,
+    },
     /// The requested destination exceeds every admitted buffer's capacity.
     Capacity {
         /// Complete limbs needed by this exact destination.
@@ -46,6 +54,10 @@ pub enum LimbScratchError {
 impl fmt::Display for LimbScratchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Destinations { required, admitted } => write!(
+                f,
+                "integer working set requires {required} destinations; admitted {admitted}"
+            ),
             Self::Capacity {
                 required_limbs,
                 admitted_limbs,
@@ -229,6 +241,35 @@ impl LimbScratch {
                 .buffers
                 .len()
         })
+    }
+
+    /// Admit a complete upcoming working set without allocating any payload.
+    /// Existing immutable values remain charged to their original arena.
+    ///
+    /// # Errors
+    /// Reports the complete required shape if available destinations do not fit.
+    pub fn require_available(&self, additional: usize) -> Result<(), LimbScratchError> {
+        if additional == 0 {
+            return Ok(());
+        }
+        let Some(owner) = &self.owner else {
+            return Err(LimbScratchError::Destinations {
+                required: additional,
+                admitted: 0,
+            });
+        };
+        let free = owner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if additional <= free.buffers.len() {
+            return Ok(());
+        }
+        let admitted = free.buffers.capacity();
+        let required = (admitted - free.buffers.len())
+            .checked_add(additional)
+            .ok_or(LimbScratchError::SizeOverflow)?;
+        drop(free);
+        Err(LimbScratchError::Destinations { required, admitted })
     }
 
     /// Whether dropping this handle destroys the actual complete arena.
@@ -499,6 +540,39 @@ impl Allocate for Fallible {
 #[cfg(test)]
 mod tests {
     use super::{LimbScratch, LimbScratchError};
+
+    #[test]
+    fn working_set_preflight_counts_shared_live_values_without_allocating() {
+        let scratch = LimbScratch::new(4, 16).unwrap();
+        let value = BigInt::one().shl_in(400, &scratch).unwrap();
+        let shared = value.clone();
+        let measured = CurrentThreadWindow::open();
+        assert_eq!(scratch.require_available(3), Ok(()));
+        assert_eq!(
+            scratch.require_available(4),
+            Err(LimbScratchError::Destinations {
+                required: 5,
+                admitted: 4,
+            })
+        );
+        assert_eq!(
+            scratch.require_available(usize::MAX),
+            Err(LimbScratchError::SizeOverflow)
+        );
+        drop(value);
+        assert_eq!(scratch.available(), 3);
+        drop(shared);
+        assert_eq!(scratch.require_available(4), Ok(()));
+        assert_eq!(LimbScratch::inline().require_available(0), Ok(()));
+        assert_eq!(
+            LimbScratch::inline().require_available(1),
+            Err(LimbScratchError::Destinations {
+                required: 1,
+                admitted: 0,
+            })
+        );
+        assert_eq!(measured.close().allocations, 0);
+    }
 
     #[test]
     fn full_worker_arena_has_constant_birth_allocations_and_exact_live_layout() {

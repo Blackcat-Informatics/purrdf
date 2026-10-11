@@ -14,7 +14,7 @@ use crate::{
 };
 use purrdf_core::SmallVec;
 use purrdf_hash::{Domain, hex::Digest32};
-use purrdf_xsd::integer::ExactOperation::{Linear, RationalAdd, RationalCompare, RationalMultiply};
+use purrdf_xsd::integer::ExactOperation::{Linear, RationalAdd, RationalCompare};
 use purrdf_xsd::math::FixedInterval;
 
 const NODE_DOMAIN: Domain = Domain::new(b"purrdf-geo-kernel/native-arrangement-node/v1");
@@ -1779,20 +1779,7 @@ fn midpoint(
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
 ) -> Result<Rat, GeoError> {
-    let half = Rat::one().div(&Rat::from_i64(2)).expect("half");
-    let mut admission = ExactAdmission::new(context, progress);
-    let sum = exact_rational(
-        Some(&mut admission),
-        RationalAdd,
-        &[&first.bounds.1, &second.bounds.0],
-        |values| values.add(&(first.bounds.1), &second.bounds.0),
-    )?;
-    exact_rational(
-        Some(&mut admission),
-        RationalMultiply,
-        &[&sum, &half],
-        |values| values.multiply(&(sum), &half),
-    )
+    crate::topology::mean_admitted(&first.bounds.1, &second.bounds.0, context, progress)
 }
 
 fn exact_fragment_point(

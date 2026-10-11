@@ -1638,7 +1638,7 @@ impl GeometryArguments<'_, '_> {
                         self.vocab, value, storage,
                     )?;
                     // Every supported carrier is parsed and retained once before
-                    // dispatch. Reaching this branch for one is a broken producer
+                    // dispatch. Reaching this arm for one is a broken producer
                     // invariant, never permission to start an unpriced parser.
                     Err(purrdf_geo_kernel::carrier::text_error(
                         Some(storage),

@@ -1526,8 +1526,8 @@ impl ChartLine {
     }
     pub(super) fn prepare(
         edge: &PreparedEdge,
-        view: Option<ArcIntervalView>,
-        image: Option<crate::PreparedValue<crate::operation::OperationImageCurve>>,
+        view: Option<&ArcIntervalView>,
+        image: Option<&crate::PreparedValue<crate::operation::OperationImageCurve>>,
         context: &MetricContext,
         math: &mut CoordinateMath,
         progress: &mut WorkProgress<'_>,
@@ -1535,7 +1535,9 @@ impl ChartLine {
     ) -> Result<Self, GeoError> {
         if matches!(edge, PreparedEdge::Transformed(_)) {
             return Ok(Self::Transformed {
-                curve: image.ok_or_else(|| GeoError::domain("admitted original image owner"))?,
+                curve: image
+                    .ok_or_else(|| GeoError::domain("admitted original image owner"))?
+                    .clone(),
                 subdivisions: context.policy().limits().max_subdivision_levels,
             });
         }
@@ -1776,7 +1778,7 @@ pub(crate) fn with_lines<T>(
     bits: u32,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
-    evaluate: impl FnOnce(
+    mut evaluate: impl FnMut(
         &[ChartLine],
         &mut CoordinateMath,
         &mut WorkProgress<'_>,
@@ -1795,7 +1797,7 @@ pub(crate) fn with_lines_retained<T>(
     bits: u32,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
-    evaluate: impl FnOnce(
+    evaluate: impl FnMut(
         &[ChartLine],
         &mut CoordinateMath,
         &mut WorkProgress<'_>,
@@ -1815,7 +1817,7 @@ pub(crate) fn with_line_refs<T>(
     bits: u32,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
-    evaluate: impl FnOnce(
+    evaluate: impl FnMut(
         &[ChartLine],
         &mut CoordinateMath,
         &mut WorkProgress<'_>,
@@ -1830,7 +1832,7 @@ pub(super) fn with_line_refs_with_precision<T>(
     strict: bool,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
-    evaluate: impl FnOnce(
+    mut evaluate: impl FnMut(
         &[ChartLine],
         &mut CoordinateMath,
         &mut WorkProgress<'_>,
@@ -1853,7 +1855,7 @@ pub(super) fn with_line_refs_retained<T>(
     strict: bool,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
-    evaluate: impl FnOnce(
+    mut evaluate: impl FnMut(
         &[ChartLine],
         &mut CoordinateMath,
         &mut WorkProgress<'_>,
@@ -1906,11 +1908,11 @@ pub(super) fn with_line_refs_retained<T>(
                         &mut line_bytes,
                         line_context.policy(),
                     )?;
-                    for (edge, (view, image)) in edges.iter().zip(views) {
+                    for (edge, (view, image)) in edges.iter().zip(views.iter()) {
                         lines.push_reserved(ChartLine::prepare(
                             edge,
-                            view,
-                            image,
+                            view.as_ref(),
+                            image.as_ref(),
                             &line_context,
                             math,
                             progress,

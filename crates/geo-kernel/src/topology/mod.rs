@@ -75,6 +75,6 @@ pub(crate) use relate::relate_admitted;
 pub use relate::{relate, relate_metered, relate_pattern};
 pub use segment::{SegmentIntersection, intersect, midpoint, on_segment, orientation};
 pub(crate) use segment::{
-    compare_inner, determinant2_admitted, intersect_admitted, midpoint_admitted,
+    compare_inner, determinant2_admitted, intersect_admitted, mean_admitted, midpoint_admitted,
     on_segment_admitted, orientation_admitted, plane, same_planar_inner,
 };

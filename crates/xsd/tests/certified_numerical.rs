@@ -221,20 +221,37 @@ fn bounded_rational_ownership_and_rounding_replay() {
     let decimal = Int::from_i64(3).mul(&Int::pow10(400));
     let normalized = Rat::from_decimal_in(&decimal, 400, &scratch).unwrap();
     assert_eq!(normalized, Rat::from_i64(3));
-    let source = Rat::new(Int::one().shl(448).add(&Int::one()), Int::one()).unwrap();
-    let copied = Rat::new(
-        source.numerator().copy_in(&scratch).unwrap(),
-        source.denominator().into_owned(),
-    )
-    .unwrap()
-    .into_shared();
     assert_eq!(scratch.available(), scratch.destination_capacity());
+    let source = Rat::new(Int::one().shl(448).add(&Int::one()), Int::one()).unwrap();
+    let copy = || {
+        Rat::new(
+            source.numerator().copy_in(&scratch).unwrap(),
+            source.denominator().into_owned(),
+        )
+        .unwrap()
+    };
+    let copied = copy();
+    let allocations = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let copied = copied.into_shared();
+    let retained = copied.clone();
+    // Sharing preserves the original admitted destination; it must neither
+    // detach into unpriced storage nor return a slot while a value owns it.
+    assert_eq!(scratch.available(), scratch.destination_capacity() - 1);
     assert_eq!(
         source.compare_in(&copied, &scratch).unwrap(),
         std::cmp::Ordering::Equal
     );
+    drop(copied);
+    assert_eq!(scratch.available(), scratch.destination_capacity() - 1);
+    assert_eq!(source, retained);
+    drop(retained);
+    assert_eq!(scratch.available(), scratch.destination_capacity());
+    let receipt = allocations.close();
+    assert_eq!(receipt.allocations, 0);
+    assert_eq!(receipt.requested_bytes, 0);
+    let escaped = copy().into_shared();
     drop(scratch);
-    assert_eq!(source, copied);
+    assert_eq!(source, escaped);
 }
 
 fn reusable_taylor_pool_admission_and_allocation_replay() {

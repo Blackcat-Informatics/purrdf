@@ -1098,7 +1098,7 @@ fn complete_metric(
     law: GeometryMetricLaw,
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
-    evaluate: impl FnOnce(
+    mut evaluate: impl FnMut(
         &mut CoordinateMath,
         &mut WorkProgress<'_>,
     ) -> Result<FixedInterval, MathError>,
@@ -1781,6 +1781,26 @@ mod tests {
         )
         .unwrap();
         PreparedGeometry::from_literal(&literal, &profile).unwrap()
+    }
+
+    #[test]
+    fn relaxed_scratch_ceilings_preserve_complete_geometry_metrics() {
+        let geometry = prepared("MULTILINESTRING((10 30,10.125 30.25,10.5 30.75),(12 33,12.5 33))");
+        let mut bounded = MetricContext::wgs84().unwrap();
+        let expected = length(&geometry, &mut bounded).unwrap();
+        let mut relaxed = MetricContext::new(
+            crate::GeographicReference::wgs84(),
+            crate::ExecutionPolicy::unbounded(),
+        )
+        .unwrap();
+        let actual = length(&geometry, &mut relaxed).unwrap();
+        assert_eq!(actual.certificate_bytes(), expected.certificate_bytes());
+        assert_eq!(relaxed.work_items(), bounded.work_items());
+        assert_eq!(relaxed.workspace_peak(), bounded.workspace_peak());
+        assert_eq!(
+            perimeter(&geometry, &mut relaxed).unwrap().exact(),
+            actual.exact()
+        );
     }
 
     #[test]

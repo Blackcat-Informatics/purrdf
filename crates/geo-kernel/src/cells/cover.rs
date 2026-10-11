@@ -1012,10 +1012,22 @@ impl<'a> CoverBudget<'a> {
                     .as_ref()
                     .is_none_or(|scratch| (scratch.limb_capacity() as u64) < required)
             {
-                let limbs = crate::context::scratch_limb_capacity(
-                    cost.output_bits,
-                    budget.execution.max_precision_bits,
-                )?;
+                // Exact chart/scaling results stay live across subsequent
+                // exact and numerical steps. Admit their shared initial
+                // working width before returning those values: sizing only
+                // the first scalar would force replacement while it is held.
+                // An unbounded ceiling still requests only this working set.
+                let limbs =
+                    crate::context::scratch_limb_capacity(
+                        cost.output_bits,
+                        budget
+                            .execution
+                            .max_precision_bits
+                            .min(ExecutionLimits::GEOMETRY.max_precision_bits),
+                    )?
+                    .max(usize::try_from(required).map_err(|_| {
+                        GeoError::ArithmeticOverflow("cover exact destination width")
+                    })?);
                 if let Some(scratch) = &budget.integer_scratch
                     && scratch.available() != scratch.destination_capacity()
                 {
@@ -1026,8 +1038,7 @@ impl<'a> CoverBudget<'a> {
                         },
                     ));
                 }
-                let buffers = usize::try_from(budget.execution.max_scratch_destinations)
-                    .map_err(|_| GeoError::ArithmeticOverflow("cover exact destination count"))?;
+                let buffers = crate::context::scratch_destination_count(&budget.execution);
                 let bytes = budget.progress.integer_scratch_layout(buffers, limbs)?;
                 let old_bytes = if budget.borrowed_scratch {
                     0
@@ -1165,7 +1176,7 @@ impl<'a> CoverBudget<'a> {
         &mut self,
         precision: u32,
         sources: &[&Rat],
-        action: impl FnOnce(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<T, MathError>,
+        mut action: impl FnMut(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<T, MathError>,
     ) -> Result<T, GeoError> {
         let mut context = self.context_for_sources(GeographicReference::wgs84(), sources)?;
         let policy = context.policy();

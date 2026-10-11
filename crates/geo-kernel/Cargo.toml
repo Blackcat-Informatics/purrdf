@@ -46,14 +46,6 @@ name = "geo_determinism"
 harness = false
 
 [[bench]]
-name = "relate"
-harness = false
-
-[[bench]]
-name = "geojson_parse"
-harness = false
-
-[[bench]]
 name = "covers"
 harness = false
 

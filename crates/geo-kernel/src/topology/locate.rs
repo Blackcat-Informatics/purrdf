@@ -322,6 +322,9 @@ pub(crate) fn locate_surface_direction_transverse_admitted(
     )
 }
 
+/// Surface traversal's arithmetic protocol. Its callback and admitted routes
+/// preserve their own error types while comparison uses the original Rat home,
+/// as does noding's separate work protocol.
 trait SurfaceArithmetic {
     type Error;
     fn charge(&mut self, count: u64) -> Result<(), Self::Error>;

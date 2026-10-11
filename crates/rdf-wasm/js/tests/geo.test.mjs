@@ -57,6 +57,7 @@ test("explicit axes reach sync queries and an already started async profile snap
   const session = new GeoSession(AXES);
   try {
     assert.throws(() => engine.ask(dataset, AXES_QUERY), /unregistered/i);
+    assert.throws(() => engine.setGeoSession(), /expected instance of GeoSession/);
     engine.setGeoSession(session);
     session.free();
     assert.equal(engine.ask(dataset, AXES_QUERY), true);

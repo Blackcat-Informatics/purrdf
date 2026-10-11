@@ -61,10 +61,7 @@ impl GeoSession {
     /// Operational refusal returns through the host error channel without
     /// constructing an error envelope after the original account refuses.
     pub fn call(&self, request: &str) -> Result<String, JsValue> {
-        self.inner
-            .try_response(request)
-            .map(|(text, _)| text)
-            .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))
+        response_text(self.inner.try_response(request))
     }
 }
 
@@ -87,9 +84,17 @@ impl GeoPointIndex {
     /// # Errors
     /// Preserves operational refusal before allocating a response envelope.
     pub fn call(&self, request: &str) -> Result<String, JsValue> {
-        self.inner
-            .try_response(request)
-            .map(|(text, _)| text)
-            .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))
+        response_text(self.inner.try_response(request))
     }
+}
+
+/// The one text/error boundary for the distinct native session and index
+/// producers. Operational refusal retains its original code and does not
+/// allocate a JSON error envelope.
+fn response_text(
+    result: Result<(String, bool), purrdf_validate::geo::GeoCallError>,
+) -> Result<String, JsValue> {
+    result
+        .map(|(text, _)| text)
+        .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))
 }

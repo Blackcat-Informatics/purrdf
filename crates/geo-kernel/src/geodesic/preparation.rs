@@ -520,59 +520,66 @@ impl PreparedGeodesic {
         if bits <= 112 {
             return Ok(None);
         }
-        let policy = context.policy();
-        chunks
-            .context_entry(context)
-            .map_err(super::solve_external_error)?;
-        let mut math = context
-            .coordinate_math(MathLimits {
-                precision_bits: bits,
-                max_work: policy
-                    .limits()
-                    .max_work_items
-                    .saturating_sub(context.work_items()),
-                max_workspace_bytes: usize::try_from(context.remaining_workspace()).map_err(
-                    |_| GeoError::MemoryExhausted {
-                        limit: policy.limits().max_workspace_bytes,
-                    },
-                )?,
-            })
-            .map_err(|error| geo_math_error(&error, policy))?;
-        let interval_bytes = usize::try_from(bits.div_ceil(8))
-            .unwrap_or(usize::MAX)
-            .saturating_mul(8)
-            .saturating_add(size_of::<FixedInterval>());
-        let reservation =
-            interval_bytes
-                .checked_mul(2 * (order + 1) + 64)
-                .ok_or(GeoError::MemoryExhausted {
+        loop {
+            let policy = context.policy();
+            chunks
+                .context_entry(context)
+                .map_err(super::solve_external_error)?;
+            let mut math = context
+                .coordinate_math(MathLimits {
+                    precision_bits: bits,
+                    max_work: policy
+                        .limits()
+                        .max_work_items
+                        .saturating_sub(context.work_items()),
+                    max_workspace_bytes: usize::try_from(context.remaining_workspace()).map_err(
+                        |_| GeoError::MemoryExhausted {
+                            limit: policy.limits().max_workspace_bytes,
+                        },
+                    )?,
+                })
+                .map_err(|error| geo_math_error(&error, policy))?;
+            let interval_bytes = usize::try_from(bits.div_ceil(8))
+                .unwrap_or(usize::MAX)
+                .saturating_mul(8)
+                .saturating_add(size_of::<FixedInterval>());
+            let reservation = interval_bytes.checked_mul(2 * (order + 1) + 64).ok_or(
+                GeoError::MemoryExhausted {
                     limit: policy.limits().max_workspace_bytes,
-                })?;
-        math.reserve_workspace(reservation)
-            .map_err(|error| geo_math_error(&error, policy))?;
-        let result = prepare_worker_coefficients(
-            self.reference.ellipsoid(),
-            bits,
-            order,
-            CoefficientUse::Complete,
-            context.geodesic_coefficients().cloned(),
-            chunks,
-            &mut math,
-        );
-        let observed = chunks.finish(&math);
-        math.release_workspace(reservation)
-            .map_err(|error| geo_math_error(&error, policy))?;
-        context.charge_work(math.work_used())?;
-        context.admit_workspace(math.workspace_peak() as u64)?;
-        context.release_workspace(math.workspace_peak() as u64)?;
-        observed.map_err(super::solve_external_error)?;
-        let (cache, coefficients, bytes) = result.map_err(|error| match error {
-            SolveError::Math(error) => geo_math_error(&error, policy),
-            SolveError::External(error) => error,
-            SolveError::Iterations => GeoError::ConvergenceExhausted { iterations: 0 },
-        })?;
-        context.retain_geodesic_coefficients(cache, bytes)?;
-        Ok(Some(coefficients))
+                },
+            )?;
+            math.reserve_workspace(reservation)
+                .map_err(|error| geo_math_error(&error, policy))?;
+            let result = prepare_worker_coefficients(
+                self.reference.ellipsoid(),
+                bits,
+                order,
+                CoefficientUse::Complete,
+                context.geodesic_coefficients().cloned(),
+                chunks,
+                &mut math,
+            );
+            let observed = chunks.finish(&math);
+            math.release_workspace(reservation)
+                .map_err(|error| geo_math_error(&error, policy))?;
+            context.charge_work(math.work_used())?;
+            context.admit_workspace(math.workspace_peak() as u64)?;
+            context.release_workspace(math.workspace_peak() as u64)?;
+            observed.map_err(super::solve_external_error)?;
+            drop(math);
+            if let Err(SolveError::Math(error)) = &result
+                && chunks.grow_requested_scratch(error, context)?
+            {
+                continue;
+            }
+            let (cache, coefficients, bytes) = result.map_err(|error| match error {
+                SolveError::Math(error) => geo_math_error(&error, policy),
+                SolveError::External(error) => error,
+                SolveError::Iterations => GeoError::ConvergenceExhausted { iterations: 0 },
+            })?;
+            context.retain_geodesic_coefficients(cache, bytes)?;
+            return Ok(Some(coefficients));
+        }
     }
 
     /// Bytes retained by this immutable auxiliary coefficient allocation,
@@ -633,6 +640,7 @@ impl PreparedGeodesic {
         chunks.prepare_scratch(
             context,
             super::scratch_source_bits(&[], reference.ellipsoid()),
+            context.policy().limits().max_precision_bits.min(112),
         )?;
         let policy = context.policy();
         let bits = policy.limits().max_precision_bits.min(80);

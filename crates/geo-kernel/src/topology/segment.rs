@@ -47,6 +47,7 @@
 //! segments rather than of the order they were passed in.
 
 use core::cmp::Ordering;
+use std::borrow::Cow;
 
 use crate::GeoError;
 use crate::exact::{Int, Rat};
@@ -391,19 +392,49 @@ fn midpoint_inner(
     b: &Coord,
     mut admission: Option<&mut ExactAdmission<'_, '_>>,
 ) -> Result<Coord, GeoError> {
-    let h = half();
-    let mut ordinate = |a: &Rat, b: &Rat| {
-        let sum = exact_rational(admission.as_deref_mut(), RationalAdd, &[a, b], |values| {
-            values.add(a, b)
-        })?;
-        exact_rational(
+    Ok(Coord::xy(
+        mean_inner(a.x(), b.x(), admission.as_deref_mut())?,
+        mean_inner(a.y(), b.y(), admission)?,
+    ))
+}
+
+/// The exact scalar mean shared by fragment and arrangement witnesses.
+pub(crate) fn mean_admitted(
+    a: &Rat,
+    b: &Rat,
+    context: &mut crate::MetricContext,
+    progress: &mut crate::context::WorkProgress<'_>,
+) -> Result<Rat, GeoError> {
+    mean_inner(a, b, Some(&mut ExactAdmission::new(context, progress)))
+}
+
+/// The same scalar witness mean with the resident or admitted arithmetic owner.
+pub(crate) fn mean_inner(
+    a: &Rat,
+    b: &Rat,
+    mut admission: Option<&mut ExactAdmission<'_, '_>>,
+) -> Result<Rat, GeoError> {
+    if crate::numerical::compare_rational(admission.as_deref_mut(), a, b)?.is_eq() {
+        return exact_rational(admission, Linear, &[a], |values| values.original(a));
+    }
+    // Equality and copies remain admitted. A zero numerator is a constant-time
+    // shape fact, so adding that zero requires no arithmetic or destination.
+    let sum = if a.is_zero() {
+        Cow::Borrowed(b)
+    } else if b.is_zero() {
+        Cow::Borrowed(a)
+    } else {
+        Cow::Owned(exact_rational(
             admission.as_deref_mut(),
-            RationalMultiply,
-            &[&sum, &h],
-            |values| values.multiply(&sum, &h),
-        )
+            RationalAdd,
+            &[a, b],
+            |values| values.add(a, b),
+        )?)
     };
-    Ok(Coord::xy(ordinate(a.x(), b.x())?, ordinate(a.y(), b.y())?))
+    let scale = half();
+    exact_rational(admission, RationalMultiply, &[&sum, &scale], |values| {
+        values.multiply(&sum, &scale)
+    })
 }
 
 /// How two closed segments meet.

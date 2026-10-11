@@ -6,6 +6,7 @@
 //! The caller supplies the complete original region classifier and bounding
 //! rectangle; neither datum nor geographic axis interpretation is inferred.
 
+use super::mean_admitted as average;
 use crate::context::{
     PersistentNumeric, RetainedBuilder, WorkProgress, persistent_numeric, persistent_numeric_owned,
 };
@@ -379,20 +380,6 @@ fn ordinate(
                 .ok_or_else(|| GeoError::domain("vertical edge has no open-slab ordinate"))
         })?;
     crate::SourceLinearEdge::interpolate_ordinate_admitted(a.y(), b.y(), &parameter, &mut admission)
-}
-fn average(
-    a: &Rat,
-    b: &Rat,
-    context: &mut MetricContext,
-    progress: &mut WorkProgress<'_>,
-) -> Result<Rat, GeoError> {
-    let mut admission = ExactAdmission::new(context, progress);
-    let sum =
-        admission.expression_result(RationalAdd, &[a, b], 1, |values| Ok(values.add(a, b)?))?;
-    let two = Rat::from_i64(2);
-    admission.expression_result(RationalDivide, &[&sum, &two], 1, |values| {
-        Ok(values.divide(&sum, &two)?.expect("positive divisor"))
-    })
 }
 fn push_event(
     value: &Rat,

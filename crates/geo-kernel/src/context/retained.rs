@@ -1638,53 +1638,84 @@ mod tests {
     #[test]
     fn native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction() {
         let crs = crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
-        let a = crate::wkt::parse("GEOMETRYCOLLECTION (POLYGON ((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1)),LINESTRING (0 2,4 2))", &crs).unwrap();
-        let b = crate::wkt::parse("POLYGON ((2 -1,5 -1,5 5,2 5,2 -1))", &crs).unwrap();
-        let expected = crate::topology::relate(a.geometry(), b.geometry());
-        let mut context = MetricContext::wgs84().unwrap();
-        let (account, mut observer) = observer(usize::MAX);
-        let window = CurrentThreadWindow::open();
-        assert_eq!(
-            crate::topology::relate_metered(
-                a.geometry(),
-                b.geometry(),
-                &mut context,
-                &mut observer
-            )
-            .unwrap(),
-            expected
-        );
-        assert!(context.integer_scratch().is_none());
-        assert_eq!(
-            account.live.load(Ordering::Relaxed),
-            0,
-            "completed arrays are destroyed and inline arithmetic owns no heap arena"
-        );
-        assert!(account.maximum.load(Ordering::Relaxed) != 0);
-        drop(context);
-        assert_eq!(account.live.load(Ordering::Relaxed), 0);
-        let measured = window.close();
-        assert_eq!(measured.retained_bytes, 0);
-        assert!(
-            measured.peak_working_bytes
-                <= i64::try_from(account.maximum.load(Ordering::Relaxed)).unwrap()
-        );
-
-        let mut context = MetricContext::wgs84().unwrap();
-        let (account, mut refusing_observer) = self::observer(0);
-        let window = CurrentThreadWindow::open();
-        assert!(matches!(
-            crate::topology::relate_metered(
-                a.geometry(),
-                b.geometry(),
-                &mut context,
-                &mut refusing_observer
+        for (a, b) in [
+            (
+                "GEOMETRYCOLLECTION (POLYGON ((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1)),LINESTRING (0 2,4 2))",
+                "POLYGON ((2 -1,5 -1,5 5,2 5,2 -1))",
             ),
-            Err(GeoError::Storage(StorageError::AdmissionFailed))
-        ));
-        assert_eq!(window.close().allocations, 0);
-        drop(context);
-        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+            ("POINT (2 2)", "POLYGON ((0 0,4 0,4 4,0 4,0 0))"),
+            ("POLYGON ((0 0,4 0,4 4,0 4,0 0))", "POINT (2 2)"),
+        ] {
+            let a = crate::wkt::parse(a, &crs).unwrap();
+            let b = crate::wkt::parse(b, &crs).unwrap();
+            let expected = crate::topology::relate(a.geometry(), b.geometry());
+            let mut context = MetricContext::wgs84().unwrap();
+            let (account, mut observer) = observer(usize::MAX);
+            let window = CurrentThreadWindow::open();
+            assert_eq!(
+                crate::topology::relate_metered(
+                    a.geometry(),
+                    b.geometry(),
+                    &mut context,
+                    &mut observer
+                )
+                .unwrap(),
+                expected
+            );
+            assert!(context.integer_scratch().is_none());
+            assert_eq!(
+                account.live.load(Ordering::Relaxed),
+                0,
+                "completed arrays are destroyed and inline arithmetic owns no heap arena"
+            );
+            assert!(account.maximum.load(Ordering::Relaxed) != 0);
+            let completed_work = context.work_items();
+            drop(context);
+            assert_eq!(account.live.load(Ordering::Relaxed), 0);
+            let measured = window.close();
+            assert_eq!(measured.retained_bytes, 0);
+            assert!(
+                measured.peak_working_bytes
+                    <= i64::try_from(account.maximum.load(Ordering::Relaxed)).unwrap()
+            );
+
+            let mut context = MetricContext::wgs84().unwrap();
+            let (account, mut refusing_observer) = self::observer(0);
+            let window = CurrentThreadWindow::open();
+            assert!(matches!(
+                crate::topology::relate_metered(
+                    a.geometry(),
+                    b.geometry(),
+                    &mut context,
+                    &mut refusing_observer
+                ),
+                Err(GeoError::Storage(StorageError::AdmissionFailed))
+            ));
+            assert_eq!(window.close().allocations, 0);
+            drop(context);
+            assert_eq!(account.live.load(Ordering::Relaxed), 0);
+
+            // Refuse the last positive charge, after support sorting and real
+            // witness work. All partially built owners must die on that exit too.
+            let limit = completed_work - 1;
+            let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+                max_work_items: limit,
+                ..crate::ExecutionLimits::GEOMETRY
+            })
+            .unwrap();
+            let mut context =
+                MetricContext::new(crate::GeographicReference::wgs84(), policy).unwrap();
+            let (account, mut observer) = self::observer(usize::MAX);
+            let window = CurrentThreadWindow::open();
+            assert!(matches!(
+                crate::topology::relate_metered(a.geometry(), b.geometry(), &mut context, &mut observer),
+                Err(GeoError::WorkExhausted { limit: exhausted }) if exhausted == limit
+            ));
+            assert!(context.work_items() > 0);
+            drop(context);
+            assert_eq!(account.live.load(Ordering::Relaxed), 0);
+            assert_eq!(window.close().retained_bytes, 0);
+        }
     }
 
     #[test]

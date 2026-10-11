@@ -91,8 +91,8 @@
 //! eight cells only `I/I`, `I/E` and `E/I` can ever be `2`, because a boundary is
 //! at most one-dimensional. They are decided by an exact **horizontal scan line**:
 //!
-//! * Let `ys` be the sorted, deduplicated `y` of every event point, plus a
-//!   sentinel one below the minimum and one above the maximum.
+//! * Let `ys` be the sorted, deduplicated `y` of every event point. Outside
+//!   their range there is no edge and only the already-established `E/E` area.
 //! * For each consecutive pair take `ym = (y_i + y_{i+1}) / 2` — exact, and
 //!   strictly between, so **no vertex and no intersection point lies on the line
 //!   `y = ym`**.
@@ -126,10 +126,20 @@
 //! The scan is skipped entirely when neither geometry has area, because then no
 //! entry other than `E/E` can be `2`. It also stops as soon as every cell it could
 //! still decide has reached `2`.
+//!
+//! **Singleton reduction.** A nonempty point operand has one interior position
+//! and no boundary. Locate that position once to fix its whole interior row or
+//! column, then node only the other operand. Removing one point from an open
+//! fragment or face leaves its positive dimension unchanged, so those witnesses
+//! contribute to the singleton's exterior even when their sample equals it.
+//! Event witnesses still use both exact locations. Area and fragment witnesses
+//! run first, and traversal stops only when the two remaining cells actually
+//! attain conservative dimension ceilings. Degenerate and invalid inputs whose
+//! cells do not attain those ceilings retain the complete witness traversal.
 
 use super::locate::{horizontal_crossing, horizontal_crossing_admitted, locate, locate_admitted};
 use super::noding::{AdmittedWork, LegacyWork, NodingWork, events_inner, fragments_inner};
-use super::segment::{half, midpoint, midpoint_admitted};
+use super::segment::{mean_admitted, mean_inner};
 use crate::context::{RetainedBuilder, WorkProgress};
 use crate::de9im::{Dim, IntersectionMatrix, Pattern, Set};
 use crate::exact::Rat;
@@ -197,14 +207,17 @@ pub fn relate_pattern(a: &Geometry, b: &Geometry, pattern: &Pattern) -> bool {
 /// The original noder supplies the working arrays and exact-expression seam;
 /// topology adds only its existing location and scan primitives.
 trait RelateWork: NodingWork<Error = GeoError> {
+    fn mean(&mut self, a: &Rat, b: &Rat) -> Result<Rat, GeoError>;
     fn leaves<'a>(&mut self, root: &'a Geometry) -> Result<Self::Array<&'a Geometry>, GeoError>;
     fn locate(&mut self, point: &Coord, geometry: &Geometry) -> Result<Set, GeoError>;
-    fn midpoint(&mut self, a: &Coord, b: &Coord) -> Result<Coord, GeoError>;
     fn crossing(&mut self, a: &Coord, b: &Coord, height: &Rat) -> Result<Option<Rat>, GeoError>;
     fn persistent_rat(&mut self, value: Rat) -> Result<Rat, GeoError>;
 }
 
 impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for LegacyWork<'_, F> {
+    fn mean(&mut self, a: &Rat, b: &Rat) -> Result<Rat, GeoError> {
+        mean_inner(a, b, None)
+    }
     fn leaves<'a>(&mut self, root: &'a Geometry) -> Result<Vec<&'a Geometry>, GeoError> {
         let mut values = Vec::new();
         let mut resident = purrdf_lex::allocation::Resident;
@@ -222,9 +235,6 @@ impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for Legac
     fn locate(&mut self, point: &Coord, geometry: &Geometry) -> Result<Set, GeoError> {
         Ok(locate(point, geometry))
     }
-    fn midpoint(&mut self, a: &Coord, b: &Coord) -> Result<Coord, GeoError> {
-        Ok(midpoint(a, b))
-    }
     fn crossing(&mut self, a: &Coord, b: &Coord, height: &Rat) -> Result<Option<Rat>, GeoError> {
         Ok(horizontal_crossing(a, b, height))
     }
@@ -234,6 +244,9 @@ impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for Legac
 }
 
 impl RelateWork for AdmittedWork<'_, '_> {
+    fn mean(&mut self, a: &Rat, b: &Rat) -> Result<Rat, GeoError> {
+        mean_admitted(a, b, self.context, self.progress)
+    }
     fn leaves<'a>(
         &mut self,
         root: &'a Geometry,
@@ -248,9 +261,6 @@ impl RelateWork for AdmittedWork<'_, '_> {
     }
     fn locate(&mut self, point: &Coord, geometry: &Geometry) -> Result<Set, GeoError> {
         locate_admitted(point, geometry, self.context, self.progress)
-    }
-    fn midpoint(&mut self, a: &Coord, b: &Coord) -> Result<Coord, GeoError> {
-        midpoint_admitted(a, b, &mut ExactAdmission::new(self.context, self.progress))
     }
     fn crossing(&mut self, a: &Coord, b: &Coord, height: &Rat) -> Result<Option<Rat>, GeoError> {
         horizontal_crossing_admitted(
@@ -275,39 +285,212 @@ fn relate_inner<W: RelateWork>(
     let a_leaves = work.leaves(a)?;
     let b_leaves = work.leaves(b)?;
     let targets = AreaTargets::new(area_present(&a_leaves), area_present(&b_leaves));
+    let point_targets = match (a.body(), b.body()) {
+        (GeometryBody::Point(Some(point)), _) => {
+            matrix.set(Set::Interior, work.locate(point, b)?, Dim::Zero);
+            Some(PointTargets::new(false, &b_leaves))
+        }
+        (_, GeometryBody::Point(Some(point))) => {
+            matrix.set(work.locate(point, a)?, Set::Interior, Dim::Zero);
+            Some(PointTargets::new(true, &a_leaves))
+        }
+        _ => None,
+    };
     let mut edges = W::Array::default();
     let mut seeds = W::Array::default();
-    for &member in a_leaves.iter().chain(b_leaves.iter()) {
-        collect_edges(member, &mut edges, work)?;
-        for coordinate in LeafCoords::of(member) {
-            work.push(&mut seeds, coordinate)?;
+    for (leaves, singleton) in [
+        (
+            &a_leaves[..],
+            point_targets.is_some_and(|targets| !targets.transpose),
+        ),
+        (
+            &b_leaves[..],
+            point_targets.is_some_and(|targets| targets.transpose),
+        ),
+    ] {
+        if singleton {
+            continue;
+        }
+        for &member in leaves {
+            collect_edges(member, &mut edges, work)?;
+            for coordinate in LeafCoords::of(member) {
+                work.push(&mut seeds, coordinate)?;
+            }
         }
     }
     work.release(a_leaves)?;
     work.release(b_leaves)?;
+    unique_edge_supports(&mut edges, work)?;
     let events = events_inner(&edges, seeds.iter().copied().map(Cow::Borrowed), work)?;
     work.release(seeds)?;
-    for point in events.iter() {
-        let in_a = work.locate(point, a)?;
-        let in_b = work.locate(point, b)?;
-        matrix.raise(in_a, in_b, Dim::Zero);
+    // A singleton fixes its complete interior and boundary rows (or columns).
+    // Establish area witnesses first so the two remaining cells can reach their
+    // dimension ceilings without classifying every duplicate witness. Syntax
+    // supplies only ceilings: degenerate polygons still exhaust the witnesses.
+    if point_targets.is_some() && (targets.interior_exterior || targets.exterior_interior) {
+        scan_for_areas(
+            a,
+            b,
+            &events,
+            &edges,
+            &mut matrix,
+            targets,
+            point_targets,
+            work,
+        )?;
+    }
+    if point_targets.is_none() {
+        classify_events(a, b, &events, &mut matrix, point_targets, work)?;
     }
     for &edge in edges.iter() {
+        if point_targets.is_some_and(|targets| targets.settled(&matrix)) {
+            break;
+        }
         let fragments = fragments_inner(edge, &events, work)?;
         for &(from, to) in fragments.iter() {
-            let mid = work.midpoint(from, to)?;
-            let in_a = work.locate(&mid, a)?;
-            let in_b = work.locate(&mid, b)?;
+            if point_targets.is_some_and(|targets| targets.settled(&matrix)) {
+                break;
+            }
+            let mid = Coord::xy(work.mean(from.x(), to.x())?, work.mean(from.y(), to.y())?);
+            let (in_a, in_b) = locate_positive(&mid, a, b, point_targets, work)?;
             matrix.raise(in_a, in_b, Dim::One);
         }
         work.release(fragments)?;
     }
-    if targets.interior_exterior || targets.exterior_interior {
-        scan_for_areas(a, b, &events, &edges, &mut matrix, targets, work)?;
+    // A fragment can attain a curve ceiling that no event can attain. For a
+    // singleton, visit those higher-dimensional witnesses first; events remain
+    // necessary if either ceiling is unattained (including degenerate inputs).
+    if point_targets.is_some() {
+        classify_events(a, b, &events, &mut matrix, point_targets, work)?;
+    }
+    if point_targets.is_none() && (targets.interior_exterior || targets.exterior_interior) {
+        scan_for_areas(
+            a,
+            b,
+            &events,
+            &edges,
+            &mut matrix,
+            targets,
+            point_targets,
+            work,
+        )?;
     }
     work.release(events)?;
     work.release(edges)?;
     Ok(matrix)
+}
+
+fn classify_events<W: RelateWork>(
+    a: &Geometry,
+    b: &Geometry,
+    events: &[Coord],
+    matrix: &mut IntersectionMatrix,
+    point_targets: Option<PointTargets>,
+    work: &mut W,
+) -> Result<(), GeoError> {
+    for point in events {
+        if point_targets.is_some_and(|targets| targets.settled(matrix)) {
+            break;
+        }
+        let in_a = work.locate(point, a)?;
+        let in_b = work.locate(point, b)?;
+        matrix.raise(in_a, in_b, Dim::Zero);
+    }
+    Ok(())
+}
+
+/// Removing one point cannot lower the dimension of a nonempty open fragment
+/// or face. The singleton's row/column is already exact, so a positive-
+/// dimensional witness contributes to its exterior even if its sample happens
+/// to equal that point. Only the other operand therefore needs noding; all of
+/// its vertices and isolated points remain seeds. Zero-dimensional events still
+/// use both actual locations and cannot include the singleton in its exterior.
+fn locate_positive<W: RelateWork>(
+    sample: &Coord,
+    a: &Geometry,
+    b: &Geometry,
+    point_targets: Option<PointTargets>,
+    work: &mut W,
+) -> Result<(Set, Set), GeoError> {
+    match point_targets {
+        Some(targets) if targets.transpose => Ok((work.locate(sample, a)?, Set::Exterior)),
+        Some(_) => Ok((Set::Exterior, work.locate(sample, b)?)),
+        None => Ok((work.locate(sample, a)?, work.locate(sample, b)?)),
+    }
+}
+
+/// Only the witness supports lose multiplicity. The original operands retain
+/// every ring and curve for location and boundary parity, and every original
+/// endpoint remains a noding seed. Reversed and coincident supports therefore
+/// introduce no new event or fragment witness.
+fn unique_edge_supports<'a, W: RelateWork>(
+    edges: &mut W::Array<(&'a Coord, &'a Coord)>,
+    work: &mut W,
+) -> Result<(), GeoError> {
+    for edge in edges.iter_mut() {
+        if work.compare_coordinate(edge.0, edge.1)?.is_gt() {
+            core::mem::swap(&mut edge.0, &mut edge.1);
+        }
+    }
+    purrdf_lex::walk::try_sort_unstable_by(edges, |a, b| {
+        work.visit(1, None)?;
+        let first = work.compare_coordinate(a.0, b.0)?;
+        if first.is_eq() {
+            work.compare_coordinate(a.1, b.1)
+        } else {
+            Ok(first)
+        }
+    })?;
+    let unique = purrdf_lex::walk::try_partition_unique_by(edges, |a, b| {
+        Ok::<_, GeoError>(
+            work.compare_coordinate(a.0, b.0)?.is_eq()
+                && work.compare_coordinate(a.1, b.1)?.is_eq(),
+        )
+    })?;
+    work.truncate(edges, unique);
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PointTargets {
+    transpose: bool,
+    interior: Dim,
+    boundary: Dim,
+}
+
+impl PointTargets {
+    fn new(transpose: bool, leaves: &[&Geometry]) -> Self {
+        let mut interior = Dim::Empty;
+        let mut boundary = Dim::Empty;
+        for geometry in leaves {
+            let (i, b) = match geometry.body() {
+                GeometryBody::Point(_) | GeometryBody::MultiPoint(_) => (Dim::Zero, Dim::Empty),
+                GeometryBody::LineString(_) | GeometryBody::MultiLineString(_) => {
+                    (Dim::One, Dim::Zero)
+                }
+                GeometryBody::Polygon(_) | GeometryBody::MultiPolygon(_) => (Dim::Two, Dim::One),
+                GeometryBody::GeometryCollection(_) => unreachable!("only leaves are retained"),
+            };
+            interior = interior.max(i);
+            boundary = boundary.max(b);
+        }
+        Self {
+            transpose,
+            interior,
+            boundary,
+        }
+    }
+
+    fn settled(self, matrix: &IntersectionMatrix) -> bool {
+        let dimension = |set| {
+            if self.transpose {
+                matrix.get(set, Set::Exterior)
+            } else {
+                matrix.get(Set::Exterior, set)
+            }
+        };
+        dimension(Set::Interior) == self.interior && dimension(Set::Boundary) == self.boundary
+    }
 }
 
 fn area_present(leaves: &[&Geometry]) -> bool {
@@ -383,19 +566,6 @@ impl AreaTargets {
     }
 }
 
-fn mean<W: RelateWork>(a: &Rat, b: &Rat, work: &mut W) -> Result<Rat, GeoError> {
-    let sum = work.exact(ExactOperation::RationalAdd, &[a, b], 1, |values| {
-        values.add(a, b)
-    })?;
-    let scale = half();
-    work.exact(
-        ExactOperation::RationalMultiply,
-        &[&sum, &scale],
-        1,
-        |values| values.multiply(&sum, &scale),
-    )
-}
-
 fn scan_for_areas<W: RelateWork>(
     a: &Geometry,
     b: &Geometry,
@@ -403,6 +573,7 @@ fn scan_for_areas<W: RelateWork>(
     edges: &[(&Coord, &Coord)],
     matrix: &mut IntersectionMatrix,
     targets: AreaTargets,
+    point_targets: Option<PointTargets>,
     work: &mut W,
 ) -> Result<(), GeoError> {
     let Some(bands) = band_boundaries(events, work)? else {
@@ -412,7 +583,7 @@ fn scan_for_areas<W: RelateWork>(
         if targets.settled(matrix) {
             break;
         }
-        let height = mean(&pair[0], &pair[1], work)?;
+        let height = work.mean(&pair[0], &pair[1])?;
         let crossings = sorted_crossings(edges, &height, work)?;
         // Outside every original crossing, both finite geometries are exterior;
         // E/E is already dimension two. Open bands exclude every input vertex
@@ -423,14 +594,13 @@ fn scan_for_areas<W: RelateWork>(
             if targets.settled(matrix) {
                 break;
             }
-            let abscissa = mean(&window[0], &window[1], work)?;
+            let abscissa = work.mean(&window[0], &window[1])?;
             let abscissa = work.persistent_rat(abscissa)?;
             let ordinate = work.exact(ExactOperation::Linear, &[&height], 1, |values| {
                 values.original(&height)
             })?;
             let sample = Coord::xy(abscissa, ordinate);
-            let in_a = work.locate(&sample, a)?;
-            let in_b = work.locate(&sample, b)?;
+            let (in_a, in_b) = locate_positive(&sample, a, b, point_targets, work)?;
             debug_assert!(
                 in_a != Set::Boundary && in_b != Set::Boundary,
                 "a scan-line sample cannot lie on a fully noded boundary"
@@ -473,24 +643,13 @@ fn band_boundaries<W: RelateWork>(
         work.push(&mut ordinates, value)?;
     }
     sort_rationals(&mut ordinates, work)?;
-    let (Some(first), Some(last)) = (ordinates.first(), ordinates.last()) else {
+    if ordinates.len() < 2 {
         work.release(ordinates)?;
         return Ok(None);
-    };
-    let one = Rat::one();
-    let first = work.exact(ExactOperation::RationalAdd, &[first, &one], 1, |values| {
-        values.subtract(first, &one)
-    })?;
-    let last = work.exact(ExactOperation::RationalAdd, &[last, &one], 1, |values| {
-        values.add(last, &one)
-    })?;
-    let first = work.persistent_rat(first)?;
-    let last = work.persistent_rat(last)?;
-    let mut bands = W::Array::default();
-    work.push(&mut bands, first)?;
-    work.append(&mut bands, ordinates)?;
-    work.push(&mut bands, last)?;
-    Ok(Some(bands))
+    }
+    // Every planar segment stays between its endpoint ordinates. Bands outside
+    // this range can witness only E/E, which is unconditionally dimension two.
+    Ok(Some(ordinates))
 }
 
 fn sorted_crossings<W: RelateWork>(
@@ -518,14 +677,15 @@ mod tests {
     use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind, Rings};
     use crate::relations::{SpatialRelation, transpose};
 
+    struct Observe;
+    impl crate::MetricWorkObserver for Observe {
+        fn charge_chunk(&mut self, _: u64, _: u64) -> Result<(), crate::GeoError> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn native_matrix_owner_preserves_every_original_golden_and_relation_family() {
-        struct Observe;
-        impl crate::MetricWorkObserver for Observe {
-            fn charge_chunk(&mut self, _: u64, _: u64) -> Result<(), crate::GeoError> {
-                Ok(())
-            }
-        }
         for (name, a, b) in corpus() {
             let original = relate(&a, &b);
             let mut context = crate::MetricContext::wgs84().unwrap();
@@ -538,6 +698,41 @@ mod tests {
                     relation.holds(&original, dimensions[0], dimensions[1]),
                     "{name}: {relation:?}",
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn all_small_map_pairs_complete_in_one_default_work_budget() {
+        // The seven spatial objects in the query-rewrite fixture: each feature
+        // and its geometry are distinct entries, plus the bare interior point.
+        let geometries = [point(1, 1), point(9, 9), boxed(0, 0, 4, 4), point(2, 2)];
+        let entries = [0, 0, 1, 1, 2, 2, 3];
+        let mut context = crate::MetricContext::wgs84().unwrap();
+        for a in entries {
+            for b in entries {
+                let expected = match (a, b) {
+                    (2, 2) => "2FFF1FFF2",
+                    (2, 1) => "FF2FF10F2",
+                    (1, 2) => "FF0FFF212",
+                    (2, _) => "0F2FF1FF2",
+                    (_, 2) => "0FFFFF212",
+                    _ if a == b => "0FFFFFFF2",
+                    _ => "FF0FFF0F2",
+                };
+                let matrix = super::relate_metered(
+                    &geometries[a],
+                    &geometries[b],
+                    &mut context,
+                    &mut Observe,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "pair {a}/{b}, cumulative work {}: {error}",
+                        context.work_items()
+                    )
+                });
+                assert_eq!(matrix.to_string(), expected, "pair {a}/{b}");
             }
         }
     }
@@ -638,6 +833,54 @@ mod tests {
             &square,
             "FF0FFF212",
         );
+    }
+
+    #[test]
+    fn point_witness_settlement_preserves_degenerate_and_repeated_supports() {
+        let doubled_curve = Geometry::new(
+            CoordDim::Xy,
+            GeometryBody::MultiLineString(vec![seq(&[(0, 0), (4, 0)]), seq(&[(4, 0), (0, 0)])]),
+        )
+        .unwrap();
+        let cases = [
+            (point(2, 0), line(&[(0, 0), (4, 0)]), "0FFFFF102"),
+            (point(0, 0), doubled_curve, "0FFFFF1F2"),
+            (
+                point(2, 0),
+                polygon(&[&[(0, 0), (4, 0), (2, 0), (0, 0)]]),
+                "F0FFFFF12",
+            ),
+            (
+                point(0, 0),
+                polygon(&[&[(0, 0), (0, 0), (0, 0), (0, 0)]]),
+                "F0FFFFFF2",
+            ),
+            (
+                point(2, 1),
+                polygon(&[&[(0, 0), (4, 4), (0, 4), (4, 0), (0, 0)]]),
+                "0FFFFF212",
+            ),
+            (
+                point(2, 2),
+                polygon(&[&[(0, 0), (4, 4), (0, 4), (4, 0), (0, 0)]]),
+                "F0FFFF212",
+            ),
+        ];
+        for (point, geometry, expected) in cases {
+            let expected = IntersectionMatrix::parse(expected).unwrap();
+            assert_eq!(relate(&point, &geometry), expected);
+            assert_eq!(relate(&geometry, &point), transpose(&expected));
+            for (a, b, expected) in [
+                (&point, &geometry, expected),
+                (&geometry, &point, transpose(&expected)),
+            ] {
+                let mut context = crate::MetricContext::wgs84().unwrap();
+                assert_eq!(
+                    super::relate_metered(a, b, &mut context, &mut Observe).unwrap(),
+                    expected,
+                );
+            }
+        }
     }
 
     /// The five polygon-against-polygon configurations, plus the two orders of

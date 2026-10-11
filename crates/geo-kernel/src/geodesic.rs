@@ -441,13 +441,17 @@ impl PreparedGeodesic {
         }
         let policy = context.policy();
         let maximum = policy.limits().max_precision_bits;
-        // Near-equatorial vertex geometry can lose many working bits in the
-        // inverse square root. The same certified solver starts its fixed
-        // proof at112 bits there, avoiding an unproductive80-bit attempt.
-        // This selects proof effort; the output grid and completion test stay
-        // independent of this proposal and of the caller's admission limits.
-        let mut bits = maximum.min(80);
-        let mut floating = maximum >= 64;
+        // Cut-locus neighbors already select a fixed proof beyond the
+        // double-word tier. Start there when admitted, instead of spending
+        // the caller's work allowance on two insufficient precision tiers.
+        // Ordinary pairs keep their binary64 and double-word fast paths.
+        let initial_bits = initial_inverse_precision(&canonical);
+        let direct_fixed = initial_bits > 112
+            && maximum >= initial_bits
+            && canonical.longitude < Rat::from_i64(180)
+            && canonical.latitude1 != canonical.latitude2.neg();
+        let mut floating = maximum >= 64 && !direct_fixed;
+        let mut bits = maximum.min(if floating { 80 } else { initial_bits });
         let mut double_word = false;
         if bits < 16 {
             return Err(GeoError::PrecisionExhausted { bits: maximum });
@@ -461,6 +465,7 @@ impl PreparedGeodesic {
                         &[a.longitude(), a.latitude(), b.longitude(), b.latitude()],
                         self.reference.ellipsoid(),
                     ),
+                    bits,
                 )?;
             }
             let fixed_coefficients = if floating {
@@ -623,7 +628,13 @@ impl PreparedGeodesic {
                     });
                 }
                 Err(SolveError::External(error)) => return Err(error),
-                Err(SolveError::Math(error)) => return Err(geo_math_error(&error, policy)),
+                Err(SolveError::Math(error)) => {
+                    drop(math);
+                    if chunks.grow_requested_scratch(&error, context)? {
+                        continue;
+                    }
+                    return Err(geo_math_error(&error, policy));
+                }
             }
             if floating && !double_word {
                 double_word = true;
@@ -633,7 +644,7 @@ impl PreparedGeodesic {
                 // The double-word tier already carries about 100 working bits,
                 // so the exact solver resumes beyond it rather than at 80.
                 floating = false;
-                bits = maximum.min(initial_inverse_precision(&canonical).max(112));
+                bits = maximum.min(initial_bits.max(112));
                 continue;
             }
             if bits == maximum {
@@ -1040,14 +1051,21 @@ impl<'borrow, 'observer> ChunkObserver<'borrow, 'observer> {
         &mut self,
         context: &mut MetricContext,
         source_bits: u64,
+        precision_bits: u32,
     ) -> Result<(), GeoError> {
         match &mut self.progress {
-            ChunkProgress::Owned(progress) => {
-                context.prepare_integer_scratch_for_observed(source_bits, progress)
-            }
-            ChunkProgress::Borrowed(progress) => {
-                context.prepare_integer_scratch_for_observed(source_bits, progress)
-            }
+            ChunkProgress::Owned(progress) => context
+                .prepare_integer_scratch_at_precision_observed(
+                    source_bits,
+                    precision_bits,
+                    progress,
+                ),
+            ChunkProgress::Borrowed(progress) => context
+                .prepare_integer_scratch_at_precision_observed(
+                    source_bits,
+                    precision_bits,
+                    progress,
+                ),
         }
     }
 
@@ -1064,6 +1082,15 @@ impl<'borrow, 'observer> ChunkObserver<'borrow, 'observer> {
                 context.install_arithmetic_observed(math, Some(progress))
             }
         }
+    }
+
+    fn grow_requested_scratch(
+        &mut self,
+        error: &MathError,
+        context: &mut MetricContext,
+    ) -> Result<bool, GeoError> {
+        let error = geo_math_error(error, context.policy());
+        context.grow_requested_integer_scratch(&error, self.progress_mut())
     }
     fn finish_interval(&mut self, math: &mut IntervalContext<'_>) -> Result<(), SolveError> {
         if self.metered {
@@ -1137,20 +1164,21 @@ fn initial_inverse_precision(pair: &CanonicalPair) -> u32 {
     // azimuth is ill-conditioned although shortest distance remains regular.
     // Exact source coordinates select a more precise first proof, avoiding
     // work on coarse enclosures which cannot contract the inverse bracket.
-    let latitude_sum = pair.latitude1.add(&pair.latitude2).abs();
-    if pair.longitude > Rat::from_i64(170)
-        && !latitude_sum.is_zero()
-        && latitude_sum
-            < Rat::one()
-                .div(&Rat::from_i64(1_000_000_000_000))
-                .expect("positive")
-    {
-        448
-    } else if pair.longitude > Rat::from_i64(170)
-        && latitude_sum < Rat::one().div(&Rat::from_i64(1_000_000)).expect("positive")
-    {
-        224
-    } else if pair.latitude1.abs() <= Rat::from_i64(1) {
+    if pair.longitude > Rat::from_i64(170) {
+        let latitude_sum = pair.latitude1.add(&pair.latitude2).abs();
+        if !latitude_sum.is_zero()
+            && latitude_sum
+                < Rat::one()
+                    .div(&Rat::from_i64(1_000_000_000_000))
+                    .expect("positive")
+        {
+            return 448;
+        }
+        if latitude_sum < Rat::one().div(&Rat::from_i64(1_000_000)).expect("positive") {
+            return 224;
+        }
+    }
+    if pair.latitude1.abs() <= Rat::from_i64(1) {
         112
     } else {
         80
@@ -3229,6 +3257,98 @@ mod tests {
                 "reference {metres}, got {}",
                 answer.value().exact().to_decimal_string(6)
             );
+        }
+    }
+
+    #[test]
+    fn cut_locus_distance_finishes_with_default_work_in_cold_and_prepared_paths() {
+        // CC0 GeodTest vertex neighbors. The printed distances carry rounding
+        // uncertainty; admission must succeed without enlarging the work cap.
+        let tolerance = Rat::parse_decimal("0.0000006").unwrap();
+        for (lat1, lon2, lat2, metres) in [
+            (
+                "48.516342589463",
+                "179.599668832767006923",
+                "-48.516342589463002206",
+                "19989140.9602825",
+            ),
+            (
+                "21.004101257892",
+                "179.43641220015808594",
+                "-21.004101257877442853",
+                "19974623.3063849",
+            ),
+            (
+                "7.326494029601",
+                "179.401396884582420845",
+                "-7.326494029600942956",
+                "19970869.9355725",
+            ),
+        ] {
+            let a = point("0", lat1);
+            let b = point(lon2, lat2);
+            let reference = GeographicReference::wgs84();
+            let mut context =
+                MetricContext::new(reference.clone(), ExecutionPolicy::geometry()).unwrap();
+            let prepared = PreparedGeodesic::prepare(reference, &mut context).unwrap();
+            let (answer, _) = prepared
+                .distance_with_proof(&a, &b, &mut context)
+                .expect("prepared distance within default work");
+            assert!(
+                answer
+                    .value()
+                    .exact()
+                    .sub(&Rat::parse_decimal(metres).unwrap())
+                    .abs()
+                    <= tolerance
+            );
+            assert_eq!(
+                distance(a.clone(), b.clone()).expect("plain distance within default work"),
+                answer
+            );
+            let reference = GeographicReference::wgs84();
+            let cold = PreparedGeodesic::new(reference.clone());
+            let mut cold_context =
+                MetricContext::new(reference, ExecutionPolicy::geometry()).unwrap();
+            assert_eq!(
+                cold.distance(&a, &b, &mut cold_context)
+                    .expect("cold distance within default work"),
+                answer
+            );
+            assert_eq!(
+                prepared
+                    .distance(&b, &a, &mut context)
+                    .expect("reused preparation within default work"),
+                answer
+            );
+        }
+    }
+
+    #[test]
+    fn easy_antipodal_branches_keep_the_same_work_at_higher_precision_limits() {
+        for (a, b) in [
+            (point("0", "0"), point("171", "0")),
+            (point("0", "48"), point("180", "-48")),
+            (point("0", "48"), point("180", "-48.000000000000001")),
+        ] {
+            let mut lower_limit = None;
+            for max_precision_bits in [112, ExecutionLimits::GEOMETRY.max_precision_bits] {
+                let reference = GeographicReference::wgs84();
+                let policy = ExecutionPolicy::new(ExecutionLimits {
+                    max_precision_bits,
+                    ..ExecutionLimits::GEOMETRY
+                })
+                .unwrap();
+                let mut context = MetricContext::new(reference.clone(), policy).unwrap();
+                let prepared = PreparedGeodesic::prepare(reference, &mut context).unwrap();
+                let (answer, proof) = prepared.distance_with_proof(&a, &b, &mut context).unwrap();
+                let result = (answer, proof.work_items);
+                if let Some(expected) = lower_limit.as_ref() {
+                    assert_eq!(&result, expected);
+                } else {
+                    lower_limit = Some(result);
+                }
+            }
         }
     }
 

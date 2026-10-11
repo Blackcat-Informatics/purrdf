@@ -470,24 +470,22 @@ impl PreparedGeodesic {
         }
         let policy = context.policy();
         let maximum = policy.limits().max_precision_bits;
-        chunks.prepare_scratch(
-            context,
-            super::scratch_source_bits(
-                &[
-                    start.longitude(),
-                    start.latitude(),
-                    &azimuth,
-                    length.exact(),
-                ],
-                self.reference.ellipsoid(),
-            ),
-        )?;
+        let source_bits = super::scratch_source_bits(
+            &[
+                start.longitude(),
+                start.latitude(),
+                &azimuth,
+                length.exact(),
+            ],
+            self.reference.ellipsoid(),
+        );
         let mut bits = maximum.min(80);
         if bits < 16 {
             return Err(GeoError::PrecisionExhausted { bits: maximum });
         }
         loop {
             chunks.reset();
+            chunks.prepare_scratch(context, source_bits, bits)?;
             let order = super::integral_order(self.reference.ellipsoid(), bits);
             let coefficients = self.worker_coefficients(bits, order, context, chunks)?;
             chunks
@@ -554,7 +552,13 @@ impl PreparedGeodesic {
                     });
                 }
                 Err(SolveError::External(error)) => return Err(error),
-                Err(SolveError::Math(error)) => return Err(geo_math_error(&error, policy)),
+                Err(SolveError::Math(error)) => {
+                    drop(math);
+                    if chunks.grow_requested_scratch(&error, context)? {
+                        continue;
+                    }
+                    return Err(geo_math_error(&error, policy));
+                }
             }
             if bits == maximum {
                 return Err(GeoError::PrecisionExhausted { bits: maximum });
@@ -1016,6 +1020,14 @@ impl PreparedGeodesic {
             context.charge_work(1)?;
             let mut chunks = ChunkObserver::new(if metered { Some(&mut nested) } else { None });
             chunks.initial().map_err(super::solve_external_error)?;
+            chunks.prepare_scratch(
+                context,
+                super::scratch_source_bits(
+                    &[a.longitude(), a.latitude(), b.longitude(), b.latitude(), t],
+                    self.reference.ellipsoid(),
+                ),
+                bits,
+            )?;
             let order = super::integral_order(self.reference.ellipsoid(), bits);
             let coefficients = self.worker_coefficients(bits, order, context, &mut chunks)?;
             let mut math = context
@@ -1087,7 +1099,13 @@ impl PreparedGeodesic {
                     });
                 }
                 Err(SolveError::Math(MathError::PrecisionExhausted | MathError::Domain(_))) => {}
-                Err(SolveError::Math(error)) => return Err(geo_math_error(&error, policy)),
+                Err(SolveError::Math(error)) => {
+                    drop(math);
+                    if chunks.grow_requested_scratch(&error, context)? {
+                        continue;
+                    }
+                    return Err(geo_math_error(&error, policy));
+                }
                 Err(SolveError::Iterations) => {
                     return Err(GeoError::ConvergenceExhausted {
                         iterations: policy.limits().max_iterations,

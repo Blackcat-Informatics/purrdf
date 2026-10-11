@@ -584,4 +584,3 @@ Scope: source-only conformance data; original notices remain authoritative
 Source: https://github.com/yaml/yaml-test-suite/tree/data-2022-01-17
 Evidence: vectors/yaml-test-suite/PROVENANCE.md
 Notice: third-party/yaml-tests/0-LICENSE
-

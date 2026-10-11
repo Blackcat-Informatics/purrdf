@@ -613,6 +613,17 @@ fn admitted_physical_scales_preserve_exact_values_and_default_level_selection() 
             assert_eq!(result, grid.physical_scale_bounds(level).unwrap());
             assert!(receipt.work > 100);
             assert!(receipt.peak >= result.retained_workspace_bytes());
+            let mut relaxed_receipt = Receipt { work: 0, peak: 0 };
+            let relaxed = grid
+                .physical_scale_bounds_in_policy_metered(
+                    level,
+                    crate::ExecutionPolicy::unbounded(),
+                    &mut relaxed_receipt,
+                )
+                .expect("unbounded ceilings preserve the retained exact working set");
+            assert_eq!(relaxed, result);
+            assert_eq!(relaxed_receipt.work, receipt.work);
+            assert_eq!(relaxed_receipt.peak, receipt.peak);
             assert_eq!(
                 grid.level_for_max_edge_length_in_policy(result.upper(), policy)
                     .expect("inclusive exact bound under defaults"),

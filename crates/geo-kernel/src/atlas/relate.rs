@@ -10,6 +10,7 @@
 use super::boundary::physical_point;
 use crate::context::WorkProgress;
 use crate::numerical::ExactAdmission;
+use crate::topology::mean_admitted as average;
 use crate::{
     Coord, Dim, GeoError, IntersectionMatrix, LonLat, MetricContext, MetricWorkObserver,
     PreparedEdge, PreparedGeometry, PreparedRegion, Rat, SemanticLawId, Set,
@@ -456,22 +457,6 @@ pub(crate) fn copy_point(
         2,
         |values| Ok(values.planar_location(point)?),
     )
-}
-
-fn average(
-    a: &Rat,
-    b: &Rat,
-    context: &mut MetricContext,
-    progress: &mut WorkProgress<'_>,
-) -> Result<Rat, GeoError> {
-    let mut admission = ExactAdmission::new(context, progress);
-    let sum = admission.expression_result(ExactOperation::RationalAdd, &[a, b], 1, |values| {
-        Ok(values.add(a, b)?)
-    })?;
-    let two = Rat::from_i64(2);
-    admission.expression_result(ExactOperation::RationalDivide, &[&sum, &two], 1, |values| {
-        Ok(values.divide(&(sum), &two)?.expect("positive divisor"))
-    })
 }
 
 fn locate(

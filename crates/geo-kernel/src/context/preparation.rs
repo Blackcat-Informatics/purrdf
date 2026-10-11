@@ -306,8 +306,7 @@ impl PreparationBudget {
                 observer,
             );
         }
-        let buffers = usize::try_from(self.policy.limits().max_scratch_destinations)
-            .map_err(|_| GeoError::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))?;
+        let buffers = super::scratch_destination_count(self.policy.limits());
         let bytes = match observer.as_ref() {
             Some(observer) => observer.integer_scratch_layout(buffers, limbs)?,
             None => purrdf_xsd::integer::LimbScratch::required_bytes(buffers, limbs)

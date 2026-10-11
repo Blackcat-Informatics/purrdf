@@ -112,7 +112,7 @@ The native cubed-sphere hierarchy assigns profile-qualified cell IDs at levels
 definition. Closed disk, box and prepared-region covers are conservative;
 caller limits refuse a complete cover rather than truncate or silently
 coarsen it. Reusable point indexes keep original coordinates and refine
-candidates with the requested physical or reported-distance law. H3 v4.0
+candidates with the requested physical or reported-distance law. `h3` v4.0
 compatibility is an architecture document, not an implemented family.
 
 ## Host ownership and qualification

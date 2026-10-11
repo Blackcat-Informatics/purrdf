@@ -14,6 +14,10 @@ use crate::{ExecutionPolicy, GeoError, Int, MetricContext, Rat};
 type DiagnosticNumberFactory<'a> =
     dyn Fn(&Rat) -> Result<crate::context::Retained<Rat>, GeoError> + 'a;
 
+/// Typed admission adapters to the original XSD integer and rational operations.
+/// The integer and rational entries retain their different value/normalization
+/// laws; each delegates computation to that type's existing admitted or resident
+/// home. Copying a coordinate retains all its ordinates, unlike copying one Rat.
 #[derive(Clone, Copy)]
 pub(crate) struct ExactValues<'a>(
     Option<&'a purrdf_xsd::integer::LimbScratch>,
@@ -1883,12 +1887,16 @@ pub(crate) fn math_share_fields<T: crate::context::NativeDetached>(
 /// The context owns no floating guard; a borrowed floating subcontext must pause
 /// its guard before invoking WorkProgress, which revalidates after callbacks.
 /// Every exit accounts actual work/peak and releases all phase reservations.
+/// A coefficient shape request can restart the phase at the same precision
+/// after its temporaries are dropped and a larger arena is admitted. The
+/// callback must construct attempt-local owners each time and transfer external
+/// state only on success. Failed work remains charged across these attempts.
 pub(crate) fn with_math<T>(
     context: &mut MetricContext,
     progress: &mut WorkProgress<'_>,
     precision_bits: u32,
     reservation: usize,
-    evaluate: impl FnOnce(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<T, GeoError>,
+    evaluate: impl FnMut(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<T, GeoError>,
 ) -> Result<T, GeoError> {
     with_math_for_sources(
         context,
@@ -1908,7 +1916,7 @@ pub(crate) fn with_math_for_sources<T>(
     precision_bits: u32,
     reservation: usize,
     sources: &[&Rat],
-    evaluate: impl FnOnce(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<T, GeoError>,
+    mut evaluate: impl FnMut(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<T, GeoError>,
 ) -> Result<T, GeoError> {
     with_math_for_sources_retained(
         context,
@@ -1931,110 +1939,126 @@ pub(crate) fn with_math_for_sources_retained<T>(
     precision_bits: u32,
     reservation: usize,
     sources: &[&Rat],
-    evaluate: impl FnOnce(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<(T, u64), GeoError>,
+    mut evaluate: impl FnMut(&mut CoordinateMath, &mut WorkProgress<'_>) -> Result<(T, u64), GeoError>,
 ) -> Result<(T, u64), GeoError> {
-    if let Some(error) = progress.latched_error() {
-        return Err(error);
-    }
-    let policy = context.policy();
-    if precision_bits > policy.limits().max_precision_bits {
-        return Err(GeoError::PrecisionExhausted {
-            bits: policy.limits().max_precision_bits,
-        });
-    }
-    // CoordinateMath::new requires max_work > 0. Check that same minimum
-    // before preparing an arena for a phase that cannot begin; this does not
-    // charge work or change any successful phase's accounting.
-    context.next_work(1)?;
-    let source_bits = scratch_source_bits(sources, context.reference().ellipsoid());
-    context.prepare_integer_scratch_for_observed(source_bits, progress)?;
-    progress.context_poll(context)?;
-    let mut math = context
-        .coordinate_math(MathLimits {
-            precision_bits,
-            max_work: policy
-                .limits()
-                .max_work_items
-                .saturating_sub(context.work_items()),
-            max_workspace_bytes: usize::try_from(context.remaining_workspace()).map_err(|_| {
-                GeoError::MemoryExhausted {
-                    limit: policy.limits().max_workspace_bytes,
-                }
-            })?,
-        })
-        .map_err(|error| geo_math_error(&error, policy))?;
-    math.set_binary64_backend(context.binary64_backend())
-        .map_err(|error| geo_math_error(&error, policy))?;
-    progress.math_phase(context);
-    let result = math
-        .reserve_workspace(reservation)
-        .map_err(|error| geo_math_error(&error, policy))
-        .and_then(|()| {
-            progress
-                .math_poll(&math)
-                .map_err(|error| geo_math_error(&error, policy))?;
-            evaluate(&mut math, progress)
-        });
-    let output_bytes = result.as_ref().map_or(0, |(_, bytes)| *bytes);
-    let transfer = usize::try_from(output_bytes)
-        .ok()
-        .filter(|bytes| *bytes <= math.workspace_reserved())
-        .ok_or(GeoError::ArithmeticOverflow(
-            "numerical result storage transfer",
-        ));
-    let observed = progress
-        .math_poll(&math)
-        .map_err(|error| geo_math_error(&error, policy));
-    let released = math
-        .release_workspace(math.workspace_reserved())
-        .map_err(|error| geo_math_error(&error, policy));
-    let charged = context.charge_work(math.work_used());
-    let peak_bytes = math.workspace_peak() as u64;
-    let peak = context.admit_workspace(peak_bytes);
-    let kept = if peak.is_ok() && transfer.is_ok() {
-        output_bytes
-    } else {
-        0
-    };
-    let peak_release = if peak.is_ok() {
-        context.release_workspace(peak_bytes - kept)
-    } else {
-        Ok(())
-    };
-    let (prepared_coefficients, coefficient_bytes) = progress.take_prepared_coefficients();
-    let completed = (|| {
+    loop {
         if let Some(error) = progress.latched_error() {
             return Err(error);
         }
-        charged?;
-        peak?;
-        peak_release?;
-        transfer?;
-        released?;
-        observed?;
-        if result.is_ok()
-            && let Some(scratch) = math.taylor_scratch()
-        {
-            context.adopt_taylor_scratch(scratch)?;
+        let policy = context.policy();
+        if precision_bits > policy.limits().max_precision_bits {
+            return Err(GeoError::PrecisionExhausted {
+                bits: policy.limits().max_precision_bits,
+            });
         }
-        if result.is_ok()
-            && coefficient_bytes != 0
-            && let Some(cache) = prepared_coefficients
-        {
-            context.retain_geodesic_coefficients(cache, coefficient_bytes)?;
+        // CoordinateMath::new requires max_work > 0. Check that same minimum
+        // before preparing an arena for a phase that cannot begin; this does not
+        // charge work or change any successful phase's accounting.
+        context.next_work(1)?;
+        let source_bits = scratch_source_bits(sources, context.reference().ellipsoid());
+        context.prepare_integer_scratch_at_precision_observed(
+            source_bits,
+            precision_bits,
+            progress,
+        )?;
+        progress.context_poll(context)?;
+        let mut math = context
+            .coordinate_math(MathLimits {
+                precision_bits,
+                max_work: policy
+                    .limits()
+                    .max_work_items
+                    .saturating_sub(context.work_items()),
+                max_workspace_bytes: usize::try_from(context.remaining_workspace()).map_err(
+                    |_| GeoError::MemoryExhausted {
+                        limit: policy.limits().max_workspace_bytes,
+                    },
+                )?,
+            })
+            .map_err(|error| geo_math_error(&error, policy))?;
+        math.set_binary64_backend(context.binary64_backend())
+            .map_err(|error| geo_math_error(&error, policy))?;
+        progress.math_phase(context);
+        let result = math
+            .reserve_workspace(reservation)
+            .map_err(|error| geo_math_error(&error, policy))
+            .and_then(|()| {
+                progress
+                    .math_poll(&math)
+                    .map_err(|error| geo_math_error(&error, policy))?;
+                evaluate(&mut math, progress)
+            });
+        let output_bytes = result.as_ref().map_or(0, |(_, bytes)| *bytes);
+        let transfer = usize::try_from(output_bytes)
+            .ok()
+            .filter(|bytes| *bytes <= math.workspace_reserved())
+            .ok_or(GeoError::ArithmeticOverflow(
+                "numerical result storage transfer",
+            ));
+        let observed = progress
+            .math_poll(&math)
+            .map_err(|error| geo_math_error(&error, policy));
+        let released = math
+            .release_workspace(math.workspace_reserved())
+            .map_err(|error| geo_math_error(&error, policy));
+        let charged = context.charge_work(math.work_used());
+        let peak_bytes = math.workspace_peak() as u64;
+        let peak = context.admit_workspace(peak_bytes);
+        let kept = if peak.is_ok() && transfer.is_ok() {
+            output_bytes
+        } else {
+            0
+        };
+        let peak_release = if peak.is_ok() {
+            context.release_workspace(peak_bytes - kept)
+        } else {
+            Ok(())
+        };
+        let (prepared_coefficients, coefficient_bytes) = progress.take_prepared_coefficients();
+        let completed = (|| {
+            if let Some(error) = progress.latched_error() {
+                return Err(error);
+            }
+            charged?;
+            peak?;
+            peak_release?;
+            transfer?;
+            released?;
+            observed?;
+            if result.is_ok()
+                && let Some(scratch) = math.taylor_scratch()
+            {
+                context.adopt_taylor_scratch(scratch)?;
+            }
+            if result.is_ok()
+                && coefficient_bytes != 0
+                && let Some(cache) = prepared_coefficients
+            {
+                context.retain_geodesic_coefficients(cache, coefficient_bytes)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = completed {
+            drop(result);
+            context.release_workspace(kept)?;
+            drop(math);
+            let _ = context.release_unused_integer_scratch();
+            return Err(error);
         }
-        Ok(())
-    })();
-    if let Err(error) = completed {
-        drop(result);
-        context.release_workspace(kept)?;
         drop(math);
-        let _ = context.release_unused_integer_scratch();
-        return Err(error);
+        if let Err(error) = &result {
+            match context.grow_requested_integer_scratch(error, progress) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    let released = context.release_unused_integer_scratch();
+                    return progress.settle_result(Err(error), released);
+                }
+            }
+        }
+        let released = context.release_unused_integer_scratch();
+        return progress.settle_result(result, released);
     }
-    drop(math);
-    let released = context.release_unused_integer_scratch();
-    progress.settle_result(result, released)
 }
 
 /// Decode an internally frozen exact decimal constant in its one helper home.

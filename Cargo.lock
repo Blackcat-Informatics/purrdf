@@ -773,6 +773,7 @@ dependencies = [
  "purrdf-columnar",
  "purrdf-core",
  "purrdf-gts",
+ "purrdf-lex",
  "purrdf-shapes",
  "purrdf-shex",
  "purrdf-slice",

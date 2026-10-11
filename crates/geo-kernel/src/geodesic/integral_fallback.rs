@@ -326,6 +326,84 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn adaptive_coefficients_grow_at_actual_order_and_keep_live_outer_arrays() {
+        use crate::context::WorkProgress;
+        use crate::{ExecutionLimits, ExecutionPolicy, GeographicReference, MetricContext};
+        let run = |limit| {
+            let policy = ExecutionPolicy::new(ExecutionLimits {
+                max_scratch_destinations: limit,
+                max_workspace_bytes: 64 * 1024 * 1024,
+                ..ExecutionLimits::UNBOUNDED
+            })
+            .unwrap();
+            let mut context = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+            if limit == 8192 {
+                context
+                    .prepare_integer_scratch_with_capacity(0, 8192)
+                    .unwrap();
+            }
+            let mut progress = WorkProgress::new(None);
+            let mut attempts = 0;
+            let result = crate::numerical::with_math(
+                &mut context,
+                &mut progress,
+                640,
+                0,
+                |math, progress| {
+                    attempts += 1;
+                    let evaluate = (|| -> Result<_, SolveError> {
+                        let mut chunks = ChunkObserver::borrowed(progress);
+                        let zero = FixedInterval::from_i64(0, math)?;
+                        let one = FixedInterval::from_i64(1, math)?;
+                        let half_pi = FixedInterval::pi(math)?
+                            .div(&FixedInterval::from_i64(2, math)?, math)?;
+                        let c = one.div(&FixedInterval::from_i64(2, math)?, math)?;
+                        let outer = super::coefficients::generate(
+                            &c,
+                            128,
+                            &mut chunks,
+                            &mut purrdf_xsd::math::IntervalContext::fixed(math),
+                        )?;
+                        let (distance, longitude) =
+                            super::evaluate(&zero, &half_pi, &one, &c, 8, &mut chunks, math)?;
+                        assert_eq!(outer.0.len(), 129);
+                        assert_eq!(outer.1.len(), 129);
+                        Ok([
+                            crate::numerical::exact_bounds(&distance),
+                            crate::numerical::exact_bounds(&longitude),
+                        ])
+                    })();
+                    evaluate.map_err(|error| match error {
+                        SolveError::Math(error) => crate::numerical::geo_math_error(&error, policy),
+                        SolveError::External(error) => error,
+                        SolveError::Iterations => {
+                            crate::GeoError::ConvergenceExhausted { iterations: 0 }
+                        }
+                    })
+                },
+            );
+            (result, attempts, context.work_items())
+        };
+        let (refused, attempts, failed_work) = run(768);
+        assert_eq!(attempts, 1);
+        assert!(matches!(refused, Err(crate::GeoError::NumericalScratch(
+            purrdf_xsd::integer::LimbScratchError::Destinations { required, admitted: 768 }
+        )) if required > 768));
+        let (grown, attempts, grown_work) = run(u32::MAX);
+        let grown = grown.unwrap();
+        assert!(attempts > 1);
+        assert!(grown_work > failed_work);
+        let (pre_admitted, pre_admitted_attempts, pre_admitted_work) = run(8192);
+        assert_eq!(grown, pre_admitted.unwrap());
+        assert_eq!(pre_admitted_attempts, 1);
+        assert!(grown_work > pre_admitted_work);
+        for (lower, upper) in grown {
+            assert!(lower < upper);
+            assert!(lower > crate::Rat::zero());
+        }
+    }
+
     fn ratio(numerator: i128, denominator: i128, math: &mut CoordinateMath) -> FixedInterval {
         FixedInterval::from_ratio(
             &Int::from_i128(numerator),

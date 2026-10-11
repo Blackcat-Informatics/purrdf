@@ -1505,6 +1505,13 @@ fn scratch_policy_and_refusals_preserve_explicit_host_fields() {
     assert!(profile_from_str(r#"{"version":1,"limits":{"max_scratch_destinations":0}}"#).is_err());
     for (error, reason) in [
         (
+            LimbScratchError::Destinations {
+                required: 900,
+                admitted: 768,
+            },
+            "required-destinations",
+        ),
+        (
             LimbScratchError::Capacity {
                 required_limbs: 40,
                 admitted_limbs: 32,
@@ -1531,6 +1538,10 @@ fn scratch_policy_and_refusals_preserve_explicit_host_fields() {
             native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
         assert_eq!(record["code"].as_str(), Some("numerical-scratch"));
         assert_eq!(record["reason"].as_str(), Some(reason));
+        if reason == "required-destinations" {
+            assert_eq!(record["required_destinations"].as_u64(), Some(900));
+            assert_eq!(record["admitted_destinations"].as_u64(), Some(768));
+        }
     }
 }
 

@@ -103,6 +103,26 @@ pub(super) fn generate<I: CertifiedInterval>(
     chunks: &mut ChunkObserver<'_, '_>,
     math: &mut IntervalContext<'_>,
 ) -> Result<(CoefficientArray<I>, CoefficientArray<I>), SolveError> {
+    if math.binary64_ops().is_none()
+        && math.limits().precision_bits >= 192
+        && let Some(scratch) = math.limb_scratch()
+    {
+        // Both arrays retain two endpoints per coefficient, while convolution
+        // uses bounded temporary intervals. Include every currently live value
+        // (including an outer coefficient pair during centered fallback).
+        // All retained coefficients are bounded by one, so below 192 bits
+        // their endpoints fit Int's three inline limbs and consume no slots.
+        // In that case only the arithmetic's actual wide temporaries check out
+        // destinations; do not impose a fictitious minimum array allocation.
+        let destinations = order
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(4))
+            .and_then(|count| count.checked_add(64))
+            .ok_or(MathError::WorkspaceExhausted)?;
+        scratch
+            .require_available(destinations)
+            .map_err(MathError::LimbScratch)?;
+    }
     let one = I::from_i64(1, math)?;
     let zero = I::from_i64(0, math)?;
     if d.upper() < zero.lower() {
@@ -166,4 +186,53 @@ fn unit_coefficient<I: CertifiedInterval>(
         return Err(MathError::PrecisionExhausted);
     }
     I::from_bounds(lower, upper, math)
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_xsd::math::{FixedInterval, IntervalContext};
+
+    use crate::context::WorkProgress;
+    use crate::geodesic::{ChunkObserver, SolveError};
+    use crate::{ExecutionLimits, ExecutionPolicy, GeographicReference, MetricContext};
+
+    #[test]
+    fn inline_coefficient_arrays_do_not_require_pooled_endpoints() {
+        let policy = ExecutionPolicy::new(ExecutionLimits {
+            max_scratch_destinations: 8,
+            ..ExecutionLimits::UNBOUNDED
+        })
+        .unwrap();
+        let mut context = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+        crate::numerical::with_math(
+            &mut context,
+            &mut WorkProgress::new(None),
+            80,
+            0,
+            |math, progress| {
+                let result = (|| -> Result<(), SolveError> {
+                    let one = FixedInterval::from_i64(1, math)?;
+                    let two = FixedInterval::from_i64(2, math)?;
+                    let d = one.div(&two, math)?;
+                    let coefficients = super::generate(
+                        &d,
+                        128,
+                        &mut ChunkObserver::borrowed(progress),
+                        &mut IntervalContext::fixed(math),
+                    )?;
+                    assert_eq!(coefficients.0.len(), 129);
+                    assert_eq!(coefficients.1.len(), 129);
+                    let scratch = math.limb_scratch().unwrap();
+                    assert_eq!(scratch.available(), scratch.destination_capacity());
+                    Ok(())
+                })();
+                result.map_err(|error| match error {
+                    SolveError::Math(error) => crate::numerical::geo_math_error(&error, policy),
+                    SolveError::External(error) => error,
+                    SolveError::Iterations => unreachable!("coefficient recurrence has no solver"),
+                })
+            },
+        )
+        .unwrap();
+    }
 }

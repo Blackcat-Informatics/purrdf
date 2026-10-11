@@ -401,6 +401,7 @@ deps = [
     "purrdf-core",
     "purrdf-columnar",
     "purrdf-gts",
+    "purrdf-lex",
     "purrdf-shapes",
     "purrdf-shex",
     "purrdf-slice",

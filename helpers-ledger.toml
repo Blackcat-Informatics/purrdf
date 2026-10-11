@@ -786,6 +786,14 @@ fingerprints = ["rule:length-prefix-frame"]
 names = []
 
 [[job.variant]]
+symbol = "purrdf_geo_kernel::index::Digest::field"
+file = "crates/geo-kernel/src/index.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_geo_kernel::index::Digest::field"
+reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen. This is the original sanctioned field moved from the evaluator-facing geo relation into the shared kernel index."
+
+[[job.variant]]
 symbol = "purrdf_datalog::resolve_fol::frame"
 file = "crates/datalog/src/resolve_fol.rs"
 detector = "forbidden"
@@ -1829,16 +1837,6 @@ reason = "Per-architecture safe entries, each around its own module's SHA-1 kern
 
 [[distinct]]
 members = [
-    "purrdf_lex::json::record::DecodeError::from",
-    "purrdf_lex::json::record::DecodeError::from",
-]
-kind = "shim"
-criterion = "b"
-anchor = "purrdf_lex::json::record::DecodeError::custom"
-reason = "Two `From` impls on one error type for different sources, the lex reader's `Error` and the rdf projections' `ProjectionError`, both routed through the one `DecodeError::custom`."
-
-[[distinct]]
-members = [
     "purrdf_core::ir::paged::provider::CountingDemandProvider::new",
     "purrdf_core::ir::paged::provider::InMemoryPageProvider::new",
 ]
@@ -2389,14 +2387,13 @@ reason = "Each grammar's own parser cursor (Turtle/TriG, SRL, SPARQL) advancing 
 
 [[distinct]]
 members = [
-    "purrdf_geo_kernel::wkt::Cursor::eat",
     "purrdf_jsonschema::ecma::Parser::eat",
     "purrdf_shex::parser::Parser::eat",
 ]
 kind = "body"
 criterion = "a"
 anchor = "purrdf_shex::lexer::tokenize"
-reason = "Three scanners over three alphabets — WKT bytes, ECMA-262 pattern characters, ShExC tokens — each consuming its own unit on a match; nothing but the consume-on-match spelling is shared."
+reason = "Two scanners over different alphabets, ECMA-262 pattern characters and ShExC tokens, each consume their own unit on a match; only the consume-on-match spelling is shared."
 
 [[distinct]]
 members = [
@@ -2551,16 +2548,246 @@ constants = []
 fingerprints = []
 names = ['^xorshift(64)?(_next|_step)?$']
 
+[[distinct]]
+members = [
+    "purrdf_xsd::numeric::canonical_double_text",
+    "purrdf_xsd::numeric::canonical_float_text",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_xsd::numeric::canonical_float_text"
+reason = "The f64 and f32 adapters classify and format at their original IEEE precision, then delegate canonical spelling to canonical_ieee. Widening f32 would change its shortest representation."
+
+[[distinct]]
+members = [
+    "purrdf_xsd::exact::integer::Integer::into_bigint",
+    "purrdf_xsd::exact::integer::Integer::to_bigint",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_xsd::exact::integer::Integer::into_bigint"
+reason = "The consuming conversion moves its original large magnitude; the borrowed conversion clones it. Normalization erases the move/clone distinction, but replacing consumption with borrowing would change allocation and ownership."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::numerical::ExactValues::multiply",
+    "purrdf_geo_kernel::numerical::ExactValues::integer_multiply",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::numerical::ExactValues"
+reason = "These typed adapters select the original admitted or resident multiply of Rat versus Int. They implement neither arithmetic again: rational normalization and integer magnitude operations retain different XSD homes, payload shapes and scratch/refusal contracts."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::numerical::ExactValues::add",
+    "purrdf_geo_kernel::numerical::ExactValues::integer_add",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::numerical::ExactValues"
+reason = "These typed adapters select the original admitted or resident add of Rat versus Int. They implement neither arithmetic again: rational normalization and integer magnitude operations retain different XSD homes, payload shapes and scratch/refusal contracts."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::numerical::ExactValues::subtract",
+    "purrdf_geo_kernel::numerical::ExactValues::integer_subtract",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::numerical::ExactValues"
+reason = "These typed adapters select the original admitted or resident subtract of Rat versus Int. They implement neither arithmetic again: rational normalization and integer magnitude operations retain different XSD homes, payload shapes and scratch/refusal contracts."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::numerical::ExactValues::absolute",
+    "purrdf_geo_kernel::numerical::ExactValues::integer_absolute",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::numerical::ExactValues"
+reason = "These typed adapters select the original admitted or resident absolute of Rat versus Int. They implement neither arithmetic again: rational normalization and integer magnitude operations retain different XSD homes, payload shapes and scratch/refusal contracts."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::numerical::ExactValues::coordinate",
+    "purrdf_geo_kernel::numerical::ExactValues::original",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::numerical::ExactValues"
+reason = "A coordinate copy preserves every x/y/z/m payload through Coord::copy_in; a scalar copy preserves one Rat through its copy_in. Both select their original resident/admitted home, without duplicating numerical copying."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::numerical::NativeRootValues::deref",
+    "purrdf_geo_kernel::numerical::NativeRootValues::deref_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::numerical::NativeRootValues"
+reason = "Deref exposes a shared root slice and DerefMut an exclusive root slice over the original inline or admitted spill owner. Rust requires distinct trait methods for these incompatible borrow contracts."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::operation::Applicability::new",
+    "purrdf_geo_kernel::operation::models::Polynomial2d::new",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::operation::Applicability::new"
+reason = "The public rectangle and polynomial constructors forward different typed fields to their own single new_in_budget_observed validators. Extent validation and polynomial canonicalization are separate jobs; budgets and original observers pass through unchanged."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::operation::Applicability::new_in_budget",
+    "purrdf_geo_kernel::operation::models::Polynomial2d::new_in_budget",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::operation::Applicability::new"
+reason = "The public rectangle and polynomial constructors forward different typed fields to their own single new_in_budget_observed validators. Extent validation and polynomial canonicalization are separate jobs; budgets and original observers pass through unchanged."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::operation::Applicability::new_in_budget_metered",
+    "purrdf_geo_kernel::operation::models::Polynomial2d::new_in_budget_metered",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::operation::Applicability::new"
+reason = "The public rectangle and polynomial constructors forward different typed fields to their own single new_in_budget_observed validators. Extent validation and polynomial canonicalization are separate jobs; budgets and original observers pass through unchanged."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::operation::models_inverse::MetricSourceDomain::new_in_budget",
+    "purrdf_geo_kernel::profile::PreparedEllipsoid::new_in_budget",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::profile::PreparedEllipsoid::new_in_budget"
+reason = "The source-metre-domain and ellipsoid constructors forward original budgets and observers to distinct typed validators. A metric rectangle is not ellipsoid factor preparation; neither forwarding method duplicates validation or admission."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::operation::models_inverse::MetricSourceDomain::new_in_budget_metered",
+    "purrdf_geo_kernel::profile::PreparedEllipsoid::new_in_budget_metered",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::profile::PreparedEllipsoid::new_in_budget"
+reason = "The source-metre-domain and ellipsoid constructors forward original budgets and observers to distinct typed validators. A metric rectangle is not ellipsoid factor preparation; neither forwarding method duplicates validation or admission."
+
+[[distinct]]
+members = [
+    "purrdf::geo::purrdf_geo_point_index_call",
+    "purrdf::geo::purrdf_geo_session_call",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf::geo::response_call"
+reason = "Distinct exported C opaque-handle signatures forward their native producers and handle-specific null diagnostics to the one response_call home for pointer validation, unwinding, response ownership and status mapping."
+
+[[distinct]]
+members = [
+    "purrdf::geo::purrdf_geo_point_index_free",
+    "purrdf::geo::purrdf_geo_session_free",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf::geo::purrdf_geo_session_free"
+reason = "Distinct C opaque-handle destruction entries forward their pointer types to the one free_handle implementation. Combining the exported handle types would change the ABI and ownership contract."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::geo::relation::GeoRelation::open",
+    "purrdf_sparql_eval::knn::EmbeddingKnnRelation::open",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::geo::relation::GeoRelation"
+reason = "Required resident PropertyFunction adapters invoke their distinct geographic or nearest-neighbor admitted producers, then the one WorkspaceCursor resident extraction home. They share no producer algorithm; making open and its default open_admitted delegate to each other would recurse."
+
+[[distinct]]
+members = [
+    "purrdf_text::relation::TermOccurrenceRelation::open",
+    "purrdf_text::relation::TextSearchRelation::open",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_text::relation::TextSearchRelation"
+reason = "Required resident trait adapters invoke the distinct occurrence-walk or ranked-search open_owned producer and then the shared cursor extraction home. Neither wrapper implements posting traversal or scoring."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::topology::noding::AdmittedWork::persistent",
+    "purrdf_geo_kernel::topology::noding::AdmittedWork::persistent_rat",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::context::retained::persistent_numeric"
+reason = "Coord and Rat trait adapters both call the one generic persistent_numeric owner-detachment implementation. The former preserves all coordinate ordinates; the latter one rational. The rational impl lives in relate.rs but is named under its noding-declared type."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::topology::noding::AdmittedWork::truncate",
+    "purrdf_geo_kernel::topology::noding::LegacyWork::truncate",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::topology::noding::NodingWork"
+reason = "Vec and RetainedBuilder truncate through their respective existing storage owners. The admitted route preserves unique buffer ownership and payload destruction; these typed trait routes do not duplicate truncation storage logic."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::topology::locate::LegacySurface::compare",
+    "purrdf_geo_kernel::topology::noding::LegacyWork::compare",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::topology::locate::SurfaceArithmetic"
+reason = "Separate surface-traversal and noding work traits adapt Rat::cmp to their own error protocols. Rational comparison remains implemented once; the method bodies are required trait adapters."
+
+[[distinct]]
+members = [
+    "purrdf_validate::geo::geometry::GeometryInput::from_value",
+    "purrdf_validate::geo::request::PointInput::from_value",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_validate::geo::request::PointInput::from_value"
+reason = "The strict point and geometry/image record entries supply different native parsers to the single decode::value accounting/error boundary. Their input schemas and typed values are different; decoding infrastructure is not copied."
+
+[[distinct]]
+members = [
+    "purrdf_lex::json::record::String::from_json",
+    "purrdf_lex::json::record::bool::from_json",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_lex::json::record::FromJsonNative"
+reason = "String and bool FromJson adapters delegate to their own FromJsonNative implementations. String validation owns text through its account; bool validates a scalar without that payload. The native decode/error boundary is shared."
+
+[[distinct]]
+members = [
+    "purrdf_sparql_eval::agg_fn::WorkspaceAccumulator::resident",
+    "purrdf_sparql_eval::property_fn::WorkspaceCursor::resident",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_sparql_eval::property_fn::WorkspaceCursor"
+reason = "Resident accumulator and cursor controls pair different boxed trait objects with the existing zero-byte resident grant. Their lifecycle/extraction types differ; allocation admission remains solely at WorkspaceCapability::charge."
+
 [[job]]
 id = "float-control-register"
 summary = "Reading and writing the thread's floating-point control register (MXCSR on x86, FPCR on aarch64) for the float-environment tests"
-home = "purrdf_core::distance::control::mxcsr"
+home = "purrdf_xsd::ieee::control::mxcsr"
 entry_points = [
-    "purrdf_core::distance::control::set_mxcsr",
-    "purrdf_core::distance::control::Mxcsr",
-    "purrdf_core::distance::control::fpcr",
-    "purrdf_core::distance::control::set_fpcr",
-    "purrdf_core::distance::control::Fpcr",
+    "purrdf_xsd::ieee::control::set_mxcsr",
+    "purrdf_xsd::ieee::control::Mxcsr",
+    "purrdf_xsd::ieee::control::fpcr",
+    "purrdf_xsd::ieee::control::set_fpcr",
+    "purrdf_xsd::ieee::control::Fpcr",
 ]
 spec = "Intel SDM vol. 1 section 10.2.3 (MXCSR, STMXCSR and LDMXCSR) and the Arm ARM (FPCR, MRS and MSR): the one assembly wrapper per register, safe over the defined bits"
 vectors = []

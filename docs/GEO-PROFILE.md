@@ -43,13 +43,18 @@ does not install a datum transformation.
 }
 ```
 
-The destination count bounds simultaneously live reusable integer buffers.
-Their limb capacity follows the admitted precision and original source widths;
-their complete storage also consumes `max_workspace_bytes`. Raising the count
-requires an explicit policy change. A scratch refusal is fatal and records
+The destination ceiling bounds simultaneously live reusable integer buffers.
+Workers allocate an initial working set and admit larger coefficient arrays
+within that ceiling as their actual order requires. An unbounded policy does
+not allocate the ceiling in advance. Limb capacity follows the attempted
+precision and original source widths; complete storage also consumes
+`max_workspace_bytes`. Raising the ceiling requires an explicit policy change.
+A scratch refusal records
 `numerical-scratch` with `reason: "capacity"` and required/admitted limb counts,
 `reason: "destinations"` and the destination count, `reason: "retained-destinations"` and
 held/total destination counts when a live result prevents arena replacement,
+`reason: "required-destinations"` with `required_destinations` and
+`admitted_destinations` when a coefficient shape cannot be admitted,
 or `reason: "size-overflow"`. A leased Taylor workspace refuses with
 `numerical-taylor-scratch` and `reason: "in-use"`.
 The admitted count changes the policy identity; it does not change metric, grid
@@ -129,20 +134,47 @@ Distance proof tiers never change an output. A deterministic binary64
 proposal seeds an interval Newton (Krawczyk) inclusion of the inverse
 azimuth; the distance enclosure is then tried in validated binary64
 intervals, double-word (about 106-bit) intervals, and fixed point of at
-least 112 bits, in that order, and the first tier whose enclosure decides
-the half-even micrometre rounding completes. Every tier rounds outward, so
+least 112 bits. Qualified cut-locus neighbors start at the existing fixed
+precision when the policy admits it, avoiding inconclusive lower tiers;
+exact symmetric and meridian cases retain their specialized paths. Other
+cases try the tiers in order. The first enclosure that decides the half-even
+micrometre rounding completes. Every tier rounds outward, so
 a tier can only refuse to decide; the completed value and its certificate
 bytes are identical whichever tier decides, on every host. A true distance
 within rounding of a half-micrometre tie needs the fixed tier. The
 `geodesic` benchmark (`cargo bench -p purrdf-geo-kernel --bench geodesic`)
-reports, for a GeodTest row on x86_64: prepared distance about 23 µs on every
-binary64 backend, plain `geodesic::distance` about 52 µs, inverse with
-metadata about 3.4 ms and direct about 1.8 ms. Batches cost the scalar price
+reports, for a GeodTest row on the x86_64 host and profile described with the
+index measurements below: prepared distance about 23.6 µs, plain
+`geodesic::distance` about 35.3 µs, inverse with metadata about 3.47 ms and
+direct about 1.89 ms. Batches cost the scalar price
 per element; their benefit is caller-owned output buffers and zero
-allocation, not throughput. Creating a `MetricContext` costs about 3 µs and
-validating a reused one about 40 ns, so callers that issue many requests
+allocation, not throughput. Creating a `MetricContext` costs about 3.9 µs and
+validating a reused one about 37 ns, so callers that issue many requests
 should keep one context. Warmed distance, inverse and direct perform no
 allocation (`examples/geodesic_allocations.rs`).
+
+That allocator probe exercises distance, inverse metadata, direct, zero-distance
+inverse and mixed zero/nonzero inverse at 1, 4, 16, 256 and 4,096 elements; all
+25 warmed windows report zero allocations. Its adversarial mode also measures
+complete 112-, 224- and 448-bit inverse computations and their separately
+published proof objects:
+
+| Proof precision | Inverse allocations | Published-proof allocations | Proof bytes requested | Retained context workspace |
+|---|---:|---:|---:|---:|
+| 112 bits | 0 | 0 | 0 | 430,208 bytes |
+| 224 bits | 0 | 65 | 3,096 | 475,384 bytes |
+| 448 bits | 0 | 65 | 3,984 | 557,336 bytes |
+
+The larger public proof objects allocate their returned storage. Each probe
+drops its result inside the measurement window and reports zero net retained
+allocation bytes; the reused context keeps its separately admitted workspace.
+
+For the same prepared distance, twenty-sample forced-backend medians are
+23.57 µs (portable), 23.86 µs (SSE2), 23.87 µs (AVX2) and 23.59 µs
+(AVX-512). Portable remains the selected complete-kernel path. Callers can
+explicitly select each available equivalent backend for their own workload
+measurements. At 4,096 elements, the measured distance, inverse-with-metadata
+and direct batches take 95.93 ms, 14.31 s and 7.739 s respectively.
 
 The `make geodtest` target qualifies distance, inverse and direct on all
 500,000 rows of Karney's public GeodTest (CC0), refusing any input whose
@@ -154,6 +186,13 @@ a printed conjugate endpoint (`m12 = 0`, the cusp of the cut locus where the
 shortest geodesic is not unique to first order), agreement of both the
 corpus construction and the returned geodesic with the printed endpoint and
 length. Nominal disagreements of those rows are reported separately.
+
+The complete plain-distance run on the portable backend returns all 500,000
+rows without refusal or mismatch under the default 262,144-work limit per
+row. It takes the fixed-precision fallback for 161,376 rows (32.2752%),
+consumes 9,551,323,977 work items in total and peaks at 866,560 admitted
+workspace bytes. This is a correctness and resource receipt; its elapsed time
+includes concurrent qualification and is not a controlled throughput result.
 
 Points default to decimal strings. With `"encoding":"ieee64"`, longitude
 and latitude contain their exact eight-byte hexadecimal binary64 bits.
@@ -283,11 +322,50 @@ Disk covers follow cover law version 2 (`crates/geo-kernel/src/cells/LAW.md`).
 Each cell is classified from a cap about its normalized chart midpoint:
 a normal-sphere bound and a certified binary64 enclosure of the physical
 distance to the cell, both outward, decide inside, outside or refine. Cover
-work counts one unit per root cell, one per refinement and one per emitted
-cell. Under default limits the `covers` benchmark completes a disk at
-level 16 of 1 km (54 cells) in about 7 ms, 30 km (1,948 cells) in about
-0.25 s and 400 km (27,770 cells) in about 4 s; level 17 emits about twice as
-many cells in about twice the time.
+work includes the charged root, refinement and emission steps together with
+their admitted numerical operations; `visited_nodes` is reported separately.
+Under default limits the `covers` benchmark completes all of these disks.
+On the host and release-derived profile described with the index measurements
+below, ten samples produce the following medians and bootstrap intervals:
+
+| Maximum level | Radius | Emitted cells | Median | Interval |
+|---|---:|---:|---:|---:|
+| 16 | 1 km | 54 | 9.259 ms | 9.249–9.271 ms |
+| 16 | 30 km | 1,948 | 339.7 ms | 328.6–340.0 ms |
+| 16 | 400 km | 27,770 | 6.188 s | 4.438–6.908 s |
+| 17 | 1 km | 114 | 12.16 ms | 11.84–12.79 ms |
+| 17 | 30 km | 3,806 | 744.3 ms | 608.9–745.9 ms |
+| 17 | 400 km | 55,215 | 7.691 s | 7.658–7.729 s |
+
+The timed call includes the complete cover and its destruction. Host timing
+varies substantially in some cases; the emitted counts and complete-cover
+contract are deterministic. The same target measures complete prepared polygon
+length, perimeter and area, and geographic buffer materialization. Its allocator
+receipts distinguish live metric outputs from complete buffer lifecycles,
+including explicit release of materialized-output registrations.
+
+The geometry fixtures use a CRS84 square from (0°, 0°) to (0.01°, 0.01°),
+the distance from (0°, 1°) to the source-linear edge from (−2°, 0°) to
+(2°, 0°), and a 10 m buffer of (116°, 40°). Complete warmed calls measure:
+
+| Operation | Median | Interval | Work items | Peak admitted workspace | Allocations |
+|---|---:|---:|---:|---:|---:|
+| Polygon length | 1.589 ms | 1.587–1.592 ms | 58,901 | 793,984 bytes | 86 |
+| Polygon perimeter | 1.585 ms | 1.583–1.589 ms | 58,900 | 793,984 bytes | 86 |
+| Polygon area | 1.062 ms | 1.060–1.068 ms | 44,987 | 793,320 bytes | 62 |
+| Point-to-edge distance | 622.2 µs | 621.2–623.8 µs | 29,899 | 581,848 bytes | 37 |
+| Point buffer materialization | 251.0 ms | 250.7–251.6 ms | 1,792,091 | 541,552 bytes | 712 |
+
+The distance result is exactly 110,574.388558 m. The buffer uses an explicit
+20,000,000-work admission, with ordinary geometry workspace and precision
+limits; its complete output retains 67,064 admitted bytes. Its allocation probe
+includes output destruction and receipt release, requesting 56,088,008 bytes
+cumulatively with a 513,400-byte allocation peak and zero net retained bytes.
+Those cumulative requests are allocation traffic, not simultaneous live memory.
+The three polygon timings are approximately 56–60% slower than the earlier
+measurement of the unchanged metric implementation in the smaller benchmark
+artifact. The table reports the later measured costs; these separate runs do
+not isolate the cause of that difference.
 
 Reusable point indexes take a `grid`, `crs`, `level` and `points`, each with
 a decimal-string stable `key` and exact `point`. Coordinates must already
@@ -296,6 +374,28 @@ registered actual chain whose target matches that reference. It records
 conversion provenance; it never relabels or implicitly converts coordinates.
 Search accepts physical or reported thresholds and uses cover ranges,
 ordered buckets and the corresponding exact public refinement law.
+
+The `cells` benchmark measures complete physical searches of a 289-point
+synthetic lattice around (116°, 40°), spaced by 0.001°, with a 500 m radius.
+Both measured levels return the same 83 exact keys. With the release-derived
+benchmark profile (fat LTO, one codegen unit), Rust 1.100.0-nightly
+(`4b6d04e70`) on an AMD Ryzen AI Max+ 395, pinned to one CPU, the ten-sample
+medians are:
+
+| Index level | Candidates | Exact matches | Search time | Retained index bytes | Retained result bytes |
+|---|---:|---:|---:|---:|---:|
+| 12 | 287 | 83 | 18.75 ms | 106,032 | 1,104 |
+| 17 | 101 | 83 | 14.81 ms | 106,032 | 1,104 |
+
+These costs include cover construction, refinement and result destruction;
+index construction is outside the timed search. The declared index work limit
+is 20,000,000, with default cover and workspace limits. Candidate counts are
+cover matches before exact refinement, so they expose the extra work caused by
+coarser cells. Allocation probes close with the result live: level 12 requests
+967,320 bytes across 430 allocations, and level 17 requests 895,944 bytes across
+66 allocations; their peaks are 451,688 and 452,304 bytes respectively. Separate
+grid-assignment batches of 1, 4, 16, 256 and 4,096 points allocate zero bytes.
+These are measured workload costs on this host, not timing guarantees.
 
 `index::GeographicGeoIndex` prepares a dataset's immutable `GeoIndex`
 projection on an actual registered target surface. Its prepared sources retain
@@ -335,7 +435,7 @@ query variants. A refused C call returns status 14 (`GEO_ERROR`). Semantic
 refusals retain complete JSON error bytes through the caller buffer;
 operational refusals preserve the original error and leave that buffer null.
 
-`purrdf geo REQUEST.json --output RESPONSE.json` executes the same records;
+`purrdf geo REQUEST.json RESPONSE.json` executes the same records;
 `-` selects stdin or stdout. `--geo-profile PROFILE.json` configures `geo`,
 `query` and `update`. A semantic refusal prints its complete response and exits
 1. An operational refusal exits 1 through the error channel without allocating
@@ -409,6 +509,38 @@ through the same bounded arithmetic context used by metrics. The report-only
 `transforms` benchmark compares fresh and warmed workers and caller buffers of
 1, 4, 16, 256 and 4096 points, with allocator traffic, actual work and admitted
 workspace reported separately.
+
+On the same host, compiler and release-derived profile as the index measurements,
+the complete scalar calls have these ten-sample medians:
+
+| Operation | Fresh context | Reused context |
+|---|---:|---:|
+| GCJ rational harmonic | 346.6 µs | 225.7 µs |
+| BD-09 longitude/latitude | 91.43 µs | 40.87 µs |
+| Analytic Baidu Mercator | 222.7 µs | 171.3 µs |
+| CGCS2000 geographic to geocentric | 111.7 µs | 82.96 µs |
+| Two-dimensional similarity | 97.69 µs | 48.43 µs |
+| CGCS2000 Gauss–Krüger 3° forward | 1.041 ms | 924.3 µs |
+| CGCS2000 Gauss–Krüger 3° inverse | 11.41 ms | 11.00 ms |
+| CGCS2000 UTM forward | 1.458 ms | 1.310 ms |
+| CGCS2000 UTM inverse | 17.37 ms | 17.07 ms |
+
+The first five cases use the public synthetic tuple (120, 30, 10), interpreted
+in each operation's declared source units. The projection cases use
+(120.75°, 30°, 10 m); inverse inputs are their actual forward outputs.
+Preparation is outside the reused-context measurements. Batches repeat those
+inputs into preallocated caller buffers, including replacement of prior results.
+The declared work limit is `u64::MAX`, with the ordinary geometry workspace and
+precision limits; this admits complete large batches without changing their
+output law. For example, the 4,096-point Gauss–Krüger inverse takes a median
+46.48 s (bootstrap interval 46.23–53.12 s), charges 448,872,448 work items and
+reports 3,008,352 bytes of peak admitted workspace, with zero allocations in
+the warmed batch. The corresponding UTM inverse batch takes 68.71 s
+(68.52–71.69 s), charges 654,917,632 work items and reports 3,030,136 bytes of
+peak admitted workspace. All 45 warmed batch allocation probes, spanning the
+nine operations and five batch sizes, report zero allocations. These
+measurements expose the substantial inverse-projection cost; reusing a context
+alone does not remove it.
 
 A session compiles its immutable query identity once under a configuration
 budget. `GeoSession::try_new(profile, compile_policy)` exposes that budget

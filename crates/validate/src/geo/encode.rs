@@ -826,6 +826,24 @@ pub(super) fn refusal(
                 GeoError::NumericalScratch(error) => {
                     use purrdf_xsd::integer::LimbScratchError;
                     match error {
+                        LimbScratchError::Destinations { required, admitted } => {
+                            fields = fields
+                                .with_memory_cell(
+                                    "reason",
+                                    "required-destinations",
+                                    decode.storage.memory(),
+                                )?
+                                .with_memory_cell(
+                                    "required_destinations",
+                                    *required as u64,
+                                    decode.storage.memory(),
+                                )?
+                                .with_memory_cell(
+                                    "admitted_destinations",
+                                    *admitted as u64,
+                                    decode.storage.memory(),
+                                )?;
+                        }
                         LimbScratchError::Capacity {
                             required_limbs,
                             admitted_limbs,

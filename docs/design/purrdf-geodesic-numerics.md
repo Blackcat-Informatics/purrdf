@@ -17,9 +17,10 @@ before range validation. Longitude and latitude are validated as original
 rationals. Exact poles, zero coordinates and seam aliases therefore remain exact
 decisions even when a nearby source rounds to the same host double.
 
-`purrdf_xsd::integer` owns integer arithmetic;
-`purrdf_xsd::rational::Rat` owns normalized rational arithmetic and conversion.
-The geographic `Int` and `Rat` names reexport these types. XSD's IEEE layer owns
+`purrdf_xsd::bigint::BigInt` owns integer arithmetic;
+`purrdf_xsd::exact::GeometricRational` supplies the geometric face of the shared
+exact rational owner. The geographic `Int` and `Rat` names reexport these types
+through `purrdf_xsd::integer`. XSD's IEEE layer owns
 binary64 decoding, endpoint rounding and floating-environment control; its math
 layer owns intervals, elementary functions, Taylor arithmetic and root isolation.
 The geometry modules contain no second arithmetic backend.
@@ -99,6 +100,13 @@ These supply trial values to a safeguarded bracket and certified interval Newton
 contraction. A local iterate never constitutes a completed answer. Unresolved
 branch comparisons, singular limits or output rounding refine the original
 sources through higher precision, or return a typed operational refusal.
+
+Distance entry uses the same exact-coordinate precision proposal as the inverse
+solver. For nonsymmetric cut-locus neighbors away from the exact meridian, an
+admitted proposal beyond the double-word tier starts directly in fixed-point
+arithmetic. Exact opposite-latitude and meridian branches retain their cheaper
+initial proofs. Precision proposals choose computational effort only: every
+attempt keeps the original work charges, caller limits and completion test.
 
 Monotone coordinate inverses also distinguish source-family width from their
 arithmetic evaluation floor. For a proved contraction `T` with derivative bound
@@ -205,6 +213,18 @@ Immutable prepared coefficients and arithmetic tables can be shared between
 workers. Each worker owns its context and reusable limb arena. Work, retained
 tables, arena heap, destination capacity and output storage are checked before
 construction; external governors observe the admitted count before allocation.
+Resource ceilings do not prescribe allocation sizes. Workers prepare an initial
+working set and admit wider destinations for the actual precision attempted.
+The coefficient generator requests both arrays at their actual expansion order,
+including endpoints already held by an enclosing calculation. A request beyond
+the current arena unwinds the attempt, accounts its work, and admits the larger
+arena within the caller's ceiling before repeating at the same precision.
+Cancellation, work exhaustion and failed admission remain terminal. Transient
+exact-only preparation uses its original operation's destination-width bound.
+Covering and scale calculations retain a shared initial working width before
+returning exact values that subsequent steps still hold; their arena therefore
+does not need replacement between those steps. Relaxing a ceiling, including selecting
+unbounded admission, does not request an arena of that maximum size.
 Meridian integrals reuse these same generated tables. Their cache key includes
 the exact normalized inverse flattening, precision and expansion order; overlap
 between numerical enclosures cannot make different ellipsoids share a key.
@@ -219,6 +239,8 @@ source reservations and counting inherited tables once.
 Arithmetic destinations return to the arena when temporary values die. A held
 destination produces a typed scratch-capacity refusal rather than an allocation
 fallback. Replacing an arena with retained destinations refuses explicitly.
+Sharing an intermediate rational retains its original admitted arena and
+destination without allocating; the last numeric clone returns that destination.
 Public immutable proofs and selected-arc preparations detach their retained
 endpoints once under output-preparation admission. They remain valid after the
 worker context dies and do not pin its reusable arithmetic destinations.

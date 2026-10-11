@@ -99,7 +99,7 @@ case through the same `explain_query_with_options` entry with
 a REGISTERED custom aggregate needs, the exact counterpart the relation lane's
 `QueryOptions::property_functions` populated case is for a scripted relation).
 The harness re-derives it on every run and additionally checks that
-the thirteen counts add back up to the `.metered` fuel — a decomposition that
+all charge-point counts add back up to the `.metered` fuel — a decomposition that
 did not sum to the quantity it claims to decompose would be a decomposition of
 something else.
 

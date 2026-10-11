@@ -51,9 +51,7 @@ impl PyGeoSession {
     /// Semantic refusals retain their canonical JSON; operational refusals use
     /// the Python error channel before another response allocation is attempted.
     fn call(&self, py: Python<'_>, request: &str) -> PyResult<String> {
-        py.detach(|| self.inner.try_response(request))
-            .map(|(text, _)| text)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        response_text(py.detach(|| self.inner.try_response(request)))
     }
 
     /// Prepare immutable native ordered point buckets from exact input coordinates.
@@ -79,10 +77,19 @@ pub(crate) struct PyGeoPointIndex {
 impl PyGeoPointIndex {
     /// Refine reusable ordered buckets using a strict physical/reported request.
     fn call(&self, py: Python<'_>, request: &str) -> PyResult<String> {
-        py.detach(|| self.inner.try_response(request))
-            .map(|(text, _)| text)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        response_text(py.detach(|| self.inner.try_response(request)))
     }
+}
+
+/// Map the original native response after the producer releases the GIL.
+/// Session and index methods retain their own typed producers and share this
+/// text/error boundary without constructing an error response on refusal.
+fn response_text(
+    result: Result<(String, bool), purrdf_validate::geo::GeoCallError>,
+) -> PyResult<String> {
+    result
+        .map(|(text, _)| text)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 fn prepare_session(geo: Option<&Bound<'_, PyAny>>) -> PyResult<purrdf_validate::geo::GeoSession> {

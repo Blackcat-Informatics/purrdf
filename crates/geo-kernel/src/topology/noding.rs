@@ -13,17 +13,15 @@ use core::ops::{Deref, DerefMut};
 use purrdf_xsd::integer::ExactOperation;
 use std::borrow::Cow;
 
+/// Typed storage and arithmetic routes for resident and admitted noding.
+/// Vec and RetainedBuilder keep their own payload ownership and truncation;
+/// this interface does not replace either storage implementation.
 pub(crate) trait NodingWork {
     type Error;
     type Array<T>: Default + Deref<Target = [T]> + DerefMut + IntoIterator<Item = T>;
     fn push<T>(&mut self, values: &mut Self::Array<T>, value: T) -> Result<(), Self::Error>;
     fn truncate<T>(&mut self, values: &mut Self::Array<T>, length: usize);
     fn release<T>(&mut self, values: Self::Array<T>) -> Result<(), Self::Error>;
-    fn append<T>(
-        &mut self,
-        destination: &mut Self::Array<T>,
-        source: Self::Array<T>,
-    ) -> Result<(), Self::Error>;
     fn persistent(&mut self, point: Coord) -> Result<Coord, Self::Error>;
     fn visit(&mut self, work: u64, point: Option<&Coord>) -> Result<(), Self::Error>;
     fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, Self::Error>;
@@ -64,10 +62,6 @@ impl<E, F: FnMut(u64, Option<&Coord>) -> Result<(), E>> NodingWork for LegacyWor
     }
     fn release<T>(&mut self, values: Vec<T>) -> Result<(), E> {
         drop(values);
-        Ok(())
-    }
-    fn append<T>(&mut self, destination: &mut Vec<T>, mut source: Vec<T>) -> Result<(), E> {
-        destination.append(&mut source);
         Ok(())
     }
     fn persistent(&mut self, point: Coord) -> Result<Coord, E> {
@@ -126,13 +120,6 @@ impl NodingWork for AdmittedWork<'_, '_> {
     }
     fn release<T>(&mut self, values: RetainedBuilder<T>) -> Result<(), GeoError> {
         values.release_admitted(self.context, self.retained)
-    }
-    fn append<T>(
-        &mut self,
-        destination: &mut RetainedBuilder<T>,
-        source: RetainedBuilder<T>,
-    ) -> Result<(), GeoError> {
-        destination.append_admitted(source, self.context, self.progress, self.retained)
     }
     fn persistent(&mut self, point: Coord) -> Result<Coord, GeoError> {
         crate::context::persistent_numeric(point, self.context, self.progress, self.retained)

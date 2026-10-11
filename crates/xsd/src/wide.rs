@@ -134,7 +134,75 @@ pub const fn gcd(mut a: u128, mut b: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{div_wide, gcd, mul_div, mul_div_round_even, wide_mul};
+    use super::{div_wide, div_wide_rem, gcd, mul_div, mul_div_round_even, wide_mul};
+
+    #[test]
+    fn dyadic_divisors_preserve_the_full_quotient_remainder_and_even_ties() {
+        use crate::BigInt;
+        let mut state = 0x2971_4646_57d4_83ab;
+        for shift in 0..128 {
+            let divisor = 1_u128 << shift;
+            state = purrdf_hash::mix::splitmix64_step(state);
+            let high = u128::from(state) & (divisor - 1);
+            state = purrdf_hash::mix::splitmix64_step(state);
+            let low = (u128::from(state) << 64) | u128::from(!state);
+            let (quotient, remainder) = div_wide_rem(high, low, divisor);
+            let dividend = BigInt::from_u128(high)
+                .mul_pow2(128)
+                .plus(&BigInt::from_u128(low));
+            let divisor = BigInt::from_u128(divisor);
+            let expected = dividend.div_rem(&divisor).unwrap();
+            assert_eq!(
+                (BigInt::from_u128(quotient), BigInt::from_u128(remainder)),
+                expected
+            );
+            if shift > 0 {
+                assert_eq!(
+                    mul_div_round_even(3, 1_u128 << (shift - 1), 1_u128 << shift),
+                    Some(2)
+                );
+                assert_eq!(
+                    mul_div_round_even(5, 1_u128 << (shift - 1), 1_u128 << shift),
+                    Some(2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_width_rounding_lies_in_the_exact_nearest_even_cell() {
+        use crate::BigInt;
+        use purrdf_hash::mix::splitmix64_next;
+        let mut state = 0x40de_61c3_826b_9a7f;
+        let mut draw = || {
+            (u128::from(splitmix64_next(&mut state)) << 64)
+                | u128::from(splitmix64_next(&mut state))
+        };
+        for _ in 0..4096 {
+            let (a, b, c) = (draw(), draw(), draw());
+            let doubled = BigInt::from_u128(a).mul(&BigInt::from_u128(b)).mul_small(2);
+            let divisor = BigInt::from_u128(c);
+            match mul_div_round_even(a, b, c) {
+                Some(value) => {
+                    let mut lower = BigInt::from_u128(value).mul_small(2);
+                    lower.add_i128(-1);
+                    let lower = lower.mul(&divisor);
+                    let mut upper = BigInt::from_u128(value).mul_small(2);
+                    upper.add_i128(1);
+                    let upper = upper.mul(&divisor);
+                    assert!(doubled >= lower && doubled <= upper);
+                    if doubled == lower || doubled == upper {
+                        assert_eq!(value & 1, 0, "ties belong to the even neighbor");
+                    }
+                }
+                None => {
+                    let mut beyond = BigInt::from_u128(u128::MAX).mul_small(2);
+                    beyond.add_i128(1);
+                    assert!(c == 0 || doubled >= beyond.mul(&divisor));
+                }
+            }
+        }
+    }
 
     #[test]
     fn rounded_wide_quotient_preserves_halfway_and_overflow_laws() {
