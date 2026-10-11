@@ -905,6 +905,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/rdf/benches/gts_selected_blobs.rs` | gts.cbor-writer, blake3.hash-many-dispatch |
 | `crates/rdf/benches/jsonld_alloc.rs` | json.parser-string |
 | `crates/rdf/benches/native_codecs.rs` | lex.find-byte2-line-split, rdf.escape-scan, rdf.sort-canonical, sparql.lexer-trivia |
+| `crates/rdf/benches/turtle_chains.rs` | core.canon-escape |
 | `crates/rdf/benches/projections.rs` | rdf.projections, lex.percent-encode, rdf.csvw-uri-template |
 | `crates/rdf/benches/stream_parse_alloc.rs` | lex.find-byte2-line-split, sparql.lexer-trivia |
 | `crates/rdf/benches/viz_layout.rs` | rdf.viz-layout |
