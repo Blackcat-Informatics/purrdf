@@ -879,7 +879,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        KnnInvocation::open_owned(
+        let invocation = KnnInvocation::open_owned(
             "the HNSW relation",
             args,
             ceiling,
@@ -887,11 +887,29 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
             self.space.guard(),
             &self.observations.membership_lookups,
             workspace,
-        )?
-        .cursor(HnswSource {
+        )?;
+        let source = HnswSource {
             space: Arc::clone(&self.space),
             observations: Arc::clone(&self.observations),
-        })
+        };
+        if let Some(scope) = args.candidate_scope() {
+            invocation.cursor_scoped(source, scope)
+        } else {
+            invocation.cursor(source)
+        }
+    }
+
+    fn supports_candidate_scope(&self) -> bool {
+        true
+    }
+
+    fn scoped_rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        let rows = self.space.row_count() as u64;
+        if mode.is_bound(KNN_NEIGHBOUR) {
+            rows.min(1)
+        } else {
+            rows.min(self.space.index.params().ef_search() as u64)
+        }
     }
 }
 
@@ -907,6 +925,16 @@ struct HnswSource<A: Arithmetic> {
 }
 
 impl<A: Arithmetic> RankSource for HnswSource<A> {
+    fn candidates_admitted(
+        &self,
+        query_row: usize,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<(purrdf_sparql_eval::AdmittedVec<Ranked>, u64), EvalError> {
+        // The native traversal keeps its artifact-bound ef_search. Requesting
+        // the entire beam avoids the final invocation-depth truncation without
+        // widening the graph exploration or claiming exhaustive membership.
+        self.search_admitted(query_row, self.space.index.rows(), workspace)
+    }
     /// The **only** call site of [`HnswIndex::search_rows_work`] in this relation, which
     /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate.
     fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {

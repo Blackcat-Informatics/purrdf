@@ -50,6 +50,24 @@ pub struct Iri {
 }
 
 impl Iri {
+    /// Copy the validated value without repeating recognition, admitting its
+    /// actual lexical buffer through the original memory before allocation.
+    /// # Errors
+    /// Returns the original layout, admission or allocator refusal.
+    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            text: memory.string(&self.text)?,
+            scheme: self.scheme.clone(),
+            authority: self.authority.clone(),
+            path: self.path.clone(),
+            query: self.query.clone(),
+            fragment: self.fragment.clone(),
+        })
+    }
+
     /// The full IRI text, verbatim.
     pub fn as_str(&self) -> &str {
         &self.text
@@ -960,6 +978,59 @@ fn find_scheme_end(bytes: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_iri_copy_preserves_component_spans_and_original_admission() {
+        struct Grant {
+            live: usize,
+            refuse: bool,
+        }
+        impl purrdf_lex::allocation::Admission for Grant {
+            fn resize(
+                &mut self,
+                live: usize,
+            ) -> core::result::Result<(), purrdf_lex::allocation::StorageError> {
+                if self.refuse && live != 0 {
+                    return Err(purrdf_lex::allocation::StorageError::AdmissionFailed);
+                }
+                self.live = live;
+                Ok(())
+            }
+        }
+        for text in [
+            "http://user@[2001:db8::1]:80/path%20part?x=1#frag",
+            "urn:example:one",
+            "../relative/path?query#fragment",
+            "https://example.org/日本語?値=一#章",
+        ] {
+            let original = parse(text).expect("valid fixture IRI");
+            let mut grant = Grant {
+                live: 0,
+                refuse: false,
+            };
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut grant);
+            let copy = original
+                .clone_with_memory(&mut memory)
+                .expect("admitted copy");
+            assert_eq!(copy, original);
+            assert_eq!(copy, parse(copy.as_str()).expect("independent recognition"));
+            assert_eq!(memory.admitted_bytes(), copy.text.capacity());
+            memory
+                .release_string(copy.into_text())
+                .expect("destroy original buffer");
+            assert_eq!(grant.live, 0);
+
+            grant.refuse = true;
+            let refused =
+                original.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut grant));
+            assert_eq!(
+                refused.expect_err("before-copy refusal"),
+                purrdf_lex::allocation::StorageError::AdmissionFailed
+            );
+            assert_eq!(grant.live, 0);
+            assert_eq!(original.as_str(), text);
+        }
+    }
 
     /// **`is_absolute` is `parse(..).map(has_scheme)`, for every input.**
     ///

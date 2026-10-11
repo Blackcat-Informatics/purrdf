@@ -422,7 +422,16 @@ mod ranked_stream;
 mod reciprocal_rank;
 mod render;
 mod request;
+mod scope;
 mod search;
+
+pub use purrdf_core::query_scope::{
+    ConstraintCounts, ConstraintDecision, ScopeCounters, ScopeError,
+};
+pub use scope::{
+    ConstraintBinding, ConstraintBindings, ScopedExecution, ScopedFusedAnswer, ScopedFusedRow,
+    ScopedRow, ScopedRows, ScopedSearch, ScopedStratum,
+};
 mod statistics;
 mod union;
 
@@ -457,7 +466,7 @@ pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
 pub use execute::{
     CandidateExecutionResult, ExecutionError, ExecutionResult, RankedStreamImpl, ReadStratum,
-    StratumStream, StreamEnding, execute, execute_within,
+    StratumStream, StreamEnding, execute, execute_scoped_within, execute_within,
 };
 pub use executor::block_on;
 pub use fuse::{FusionResult, TopK, fuse};
@@ -487,7 +496,7 @@ pub use reciprocal_rank::{
 };
 pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
-pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
+pub use search::{RankedStreamAdapter, SearchError, SearchResult, search, search_scoped};
 pub use statistics::Statistics;
 pub use union::{CandidateUnion, UnionCandidate, UnionError, UnionFailure, UnionProducer, union};
 

@@ -915,13 +915,17 @@ fn eval_application_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<
 #[allow(clippy::inline_always)]
 #[inline(always)]
 fn merge_application_row<I: ViewTermId>(
-    left: &Solution<I>,
-    right: &Solution<I>,
+    left: &RetainedRow<I>,
+    right: &RetainedRow<I>,
     left_width: usize,
     indices: &[usize],
     width: usize,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<RetainedRow<I>, EvalError> {
+    let evidence = left.combined_evidence(
+        right,
+        purrdf_core::evidence::EvidenceCombination::Conjunction,
+    )?;
     RetainedRow::try_build(width, workspace, |row| {
         row[..left_width].copy_from_slice(left);
         for (column, cell) in right.iter().enumerate() {
@@ -930,6 +934,10 @@ fn merge_application_row<I: ViewTermId>(
             }
         }
         Ok(())
+    })
+    .and_then(|row| match evidence {
+        Some(evidence) => row.with_evidence(evidence, workspace),
+        None => Ok(row),
     })
 }
 
@@ -1407,16 +1415,17 @@ fn eval_union_with<D: DatasetView + Sync>(
             }
         };
         debug_assert_eq!(truncated, certificate.is_some());
+        let search_evidence = rows.search_evidence().clone();
         let minted: Vec<_> = rows
             .into_iter()
             .map(|row| {
-                let row = row.into_resident().map_err(|_| EvalError::WorkspaceUnpriced("a forked UNION requires resident worker rows"))?;
-                Ok(crate::parallel::minted_row(&child.scratch, base, row))
+                crate::parallel::minted_row(&child.scratch, base, row)
             })
             .collect::<Result<_, EvalError>>()?;
         Ok(UnionBranch {
             schema,
             rows: minted,
+            search_evidence,
             certificate,
             // Taken while the child is still alive, exactly as the rows are: an arm can
             // contain a property-function call (`is_parallel_safe_pattern` admits a
@@ -1438,6 +1447,18 @@ fn eval_union_with<D: DatasetView + Sync>(
     // The arm-order rule, applied before a single row is concatenated: see
     // `union_branch_order` for why a computed-but-discarded later arm is the point.
     let governing = union_branch_order(&mut branches);
+    if let Some(search) = ctx
+        .evidence_search
+        .as_mut()
+        .and_then(|frames| frames.as_mut_slice().last_mut())
+    {
+        for branch in &branches {
+            *search = search.combine(
+                &branch.search_evidence,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+        }
+    }
     // Every surviving arm's attestations, folded back into the parent now that the
     // immutable borrow the parallel map held is over. Arm order is irrelevant here (the
     // fold is commutative — see `RelationWitness::merge`); what matters is that an arm
@@ -1462,26 +1483,36 @@ fn eval_union_with<D: DatasetView + Sync>(
             // shape as `merge`: one exact-size allocation initialized from the row
             // directly, then padded — no write-None-then-overwrite pass over the prefix.
             for minted in branch.rows {
-                let reinterned =
-                    crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted)?;
-                rows.push_cells(
+                let reinterned = crate::parallel::reintern_minted_row(
+                    &mut ctx.scratch,
+                    ctx.dataset,
+                    minted,
+                    &ctx.growth,
+                )?;
+                let padded = RetainedRow::from_cells(
                     out_len,
                     (0..out_len).map(|column| reinterned.get(column).copied().flatten()),
+                    &ctx.growth,
                 )?;
+                rows.push_row(padded.with_evidence_from(&reinterned, &ctx.growth)?)?;
             }
             continue;
         }
         let arm_to_out = right_to_out_map(&branch.schema, &out, &ctx.growth)?;
         for minted in branch.rows {
-            let reinterned =
-                crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted)?;
+            let reinterned = crate::parallel::reintern_minted_row(
+                &mut ctx.scratch,
+                ctx.dataset,
+                minted,
+                &ctx.growth,
+            )?;
             let row = RetainedRow::try_build(out_len, &ctx.growth, |row| {
                 for (j, &cell) in reinterned.iter().enumerate() {
                     row[arm_to_out[j]] = cell;
                 }
                 Ok(())
             })?;
-            rows.push_row(row)?;
+            rows.push_row(row.with_evidence_from(&reinterned, &ctx.growth)?)?;
         }
     }
 
@@ -1548,10 +1579,12 @@ pub(crate) fn concat_union<D: DatasetView + Sync>(
                 // None. Same shape as `merge`: one exact-size allocation initialized
                 // from the row directly, no write-None-then-overwrite pass over the
                 // prefix.
-                rows.push_cells(
+                let padded = RetainedRow::from_cells(
                     out_len,
                     (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                    &ctx.growth,
                 )?;
+                rows.push_row(padded.with_evidence_from(lrow, &ctx.growth)?)?;
             }
             continue;
         }
@@ -1567,7 +1600,7 @@ pub(crate) fn concat_union<D: DatasetView + Sync>(
                 }
                 Ok(())
             })?;
-            rows.push_row(row)?;
+            rows.push_row(row.with_evidence_from(rrow, &ctx.growth)?)?;
         }
     }
 
@@ -1593,6 +1626,8 @@ struct UnionBranch<T> {
     schema: crate::solution::SharedSchema,
     /// The branch's rows.
     rows: Vec<T>,
+    /// Search attestations survive empty output and the worker's destruction.
+    search_evidence: crate::evidence_exec::RowEvidence,
     /// The certificate, when a governor stopped the arm short.
     certificate: Option<crate::governor::lift::Certificate>,
     /// What the relations this arm invoked attested, taken from the branch's own
@@ -1630,6 +1665,7 @@ fn union_branch_order<T>(branches: &mut [UnionBranch<T>]) -> Option<(usize, Chil
         // Discarded, not concatenated. An empty schema adds no column, so the
         // concatenation downstream reproduces the sequential body's output exactly.
         later.rows = Vec::new();
+        later.search_evidence = crate::evidence_exec::RowEvidence::default();
         later.schema = VarSchema::empty_shared();
         later.certificate = None;
         // The attestations of an arm whose rows are discarded go with them, for the SAME
@@ -1752,6 +1788,55 @@ pub(crate) fn probe_has_match<I: ViewTermId>(
         // Unbound shared column ⇒ wildcard probe: scan for any compatible build row.
         None => r_rows.iter().any(|rrow| compatible(probe, rrow, shared)),
     })
+}
+
+/// Fold every matching witness from the original EXISTS index. Ordinary
+/// boolean probes retain their constant-time bucket-presence shortcut above;
+/// an information join necessarily reads each matching original record.
+pub(crate) fn probe_evidence<D: DatasetView + Sync>(
+    probe: &[Option<SolutionTerm<D::Id>>],
+    entry: &crate::eval::ExistsInner<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<(bool, crate::evidence_exec::RowEvidence), EvalError> {
+    let mut combined: Option<crate::evidence_exec::RowEvidence> = None;
+    let mut retain = |row: &RetainedRow<D::Id>| -> Result<(), EvalError> {
+        combined = Some(match combined.take() {
+            None => row.evidence().clone(),
+            Some(previous) => previous.combine(
+                row.evidence(),
+                purrdf_core::evidence::EvidenceCombination::Alternatives,
+            )?,
+        });
+        Ok(())
+    };
+    match bound_key(probe, &entry.shared, KeySide::Left, &ctx.growth)? {
+        Some(key) => {
+            if let Some(indices) = entry.keyed.get(&key) {
+                for &index in indices {
+                    retain(&entry.inner.rows[index])?;
+                }
+            }
+            for &index in &entry.wild {
+                let row = &entry.inner.rows[index];
+                if compatible(probe, row, &entry.shared) {
+                    retain(row)?;
+                }
+            }
+        }
+        None => {
+            for row in &entry.inner.rows {
+                if compatible(probe, row, &entry.shared) {
+                    retain(row)?;
+                }
+            }
+        }
+    }
+    let found = combined
+        .as_ref()
+        .is_some_and(|record| !record.is_undecided());
+    let evidence =
+        ctx.existential_evidence(combined.as_ref(), entry.inner.rows.search_evidence())?;
+    Ok((found, evidence))
 }
 
 /// Hash-join two solution sequences on their shared variables.
@@ -1976,8 +2061,8 @@ fn bound_key<I: ViewTermId>(
 /// filled from the right (and an already-bound shared column — equal by
 /// compatibility — is left intact).
 fn merge_admitted<I: ViewTermId>(
-    left: &[Option<SolutionTerm<I>>],
-    right: &[Option<SolutionTerm<I>>],
+    left: &RetainedRow<I>,
+    right: &RetainedRow<I>,
     left_len: usize,
     right_to_out: &[usize],
     width: usize,
@@ -1990,6 +2075,10 @@ fn merge_admitted<I: ViewTermId>(
         }
     });
     debug_assert_eq!(left.len(), left_len);
+    let evidence = left.combined_evidence(
+        right,
+        purrdf_core::evidence::EvidenceCombination::Conjunction,
+    )?;
     RetainedRow::try_build(width, workspace, |row| {
         row[..left_len].copy_from_slice(left);
         for (column, &cell) in right.iter().enumerate() {
@@ -1999,6 +2088,10 @@ fn merge_admitted<I: ViewTermId>(
             }
         }
         Ok(())
+    })
+    .and_then(|row| match evidence {
+        Some(evidence) => row.with_evidence(evidence, workspace),
+        None => Ok(row),
     })
 }
 
@@ -2171,7 +2264,7 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
         };
         if !append_seeded_optional_block(
             block,
-            padding.as_deref().filter(|_| pad_unmatched),
+            padding.as_ref().filter(|_| pad_unmatched),
             &mut rows,
             &schema,
             row_ceiling,
@@ -2243,9 +2336,24 @@ fn seeded_optional_block<D: DatasetView + Sync>(
 
 /// Complete driver blocks share their layout, padding and sink admission law
 /// across serial execution and the ungoverned indexed chunk reduction.
+fn optional_evidence<D: DatasetView + Sync>(
+    row: &RetainedRow<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+    if ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
+        return Ok(None);
+    }
+    match &ctx.evidence_input {
+        Some(input) => input
+            .scope_evidence(row.evidence(), ctx.active_graph, &ctx.growth)
+            .map(Some),
+        None => Ok(Some(row.evidence().clone())),
+    }
+}
+
 fn append_seeded_optional_block<D: DatasetView + Sync>(
     block: SolutionSeq<D::Id>,
-    padding: Option<&Solution<D::Id>>,
+    padding: Option<&RetainedRow<D::Id>>,
     rows: &mut RowsBuilder<D::Id>,
     schema: &crate::solution::SharedSchema,
     row_ceiling: Option<usize>,
@@ -2265,6 +2373,9 @@ fn append_seeded_optional_block<D: DatasetView + Sync>(
                 (0..schema.len()).map(|column| padding.get(column).copied().flatten()),
                 &ctx.growth,
             )
+            .and_then(|row| {
+                row.with_optional_evidence(optional_evidence(padding, ctx)?, &ctx.growth)
+            })
         });
     }
     for row in block.reorder_like_admitted(schema, &ctx.growth)?.rows {
@@ -2507,7 +2618,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         // One left row's output: its compatible right rows the predicate keeps, or the
         // left row padded when it keeps none and padding is sound.
-        let join_row = |lrow: &Solution<D::Id>,
+        let join_row = |lrow: &RetainedRow<D::Id>,
                         linked: &mut crate::vm::Linked<'_, D::Id>,
                         ctx: &mut EvalCtx<'_, D>,
                         acc: &mut Vec<RetainedRow<D::Id>>|
@@ -2524,9 +2635,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             reserve_join_rows(acc, 1, usize::MAX)?;
-                            acc.push(merged);
+                            acc.push(merged.with_optional_evidence(evidence, &ctx.growth)?);
                         }
                     }
                 }
@@ -2543,20 +2655,24 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             reserve_join_rows(acc, 1, usize::MAX)?;
-                            acc.push(merged);
+                            acc.push(merged.with_optional_evidence(evidence, &ctx.growth)?);
                         }
                     }
                 }
             }
             if pad_unmatched && acc.len() == before {
                 reserve_join_rows(acc, 1, usize::MAX)?;
-                acc.push(RetainedRow::from_cells(
-                    out_len,
-                    (0..out_len).map(|column| lrow.get(column).copied().flatten()),
-                    &ctx.growth,
-                )?);
+                acc.push(
+                    RetainedRow::from_cells(
+                        out_len,
+                        (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                        &ctx.growth,
+                    )?
+                    .with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
+                );
             }
             Ok(())
         };
@@ -2618,12 +2734,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            rows.push_row(merged)?;
+                            rows.push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
                             matched = true;
                         }
                     }
@@ -2641,12 +2758,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            rows.push_row(merged)?;
+                            rows.push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
                             matched = true;
                         }
                     }
@@ -2657,9 +2775,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                rows.push_cells(
+                let padded = RetainedRow::from_cells(
                     out_len,
                     (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                    &ctx.growth,
+                )?;
+                rows.push_row(
+                    padded.with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
                 )?;
             }
         }
@@ -2760,9 +2882,13 @@ fn left_outer_join<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                rows.push_cells(
+                let padded = RetainedRow::from_cells(
                     out_len,
                     (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                    &ctx.growth,
+                )?;
+                rows.push_row(
+                    padded.with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
                 )?;
             }
         }
@@ -2823,11 +2949,14 @@ fn left_outer_join<D: DatasetView + Sync>(
                 // contributed nothing, its variables stay unbound).
                 if pad_unmatched && acc.len() == before {
                     reserve_join_rows(acc, 1, usize::MAX)?;
-                    acc.push(RetainedRow::from_cells(
-                        out_len,
-                        (0..out_len).map(|column| lrow.get(column).copied().flatten()),
-                        &ctx.growth,
-                    )?);
+                    acc.push(
+                        RetainedRow::from_cells(
+                            out_len,
+                            (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                            &ctx.growth,
+                        )?
+                        .with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
+                    );
                 }
                 Ok(())
             },
@@ -2885,6 +3014,13 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     // could remove none of them. See `crate::service_endpoints`.
     if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
         let mut removed = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
+        let mut evidence = crate::AdmittedVec::new(&ctx.growth);
+        let tracking = ctx.may_have_evidence() || l.rows.may_have_evidence_attachment();
+        if tracking {
+            for row in &l.rows {
+                evidence.push(row.evidence().clone())?;
+            }
+        }
         for _ in 0..l.rows.len() {
             removed.push(false)?;
         }
@@ -2896,6 +3032,14 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
             let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
             for &position in &partition.rows {
                 let lrow = &l.rows[position];
+                if tracking {
+                    let decision = minus_evidence(lrow, &r, &shared, ctx)?;
+                    removed.as_mut_slice()[position] = decision.is_none();
+                    if let Some(retained) = decision {
+                        evidence.as_mut_slice()[position] = retained;
+                    }
+                    continue;
+                }
                 removed.as_mut_slice()[position] = r.rows.iter().any(|rrow| {
                     compatible(lrow, rrow, &shared)
                         && shared
@@ -2910,7 +3054,11 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
             }
         }
         let mut rows = RowsBuilder::new(&ctx.growth);
-        for (row, removed) in l.rows.into_iter().zip(removed.iter()) {
+        let mut evidence = evidence.into_iter();
+        for (mut row, removed) in l.rows.into_iter().zip(removed.iter()) {
+            if let Some(retained) = evidence.next() {
+                row = row.with_evidence(retained, &ctx.growth)?;
+            }
             if !removed {
                 rows.push_row(row)?;
             }
@@ -2953,6 +3101,23 @@ fn minus_rows<D: DatasetView + Sync>(
         return Ok(l);
     }
 
+    if ctx.evidence_input.is_some()
+        || l.rows.may_have_evidence_attachment()
+        || r.rows.may_have_evidence_attachment()
+        || !r.rows.search_evidence().is_virtual()
+    {
+        let mut rows = RowsBuilder::new(&ctx.growth);
+        for row in l.rows {
+            if let Some(evidence) = minus_evidence(&row, r, shared, ctx)? {
+                rows.push_row(row.with_evidence(evidence, &ctx.growth)?)?;
+            }
+        }
+        return Ok(SolutionSeq {
+            schema: l.schema,
+            rows: rows.finish()?,
+        });
+    }
+
     let keep = |lrow: &Solution<D::Id>| {
         // Keep the left row unless some right row removes it.
         !r.rows.iter().any(|rrow| {
@@ -2986,6 +3151,70 @@ fn minus_rows<D: DatasetView + Sync>(
         schema: l.schema,
         rows,
     })
+}
+
+fn minus_evidence<D: DatasetView + Sync>(
+    left: &RetainedRow<D::Id>,
+    right: &SolutionSeq<D::Id>,
+    shared: &[(usize, usize)],
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+    // No future right row can remove a left row with no shared bound domain.
+    if !shared.iter().any(|&(la, _)| left[la].is_some()) {
+        return Ok(Some(left.evidence().clone()));
+    }
+    let mut witnesses: Option<crate::evidence_exec::RowEvidence> = None;
+    for row in &right.rows {
+        if !compatible(left, row, shared)
+            || !shared
+                .iter()
+                .any(|&(la, ra)| left[la].is_some() && row[ra].is_some())
+        {
+            continue;
+        }
+        witnesses = Some(match witnesses {
+            None => row.evidence().clone(),
+            Some(previous) => previous.combine(
+                row.evidence(),
+                purrdf_core::evidence::EvidenceCombination::Alternatives,
+            )?,
+        });
+    }
+    let Some(witnesses) = witnesses else {
+        return match &ctx.evidence_input {
+            Some(input) => input
+                .absence_evidence(left.evidence(), ctx.active_graph, &ctx.growth)
+                .map(Some),
+            None => {
+                let search = right.rows.search_evidence();
+                let retained = left.evidence().combine(
+                    search,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?;
+                Ok(Some(retained.native_absence()?))
+            }
+        };
+    };
+    let witnesses = witnesses.combine(
+        right.rows.search_evidence(),
+        purrdf_core::evidence::EvidenceCombination::Conjunction,
+    )?;
+    let negative = ctx.negative_evidence(&witnesses)?;
+    // A contradiction stays visible. A scoped negative cannot remove a row in
+    // other standpoints; removal requires uniformly opposed information.
+    if !negative.is_undecided()
+        && negative.with_record(|record| {
+            record.information().fallback() == purrdf_core::evidence::Information::Opposed
+                && record.information().entries().is_empty()
+        })?
+    {
+        return Ok(None);
+    }
+    let evidence = left.evidence().combine(
+        &negative,
+        purrdf_core::evidence::EvidenceCombination::Conjunction,
+    )?;
+    Ok(Some(evidence))
 }
 
 #[cfg(test)]
@@ -4220,6 +4449,7 @@ mod tests {
         let truncated_left = UnionBranch {
             schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
             rows: vec!["left-1", "left-2"],
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
             certificate: Some(crate::governor::lift::Certificate::origin(
                 purrdf_core::TrippedGovernor::Stopped {
                     cause: purrdf_core::StopCause::Cancelled,
@@ -4238,6 +4468,7 @@ mod tests {
         let complete_right = UnionBranch {
             schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("p")])),
             rows: vec!["right-1", "right-2", "right-3"],
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
             certificate: None,
             witness: right_witness,
         };
@@ -4268,6 +4499,7 @@ mod tests {
         let complete_left = UnionBranch {
             schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
             rows: vec!["left-1"],
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
             certificate: None,
             witness: crate::witness::RelationWitness::default(),
         };
@@ -4280,6 +4512,7 @@ mod tests {
         let truncated_right = UnionBranch {
             schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("p")])),
             rows: vec!["right-1"],
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
             certificate: Some(crate::governor::lift::Certificate::origin(
                 purrdf_core::TrippedGovernor::Stopped {
                     cause: purrdf_core::StopCause::Cancelled,

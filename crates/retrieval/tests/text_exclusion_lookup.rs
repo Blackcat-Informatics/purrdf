@@ -558,12 +558,14 @@ struct Measured {
     /// trailer's figure above is read from the other end of.
     served_free: [u64; 2],
     /// What each stratum's index attested, as the trailer reports it.
-    attestations: BTreeMap<Iri, PfAttestation>,
+    attestations: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, PfAttestation>,
+    >,
     /// The evidence identity the answer carries.
     evidence_id: EvidenceId,
     /// The canonical bytes that identity is the digest of, re-derived from the
     /// trailer.
-    evidence_bytes: Vec<u8>,
+    evidence_bytes: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<u8>>,
 }
 
 impl Measured {
@@ -656,7 +658,10 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
         served_free: [recorders[0].served_free(), recorders[1].served_free()],
         attestations: result.trailer.attestations.clone(),
         evidence_id: result.evidence_id,
-        evidence_bytes: result.trailer.evidence_canonical_bytes(),
+        evidence_bytes: result
+            .trailer
+            .evidence_canonical_bytes()
+            .expect("canonical export is admitted"),
     }
 }
 
@@ -935,7 +940,8 @@ fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
         attestation_only.push(0);
     }
     assert_eq!(
-        control.evidence_bytes, attestation_only,
+        control.evidence_bytes.as_slice(),
+        attestation_only.as_slice(),
         "a run that asked no lookup digests the attestation-only layout, byte for byte"
     );
     assert_eq!(

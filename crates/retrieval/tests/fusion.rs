@@ -30,7 +30,7 @@ use purrdf_sparql_eval::{
 mod streams;
 
 use purrdf_retrieval::block_on;
-use purrdf_retrieval::fixture::iri;
+use purrdf_retrieval::fixture::{iri, iri_members};
 use streams::{profile, render, stratum, unique_items};
 
 const K: u32 = 60;
@@ -365,7 +365,7 @@ fn checked_addition_overflow_is_refused() {
             MockStream::new(vec![row(1, huge, 1, "c")], exhausted(1)),
         ),
     ];
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
     let result = block_on(fusion.next());
     assert!(
         matches!(result, Err(FusionError::Overflow)),
@@ -395,7 +395,7 @@ fn a_checked_addition_inside_the_range_is_not_refused() {
             MockStream::new(vec![row(1, large, 1, "c")], exhausted(1)),
         ),
     ];
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
     let row = block_on(fusion.next()).expect("three heads at a quarter of the range still sum");
     assert!(row.is_some(), "the fusion certifies a row rather than none");
 }
@@ -809,7 +809,7 @@ fn drop_cancellation_and_receipts() {
             ),
         ),
     ];
-    let mut fusion = FusionStream::new(streams, profile.clone());
+    let mut fusion = FusionStream::new(streams, profile.clone()).expect("resident fusion setup");
     let first = block_on(fusion.next())
         .expect("next succeeds")
         .expect("a row");
@@ -875,7 +875,7 @@ fn trailer_preserves_each_producer_status() {
             MockStream::new(
                 Vec::new(),
                 ProducerReceipt::ExecutionFailed {
-                    reason: "no index".to_owned(),
+                    reason: "no index".into(),
                 },
             ),
         ),
@@ -900,7 +900,7 @@ fn trailer_preserves_each_producer_status() {
     assert_eq!(
         statuses.get(&stratum("geo")),
         Some(&ProducerStatus::ExecutionFailed {
-            reason: "no index".to_owned()
+            reason: "no index".into()
         })
     );
     assert_eq!(
@@ -918,7 +918,9 @@ fn trailer_names_the_pinned_plan() {
         stratum("text"),
         MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
     )];
-    let mut fusion = FusionStream::new(streams, profile.clone()).with_plan_id(pinned);
+    let mut fusion = FusionStream::new(streams, profile.clone())
+        .expect("resident fusion setup")
+        .with_plan_id(pinned);
     while block_on(fusion.next()).expect("fusion succeeds").is_some() {}
     let trailer = block_on(fusion.trailer()).expect("trailer succeeds");
     assert_eq!(trailer.plan_id, Some(pinned));
@@ -1281,7 +1283,7 @@ fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
             MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
         ),
     ];
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
     let result = block_on(async {
         loop {
             match fusion.next().await {
@@ -1461,7 +1463,7 @@ fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
         "two rank-1, K=1 contributions at the max weight must sum to exactly the ceiling"
     );
 
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
     let result = block_on(async {
         loop {
             match fusion.next().await {
@@ -1530,7 +1532,7 @@ fn fuse_returns_at_most_k_rows_in_the_declared_order() {
     });
     assert_eq!(bounded.rows.len(), 2, "the bound is a bound");
     assert_eq!(
-        bounded.rows,
+        bounded.rows.as_slice(),
         whole.rows[..2].to_vec(),
         "the bounded rows are the top of the same order, not a different order"
     );
@@ -1610,7 +1612,7 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
                 MockStream::new(
                     Vec::new(),
                     ProducerReceipt::ExecutionFailed {
-                        reason: "no index".to_owned(),
+                        reason: "no index".into(),
                     },
                 ),
             ),
@@ -1618,7 +1620,7 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     };
 
     let failed = ProducerStatus::ExecutionFailed {
-        reason: "no index".to_owned(),
+        reason: "no index".into(),
     };
     // A stratum that was read down to rank `r` and no further is reported at
     // rank `r`'s contribution: everything at or above it was read, and what lies
@@ -1637,7 +1639,12 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     });
     assert_eq!(prefix.rows.len(), 1, "the consumer holds one row of three");
     assert_eq!(
-        prefix.trailer.statuses,
+        prefix
+            .trailer
+            .statuses
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (stratum("text"), stopped_at(2)),
             (stratum("geo"), failed.clone()),
@@ -1660,7 +1667,11 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
         none.rows
     );
     assert_eq!(
-        none.trailer.statuses,
+        none.trailer
+            .statuses
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (stratum("text"), stopped_at(1)),
             (stratum("geo"), failed.clone()),
@@ -1675,7 +1686,12 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     let whole = block_on(run_fuse(streams(), &profile));
     assert_eq!(whole.rows.len(), 3);
     assert_eq!(
-        whole.trailer.statuses,
+        whole
+            .trailer
+            .statuses
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (
                 stratum("text"),
@@ -1845,7 +1861,7 @@ fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
         &profile,
     ));
     assert_eq!(
-        declined.rows,
+        declined.rows.as_slice(),
         Vec::new(),
         "a producer that declined its terms emits no rows"
     );
@@ -3436,7 +3452,8 @@ fn the_resolution_map_keys_every_weighted_stream_including_one_that_yielded_noth
     // because a producer that was never read from has no read to report.
     let completed = result
         .trailer
-        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)]);
+        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)])
+        .expect("status publication is admitted");
     assert_eq!(
         completed.statuses.keys().collect::<Vec<_>>(),
         vec![&stratum("absent"), &stratum("barren"), &stratum("dense")],
@@ -4846,20 +4863,20 @@ fn a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is
         MockStream::new(
             Vec::new(),
             ProducerReceipt::ExecutionFailed {
-                reason: "the index was unavailable".to_owned(),
+                reason: "the index was unavailable".into(),
             },
         ),
     )];
     let fused = block_on(run_fuse(failed_before_rows, &profile));
     assert_eq!(
-        fused.rows,
+        fused.rows.as_slice(),
         Vec::new(),
         "a producer that could not run emits no rows"
     );
     assert_eq!(
         fused.trailer.statuses.get(&stratum("text")),
         Some(&ProducerStatus::ExecutionFailed {
-            reason: "the index was unavailable".to_owned(),
+            reason: "the index was unavailable".into(),
         }),
         "and the reason it could not run is carried verbatim, not refused"
     );
@@ -5165,7 +5182,12 @@ fn the_trailer_carries_every_handed_streams_attestation_and_invents_none() {
 
     let result = block_on(run_fuse(streams, &profile));
     assert_eq!(
-        result.trailer.attestations,
+        result
+            .trailer
+            .attestations
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (stratum("text"), attests("a")),
             (
@@ -5183,7 +5205,8 @@ fn the_trailer_carries_every_handed_streams_attestation_and_invents_none() {
     // answer, because that means a producer was asked and stayed silent.
     let completed = result
         .trailer
-        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)]);
+        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)])
+        .expect("status publication is admitted");
     assert!(
         completed.statuses.contains_key(&stratum("absent")),
         "a producer that never became a stream still gets a status"
@@ -5296,9 +5319,9 @@ fn an_incomplete_stratum_makes_the_scores_estimates_without_refusing_the_rows() 
     assert_eq!(
         bounded.trailer.exactness,
         ScoreExactness::Estimated {
-            deficit: BTreeSet::from([stratum("vector")]),
-            inflation: BTreeSet::from([stratum("vector")]),
-            unbounded: BTreeSet::new(),
+            deficit: iri_members([stratum("vector")]),
+            inflation: iri_members([stratum("vector")]),
+            unbounded: iri_members([]),
         },
         "exactly the stratum that declared itself short, and no other, named on \
          both sides: a missing shard withholds its own rows and promotes every \
@@ -5381,13 +5404,24 @@ fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
     // The identity is re-derivable from bytes a holder of the answer has, which
     // is what makes it auditable rather than merely present.
     assert_eq!(
-        EvidenceId::from_canonical(&first.trailer.evidence_canonical_bytes()),
+        EvidenceId::from_canonical(
+            &first
+                .trailer
+                .evidence_canonical_bytes()
+                .expect("canonical export is admitted")
+        ),
         first.trailer.evidence_id,
         "the id in the trailer is the digest of the trailer's own canonical bytes"
     );
     assert_ne!(
-        first.trailer.evidence_canonical_bytes(),
-        rebuilt.trailer.evidence_canonical_bytes(),
+        first
+            .trailer
+            .evidence_canonical_bytes()
+            .expect("canonical export is admitted"),
+        rebuilt
+            .trailer
+            .evidence_canonical_bytes()
+            .expect("canonical export is admitted"),
         "and the bytes themselves differ, so the difference is not a digest artefact"
     );
 
@@ -5409,8 +5443,14 @@ fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
         &joined_profile,
     ));
     assert_ne!(
-        split.trailer.evidence_canonical_bytes(),
-        joined.trailer.evidence_canonical_bytes(),
+        split
+            .trailer
+            .evidence_canonical_bytes()
+            .expect("canonical export is admitted"),
+        joined
+            .trailer
+            .evidence_canonical_bytes()
+            .expect("canonical export is admitted"),
         "framed fields cannot run together into one another's bytes"
     );
     assert_ne!(split.trailer.evidence_id, joined.trailer.evidence_id);
@@ -5434,7 +5474,7 @@ fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
         )
         .attesting(attests_short("g-7", "shard 1 offline")),
     )];
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
 
     block_on(fusion.next())
         .expect("the first row certifies")
@@ -5483,9 +5523,9 @@ fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
     assert_eq!(
         late.exactness,
         ScoreExactness::Estimated {
-            deficit: BTreeSet::from([stratum("text")]),
-            inflation: BTreeSet::from([stratum("text")]),
-            unbounded: BTreeSet::new(),
+            deficit: iri_members([stratum("text")]),
+            inflation: iri_members([stratum("text")]),
+            unbounded: iri_members([]),
         },
         "which is `Estimated` throughout, because the index was short throughout \
          — how deep a caller read changes which streams are still open, never \
@@ -6166,7 +6206,11 @@ fn a_bounded_domain_run_reports_a_ceiling_and_an_exhausted_one_reports_exhaustio
 /// removed. It is checked below as the invariant it really is: a certified
 /// row's score is never beneath the threshold it was certified against.
 fn answer_of(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
-    (row.entity.clone(), row.score, row.contributions.clone())
+    (
+        row.entity.clone(),
+        row.score,
+        row.contributions.iter().cloned().collect(),
+    )
 }
 
 /// The trailer facts a declaration is ALLOWED to move, named once so the
@@ -7135,7 +7179,12 @@ fn the_trailer_reports_the_declarations_the_fusion_ran_under() {
 
     let declared = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
     assert_eq!(
-        declared.trailer.domains,
+        declared
+            .trailer
+            .domains
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (stratum("docs"), within(&[DOMAIN_DOCS])),
             (stratum("people"), within(&[DOMAIN_PEOPLE])),
@@ -7146,7 +7195,12 @@ fn the_trailer_reports_the_declarations_the_fusion_ran_under() {
 
     let unrestricted = fuse_spec(&spec, Declared::Nothing, bound);
     assert_eq!(
-        unrestricted.trailer.domains,
+        unrestricted
+            .trailer
+            .domains
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (stratum("docs"), CandidateDomains::Unrestricted),
             (stratum("people"), CandidateDomains::Unrestricted),
@@ -7323,9 +7377,9 @@ fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
     assert_eq!(
         fused.trailer.exactness,
         ScoreExactness::Estimated {
-            deficit: BTreeSet::from([stratum("vector")]),
-            inflation: BTreeSet::from([stratum("vector")]),
-            unbounded: BTreeSet::new(),
+            deficit: iri_members([stratum("vector")]),
+            inflation: iri_members([stratum("vector")]),
+            unbounded: iri_members([]),
         },
         "named on BOTH sides: the rows the search missed are absent (deficit), \
          and every row behind a missed one moved up a rank and collected more \
@@ -7394,7 +7448,8 @@ fn a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity() {
             .declaring(lossy_contract()),
         )],
         profile,
-    );
+    )
+    .expect("resident fusion setup");
 
     // Pull one row and stop, leaving the stream open and unreceipted.
     let first = block_on(fusion.next()).expect("a row");
@@ -7426,7 +7481,8 @@ fn the_exactness_verdict_does_not_move_as_a_caller_reads_deeper() {
             .declaring(lossy_contract()),
         )],
         profile,
-    );
+    )
+    .expect("resident fusion setup");
 
     block_on(fusion.next()).expect("a row");
     let early = block_on(fusion.trailer()).expect("a trailer");
@@ -7460,12 +7516,15 @@ fn a_stratum_added_after_the_fact_declares_nothing() {
     ));
 
     let failed = stratum("vector");
-    let trailer = fused.trailer.completed_with([(
-        failed.clone(),
-        ProducerStatus::ExecutionFailed {
-            reason: "the unit could not run".to_owned(),
-        },
-    )]);
+    let trailer = fused
+        .trailer
+        .completed_with([(
+            failed.clone(),
+            ProducerStatus::ExecutionFailed {
+                reason: "the unit could not run".into(),
+            },
+        )])
+        .expect("status publication is admitted");
 
     assert!(
         trailer.statuses.contains_key(&failed),
@@ -7674,7 +7733,7 @@ fn a_perturbed_order_leaves_no_finite_bound() {
     assert_eq!(
         fused.rows[0].interval,
         ScoreInterval::Unbounded {
-            perturbed: BTreeSet::from([stratum("vector")]),
+            perturbed: iri_members([stratum("vector")]),
         },
         "the inequality every bound rests on -- a named row's true rank is at \
          least its emitted rank -- does not hold for a producer comparing \
@@ -7683,7 +7742,7 @@ fn a_perturbed_order_leaves_no_finite_bound() {
     let ScoreExactness::Estimated { ref unbounded, .. } = fused.trailer.exactness else {
         panic!("a perturbed stratum makes the answer an estimate");
     };
-    assert_eq!(unbounded, &BTreeSet::from([stratum("vector")]));
+    assert_eq!(unbounded, &iri_members([stratum("vector")]));
     assert_eq!(
         fused.trailer.certain_prefix(&fused.rows),
         0,
@@ -8241,7 +8300,13 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
                 FusedRow {
                     entity: Term::new(format!("item-{index}")),
                     score: Fixed::from_raw(i128::from(score)),
-                    contributions: Vec::new(),
+                    contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                        purrdf_sparql_eval::AdmittedVec::new(
+                            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                        ),
+                        &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                    )
+                    .expect("resident synthetic contributions"),
                     interval: ScoreInterval::Bounded {
                         deficit: Fixed::from_raw(i128::from(deficit)),
                         inflation: Fixed::from_raw(i128::from(inflation)),
@@ -8367,7 +8432,7 @@ fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
                 MockStream::new(
                     Vec::new(),
                     ProducerReceipt::ExecutionFailed {
-                        reason: REASON.to_owned(),
+                        reason: REASON.into(),
                     },
                 ),
             ),
@@ -8378,7 +8443,7 @@ fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
     assert_eq!(
         fused.trailer.statuses.get(&stratum("vector")),
         Some(&ProducerStatus::ExecutionFailed {
-            reason: REASON.to_owned(),
+            reason: REASON.into(),
         }),
         "the failure is reported where a failure belongs, verbatim"
     );
@@ -8404,7 +8469,7 @@ fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
                 MockStream::new(
                     Vec::new(),
                     ProducerReceipt::ExecutionFailed {
-                        reason: REASON.to_owned(),
+                        reason: REASON.into(),
                     },
                 ),
             ),
@@ -8464,7 +8529,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
             MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
         ));
     }
-    let mut fusion = FusionStream::new(streams, whole_range);
+    let mut fusion = FusionStream::new(streams, whole_range).expect("resident fusion setup");
 
     let refused = block_on(fusion.next());
     assert!(
@@ -8489,7 +8554,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
             MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
         ));
     }
-    let mut fusion = FusionStream::new(streams, narrow);
+    let mut fusion = FusionStream::new(streams, narrow).expect("resident fusion setup");
     let emitted = block_on(fusion.next())
         .expect("three rank-one charges at an eighth of the range still sum")
         .expect("the fusion certifies its one candidate");

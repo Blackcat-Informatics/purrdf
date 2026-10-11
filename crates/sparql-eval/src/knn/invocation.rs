@@ -294,6 +294,132 @@ pub struct AdmittedKnnInvocation {
 }
 
 impl AdmittedKnnInvocation {
+    /// Generate scoped candidates before the requested neighbour depth. The
+    /// borrowed decision source is consumed during open; each returned row
+    /// retains its original query owner without borrowing that source.
+    ///
+    /// # Errors
+    /// Returns the original producer, constraint or allocation failure.
+    pub fn cursor_scoped<S: RankSource + 'static>(
+        self,
+        source: S,
+        scope: &dyn crate::CandidateScope,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        let workspace = &self.workspace;
+        let (candidates, work, depth) = match self.invocation.answer {
+            KnnAnswer::Search {
+                query_row: Some(row),
+                select_k,
+            } => {
+                let (candidates, work) = source.candidates_admitted(row, workspace)?;
+                (candidates, work, select_k)
+            }
+            KnnAnswer::Membership(Some((query_row, row))) => {
+                // Membership has no ranked depth. Decide before the pairwise
+                // read while preserving the same physical distance kernel.
+                let candidate = source.term(row).ok_or_else(|| {
+                    EvalError::internal("native membership candidate lost its term")
+                })?;
+                let decision = scope.decide(candidate, workspace)?;
+                let mut ranked = crate::AdmittedVec::new(workspace);
+                let mut declarations = crate::AdmittedVec::new(workspace);
+                let work = if let Some(evidence) = decision.into_evidence(workspace)? {
+                    let distance = source.distance_admitted(query_row, row, workspace)?;
+                    ranked.push(Ranked { distance, row })?;
+                    declarations.push((row, evidence))?;
+                    1
+                } else {
+                    0
+                };
+                return self.prepared_cursor(source, ranked, declarations, work);
+            }
+            KnnAnswer::Search {
+                query_row: None, ..
+            }
+            | KnnAnswer::Membership(None) => {
+                let ranked = crate::AdmittedVec::new(workspace);
+                let declarations = crate::AdmittedVec::new(workspace);
+                return self.prepared_cursor(source, ranked, declarations, 0);
+            }
+        };
+        let mut ranked = crate::AdmittedVec::new(workspace);
+        let mut declarations = crate::AdmittedVec::new(workspace);
+        let mut established = 0usize;
+        for (position, scored) in candidates.into_iter().enumerate() {
+            let candidate = source.term(scored.row).ok_or_else(|| {
+                EvalError::internal("native scoped ranking candidate lost its term")
+            })?;
+            let Some(evidence) = scope
+                .decide(candidate, workspace)?
+                .into_evidence(workspace)?
+            else {
+                continue;
+            };
+            if !evidence.is_undecided() {
+                if established >= depth {
+                    continue;
+                }
+                established = established
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            }
+            let evidence = if evidence.is_undecided() {
+                let rank = position
+                    .checked_add(1)
+                    .and_then(|rank| u64::try_from(rank).ok())
+                    .and_then(core::num::NonZeroU64::new)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                evidence.with_original_rank(rank)
+            } else {
+                evidence
+            };
+            declarations.push((scored.row, evidence))?;
+            ranked.push(scored)?;
+        }
+        declarations
+            .as_mut_slice()
+            .sort_unstable_by_key(|entry| entry.0);
+        self.prepared_cursor(source, ranked, declarations, work)
+    }
+
+    fn prepared_cursor<S: RankSource + 'static>(
+        self,
+        source: S,
+        ranked: crate::AdmittedVec<Ranked>,
+        declarations: crate::AdmittedVec<(usize, crate::RowEvidence)>,
+        work: u64,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.into_cursor(source, Some(ranked), Some(declarations), work)
+    }
+
+    fn into_cursor<S: RankSource + 'static>(
+        self,
+        source: S,
+        ranked: Option<crate::AdmittedVec<Ranked>>,
+        declarations: Option<crate::AdmittedVec<(usize, crate::RowEvidence)>>,
+        work: u64,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        let layout = std::alloc::Layout::new::<RankedCursor<S>>();
+        let cursor_admission = self
+            .workspace
+            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut cursor = RankedCursor::with_admission(
+            source,
+            self.invocation,
+            self.admission,
+            self.workspace,
+            cursor_admission,
+        );
+        cursor.ranked = ranked;
+        cursor.declarations = declarations;
+        cursor.unreported_work = work;
+        let cursor =
+            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
+                construct: "native ranked cursor",
+            })?;
+        Ok(cursor)
+    }
+
     /// Construct the shared lazy ranked cursor after admitting its concrete box.
     ///
     /// # Errors
@@ -302,22 +428,7 @@ impl AdmittedKnnInvocation {
         self,
         source: S,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let layout = std::alloc::Layout::new::<RankedCursor<S>>();
-        let cursor_admission = self
-            .workspace
-            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
-        let cursor = RankedCursor::with_admission(
-            source,
-            self.invocation,
-            self.admission,
-            self.workspace,
-            cursor_admission,
-        );
-        let cursor =
-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
-                construct: "native ranked cursor",
-            })?;
-        Ok(cursor)
+        self.into_cursor(source, None, None, 0)
     }
 }
 
@@ -592,6 +703,22 @@ pub fn universe_size(rows: usize) -> TermValue {
 /// they examined), so a counter a host reads is a measurement of the calls actually
 /// made.
 pub trait RankSource {
+    /// Generate the native candidate domain in its original total rank order,
+    /// before the caller's depth. Approximate sources preserve their declared
+    /// graph exploration rather than changing it to an exhaustive scan.
+    ///
+    /// # Errors
+    /// Returns original producer failures. Opaque sources without this contract
+    /// refuse scope rather than silently filtering a depth-limited answer.
+    fn candidates_admitted(
+        &self,
+        _query_row: usize,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
+        Err(EvalError::WorkspaceUnpriced(
+            "ranked source has no pre-depth candidate contract",
+        ))
+    }
     /// Rank the neighbourhood of `query_row`, retaining `select_k` rows nearest first,
     /// and report how many candidates the ranking examined.
     ///
@@ -686,6 +813,8 @@ pub struct RankedCursor<S> {
     invocation: KnnInvocation,
     /// The ranked neighbours, once the ranking has run.
     ranked: Option<crate::AdmittedVec<Ranked>>,
+    /// Original declarations retained for a scoped, prepared candidate domain.
+    declarations: Option<crate::AdmittedVec<(usize, crate::RowEvidence)>>,
     /// How far into `ranked` this cursor has read.
     at: usize,
     /// Candidates examined and not yet reported to the governor.
@@ -704,6 +833,7 @@ impl<S: RankSource> RankedCursor<S> {
             source,
             invocation,
             ranked: None,
+            declarations: None,
             at: 0,
             unreported_work: 0,
             workspace: crate::WorkspaceCapability::resident(),
@@ -723,6 +853,7 @@ impl<S: RankSource> RankedCursor<S> {
             source,
             invocation,
             ranked: None,
+            declarations: None,
             at: 0,
             unreported_work: 0,
             workspace,
@@ -789,7 +920,7 @@ impl<S: RankSource> RankedCursor<S> {
             },
             allocation,
         );
-        crate::property_fn::AdmittedPfRow::from_terms(
+        let row = crate::property_fn::AdmittedPfRow::from_terms(
             [
                 self.workspace.clone_term(neighbour)?,
                 self.workspace.clone_term(&self.invocation.query_term)?,
@@ -798,11 +929,21 @@ impl<S: RankSource> RankedCursor<S> {
             ]
             .into_iter(),
             &self.workspace,
-        )
+        )?;
+        if let Some(declarations) = &self.declarations {
+            let position = declarations
+                .binary_search_by_key(&scored.row, |entry| entry.0)
+                .map_err(|_| {
+                    EvalError::internal("native scoped row lost its original declaration")
+                })?;
+            Ok(row.with_evidence(declarations[position].1.clone()))
+        } else {
+            Ok(row)
+        }
     }
 
     fn pull(&mut self) -> Result<Option<crate::property_fn::AdmittedPfRow>, EvalError> {
-        if self.invocation.remaining == Some(0) {
+        if self.declarations.is_none() && self.invocation.remaining == Some(0) {
             return Ok(None);
         }
         let ranked_len = self.ensure_ranked()?.len();
@@ -820,8 +961,13 @@ impl<S: RankSource> RankedCursor<S> {
                 }
             }
             if agrees {
-                if let Some(remaining) = self.invocation.remaining.as_mut() {
-                    *remaining = remaining.saturating_sub(1);
+                if !row.evidence().is_undecided()
+                    && let Some(remaining) = self.invocation.remaining.as_mut()
+                {
+                    if *remaining == 0 {
+                        continue;
+                    }
+                    *remaining -= 1;
                 }
                 return Ok(Some(row));
             }
@@ -831,6 +977,9 @@ impl<S: RankSource> RankedCursor<S> {
 }
 
 impl<S: RankSource> PfCursor for RankedCursor<S> {
+    fn carries_row_evidence(&self) -> bool {
+        self.declarations.is_some()
+    }
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         if self.workspace.is_bounded() {
             return Err(EvalError::WorkspaceUnpriced(
@@ -838,11 +987,7 @@ impl<S: RankSource> PfCursor for RankedCursor<S> {
             ));
         }
         self.pull()?
-            .map(|row| {
-                row.try_into_resident().map_err(|_| {
-                    EvalError::WorkspaceUnpriced("raw extraction of an admitted kNN row")
-                })
-            })
+            .map(crate::property_fn::AdmittedPfRow::try_into_resident)
             .transpose()
     }
 

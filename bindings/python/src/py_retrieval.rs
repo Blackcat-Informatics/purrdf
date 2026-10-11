@@ -773,7 +773,7 @@ fn candidate_domains(
             count = blocks.len()
         ));
     }
-    Ok(CandidateDomains::Within(blocks))
+    Ok(CandidateDomains::within(blocks))
 }
 
 /// Parse the document every stage runs against.
@@ -2216,7 +2216,7 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
 
     out.set_item(
         "unserved_terms",
-        unserved_list(py, planned.unserved_evidence())?,
+        unserved_list(py, &planned.unserved_evidence())?,
     )?;
 
     let snapshot = PyDict::new(py);
@@ -2293,10 +2293,10 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
 }
 
 /// Render the per-term unserved evidence.
-fn unserved_list(
-    py: Python<'_>,
-    unserved: Vec<crate::retrieval::UnservedTerm>,
-) -> PyResult<Bound<'_, PyList>> {
+fn unserved_list<'py>(
+    py: Python<'py>,
+    unserved: &[crate::retrieval::UnservedTerm],
+) -> PyResult<Bound<'py, PyList>> {
     let out = PyList::empty(py);
     for term in unserved {
         let entry = PyDict::new(py);
@@ -2317,9 +2317,9 @@ fn unserved_list(
 /// a caller could mistake for a measurement — and `fully_separated` is the one
 /// bit that follows from comparing it with `requested_depth`, answered here so a
 /// host does not re-derive the comparison (and the saturating case) itself.
-fn planned_resolution_dict<'py>(
+fn planned_resolution_dict<'py, 'a>(
     py: Python<'py>,
-    planned: &BTreeMap<Iri, PlannedResolution>,
+    planned: impl IntoIterator<Item = (&'a Iri, &'a PlannedResolution)>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
     for (stratum, entry) in planned {
@@ -2404,7 +2404,7 @@ fn compile_dict<'py>(
     // because resolution is measured against one and this binding invents none.
     out.set_item(
         "planned_resolution",
-        planned_resolution_dict(py, &compiled.resolution)?,
+        planned_resolution_dict(py, compiled.resolution.iter())?,
     )?;
     Ok(out)
 }
@@ -2536,7 +2536,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             }
             ProducerStatus::ExecutionFailed { reason } => {
                 entry.set_item("status", "execution_failed")?;
-                entry.set_item("reason", reason)?;
+                entry.set_item("reason", reason.as_ref() as &str)?;
             }
             ProducerStatus::TermsRejected => {
                 entry.set_item("status", "terms_rejected")?;
@@ -2603,8 +2603,8 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     // the same key in "fidelities" or "attestations", so the lists are what to
     // act on rather than flags to shrug at.
     let exactness = PyDict::new(py);
-    fn strata_list(strata: &BTreeSet<Iri>) -> Vec<&str> {
-        strata.iter().map(Iri::as_str).collect()
+    fn strata_list<'a>(strata: impl Iterator<Item = &'a Iri>) -> Vec<&'a str> {
+        strata.map(Iri::as_str).collect()
     }
     match &result.trailer.exactness {
         ScoreExactness::Exact => {
@@ -2619,9 +2619,9 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             unbounded,
         } => {
             exactness.set_item("exact", false)?;
-            exactness.set_item("deficit", strata_list(deficit))?;
-            exactness.set_item("inflation", strata_list(inflation))?;
-            exactness.set_item("unbounded", strata_list(unbounded))?;
+            exactness.set_item("deficit", strata_list(deficit.iter()))?;
+            exactness.set_item("inflation", strata_list(inflation.iter()))?;
+            exactness.set_item("unbounded", strata_list(unbounded.iter()))?;
         }
     }
     out.set_item("exactness", exactness)?;
@@ -2722,7 +2722,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     // its planned depth — and neither corrects the other.
     out.set_item(
         "planned_resolution",
-        planned_resolution_dict(py, &result.planned_resolution)?,
+        planned_resolution_dict(py, result.planned_resolution.iter())?,
     )?;
 
     // Every counter, named, from the trailer's one reading of its own fields
@@ -2761,10 +2761,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     out.set_item("observed_resolution", observed)?;
     out.set_item("cut_on_a_tie", result.trailer.cut_on_a_tie)?;
 
-    out.set_item(
-        "unserved_terms",
-        unserved_list(py, result.unserved_terms.clone())?,
-    )?;
+    out.set_item("unserved_terms", unserved_list(py, &result.unserved_terms)?)?;
     out.set_item(
         "unweighted_strata",
         result

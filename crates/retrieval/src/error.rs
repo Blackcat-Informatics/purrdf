@@ -729,6 +729,8 @@ impl core::fmt::Display for StatisticsDimension {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FusionError {
+    /// The original native layout, allocation or workspace admission refusal.
+    NativeFailure(purrdf_sparql_eval::EvalError),
     /// A checked arithmetic step left the range it is computed in: a
     /// fixed-point addition, the profile's derived ceiling
     /// (`max_weight × stratum count`), or a stratum count too large for the
@@ -975,6 +977,7 @@ impl std::fmt::Display for FusionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Overflow => write!(f, "fusion overflowed the fixed-point range"),
+            Self::NativeFailure(err) => err.fmt(f),
             Self::Protocol(err) => write!(f, "ranked-stream protocol violation: {err}"),
             Self::InvalidK { k } => write!(f, "fusion profile K must be at least 1, got {k}"),
             Self::InvalidRank { rank } => write!(f, "rank must be at least 1, got {rank}"),
@@ -1026,12 +1029,29 @@ impl std::fmt::Display for FusionError {
     }
 }
 
-impl std::error::Error for FusionError {}
+impl std::error::Error for FusionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NativeFailure(error) => Some(error),
+            Self::Protocol(error) => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl From<purrdf_sparql_eval::EvalError> for FusionError {
+    fn from(error: purrdf_sparql_eval::EvalError) -> Self {
+        Self::NativeFailure(error)
+    }
+}
 
 impl From<crate::ranked_stream::ProtocolError> for FusionError {
     /// Wrap a producer's protocol violation without growing `FusionError` to the
     /// producer error's own size.
     fn from(error: crate::ranked_stream::ProtocolError) -> Self {
-        Self::Protocol(Box::new(error))
+        match error {
+            crate::ranked_stream::ProtocolError::NativeFailure(error) => Self::NativeFailure(error),
+            error => Self::Protocol(Box::new(error)),
+        }
     }
 }

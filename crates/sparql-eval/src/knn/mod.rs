@@ -1639,7 +1639,7 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
         ceiling: Option<u64>,
         workspace: crate::WorkspaceCapability,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        KnnInvocation::open_owned(
+        let invocation = KnnInvocation::open_owned(
             "the embedding kNN relation",
             args,
             ceiling,
@@ -1647,14 +1647,32 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
             self.space.guard(),
             &self.observations.membership_lookups,
             workspace,
-        )?
-        .cursor(KnnSource {
+        )?;
+        let source = KnnSource {
             space: Arc::clone(&self.space),
             declared: self.declared,
             scan: self.scan,
             lookup: self.lookup,
             observations: Arc::clone(&self.observations),
-        })
+        };
+        if let Some(scope) = args.candidate_scope() {
+            invocation.cursor_scoped(source, scope)
+        } else {
+            invocation.cursor(source)
+        }
+    }
+
+    fn supports_candidate_scope(&self) -> bool {
+        true
+    }
+
+    fn scoped_rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        let rows = self.space.row_count() as u64;
+        if mode.is_bound(KNN_NEIGHBOUR) {
+            rows.min(1)
+        } else {
+            rows
+        }
     }
 }
 
@@ -1677,6 +1695,15 @@ struct KnnSource<A: Arithmetic> {
 }
 
 impl<A: Arithmetic> RankSource for KnnSource<A> {
+    fn candidates_admitted(
+        &self,
+        query_row: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
+        // The original batch distance kernel and total order generate the full
+        // native candidate domain; scope precedes the invocation's own depth.
+        self.search_admitted(query_row, self.space.row_count(), workspace)
+    }
     fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
         let (ranked, examined) =
             self.search_admitted(query_row, select_k, &crate::WorkspaceCapability::default())?;

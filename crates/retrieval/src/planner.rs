@@ -434,6 +434,9 @@ pub fn plan(
     registry: &PropertyFunctionRegistry,
     statistics: &impl Statistics,
 ) -> Result<Plan, PlanError> {
+    for constraint in &request.constraints {
+        validate_term(constraint)?;
+    }
     let parts = plan_read(
         &request.terms,
         DepthPolicy::Fused(request.bound),
@@ -443,6 +446,7 @@ pub fn plan(
     Ok(Plan {
         version: Plan::VERSION,
         request_terms: parts.request_terms,
+        constraints: request.constraints.clone(),
         read_bound: request.bound,
         producer_bindings: parts.producer_bindings,
         producer_decisions: parts.producer_decisions,
@@ -761,7 +765,15 @@ pub(crate) fn plan_read(
                 revision: statistics.revision().to_owned(),
                 entries: StatisticsEntries::new(Vec::new())?,
             };
-            (depths.0.clone(), BTreeMap::new(), declared_rows, snapshot)
+            (
+                depths
+                    .iter()
+                    .map(|(stratum, depth)| (stratum.clone(), depth))
+                    .collect(),
+                BTreeMap::new(),
+                declared_rows,
+                snapshot,
+            )
         }
     };
 
@@ -1398,7 +1410,7 @@ fn combined_selectivity_ppm(
 /// strings would refuse legitimate intervals whose encoding is not
 /// lexicographically ordered. A degenerate range whose endpoints are equal is a
 /// single point and is admitted.
-fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
+pub(crate) fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
     let reason = match term {
         RequestTerm::Lexical { text, .. } if text.trim().is_empty() => "lexical text is empty",
         RequestTerm::Vector { embedding, .. } if embedding.is_empty() => {

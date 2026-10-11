@@ -75,6 +75,8 @@ pub mod describe;
 /// Structured diagnostics: severity, source/GTS locations, conversion losses,
 /// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
 pub mod diagnostic;
+pub mod evidence;
+pub mod query_scope;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
 // sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
 // reassociated law, their batch kernels and once-per-scan dispatch, and the

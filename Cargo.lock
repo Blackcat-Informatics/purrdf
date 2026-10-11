@@ -967,6 +967,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-lex",
+ "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-stack",

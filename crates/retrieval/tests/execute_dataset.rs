@@ -13,7 +13,7 @@
 //! ranking. Every refusal is paired with the neighbouring case that must still
 //! succeed. Fixtures are `example.org` throughout.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
@@ -38,7 +38,7 @@ use purrdf_sparql_eval::{
 mod registry;
 
 use purrdf_retrieval::block_on;
-use purrdf_retrieval::fixture::iri;
+use purrdf_retrieval::fixture::{iri, iri_members};
 use registry::kernel_iri;
 
 const K: u32 = 60;
@@ -1003,9 +1003,9 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     assert_eq!(
         result.trailer.exactness,
         ScoreExactness::Estimated {
-            deficit: BTreeSet::from([alpha.clone()]),
-            inflation: BTreeSet::from([alpha]),
-            unbounded: BTreeSet::new(),
+            deficit: iri_members([alpha.clone()]),
+            inflation: iri_members([alpha]),
+            unbounded: iri_members([]),
         },
         "one stratum served from a short index, so every fused score is an \
          estimate — and the answer names exactly which stratum made it one, on \

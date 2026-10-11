@@ -50,6 +50,13 @@
 //! **serialized** answer from two independently built indexes queried through the
 //! property-function seam. `make wasm` separately builds this release crate;
 //! WASM execution is reserved for actual target paths and host interfaces.
+//!
+//! [`dictionary`] compiles complete authored phrase dictionaries with this same
+//! resolved analyzer, and [`PhraseOccurrenceRelation`] publishes their exact
+//! positional rows under an explicit caller IRI. The original token relation
+//! also advertises the dictionary physical capability to the one SPARQL planner.
+//! Dictionary caches retain their original compilation owners; matches bind to
+//! the current immutable index rather than cached occurrence IDs.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -62,6 +69,10 @@
 mod analysis;
 pub mod character;
 pub use character::{HanCharacterIndex, HanMatchEvidence};
+pub mod dictionary;
+mod dictionary_relation;
+mod occurrence_dictionary;
+pub use dictionary_relation::PhraseOccurrenceRelation;
 mod error;
 mod query_workspace;
 pub use query_workspace::CapacityFailure;
@@ -87,7 +98,7 @@ pub use error::TextError;
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
-    TextIndexConfig,
+    TextIndexConfig, TokenOccurrence,
 };
 pub use profile::{
     AccentFold, AccentScripts, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation,
@@ -97,7 +108,8 @@ pub use relation::{
     SearchObservations, TermOccurrenceRelation, TextSearchRelation, verify_binding,
 };
 pub use score::{
-    B, Constraint, K1, PartitionFilter, Scored, TermContribution, explain, rank_partition, select,
+    B, Constraint, K1, PartitionFilter, ScopedTerm, Scored, TermContribution, explain,
+    rank_partition, select, select_scoped,
 };
 pub use surface::{
     MatchProjection, PhoneticMatch, SourceMatchEvidence, SubstringLimits, SubstringMatch,

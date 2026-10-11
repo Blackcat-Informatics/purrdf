@@ -1432,6 +1432,20 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
+    eval_user_function_evidence(func, body, iri, args, ctx, &mut None)
+}
+
+/// Return a body's original evidence beside its value from the same execution.
+/// The caller owns the suspension slot; no context-global last-result is used.
+pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
+    func: &UserFunction,
+    body: &crate::engine::PreparedQuery,
+    iri: &str,
+    args: &[Option<TermValue>],
+    ctx: &mut EvalCtx<'_, D>,
+    evidence: &mut Option<crate::evidence_exec::RowEvidence>,
+) -> Result<Option<TermValue>, EvalError> {
+    *evidence = None;
     if args.len() < func.required || args.len() > func.params.len() {
         return Err(EvalError::function(format!(
             "SHACL-AF function <{iri}> expects {}..={} argument(s), got {}",
@@ -1535,6 +1549,8 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
         }
     };
 
+    let body_evidence = function_body_evidence(&outcome, &child)?;
+
     let result: Option<TermValue> = match (func.kind, outcome) {
         (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::boolean(value)),
         (UserFnBody::Select, Outcome::Solutions(seq)) => {
@@ -1595,6 +1611,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
     // runtime datatype constraint would spuriously reject IRI/blank-node returns,
     // so it is retained on `UserFunction` for callers but NOT enforced here.
+    *evidence = body_evidence;
     Ok(result)
 }
 
@@ -1796,6 +1813,38 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     result.and_then(|value| witness_result.map(|()| value))
 }
 
+fn function_body_evidence<D: DatasetView + Sync>(
+    outcome: &Outcome<D::Id>,
+    child: &EvalCtx<'_, D>,
+) -> Result<Option<crate::RowEvidence>, EvalError> {
+    let rows = match outcome {
+        Outcome::Solutions(rows) => Some(rows),
+        Outcome::Boolean(_) => child.evidence_answer.as_ref(),
+        Outcome::Graph(_) => None,
+    };
+    let Some(rows) = rows else {
+        return if child.evidence_input.is_some() {
+            Err(EvalError::internal(
+                "SPARQL function lost its original evidence rows",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    if !child.may_have_evidence()
+        && !rows.rows.may_have_evidence_attachment()
+        && rows.rows.search_evidence().is_virtual()
+    {
+        return Ok(None);
+    }
+    child
+        .existential_evidence(
+            rows.rows.iter().map(crate::solution::RetainedRow::evidence),
+            rows.rows.search_evidence(),
+        )
+        .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1811,6 +1860,49 @@ mod tests {
         GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
         QueryOptions,
     };
+
+    #[test]
+    fn native_empty_ask_body_keeps_original_incomplete_search_like_exists() {
+        use purrdf_core::evidence::{
+            EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
+        };
+        use purrdf_lex::allocation::{Memory, Resident};
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let mut child = EvalCtx::new(&dataset);
+        let query = crate::QueryEvidence::new(&child.growth).unwrap();
+        let search = query
+            .retain(
+                &EvidenceRecord::from_parts(
+                    &InformationMap::default(),
+                    SearchCompleteness::Undetermined,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    &mut Memory::new(&mut Resident),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let schema = crate::solution::VarSchema::default()
+            .shared_admitted(&child.growth)
+            .unwrap();
+        let mut rows = crate::solution::SolutionSeq::empty(schema);
+        rows.rows.retain_search_evidence(search.clone());
+        child.evidence_answer = Some(rows);
+        assert!(child.evidence_input.is_none());
+        let body = function_body_evidence(&Outcome::Boolean(false), &child)
+            .unwrap()
+            .unwrap();
+        let direct = child
+            .existential_evidence(std::iter::empty(), &search)
+            .unwrap();
+        assert!(body.same_attachment(&direct));
+        body.with_record(|record| {
+            assert_eq!(record.information().fallback(), Information::Neither);
+            assert_eq!(record.completeness(), SearchCompleteness::Undetermined);
+        })
+        .unwrap();
+    }
 
     const EX_INC: &str = "http://example.org/ns#inc";
     const EX_EVEN: &str = "http://example.org/ns#isEven";

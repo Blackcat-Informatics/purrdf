@@ -1726,6 +1726,7 @@ members = [
     "purrdf_lex::walk::Nested::from",
     "purrdf_retrieval::iri::Term::from",
     "purrdf_retrieval::plan::StatisticsEntries::try_from",
+    "purrdf_sparql_eval::property_fn::DomainTag::from",
 ]
 kind = "shim"
 criterion = "b"
@@ -2754,10 +2755,10 @@ anchor = "purrdf_shapes::sparql::AmbientContext"
 reason = "Two independently owned typed SHACL request/cause slots: dated query admission retains exact source occurrences and invocation refusals, while native XPath execution retains its profile, finite limits, pattern cache and selected cause. AmbientContext swaps both private CURRENT slots to preserve each owner's admission and exact failure through suspension and nested restoration. Each wrapper forwards to std::RefCell::replace on its own slot; no second admission, regex, executor, cache or context-swap implementation is sanctioned."
 
 [[distinct]]
-members = ["purrdf_sparql_algebra::parser::table::ScopeTable::entry", "purrdf_sparql_algebra::parser::table::ScopeTable::entry_mut"]
+members = ["purrdf_lex::allocation::ordered::OrderedTable::entry", "purrdf_lex::allocation::ordered::OrderedTable::entry_mut"]
 kind = "body"
 criterion = "b"
-anchor = "purrdf_sparql_algebra::parser::table::ScopeTable"
+anchor = "purrdf_lex::allocation::ordered::OrderedTable"
 reason = "The same arena invariant is read through an immutable reference for lookup or an exclusive mutable reference for AVL edits; distinct borrow signatures prevent mutation through lookup and retain Rust aliasing guarantees."
 
 [[distinct]]
@@ -2801,3 +2802,24 @@ kind = "shim"
 criterion = "b"
 anchor = "purrdf_sparql_eval::retained::RetainedQueryExplanation"
 reason = "Typed public explanation and result carriers wrap different payload values through the single payload admission and lease home; the concrete return types preserve public interfaces without a second allocation or lease implementation."
+
+[[distinct]]
+members = ["purrdf_core::ir::dataset::QuadIds::from", "purrdf_core::ir::dataset::QuadRow::from"]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_core::ir::dataset::QuadIds"
+reason = "Opposite typed conversions bridge the generic view row and the concrete resident quad row by moving their four fields unchanged. They preserve the public carrier types without an allocation, remapping algorithm or duplicated storage operation."
+
+[[distinct]]
+members = ["purrdf_sparql_eval::workspace::array::WorkspaceArray::deref", "purrdf_sparql_eval::workspace::array::WorkspaceArray::deref_mut"]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_sparql_eval::workspace::array::WorkspaceArray"
+reason = "The immutable and exclusive mutable slice views must have distinct Rust borrow signatures. Both preserve the original caller/native array owner and grant; sharing a mutable accessor with the immutable one would require an invalid exclusive borrow or unsafe aliasing."
+
+[[distinct]]
+members = ["purrdf_retrieval::execute::ExecutionError::source", "purrdf_retrieval::ranked_stream::ProtocolError::source"]
+kind = "body"
+criterion = "a"
+anchor = "purrdf_retrieval::execute::ExecutionError"
+reason = "Required std::error::Error adapters expose the original native failure carried by two distinct public error enums. All other variants have no nested source; the forwarding match implements each concrete trait contract without copying the failure or its owner."

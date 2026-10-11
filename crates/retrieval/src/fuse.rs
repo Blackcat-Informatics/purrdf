@@ -109,7 +109,6 @@
 //! and the rows give no sign of it.
 
 use core::fmt;
-use std::collections::BTreeSet;
 use std::marker::PhantomData;
 
 use crate::error::FusionError;
@@ -179,9 +178,10 @@ pub struct FusionResult<T> {
     /// that reached the bound and a run that emptied the frontier return the
     /// same shape. Completeness is a property of the producers, and each one's
     /// is in [`Self::trailer`].
-    pub rows: Vec<FusedRow>,
+    pub rows: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<FusedRow>>,
     /// The terminal report: every producer's status and both identities.
     pub trailer: FusionTrailer,
+    pub(crate) scoped: Option<crate::ScopedFusedAnswer>,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -203,6 +203,7 @@ impl<T> fmt::Debug for FusionResult<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FusionResult")
             .field("rows", &self.rows)
+            .field("scoped", &self.scoped)
             .field("trailer", &self.trailer)
             .finish()
     }
@@ -266,7 +267,52 @@ where
     S: RankedStream<Item = T>,
     T: Ord + Clone + Into<Term>,
 {
-    let mut seen = BTreeSet::new();
+    fuse_admitted(admit_streams(streams)?, profile, top_k).await
+}
+
+/// Caller registration crosses into native ownership at this one boundary.
+pub(crate) fn admit_streams<S: RankedStream>(
+    streams: Vec<(Iri, S)>,
+) -> Result<purrdf_sparql_eval::AdmittedVec<(Iri, S)>, FusionError> {
+    let workspace = streams
+        .iter()
+        .find_map(|(_, stream)| stream.workspace())
+        .unwrap_or_else(purrdf_sparql_eval::WorkspaceCapability::resident);
+    purrdf_sparql_eval::AdmittedVec::try_from_iter_admitted(
+        streams.into_iter().map(|(stratum, stream)| {
+            Ok::<_, purrdf_sparql_eval::EvalError>((stratum.clone_admitted(&workspace)?, stream))
+        }),
+        &workspace,
+    )
+    .map_err(FusionError::from)
+}
+
+pub(crate) async fn fuse_admitted<S, T>(
+    streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
+    profile: &FusionProfile,
+    top_k: TopK,
+) -> Result<FusionResult<T>, FusionError>
+where
+    S: RankedStream<Item = T>,
+    T: Ord + Clone + Into<Term>,
+{
+    fuse_admitted_scoped(streams, profile, top_k, None).await
+}
+
+pub(crate) async fn fuse_admitted_scoped<S, T>(
+    streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
+    profile: &FusionProfile,
+    top_k: TopK,
+    scopes: Option<&[crate::ScopedStratum]>,
+) -> Result<FusionResult<T>, FusionError>
+where
+    S: RankedStream<Item = T>,
+    T: Ord + Clone + Into<Term>,
+{
+    let workspace = streams.workspace().clone();
+    // Keys borrow caller-owned registration values; only the actual membership
+    // arena acquires storage, under the same authority as fusion itself.
+    let mut seen = purrdf_sparql_eval::AdmittedOrderedSet::new(&workspace);
     // The pinned plan is read off the streams before any of them is consumed,
     // so a disagreement is refused before a single row is pulled. `pinned` is
     // the plan the streams seen so far agree on; `unpinned` records that at
@@ -275,7 +321,7 @@ where
     let mut pinned: Option<PlanId> = None;
     let mut unpinned = false;
     for (stratum, stream) in &streams {
-        if !seen.insert(stratum.clone()) {
+        if !seen.insert(stratum)? {
             return Err(FusionError::DuplicateStratum {
                 stratum: stratum.as_str().to_owned(),
             });
@@ -310,24 +356,52 @@ where
         }
     }
     let pinned = if unpinned { None } else { pinned };
+    drop(seen);
 
-    let mut fusion = FusionStream::new(streams, profile.clone());
+    let mut fusion = FusionStream::borrowed(streams, profile)?;
     if let Some(plan_id) = pinned {
         fusion = fusion.with_plan_id(plan_id);
     }
-    let mut rows = Vec::with_capacity(top_k.get().min(MAX_PREALLOCATED_ROWS));
-    while rows.len() < top_k.get() {
+    let owner = scopes
+        .map(|scopes| fusion.retain_scoped(scopes))
+        .transpose()?;
+    let mut retained = owner
+        .as_ref()
+        .map(|_| purrdf_sparql_eval::AdmittedVec::new(fusion.workspace()));
+    let mut rows = purrdf_sparql_eval::AdmittedVec::with_capacity(
+        top_k.get().min(MAX_PREALLOCATED_ROWS),
+        fusion.workspace(),
+    )?;
+    // Scoped composition retains every original possible row. Uncertain rows
+    // never spend established top-k slots. The finite original admitted unit
+    // receipts, rather than a new policy cap, bound this additional retention.
+    while retained.is_some() || rows.len() < top_k.get() {
         let Some(row) = fusion.next().await? else {
             break;
         };
-        rows.push(row);
+        let evidence = fusion.row_evidence(&row)?;
+        if let Some(retained) = &mut retained
+            && (evidence.is_undecided() || rows.len() < top_k.get())
+        {
+            retained.push(crate::ScopedFusedRow::new(row.clone(), evidence.clone())?)?;
+        }
+        if !evidence.is_undecided() && rows.len() < top_k.get() {
+            rows.push(row)?;
+        }
     }
     // Always, and after the rows: the trailer closes whatever the bound left
     // unread at the contribution it was read down to, so every producer has a
     // status and none of them is read further to obtain one.
     let trailer = fusion.trailer().await?;
     Ok(FusionResult {
-        rows,
+        scoped: match (retained, owner) {
+            (Some(rows), Some(owner)) => Some(crate::ScopedFusedAnswer {
+                rows: purrdf_sparql_eval::SharedWorkspace::new_admitted(rows, fusion.workspace())?,
+                owner,
+            }),
+            _ => None,
+        },
+        rows: purrdf_sparql_eval::SharedWorkspace::new_admitted(rows, fusion.workspace())?,
         trailer,
         marker: PhantomData,
     })

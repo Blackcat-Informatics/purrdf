@@ -32,4 +32,3 @@ Source: https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3
 Evidence: crates/lex/data/html/PROVENANCE.md
 Evidence: LICENSING.md
 Notice: third-party/whatwg-html-references/0-LICENSE-WHATWG
-

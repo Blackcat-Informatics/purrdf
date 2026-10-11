@@ -77,6 +77,8 @@ pub struct EvalOptions {
     /// This is a measurement seam for bench comparisons against the ordered
     /// parallel fold, and for differential tests. Production leaves it `false`.
     pub force_sequential: bool,
+    /// Disable only physical shape selection, retaining the same logical query.
+    pub disable_shapes: bool,
 }
 
 impl Default for EvalOptions {
@@ -85,6 +87,7 @@ impl Default for EvalOptions {
             exists_memo: true,
             force_structural_bgp_order: false,
             force_sequential: false,
+            disable_shapes: false,
         }
     }
 }
@@ -307,9 +310,9 @@ pub(crate) enum PreparedExists {
     FoldedFalse,
     /// A non-folded inner, normalized to Existential Normal Form.
     Pattern {
-        /// The ENF-normalized inner. What both evaluation strategies test for
-        /// non-emptiness — the memoized probe directly, the definition path via
-        /// [`Self::witness_wrapped`].
+        /// The admitted body: ENF-normalized for ordinary emptiness queries,
+        /// original algebra for evidence queries. Both strategies evaluate this
+        /// same owner; evidence queries do not use the first-witness wrapper.
         normalized: crate::expr::PreparedPattern,
         /// `normalized` wrapped in `Slice { start: 0, length: Some(1) }` — the ENF
         /// law 4a proof sketch read in reverse (`crate::enf`'s module doc,
@@ -504,6 +507,8 @@ pub(crate) enum WorkspaceAdmission {
 /// [`RdfDataset`], so the bare spelling `EvalCtx<'d>` names the production
 /// instantiation everywhere it did before.
 pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+    /// One original hard-membership owner lent to actual producer invocations.
+    pub(crate) candidate_scope: Option<&'d dyn crate::CandidateScope>,
     /// The frozen read view being queried, driven through the [`DatasetView`] trait.
     pub dataset: &'d D,
     /// The engine retains a certified workspace reservation through its drain.
@@ -512,6 +517,19 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) workspace: crate::workspace::QueryWorkspace<D::ReadError>,
     /// Erased grant shared with native producers and differently typed child views.
     pub(crate) growth: crate::WorkspaceCapability,
+    /// Original per-claim declarations and the lazily materialized query table.
+    pub(crate) evidence_input: Option<crate::evidence_exec::EvidenceInput<'d, D::Id>>,
+    /// Native-only records lazily share the same admission home as source records.
+    native_evidence: std::sync::Mutex<Option<crate::evidence_exec::EvidenceOwner>>,
+    /// Original final WHERE rows for non-SELECT evidence publication. Child
+    /// contexts start without a receipt; their scratch ids never enter a parent.
+    pub(crate) evidence_answer: Option<SolutionSeq<D::Id>>,
+    /// Actual invocation-local search scopes, published on their original bag.
+    pub(crate) evidence_search: Option<crate::AdmittedVec<crate::evidence_exec::RowEvidence>>,
+    /// Exact top-level verdict request, consumed at its actual answer pattern.
+    pub(crate) evidence_verdict: Option<purrdf_core::evidence::AnswerRequest>,
+    /// The exact verdict which stopped the original answer producer, if any.
+    pub(crate) evidence_stop: Option<purrdf_core::evidence::WitnessVerdict>,
     /// Original query-owned reverse identities, shared only over this same view.
     term_lookup: TermLookup<D::Id>,
     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
@@ -615,6 +633,10 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// (read and write both) while [`Self::in_substituted_exists`] is set, for the same ABA
     /// reason.
     pub(crate) exists_definition_memo: crate::AdmittedMap<ExistsDefinitionMemoKey<D::Id>, bool>,
+    /// Sparse non-default records for the same original restriction memo.
+    /// No entry or storage is born on the ordinary boolean path.
+    pub(crate) exists_evidence_memo:
+        crate::AdmittedMap<ExistsDefinitionMemoKey<D::Id>, crate::evidence_exec::RowEvidence>,
     /// Explicit native law and current finite bounds; absent means compatibility.
     pub(crate) xpath_regex: Option<Selection>,
     /// Successful native programs only, with bounded retained payload and entries.
@@ -756,6 +778,16 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// Borrowed for the dataset lifetime like [`Self::user_functions`], so carrying
     /// it is a `Copy` pointer, never a clone.
     pub(crate) property_functions: &'d crate::property_fn::PropertyFunctionRegistry,
+    pub(crate) shapes: &'d crate::shapes::ShapeRegistry,
+    pub(crate) shape_state: crate::shapes::runtime::ShapeState<D::Id>,
+    pub(crate) bucketed_group: Option<usize>,
+    pub(crate) window_bgp: Option<(usize, crate::shapes::window::WindowSpec)>,
+    pub(crate) ordinal_barriers: crate::shapes::barrier::BarrierState<D::Id>,
+    /// Original complete bags for a currently executing certified dictionary
+    /// region. Scoped workers share this immutable owner; nothing outlives AST use.
+    pub(crate) expanded_dictionary: Option<
+        crate::workspace::SharedWorkspace<crate::shapes::dictionary::Materialization<D::Id>>,
+    >,
     /// The caller-injected custom-aggregate table.
     /// [`crate::agg_fn::AggregateRegistry::EMPTY`] (the default) means no aggregate
     /// is registered: an `AggregateFunction::Custom(iri)` call only reaches this
@@ -1225,6 +1257,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         Self::at_with_barrier(dataset, now_val, rng_seed, ExpressionBarrier::default())
     }
 
+    /// Preserve the read's pinned clock and original workspace in its filter context.
+    pub(crate) fn at_admitted(
+        dataset: &'d D,
+        now_val: purrdf_xsd::XsdValue,
+        rng_seed: u64,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let barrier = ExpressionBarrier::admitted(workspace)?;
+        let mut ctx = Self::at_with_barrier(dataset, now_val, rng_seed, barrier);
+        ctx.growth = workspace.clone();
+        Ok(ctx)
+    }
+
     /// Bounded constructors admit their one-shot expression control before
     /// constructing any context. The ordinary constructor uses the same body.
     pub(crate) fn new_admitted(
@@ -1255,6 +1300,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             crate::user_fn::BoundFunctionRegistry::EMPTY;
         static EMPTY_RELATIONS: crate::property_fn::PropertyFunctionRegistry =
             crate::property_fn::PropertyFunctionRegistry::EMPTY;
+        static EMPTY_SHAPES: crate::shapes::ShapeRegistry = crate::shapes::ShapeRegistry::EMPTY;
         static EMPTY_AGGREGATES: crate::agg_fn::AggregateRegistry =
             crate::agg_fn::AggregateRegistry::EMPTY;
 
@@ -1263,6 +1309,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bounded_workspace: WorkspaceAdmission::Unpriced,
             workspace: crate::workspace::QueryWorkspace::resident(),
             growth: crate::WorkspaceCapability::default(),
+            evidence_input: None,
+            native_evidence: std::sync::Mutex::new(None),
+            candidate_scope: None,
+            evidence_answer: None,
+            evidence_search: None,
+            evidence_verdict: None,
+            evidence_stop: None,
             term_lookup: TermLookup::default(),
             scratch: ScratchInterner::default(),
             computed_admission: Vec::new(),
@@ -1282,6 +1335,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_inner_cache: crate::AdmittedMap::default(),
             exists_prepared_cache: crate::AdmittedMap::default(),
             exists_definition_memo: crate::AdmittedMap::default(),
+            exists_evidence_memo: crate::AdmittedMap::default(),
             xpath_regex: None,
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
@@ -1304,6 +1358,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             user_functions: &EMPTY_FUNCTIONS,
             user_function_admission: None,
             property_functions: &EMPTY_RELATIONS,
+            shapes: &EMPTY_SHAPES,
+            shape_state: crate::shapes::runtime::ShapeState::default(),
+            bucketed_group: None,
+            window_bgp: None,
+            ordinal_barriers: crate::shapes::barrier::BarrierState::default(),
+            expanded_dictionary: None,
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
             division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
@@ -1558,6 +1618,25 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub fn with_remote(mut self, source: &'d (dyn crate::remote::ServiceResolver + Sync)) -> Self {
         self.remote = Some(source);
         self
+    }
+
+    /// Attach evidence declarations for this original frozen dataset view.
+    /// Ordinary query execution keeps no evidence control or table.
+    ///
+    /// # Errors
+    /// Returns original native admission/control refusal.
+    pub fn with_evidence_source(
+        mut self,
+        source: &'d dyn crate::evidence_exec::EvidenceSource<D::Id>,
+    ) -> Result<Self, EvalError> {
+        self.evidence_input = Some(crate::evidence_exec::EvidenceInput::new(
+            source,
+            &self.growth,
+            self.candidate_scope
+                .and_then(crate::CandidateScope::evidence_owner)
+                .cloned(),
+        )?);
+        Ok(self)
     }
 
     /// Attach the engine's shared BGP join-order cache for this evaluation. The borrow
@@ -2693,6 +2772,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bounded_workspace: self.bounded_workspace,
             workspace: self.workspace.clone(),
             growth: self.growth.clone(),
+            evidence_input: self.evidence_input.clone(),
+            native_evidence: self.native_evidence_for_child()?,
+            candidate_scope: self.candidate_scope,
+            evidence_answer: None,
+            evidence_search: None,
+            evidence_verdict: None,
+            evidence_stop: None,
             term_lookup: if self.growth.is_bounded() {
                 self.term_lookup.fork_admitted(&self.growth)?
             } else {
@@ -2734,6 +2820,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                     Ok((
                         (key.0, key.1, key.2, key.3.clone_admitted(&self.growth)?),
                         *value,
+                    ))
+                },
+            )?,
+            exists_evidence_memo: self.exists_evidence_memo.clone_entries_admitted(
+                &self.growth,
+                |key, value| {
+                    Ok((
+                        (key.0, key.1, key.2, key.3.clone_admitted(&self.growth)?),
+                        value.clone(),
                     ))
                 },
             )?,
@@ -2795,6 +2890,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // worker that evaluates a property-function call must resolve the
             // predicate IRI against the same table its parent would.
             property_functions: self.property_functions,
+            shapes: self.shapes,
+            shape_state: self.shape_state.fork(),
+            bucketed_group: None,
+            window_bgp: None,
+            ordinal_barriers: self.ordinal_barriers.fork(),
+            expanded_dictionary: self.expanded_dictionary.clone(),
             // Read-only shared registry (a `Copy` pointer), for the same reason: a
             // worker computing one group's fold through a registered custom
             // aggregate must resolve its IRI against the same table its parent
@@ -2983,6 +3084,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
+    /// Carry caller-owned physical knowledge through the existing native context.
+    #[must_use]
+    pub fn with_shapes(mut self, shapes: &'d crate::shapes::ShapeRegistry) -> Self {
+        self.shapes = shapes;
+        self
+    }
+
     /// Attach a caller-injected custom-aggregate registry for this evaluation, so
     /// an `AggregateFunction::Custom(iri)` call resolves to a registered
     /// aggregate. The borrow shares the dataset lifetime `'d`.
@@ -3044,6 +3152,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             bounded_workspace: self.bounded_workspace,
             workspace: self.workspace.clone(),
             growth: self.growth.clone(),
+            evidence_input: self.evidence_input.clone(),
+            native_evidence: self.native_evidence_for_child()?,
+            candidate_scope: self.candidate_scope,
+            evidence_answer: None,
+            evidence_search: None,
+            evidence_verdict: None,
+            evidence_stop: None,
             term_lookup: if self.growth.is_bounded() {
                 self.term_lookup.fork_admitted(&self.growth)?
             } else {
@@ -3077,6 +3192,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_inner_cache: crate::AdmittedMap::default(),
             exists_prepared_cache: crate::AdmittedMap::default(),
             exists_definition_memo: crate::AdmittedMap::default(),
+            exists_evidence_memo: crate::AdmittedMap::default(),
             xpath_regex: self.xpath_regex,
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
@@ -3112,6 +3228,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // other, so a property-function call inside it resolves against the same
             // relations the calling query sees.
             property_functions: self.property_functions,
+            shapes: self.shapes,
+            shape_state: self.shape_state.fork(),
+            bucketed_group: None,
+            window_bgp: None,
+            ordinal_barriers: crate::shapes::barrier::BarrierState::default(),
+            expanded_dictionary: None,
             // Inherited for the same reason: a function body's own `GROUP BY` (it is
             // SPARQL like any other) resolves a `Custom` aggregate against the same
             // registry the calling query sees.
@@ -3189,14 +3311,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ) -> Result<crate::workspace::SharedWorkspace<PreparedExists>, EvalError> {
         if self.in_substituted_exists {
             return crate::workspace::SharedWorkspace::new_admitted(
-                PreparedExists::build_admitted(pattern, &self.growth)?,
+                PreparedExists::build_with_evidence_admitted(
+                    pattern,
+                    self.may_have_evidence(),
+                    &self.growth,
+                )?,
                 &self.growth,
             );
         }
-        // A freshly bounded execution must not mutate a caller-owned plan's
-        // persistent site cache with its query account. Its per-run memo still
-        // preserves one preparation per body, and dies on every failed run.
-        if !self.growth.is_bounded()
+        // A bounded execution must not mutate a caller-owned plan's persistent
+        // cache with its query account. Evidence preparation also stays query
+        // local: a cached ordinary ENF body has only an emptiness proof. The
+        // per-run memo preserves one preparation per body and dies on failure.
+        if !self.may_have_evidence()
+            && !self.growth.is_bounded()
             && let Some(plan) = self.plan.as_ref()
             && let Some(site) = plan
                 .node_of(pattern)
@@ -3211,12 +3339,106 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Ok(existing.clone());
         }
         let built = crate::workspace::SharedWorkspace::new_admitted(
-            PreparedExists::build_admitted(pattern, &self.growth)?,
+            PreparedExists::build_with_evidence_admitted(
+                pattern,
+                self.may_have_evidence(),
+                &self.growth,
+            )?,
             &self.growth,
         )?;
         self.exists_prepared_cache
             .insert_admitted(key, built.clone(), &self.growth)?;
         Ok(built)
+    }
+
+    /// Sources and reachable native providers can declare original records.
+    /// An unused relation registry does not change ordinary query execution.
+    /// The existing numbered plan proves whole-query absence, including nested
+    /// EXISTS bodies and subqueries. Unknown plans and separately stored UDF
+    /// bodies stay conservative, as do shape providers. Row operators still
+    /// inspect actual attachments, independently of this preparation proof.
+    pub(crate) fn may_have_evidence(&self) -> bool {
+        self.evidence_input.is_some()
+            || (!self.property_functions.is_empty()
+                && (!self.user_functions.is_empty()
+                    || self
+                        .plan
+                        .as_ref()
+                        .is_none_or(|plan| plan.shape().has_property_functions())))
+            || !self.shapes.providers.is_empty()
+    }
+
+    pub(crate) fn evidence_owner(&self) -> Result<crate::evidence_exec::EvidenceOwner, EvalError> {
+        if let Some(input) = &self.evidence_input {
+            return Ok(input.owner.clone());
+        }
+        let mut owner = self
+            .native_evidence
+            .lock()
+            .map_err(|_| EvalError::internal("poisoned native evidence owner"))?;
+        if owner.is_none() {
+            *owner = Some(crate::evidence_exec::EvidenceOwner::new(
+                self.candidate_scope
+                    .and_then(crate::CandidateScope::evidence_owner)
+                    .cloned(),
+                &self.growth,
+            )?);
+        }
+        Ok(owner.as_ref().expect("native owner admitted above").clone())
+    }
+
+    fn native_evidence_for_child(
+        &self,
+    ) -> Result<std::sync::Mutex<Option<crate::evidence_exec::EvidenceOwner>>, EvalError> {
+        // Admit the shared control before a child can create its first record.
+        // An explicit source already shares that control through EvidenceInput.
+        let owner = if self.evidence_input.is_some() {
+            None
+        } else if self.may_have_evidence() {
+            Some(self.evidence_owner()?)
+        } else {
+            self.native_evidence
+                .lock()
+                .map_err(|_| EvalError::internal("poisoned native evidence owner"))?
+                .clone()
+        };
+        Ok(std::sync::Mutex::new(owner))
+    }
+
+    pub(crate) fn bind_native_evidence(
+        &self,
+        row: &crate::RowEvidence,
+    ) -> Result<crate::RowEvidence, EvalError> {
+        if row.is_virtual() {
+            return Ok(row.clone());
+        }
+        self.evidence_owner()?
+            .bind_native_evidence(row, &self.growth)
+    }
+
+    pub(crate) fn negative_evidence(
+        &self,
+        row: &crate::RowEvidence,
+    ) -> Result<crate::RowEvidence, EvalError> {
+        match &self.evidence_input {
+            Some(input) => input.negative_evidence(row, self.active_graph, &self.growth),
+            None => row.native_negative(|| self.evidence_owner()?.query_owner(&self.growth)),
+        }
+    }
+
+    pub(crate) fn existential_evidence<'r>(
+        &self,
+        witnesses: impl IntoIterator<Item = &'r crate::RowEvidence>,
+        search: &crate::RowEvidence,
+    ) -> Result<crate::RowEvidence, EvalError> {
+        match &self.evidence_input {
+            Some(input) => {
+                input.existential_evidence(witnesses, search, self.active_graph, &self.growth)
+            }
+            None => crate::RowEvidence::native_existential(witnesses, search, || {
+                self.evidence_owner()?.query_owner(&self.growth)
+            }),
+        }
     }
 }
 
@@ -3382,12 +3604,49 @@ pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
     if let Some(error) = ctx.dataset.read_error() {
         return Err(EvalError::source_read(error));
     }
-    let evaluated = eval_evaluated_inner_with(pattern, ctx, evaluate);
+    let tracking_search = ctx.may_have_evidence();
+    if tracking_search {
+        ctx.evidence_search
+            .get_or_insert_with(|| crate::AdmittedVec::new(&ctx.growth))
+            .push(crate::evidence_exec::RowEvidence::default())?;
+    }
+    let mut evaluated = eval_evaluated_inner_with(pattern, ctx, evaluate);
+    let search = if tracking_search {
+        ctx.evidence_search
+            .as_mut()
+            .and_then(crate::AdmittedVec::pop)
+    } else {
+        None
+    };
     if local_cap {
         ctx.cap_pushdown = None;
     }
     if let Some(error) = ctx.dataset.read_error() {
         return Err(EvalError::source_read(error));
+    }
+    if tracking_search {
+        let search = search
+            .ok_or_else(|| EvalError::internal("original evidence search frame disappeared"))?;
+        if let Ok(outcome) = &mut evaluated {
+            let search = outcome.rows().rows.search_evidence().combine(
+                &search,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+            outcome
+                .rows_mut()
+                .rows
+                .retain_search_evidence(search.clone());
+            if let Some(parent) = ctx
+                .evidence_search
+                .as_mut()
+                .and_then(|frames| frames.as_mut_slice().last_mut())
+            {
+                *parent = parent.combine(
+                    &search,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?;
+            }
+        }
     }
     evaluated
 }
@@ -3778,6 +4037,64 @@ pub(crate) fn eval_yielding<D: DatasetView + Sync>(
     })
 }
 
+/// Execute the original answer pattern with its exact verdict as the consumer.
+/// The final modifier-wrapped pattern, rather than an inner scan, owns the stop.
+pub(crate) fn eval_answer_pattern<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    use crate::evidence_exec::{StatusFailure, observe_answer_rows, with_native_answer};
+    let Some(request) = ctx.evidence_verdict.take() else {
+        return eval_evaluated(pattern, ctx);
+    };
+    let request = ctx
+        .evidence_input
+        .as_ref()
+        .ok_or_else(|| EvalError::internal("verdict lost its original evidence source"))?
+        .answer_request(request)?;
+    let workspace = ctx.growth.clone();
+    with_native_answer(request, &workspace, |answer| {
+        if let Some(verdict) = answer.witness_stop() {
+            ctx.evidence_stop = Some(verdict);
+            let rows = SolutionSeq::empty(
+                syntactic_schema_admitted(pattern, &ctx.growth)
+                    .map_err(StatusFailure::Evaluation)?,
+            );
+            return Ok(Evaluated::Complete(rows));
+        }
+        let mut stopped = None;
+        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+            let observed = (|| {
+                if let Some(search) = ctx
+                    .evidence_search
+                    .as_ref()
+                    .and_then(|frames| frames.last())
+                {
+                    search
+                        .with_record(|record| {
+                            answer.observe_search(record, search.permits_closed_absence())
+                        })
+                        .map_err(StatusFailure::Evaluation)?
+                        .map_err(StatusFailure::Answer)?;
+                }
+                observe_answer_rows(answer, rows)
+            })();
+            observed.map_err(|error| crate::evidence_exec::answer_failure(error, &ctx.growth))?;
+            stopped = answer.witness_stop();
+            Ok(if stopped.is_some() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            })
+        };
+        let evaluated = eval_yielding(pattern, &mut RowConsumer::new(&mut consume), ctx)
+            .map_err(StatusFailure::Evaluation)?;
+        drop(consume);
+        ctx.evidence_stop = stopped;
+        Ok(evaluated)
+    })
+}
+
 /// Keep contextual dispatch out of the recursive admission frame, just as the
 /// native dispatcher does. Both boundaries instantiate the same match below.
 #[inline(never)]
@@ -3844,6 +4161,24 @@ fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
     mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    if let Some(seq) = ctx
+        .expanded_dictionary
+        .as_ref()
+        .and_then(|materialized| materialized.get(pattern))
+        .cloned()
+    {
+        let evaluated = Evaluated::Complete(seq);
+        if M::ACTIVE {
+            deliver_evaluated(&evaluated, delivery, ctx)?;
+        }
+        return Ok(evaluated);
+    }
+    if let Some(evaluated) = crate::shapes::eval_shape(pattern, ctx)? {
+        if M::ACTIVE {
+            deliver_evaluated(&evaluated, delivery, ctx)?;
+        }
+        return Ok(evaluated);
+    }
     if !M::ACTIVE {
         return dispatch_node(pattern, &mut delivery, ctx);
     }
@@ -3867,6 +4202,15 @@ fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
         deliver_evaluated(&evaluated, delivery, ctx)?;
     }
     Ok(evaluated)
+}
+
+/// Literal root dispatch for a physical runtime input. Child nodes still use
+/// the original numbered native funnel; this root is not charged/selected twice.
+pub(crate) fn eval_literal_node<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    dispatch_node(pattern, &mut (), ctx)
 }
 
 // Inline the one bare match directly into the mode boundary. A captured
@@ -4005,6 +4349,11 @@ pub(crate) fn deliver_evaluated<D: DatasetView + Sync, M: RowDelivery<D>>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
     let seq = evaluated.rows();
+    if seq.is_empty() {
+        // An empty invocation still owns its reached search scope. Deliver that
+        // boundary without fabricating an identity row or evaluating a suffix.
+        return delivery.deliver(seq, ctx);
+    }
     for row in &seq.rows {
         if delivery.stopped() {
             break;
@@ -4355,17 +4704,15 @@ pub fn eval<D: DatasetView + Sync>(
     let previous_plan = ctx.plan.take();
     ctx.install_plan(&tree);
     let result = (|| {
-        let rows = eval_evaluated(pattern, ctx)?
-            .into_complete()
-            .map_err(|truncation| {
-                EvalError::internal(format!(
-                    "a governor tripped on an evaluation entry point that can only return a \
+        let rows = eval_evaluated(pattern, ctx)?.into_complete(|truncation| {
+            EvalError::internal(format!(
+                "a governor tripped on an evaluation entry point that can only return a \
                  complete bag; run a bounding governor configuration through \
                  `NativeSparqlEngine::query_governed`, which returns the certified partial \
                  answers: {}",
-                    truncation.describe()
-                ))
-            })?;
+                truncation.describe()
+            ))
+        })?;
         let rows = match source_schema.as_ref() {
             Some(schema) => rows.reorder_like_admitted(schema, &ctx.growth)?,
             None => rows,
@@ -4739,7 +5086,7 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
         // pattern's variables; a caller-built one need not, so a shared blank's column
         // (see `crate::blank_scope`) is dropped from the answer here either way.
         Query::Select { pattern, .. } => {
-            match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {
+            match commit_answer_rows(eval_answer_pattern(pattern, ctx)?, ctx) {
                 Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(
                     crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?,
                 ))),
@@ -4754,10 +5101,21 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
                 }),
             }
         }
-        Query::Ask { pattern, .. } => match eval_evaluated(pattern, ctx)? {
-            Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Boolean(
-                !seq.is_empty(),
-            ))),
+        Query::Ask { pattern, .. } => match eval_answer_pattern(pattern, ctx)? {
+            Evaluated::Complete(seq) => {
+                let tracked = ctx.may_have_evidence()
+                    || seq.rows.may_have_evidence_attachment()
+                    || !seq.rows.search_evidence().is_virtual();
+                let supported = if tracked {
+                    seq.rows.iter().any(|row| !row.evidence().is_undecided())
+                } else {
+                    !seq.is_empty()
+                };
+                if tracked {
+                    ctx.evidence_answer = Some(seq);
+                }
+                Ok(EvaluatedOutcome::Complete(Outcome::Boolean(supported)))
+            }
             Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
                 // A non-empty certain lower bound settles the semantic value `true`, but
                 // the execution still stopped operationally. Keep the typed exhaustion
@@ -4993,6 +5351,88 @@ mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::{Child, NamedNode};
+
+    #[test]
+    fn native_evidence_owner_is_lazy_and_shared_before_workers_create_records() {
+        use purrdf_core::evidence::{EvidenceCombination, SearchCompleteness};
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let ordinary = EvalCtx::new(&dataset);
+        let ordinary_worker = ordinary.fork_for_worker().unwrap();
+        assert!(ordinary.native_evidence.lock().unwrap().is_none());
+        assert!(ordinary_worker.native_evidence.lock().unwrap().is_none());
+        let mut relations = crate::PropertyFunctionRegistry::default();
+        relations.register(
+            "http://example.org/unused-relation",
+            Arc::new(crate::property_fn::MemoryRelation::new(1, 1, Vec::new()).unwrap()),
+        );
+        let pattern = GraphPattern::empty_bgp();
+        let tree = crate::plan::Tree::build(&pattern);
+        let mut unused = EvalCtx::new(&dataset).with_property_functions(&relations);
+        unused.install_plan(&tree);
+        assert!(!unused.may_have_evidence());
+        let unused_worker = unused.fork_for_worker().unwrap();
+        assert!(!unused_worker.may_have_evidence());
+        assert!(unused.native_evidence.lock().unwrap().is_none());
+        assert!(unused_worker.native_evidence.lock().unwrap().is_none());
+        let context = EvalCtx::new(&dataset).with_property_functions(&relations);
+        let virtual_row = crate::RowEvidence::default();
+        assert!(
+            context
+                .existential_evidence([&virtual_row], &virtual_row)
+                .unwrap()
+                .is_virtual()
+        );
+        assert!(context.native_evidence.lock().unwrap().is_none());
+        let first_worker = context.fork_for_worker().unwrap();
+        let second_worker = context.fork_for_worker().unwrap();
+        let function = context.child_for_user_fn().unwrap().unwrap();
+        assert!(
+            context
+                .evidence_owner()
+                .unwrap()
+                .retained_owner(&context.growth)
+                .unwrap()
+                .is_none(),
+            "forks share only the admitted control until a real record is needed"
+        );
+        let first = first_worker.existential_evidence([], &virtual_row).unwrap();
+        for child in [&context, &second_worker, &function] {
+            let next = child.existential_evidence([], &virtual_row).unwrap();
+            first
+                .combine(&next, EvidenceCombination::Alternatives)
+                .unwrap();
+            let negative = child.negative_evidence(&virtual_row).unwrap();
+            first
+                .combine(&negative, EvidenceCombination::Conjunction)
+                .unwrap();
+        }
+        let foreign = crate::QueryEvidence::new(&context.growth).unwrap();
+        let original = foreign
+            .with_completeness(&virtual_row, SearchCompleteness::Undetermined, None)
+            .unwrap();
+        assert!(
+            first
+                .combine(&original, EvidenceCombination::Conjunction)
+                .is_err()
+        );
+        let admitted = context.bind_native_evidence(&original).unwrap();
+        assert_eq!(
+            first
+                .combine(&admitted, EvidenceCombination::Conjunction)
+                .unwrap()
+                .with_record(purrdf_core::evidence::EvidenceRecord::completeness)
+                .unwrap(),
+            SearchCompleteness::Undetermined
+        );
+        let other_query = EvalCtx::new(&dataset).with_property_functions(&relations);
+        let other = other_query.existential_evidence([], &virtual_row).unwrap();
+        assert!(
+            first
+                .combine(&other, EvidenceCombination::Alternatives)
+                .is_err()
+        );
+    }
 
     #[test]
     fn native_term_lookup_retains_known_ids_absence_and_shared_fork_state() {

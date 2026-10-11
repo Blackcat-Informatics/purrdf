@@ -505,6 +505,53 @@ mod tests {
         assert_eq!(normalized, left, "LeftJoin must erase to its left operand");
     }
 
+    #[test]
+    fn preserved_exists_maps_optional_nodes_and_the_synthetic_witness_wrapper() {
+        let original = GraphPattern::LeftJoin {
+            left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+            right: Child::new(bgp("x", "q", "y")),
+            expression: None,
+        };
+        let prepared = crate::eval::PreparedExists::build_with_evidence_admitted(
+            &original,
+            true,
+            &crate::WorkspaceCapability::resident(),
+        )
+        .expect("preserved OPTIONAL has its own structural source map");
+        let crate::eval::PreparedExists::Pattern {
+            normalized,
+            witness_wrapped,
+            ledger_source,
+            ..
+        } = prepared
+        else {
+            panic!("preserved evidence must not fold away OPTIONAL");
+        };
+        assert_eq!(normalized.as_ref(), &original);
+        let GraphPattern::Slice { inner, .. } = witness_wrapped.as_ref() else {
+            panic!("first-witness wrapper");
+        };
+        assert_eq!(&**inner, &original);
+        let source = std::ptr::from_ref(&original) as usize;
+        for pattern in [normalized.as_ref(), &**inner] {
+            let mapped = ledger_source
+                .get(&(std::ptr::from_ref(pattern) as usize))
+                .expect("the original OPTIONAL root is mapped");
+            assert_eq!(mapped.source, source);
+            assert!(mapped.counts_rows);
+        }
+        let wrapper = ledger_source
+            .get(&(std::ptr::from_ref(witness_wrapped.as_ref()) as usize))
+            .expect("the synthetic wrapper has the original root identity");
+        assert_eq!(wrapper.source, source);
+        assert!(!wrapper.counts_rows);
+        assert_eq!(
+            ledger_source.len(),
+            7,
+            "both complete three-node copies and wrapper"
+        );
+    }
+
     /// Law 2: `ORDER BY` at the top of an `EXISTS` inner erases entirely — sorting
     /// never changes whether a bag is empty.
     #[test]

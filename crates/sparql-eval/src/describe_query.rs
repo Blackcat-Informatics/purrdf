@@ -23,7 +23,7 @@ use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
 use crate::construct::ConstructedGraph;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
+use crate::eval::EvalCtx;
 use crate::governor::lift::Evaluated;
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -64,35 +64,40 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
         }
     }
     let describe_all = targets.is_empty();
-    let (certificate, where_rows) = if describe_all || !var_targets.is_empty() {
-        let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
-            Evaluated::Complete(seq) => (seq, None),
-            Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
-        };
-        for (column, variable) in seq.schema.vars().iter().enumerate() {
-            if (!describe_all && !var_targets.contains(&variable.as_str()))
-                || (describe_all && crate::blank_scope::is_joined_blank(variable))
-            {
-                continue;
-            }
-            for row in &seq.rows {
-                let Some(Some(term)) = row.get(column) else {
+    let (certificate, where_rows) =
+        if describe_all || !var_targets.is_empty() || ctx.may_have_evidence() {
+            let (seq, certificate) = match crate::eval::eval_answer_pattern(pattern, ctx)? {
+                Evaluated::Complete(seq) => (seq, None),
+                Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
+            };
+            for (column, variable) in seq.schema.vars().iter().enumerate() {
+                if (!describe_all && !var_targets.contains(&variable.as_str()))
+                    || (describe_all && crate::blank_scope::is_joined_blank(variable))
+                {
                     continue;
-                };
-                let value =
-                    ctx.scratch
-                        .try_owned_value_of(ctx.dataset, *term, &ctx.growth, |error| {
-                            ctx.workspace.source_error(error)
-                        })?;
-                if matches!(&*value, TermValue::Iri(_)) {
-                    subjects.push(Subject::Resolved(value))?;
+                }
+                for row in &seq.rows {
+                    if row.evidence().is_undecided() {
+                        continue;
+                    }
+                    let Some(Some(term)) = row.get(column) else {
+                        continue;
+                    };
+                    let value = ctx.scratch.try_owned_value_of(
+                        ctx.dataset,
+                        *term,
+                        &ctx.growth,
+                        |error| ctx.workspace.source_error(error),
+                    )?;
+                    if matches!(&*value, TermValue::Iri(_)) {
+                        subjects.push(Subject::Resolved(value))?;
+                    }
                 }
             }
-        }
-        (certificate, seq)
-    } else {
-        (None, SolutionSeq::empty(VarSchema::empty_shared()))
-    };
+            (certificate, seq)
+        } else {
+            (None, SolutionSeq::empty(VarSchema::empty_shared()))
+        };
     subjects
         .as_mut_slice()
         .sort_unstable_by(|left, right| left.iri().cmp(right.iri()));
@@ -134,7 +139,14 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
         }
     };
     let graph = frame.finish_dataset(&mut Some(graph))?;
-    crate::construct::commit_answer_triples(graph, certificate, &where_rows, ctx)
+    let result = crate::construct::commit_answer_triples(graph, certificate, &where_rows, ctx)?;
+    if ctx.evidence_input.is_some()
+        || where_rows.rows.may_have_evidence_attachment()
+        || !where_rows.rows.search_evidence().is_virtual()
+    {
+        ctx.evidence_answer = Some(where_rows);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

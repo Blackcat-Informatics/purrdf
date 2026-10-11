@@ -48,12 +48,12 @@
 //! exists.
 
 use core::fmt::Write as _;
-use purrdf_core::TermBox;
-use std::collections::BTreeMap;
 
 use purrdf_core::terminals;
 use purrdf_core::{RdfTextDirection, TermValue};
 use purrdf_lex::term_syntax;
+use purrdf_lex::text_out::TextOut;
+use purrdf_sparql_eval::{EvalError, NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability};
 
 use crate::fusion_stream::{CounterReading, StratumResolution};
 use crate::iri::Iri;
@@ -101,14 +101,10 @@ impl std::fmt::Display for RenderError {
                 "blank node _:{label} is a non-distinguished variable in a property-function \
          argument position, so it has no ground constant form"
             ),
-            Self::DirectionWithoutLanguage { lexical_form } => write!(
-                f,
-                "literal {lexical_form:?} carries a base direction with no language tag, \
-         which no concrete syntax can spell"
-            ),
-            Self::MalformedLanguageTag { tag } => {
-                write!(f, "language tag {tag:?} is not a well-formed LANGTAG")
+            Self::DirectionWithoutLanguage { lexical_form } => {
+                LiteralProblem::Direction(lexical_form).fmt(f)
             }
+            Self::MalformedLanguageTag { tag } => LiteralProblem::Language(tag).fmt(f),
         }
     }
 }
@@ -224,11 +220,74 @@ fn lexical_size_hint(value: &TermValue) -> usize {
 ///
 /// A literal with a base direction and no language tag, or with a tag that is not
 /// a `LANGTAG`: see [`write_candidate`].
+#[cfg(test)]
 pub(crate) fn candidate_lexical(value: &TermValue) -> Result<String, RenderError> {
     // Sized up front: this runs once per row every stratum emits.
     let mut out = String::with_capacity(lexical_size_hint(value));
     write_candidate(value, &mut out)?;
     Ok(out)
+}
+
+/// Construct result identity text under the producing query's original grant.
+/// Both the nested traversal spill and every destination growth are admitted
+/// before allocation; publication retains that same buffer and admission.
+pub(crate) fn candidate_lexical_admitted(
+    value: &TermValue,
+    workspace: &WorkspaceCapability,
+) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+    workspace.authored_text_with(|memory| {
+        let mut out = String::new();
+        value
+            .try_write_nested_with_memory(
+                &mut out,
+                ["<<( ", " ", " )>>"],
+                |out, leaf, memory| {
+                    if let TermValue::Blank { label, .. } = leaf {
+                        memory
+                            .push_str(out, "_:")
+                            .and_then(|()| memory.push_str(out, label))
+                            .map_err(|error| {
+                                workspace.storage_error(error, "candidate blank label")
+                            })?;
+                        return Ok(());
+                    }
+                    if let TermValue::Literal {
+                        lexical_form,
+                        language,
+                        direction,
+                        ..
+                    } = leaf
+                        && let Some(problem) =
+                            literal_problem(lexical_form, language.as_deref(), *direction)
+                    {
+                        return Err(NativeDiagnostic::error(
+                            NativeDiagnosticKind::Data,
+                            problem,
+                            workspace,
+                        ));
+                    }
+                    memory
+                        .append_text(out, |sink| {
+                            write_leaf(sink, leaf)
+                                .expect("validated candidate leaf has a concrete spelling");
+                        })
+                        .map_err(|error| workspace.storage_error(error, "candidate lexical text"))
+                },
+                |out, text, memory| {
+                    memory.push_str(out, text).map_err(|error| {
+                        workspace.storage_error(error, "candidate triple delimiters")
+                    })
+                },
+                memory,
+            )
+            .map_err(|error| match error {
+                purrdf_core::OwnedTermFoldError::Visitor(error) => error,
+                purrdf_core::OwnedTermFoldError::Storage(error) => {
+                    workspace.storage_error(error, "candidate term traversal")
+                }
+            })?;
+        Ok(out)
+    })
 }
 
 /// Append `value`'s result-naming form to `out`, spelling blank nodes at every
@@ -247,6 +306,7 @@ pub(crate) fn candidate_lexical(value: &TermValue) -> Result<String, RenderError
 ///
 /// A triple term is spelled `<<( s p o )>>` over [`TermValue::try_write_nested`]'s
 /// work list, and the first refusal ends the write.
+#[cfg(test)]
 fn write_candidate(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
     value.try_write_nested(
         out,
@@ -282,7 +342,7 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
 }
 
 /// Append the SPARQL constant form of a term that is not a triple term to `out`.
-fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
+fn write_leaf(out: &mut (impl TextOut + ?Sized), value: &TermValue) -> Result<(), RenderError> {
     match value {
         TermValue::Iri(iri) => {
             term_syntax::write_iri(iri, out);
@@ -309,18 +369,16 @@ fn write_literal(
     datatype: &str,
     language: Option<&str>,
     direction: Option<RdfTextDirection>,
-    out: &mut String,
+    out: &mut (impl TextOut + ?Sized),
 ) -> Result<(), RenderError> {
-    if language.is_none() && direction.is_some() {
-        return Err(RenderError::DirectionWithoutLanguage {
-            lexical_form: lexical_form.to_owned(),
-        });
-    }
-    if let Some(tag) = language
-        && !is_langtag(tag)
-    {
-        return Err(RenderError::MalformedLanguageTag {
-            tag: tag.to_owned(),
+    if let Some(problem) = literal_problem(lexical_form, language, direction) {
+        return Err(match problem {
+            LiteralProblem::Direction(lexical_form) => RenderError::DirectionWithoutLanguage {
+                lexical_form: lexical_form.to_owned(),
+            },
+            LiteralProblem::Language(tag) => RenderError::MalformedLanguageTag {
+                tag: tag.to_owned(),
+            },
         });
     }
     term_syntax::write_literal(
@@ -331,6 +389,37 @@ fn write_literal(
         out,
     );
     Ok(())
+}
+
+enum LiteralProblem<'a> {
+    Direction(&'a str),
+    Language(&'a str),
+}
+
+impl core::fmt::Display for LiteralProblem<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Direction(lexical_form) => write!(
+                f,
+                "literal {lexical_form:?} carries a base direction with no language tag, which no concrete syntax can spell"
+            ),
+            Self::Language(tag) => write!(f, "language tag {tag:?} is not a well-formed LANGTAG"),
+        }
+    }
+}
+
+fn literal_problem<'a>(
+    lexical_form: &'a str,
+    language: Option<&'a str>,
+    direction: Option<RdfTextDirection>,
+) -> Option<LiteralProblem<'a>> {
+    if language.is_none() && direction.is_some() {
+        Some(LiteralProblem::Direction(lexical_form))
+    } else {
+        language
+            .filter(|tag| !is_langtag(tag))
+            .map(LiteralProblem::Language)
+    }
 }
 
 /// Whether `tag` is a `LANGTAG` body: `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.
@@ -367,28 +456,73 @@ fn is_langtag(tag: &str) -> bool {
 /// is a diagnostic, not a parser position: this is a refusal to guess, and a
 /// caller repairs its own codec rather than reading a column number.
 pub(crate) fn decode_term(text: &str) -> Result<TermValue, String> {
-    let mut cursor = Cursor::new(text);
-    let value = cursor.term()?;
-    cursor.skip_whitespace();
-    if !cursor.at_end() {
-        return Err(format!(
-            "trailing text after the term at byte {}",
-            cursor.position
-        ));
-    }
-    Ok(value)
+    decode_term_admitted(text, &WorkspaceCapability::resident())
+        .map(|value| {
+            value
+                .into_resident()
+                .expect("resident decoder has no bounded account")
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Decode with admission preceding every lexical, traversal and box allocation.
+pub(crate) fn decode_term_admitted(
+    text: &str,
+    workspace: &WorkspaceCapability,
+) -> Result<purrdf_sparql_eval::WorkspaceTerm, EvalError> {
+    workspace.authored_term_with(|memory| {
+        let mut cursor = Cursor::new(text, memory, workspace);
+        let value = cursor.term()?;
+        cursor.skip_whitespace();
+        if !cursor.at_end() {
+            return Err(cursor.error(format_args!(
+                "trailing text after the term at byte {}",
+                cursor.position
+            )));
+        }
+        Ok(value)
+    })
 }
 
 /// A byte cursor over one canonical term lexical.
-struct Cursor<'a> {
+struct Cursor<'a, 'm, 'g> {
     text: &'a str,
     position: usize,
+    memory: &'m mut purrdf_lex::allocation::Memory<'g, dyn purrdf_lex::allocation::Admission>,
+    workspace: &'a WorkspaceCapability,
 }
 
-impl<'a> Cursor<'a> {
+impl<'a, 'm, 'g> Cursor<'a, 'm, 'g> {
     /// A cursor at the start of `text`.
-    const fn new(text: &'a str) -> Self {
-        Self { text, position: 0 }
+    fn new(
+        text: &'a str,
+        memory: &'m mut purrdf_lex::allocation::Memory<'g, dyn purrdf_lex::allocation::Admission>,
+        workspace: &'a WorkspaceCapability,
+    ) -> Self {
+        Self {
+            text,
+            position: 0,
+            memory,
+            workspace,
+        }
+    }
+
+    fn error(&self, message: impl core::fmt::Display) -> EvalError {
+        NativeDiagnostic::error(NativeDiagnosticKind::Data, message, self.workspace)
+    }
+    fn storage(&self, error: purrdf_lex::allocation::StorageError) -> EvalError {
+        self.workspace
+            .storage_error(error, "canonical candidate decoder")
+    }
+    fn push(&mut self, out: &mut String, ch: char) -> Result<(), EvalError> {
+        self.memory
+            .push_char(out, ch)
+            .map_err(|error| self.storage(error))
+    }
+    fn owned(&mut self, text: &str) -> Result<String, EvalError> {
+        self.memory
+            .string(text)
+            .map_err(|error| self.storage(error))
     }
 
     /// The text the cursor has not consumed.
@@ -442,51 +576,69 @@ impl<'a> Cursor<'a> {
     /// yet closed, each holding the components decoded so far: `<<(` opens one, a
     /// finished term becomes the next component of the innermost open one, and its
     /// third component is followed by the `)>>` that closes it.
-    fn term(&mut self) -> Result<TermValue, String> {
-        let mut open: Vec<Vec<TermValue>> = Vec::new();
+    fn term(&mut self) -> Result<TermValue, EvalError> {
+        let mut open: Vec<[Option<TermValue>; 3]> = Vec::new();
         loop {
             self.skip_whitespace();
             if self.eat("<<(") {
-                open.push(Vec::with_capacity(3));
+                self.memory
+                    .push(&mut open, [None, None, None])
+                    .map_err(|error| self.storage(error))?;
                 continue;
             }
             let mut term = self.leaf_term()?;
             loop {
                 let Some(components) = open.last_mut() else {
+                    self.memory
+                        .release_vec(open)
+                        .map_err(|error| self.storage(error))?;
                     return Ok(term);
                 };
-                components.push(term);
-                if components.len() < 3 {
+                let slot = components
+                    .iter()
+                    .position(Option::is_none)
+                    .expect("an open triple has a free component");
+                components[slot] = Some(term);
+                if slot < 2 {
                     break;
                 }
                 self.skip_whitespace();
                 if !self.eat(")>>") {
-                    return Err(format!(
+                    return Err(self.error(format_args!(
                         "unterminated triple term: expected `)>>` at byte {}",
                         self.position
-                    ));
+                    )));
                 }
-                let [subject, predicate, object] = <[TermValue; 3]>::try_from(
-                    open.pop().expect("the innermost triple term is open"),
-                )
-                .unwrap_or_else(|_| unreachable!("a triple term closes after three components"));
+                let [subject, predicate, object] =
+                    open.pop().expect("the innermost triple term is open");
                 term = TermValue::Triple {
-                    s: TermBox::new(subject),
-                    p: TermBox::new(predicate),
-                    o: TermBox::new(object),
+                    s: self
+                        .memory
+                        .boxed(subject.expect("complete subject"))
+                        .map_err(|error| self.storage(error))?
+                        .into(),
+                    p: self
+                        .memory
+                        .boxed(predicate.expect("complete predicate"))
+                        .map_err(|error| self.storage(error))?
+                        .into(),
+                    o: self
+                        .memory
+                        .boxed(object.expect("complete object"))
+                        .map_err(|error| self.storage(error))?
+                        .into(),
                 };
             }
         }
     }
 
     /// Decode one term at the cursor that does not open a triple term.
-    fn leaf_term(&mut self) -> Result<TermValue, String> {
+    fn leaf_term(&mut self) -> Result<TermValue, EvalError> {
         if self.rest().starts_with("<<") {
-            return Err(
+            return Err(self.error(
                 "a reifying triple `<< s p o >>` is not a term value; a triple term \
-                 is spelled `<<( s p o )>>`"
-                    .to_owned(),
-            );
+                 is spelled `<<( s p o )>>`",
+            ));
         }
         if self.rest().starts_with('<') {
             return self.iri().map(TermValue::Iri);
@@ -497,41 +649,45 @@ impl<'a> Cursor<'a> {
         if self.rest().starts_with('"') {
             return self.literal();
         }
-        Err(format!(
+        Err(self.error(format_args!(
             "expected a canonical term (`<iri>`, `_:label`, `\"literal\"` or \
              `<<( s p o )>>`) at byte {}",
             self.position
-        ))
+        )))
     }
 
     /// Decode `<…>`, resolving `UCHAR` escapes. The opening `<` is consumed here, so a
     /// datatype position after `^^` that holds anything else — or nothing, at the end
     /// of the text — is refused rather than stepped over.
-    fn iri(&mut self) -> Result<String, String> {
+    fn iri(&mut self) -> Result<String, EvalError> {
         if !self.eat("<") {
-            return Err(format!("expected an IRI `<…>` at byte {}", self.position));
+            return Err(self.error(format_args!(
+                "expected an IRI `<…>` at byte {}",
+                self.position
+            )));
         }
         let mut out = String::new();
         loop {
             let Some(ch) = self.rest().chars().next() else {
-                return Err("unterminated IRI: no closing `>`".to_owned());
+                return Err(self.error("unterminated IRI: no closing `>`"));
             };
             if ch == '>' {
                 self.position += 1;
                 return Ok(out);
             }
             if ch == '\\' {
-                out.push(self.uchar()?);
+                let ch = self.uchar()?;
+                self.push(&mut out, ch)?;
                 continue;
             }
             if ch == '<' {
-                return Err(format!(
+                return Err(self.error(format_args!(
                     "unescaped `<` inside an IRI at byte {}",
                     self.position
-                ));
+                )));
             }
             self.position += ch.len_utf8();
-            out.push(ch);
+            self.push(&mut out, ch)?;
         }
     }
 
@@ -542,42 +698,43 @@ impl<'a> Cursor<'a> {
     /// N-Triples `BLANK_NODE_LABEL` admits none), so one that is not `WS` — FORM
     /// FEED, VERTICAL TAB — is refused rather than absorbed into the label or
     /// taken as a separator.
-    fn blank_label(&mut self) -> Result<String, String> {
+    fn blank_label(&mut self) -> Result<String, EvalError> {
         let start = self.position;
         while let Some(ch) = self.rest().chars().next() {
             if terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
                 break;
             }
             if ch.is_ascii_control() {
-                return Err(format!(
+                return Err(self.error(format_args!(
                     "control character U+{:04X} in a blank-node label at byte {}",
                     u32::from(ch),
                     self.position
-                ));
+                )));
             }
             self.position += ch.len_utf8();
         }
-        Ok(self.text[start..self.position].to_owned())
+        self.owned(&self.text[start..self.position])
     }
 
     /// Decode `"…"` with its optional tag, direction or datatype.
-    fn literal(&mut self) -> Result<TermValue, String> {
+    fn literal(&mut self) -> Result<TermValue, EvalError> {
         self.position += 1;
         let mut lexical_form = String::new();
         loop {
             let Some(ch) = self.rest().chars().next() else {
-                return Err("unterminated literal: no closing `\"`".to_owned());
+                return Err(self.error("unterminated literal: no closing `\"`"));
             };
             if ch == '"' {
                 self.position += 1;
                 break;
             }
             if ch == '\\' {
-                lexical_form.push(self.echar()?);
+                let ch = self.echar()?;
+                self.push(&mut lexical_form, ch)?;
                 continue;
             }
             self.position += ch.len_utf8();
-            lexical_form.push(ch);
+            self.push(&mut lexical_form, ch)?;
         }
         if self.eat("^^") {
             let datatype = self.iri()?;
@@ -592,21 +749,23 @@ impl<'a> Cursor<'a> {
             let (language, direction) = self.language_tag()?;
             return Ok(TermValue::Literal {
                 lexical_form,
-                datatype: purrdf_core::vocab::language_datatype_iri(direction.is_some()).to_owned(),
+                datatype: self.owned(purrdf_core::vocab::language_datatype_iri(
+                    direction.is_some(),
+                ))?,
                 language: Some(language),
                 direction,
             });
         }
         Ok(TermValue::Literal {
             lexical_form,
-            datatype: XSD_STRING.to_owned(),
+            datatype: self.owned(XSD_STRING)?,
             language: None,
             direction: None,
         })
     }
 
     /// Read a language tag and its optional `--ltr` / `--rtl` base direction.
-    fn language_tag(&mut self) -> Result<(String, Option<RdfTextDirection>), String> {
+    fn language_tag(&mut self) -> Result<(String, Option<RdfTextDirection>), EvalError> {
         let start = self.position;
         while let Some(ch) = self.rest().chars().next() {
             if ch.is_ascii_alphanumeric() || ch == '-' {
@@ -620,21 +779,21 @@ impl<'a> Cursor<'a> {
             Some((tag, token)) => match RdfTextDirection::from_str_token(token) {
                 Some(direction) => (tag, Some(direction)),
                 None => {
-                    return Err(format!(
+                    return Err(self.error(format_args!(
                         "invalid base direction `--{token}`: it must be exactly `ltr` or `rtl`"
-                    ));
+                    )));
                 }
             },
             None => (raw, None),
         };
         if !is_langtag(tag) {
-            return Err(format!("{tag:?} is not a well-formed LANGTAG"));
+            return Err(self.error(format_args!("{tag:?} is not a well-formed LANGTAG")));
         }
-        Ok((tag.to_owned(), direction))
+        Ok((self.owned(tag)?, direction))
     }
 
     /// Resolve one `\…` escape inside a literal: an `ECHAR` or a `UCHAR`.
-    fn echar(&mut self) -> Result<char, String> {
+    fn echar(&mut self) -> Result<char, EvalError> {
         let escape = self.rest().as_bytes().get(1).copied();
         if let Some(resolved) = escape.and_then(terminals::echar_value) {
             self.position += 2;
@@ -644,26 +803,22 @@ impl<'a> Cursor<'a> {
     }
 
     /// Resolve one `\uXXXX` / `\UXXXXXXXX` escape.
-    fn uchar(&mut self) -> Result<char, String> {
+    fn uchar(&mut self) -> Result<char, EvalError> {
         let (resolved, width) =
             terminals::decode_uchar(self.rest().as_bytes()).map_err(|defect| match defect {
-                terminals::UcharError::NotAnEscape => format!(
+                terminals::UcharError::NotAnEscape => self.error(format_args!(
                     "unrecognized escape at byte {}: only \\t \\b \\n \\r \\f \\\" \\' \
                      \\\\ \\uXXXX and \\UXXXXXXXX are canonical",
                     self.position
-                ),
-                terminals::UcharError::BadHex => {
-                    format!(
-                        "truncated or non-hexadecimal escape at byte {}",
-                        self.position
-                    )
-                }
-                terminals::UcharError::NotAScalar => {
-                    format!(
-                        "the escape at byte {} is not a Unicode scalar value",
-                        self.position
-                    )
-                }
+                )),
+                terminals::UcharError::BadHex => self.error(format_args!(
+                    "truncated or non-hexadecimal escape at byte {}",
+                    self.position
+                )),
+                terminals::UcharError::NotAScalar => self.error(format_args!(
+                    "the escape at byte {} is not a Unicode scalar value",
+                    self.position
+                )),
             })?;
         self.position += width;
         Ok(resolved)
@@ -703,7 +858,9 @@ impl<'a> Cursor<'a> {
 /// materialised read behind it. Neither is spelled as a digit, because a
 /// saturation and an absence are not measurements and a caller that parsed them
 /// as one would be reading a number nobody took.
-pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> String {
+pub fn observed_resolution(
+    resolution: &purrdf_sparql_eval::AdmittedOrderedMap<Iri, StratumResolution>,
+) -> String {
     let mut out = String::new();
     for (stratum, measured) in resolution {
         write!(out, "{stratum}").expect("writing to a String cannot fail");
@@ -1018,11 +1175,14 @@ mod tests {
     #[test]
     fn the_rendering_is_the_counters_and_nothing_else() {
         let stratum = crate::Iri::parse("http://example.org/stratum/text").expect("valid");
-        let mut map = std::collections::BTreeMap::new();
+        let mut map = purrdf_sparql_eval::AdmittedOrderedMap::new(
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        );
         map.insert(
             stratum,
             resolution(crate::MonotoneDepth::SeparatesBeyondAnyPlan, None),
-        );
+        )
+        .expect("resident resolution fixture storage");
         let text = super::observed_resolution(&map);
         assert_eq!(
             text,
@@ -1081,7 +1241,9 @@ mod term_walk_tests {
         }
     }
 
-    fn reference_decode(cursor: &mut Cursor<'_>) -> Result<TermValue, String> {
+    fn reference_decode(
+        cursor: &mut Cursor<'_, '_, '_>,
+    ) -> Result<TermValue, purrdf_sparql_eval::EvalError> {
         cursor.skip_whitespace();
         if !cursor.eat("<<(") {
             return cursor.term();
@@ -1091,10 +1253,10 @@ mod term_walk_tests {
         let object = reference_decode(cursor)?;
         cursor.skip_whitespace();
         if !cursor.eat(")>>") {
-            return Err(format!(
+            return Err(cursor.error(format_args!(
                 "unterminated triple term: expected `)>>` at byte {}",
                 cursor.position
-            ));
+            )));
         }
         Ok(TermValue::Triple {
             s: TermBox::new(subject),
@@ -1147,8 +1309,17 @@ mod term_walk_tests {
                 .nth(text.chars().count() / 2)
                 .map_or(0, |(i, _)| i)];
             for input in [text.as_str(), cut] {
-                let found = Cursor::new(input).term();
-                let mut cursor = Cursor::new(input);
+                let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+                let mut first = purrdf_lex::allocation::Resident;
+                let mut second = purrdf_lex::allocation::Resident;
+                let mut first_memory = purrdf_lex::allocation::Memory::new(
+                    &mut first as &mut dyn purrdf_lex::allocation::Admission,
+                );
+                let mut second_memory = purrdf_lex::allocation::Memory::new(
+                    &mut second as &mut dyn purrdf_lex::allocation::Admission,
+                );
+                let found = Cursor::new(input, &mut first_memory, &workspace).term();
+                let mut cursor = Cursor::new(input, &mut second_memory, &workspace);
                 let expected = reference_decode(&mut cursor);
                 assert_eq!(found, expected, "seed {seed}: {input}");
                 decoded += usize::from(found.is_ok());

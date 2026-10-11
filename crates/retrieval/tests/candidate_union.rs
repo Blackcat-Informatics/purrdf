@@ -7,7 +7,7 @@ mod common;
 #[path = "support/registry.rs"]
 mod registry;
 
-use purrdf_core::{FastMap, TermValue, datatype::XSD_INTEGER};
+use purrdf_core::{TermValue, datatype::XSD_INTEGER};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDepths, CandidateExecutionResult, CandidatePlan,
     CandidatePlanError, DuplicatePolicy, IndexGeneration, Iri, OrderFidelity, PfAttestation,
@@ -112,7 +112,11 @@ fn independent_depths_compile_and_run_identical_prefixes_under_both_schedules() 
         assert!(result.completed_prefix);
         assert_eq!(result.candidates.len(), 3);
         assert_eq!(
-            result.candidates[&Term::new("<http://example.org/b>")].ranks,
+            result.candidates[&Term::new("<http://example.org/b>")]
+                .ranks
+                .iter()
+                .map(|(stratum, ranks)| (stratum.clone(), ranks.as_slice().to_vec()))
+                .collect::<BTreeMap<_, _>>(),
             BTreeMap::from([(iri("lexical"), vec![2]), (iri("vector"), vec![1])])
         );
         assert!(
@@ -302,21 +306,42 @@ fn assembled(
     let plan_id = PlanId::from_canonical(b"caller-scripted-candidate-prefix");
     (
         CandidateExecutionResult {
-            streams: vec![ReadStratum {
-                stratum: stratum.clone(),
-                plan_id,
-                requested_depth: 3,
-                contract: contract.clone(),
-                attestation: PfAttestation::UNDECLARED,
-                stream: purrdf_retrieval::RankedStreamImpl::new(rows, ending),
-            }],
-            statuses: FastMap::default(),
-            contracts: std::iter::once((stratum, contract)).collect(),
+            streams: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                [ReadStratum {
+                    admission_failure_settlement: None,
+                    stratum: stratum.clone(),
+                    plan_id,
+                    requested_depth: 3,
+                    contract: contract.clone(),
+                    attestation: PfAttestation::UNDECLARED,
+                    stream: purrdf_retrieval::RankedStreamImpl::new(rows, ending),
+                }],
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller fixture storage"),
+            statuses: purrdf_sparql_eval::AdmittedOrderedMap::new(
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            ),
+            contracts: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    std::iter::once(Ok((stratum, contract))),
+                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                )
+                .expect("caller contract arena"),
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller contract control"),
             plan_id,
             depths: depths.clone(),
-            unserved_terms: Vec::new(),
-            producer_bindings: Vec::new(),
-            producer_decisions: Vec::new(),
+            unserved_terms: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedVec::new(
+                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                ),
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller empty loss"),
+            producer_bindings: Arc::new(Vec::new()).into(),
+            producer_decisions: Arc::new(Vec::new()).into(),
         },
         depths,
     )
@@ -338,7 +363,7 @@ fn every_duplicate_rank_is_kept_and_a_unique_promise_is_refused() {
     assert!(result.completed_prefix);
     assert_eq!(result.candidates.len(), 2);
     assert_eq!(
-        result.candidates[&Term::new("a")].ranks[&iri("scripted")],
+        result.candidates[&Term::new("a")].ranks[&iri("scripted")].as_slice(),
         [1, 2]
     );
     let (execution, depths) = assembled(rows, StreamEnding::Exhausted, DuplicatePolicy::Unique);
@@ -346,9 +371,13 @@ fn every_duplicate_rank_is_kept_and_a_unique_promise_is_refused() {
     assert!(
         matches!(failure.cause, UnionError::Protocol(ProtocolError::DuplicateItem { ref item, .. }) if item == "a")
     );
-    assert!(!failure.partial.completed_prefix);
+    let partial = failure
+        .partial
+        .as_ref()
+        .expect("observed evidence is retained");
+    assert!(!partial.completed_prefix);
     assert_eq!(
-        failure.partial.candidates[&Term::new("a")].ranks[&iri("scripted")],
+        partial.candidates[&Term::new("a")].ranks[&iri("scripted")].as_slice(),
         [1]
     );
 }
@@ -378,7 +407,12 @@ fn malformed_rank_receipt_and_depths_never_certify_a_candidate_prefix() {
         })
     ));
     assert_eq!(
-        error.partial.producers[&iri("scripted")].rows_emitted,
+        error
+            .partial
+            .as_ref()
+            .expect("observed evidence is retained")
+            .producers[&iri("scripted")]
+            .rows_emitted,
         Some(1)
     );
     let (execution, _) = assembled(Vec::new(), StreamEnding::Exhausted, DuplicatePolicy::Unique);
@@ -408,7 +442,12 @@ fn failed_and_lossy_short_producers_remain_distinct_from_completed_prefixes() {
         purrdf_retrieval::ExclusionBasis::Unavailable,
     );
     execution.streams[0].contract = contract.clone();
-    execution.contracts.insert(iri("scripted"), contract);
+    execution
+        .contracts
+        .get_mut()
+        .expect("unpublished contract arena is unique")
+        .insert(iri("scripted"), contract)
+        .expect("fixture replacement admitted");
     execution.streams[0].attestation = PfAttestation {
         generation: IndexGeneration::declared("g7"),
         service: ServiceLevel::incomplete_static("missing shard"),
@@ -436,12 +475,15 @@ fn failed_and_lossy_short_producers_remain_distinct_from_completed_prefixes() {
     let (mut execution, depths) =
         assembled(Vec::new(), StreamEnding::Exhausted, DuplicatePolicy::Unique);
     execution.streams.clear();
-    execution.statuses.insert(
-        iri("scripted"),
-        ProducerStatus::ExecutionFailed {
-            reason: "host denied".to_owned(),
-        },
-    );
+    execution
+        .statuses
+        .insert(
+            iri("scripted"),
+            ProducerStatus::ExecutionFailed {
+                reason: "host denied".into(),
+            },
+        )
+        .expect("fixture failed status is admitted");
     let result = block_on(union(execution, &depths)).unwrap();
     assert!(!result.completed_prefix);
     assert_eq!(result.producers[&iri("scripted")].rows_materialised, None);
@@ -606,7 +648,8 @@ fn an_actual_partial_native_failure_keeps_its_rank_and_healthy_sibling_evidence(
         Some(ProducerStatus::ExecutionFailed { .. })
     ));
     assert_eq!(
-        result.candidates[&Term::new("<http://example.org/fault/1>")].ranks[&iri("fault")],
+        result.candidates[&Term::new("<http://example.org/fault/1>")].ranks[&iri("fault")]
+            .as_slice(),
         [1]
     );
     for sibling in [iri("lexical"), iri("vector")] {
@@ -640,10 +683,18 @@ fn a_moving_native_attestation_or_a_breached_row_declaration_refuses_the_whole_u
         ))
         .unwrap();
         let failure = block_on(union(execution, &depths)).unwrap_err();
-        assert!(!failure.partial.completed_prefix);
+        assert!(
+            !failure
+                .partial
+                .as_ref()
+                .expect("observed evidence is retained")
+                .completed_prefix
+        );
         assert!(
             failure
                 .partial
+                .as_ref()
+                .expect("observed evidence is retained")
                 .producers
                 .values()
                 .all(|producer| producer.rows_emitted.is_some())
@@ -689,9 +740,15 @@ fn unserved_terms_and_producer_decisions_move_unchanged_into_the_candidate_answe
         &depths,
     ))
     .unwrap();
-    assert_eq!(answer.unserved_terms, expected_unserved);
-    assert_eq!(answer.producer_bindings, planned.producer_bindings());
-    assert_eq!(answer.producer_decisions, planned.producer_decisions());
+    assert_eq!(answer.unserved_terms.as_slice(), expected_unserved);
+    assert_eq!(
+        answer.producer_bindings.as_slice(),
+        planned.producer_bindings()
+    );
+    assert_eq!(
+        answer.producer_decisions.as_slice(),
+        planned.producer_decisions()
+    );
     assert!(
         answer.completed_prefix,
         "each short producer actually exhausted"

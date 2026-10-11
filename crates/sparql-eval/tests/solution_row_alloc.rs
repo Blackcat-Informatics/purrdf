@@ -5,7 +5,7 @@
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::TermId;
-use purrdf_sparql_eval::{Solution, SolutionTerm};
+use purrdf_sparql_eval::{RowBag, RowEvidence, Solution, SolutionTerm, WorkspaceCapability};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -42,6 +42,47 @@ fn clone_has_inline_zero_and_spilled_one_allocation() {
         );
         assert_eq!(cloned.capacity(), width.max(4), "width {width}");
         assert_eq!(cloned.spilled(), width > 4);
+    }
+
+    // Attaching rank shares the original cells through two native controls.
+    // Cloning either an inline or spilled tracked row must allocate nothing,
+    // and only the last owner releases both controls and the original spill.
+    for width in [4, 9] {
+        let retained = RowBag::from(vec![row(width)]).into_iter().next().unwrap();
+        let cell_bytes = if retained.spilled() {
+            retained.capacity() * size_of::<Option<SolutionTerm>>()
+        } else {
+            0
+        };
+        let workspace = WorkspaceCapability::default();
+        let evidence =
+            RowEvidence::default().with_original_rank(core::num::NonZeroU64::new(7).unwrap());
+        let window = CurrentThreadWindow::open();
+        let tracked = retained.with_evidence(evidence, &workspace).unwrap();
+        let controls = window.close();
+        assert_eq!(controls.allocations, 2);
+        assert_eq!(
+            controls.retained_bytes,
+            i64::try_from(controls.requested_bytes).unwrap()
+        );
+
+        let window = CurrentThreadWindow::open();
+        let cloned = std::hint::black_box(&tracked).clone();
+        drop(tracked);
+        let shared = window.close();
+        assert_eq!(shared.allocations, 0);
+        assert_eq!(shared.retained_bytes, 0);
+        assert_eq!(cloned.evidence().original_rank().unwrap().get(), 7);
+        assert_eq!(cloned.len(), width);
+
+        let window = CurrentThreadWindow::open();
+        drop(cloned);
+        let released = window.close();
+        assert_eq!(released.allocations, 0);
+        assert_eq!(
+            released.retained_bytes,
+            -i64::try_from(controls.requested_bytes + u64::try_from(cell_bytes).unwrap()).unwrap()
+        );
     }
 }
 

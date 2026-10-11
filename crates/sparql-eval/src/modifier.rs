@@ -101,8 +101,8 @@
 
 pub(crate) mod owners;
 use crate::workspace::AdmittedVec;
-use owners::DedupState;
 pub(crate) use owners::order_permutation;
+use owners::{DedupKey, DedupState};
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -199,14 +199,51 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     })
 }
 
+// Specialize the one projection row loop after the whole-bag physical proof.
+// Ordinary rows use the original cell builder; tracked rows retain each exact
+// owner and column projection before publication.
+macro_rules! eval_project_rows {
+    ($seq:expr, $src:expr, $rows:expr, $workspace:expr, $columns:expr, $tracking:literal) => {{
+        for row in $seq.rows.iter() {
+            let cells = row.as_slice();
+            if $tracking {
+                let evidence = row.evidence().project_columns($columns)?;
+                let projected = RetainedRow::from_cells(
+                    $src.len(),
+                    $src.iter()
+                        .map(|source| source.and_then(|column| cells[column])),
+                    $workspace,
+                )?;
+                $rows.push_row(projected.with_evidence(evidence, $workspace)?)?;
+            } else {
+                $rows.push_cells(
+                    $src.len(),
+                    $src.iter()
+                        .map(|source| source.and_then(|column| cells[column])),
+                )?;
+            }
+        }
+    }};
+}
+
 // One authored projection kernel with caller-local iterator identities: sharing
 // one generic closure made its outer bulk specialization a two-use outlined call.
 // Bind each input once, in argument order, while retaining the safe container homes.
 macro_rules! eval_project_sequence {
-    ($seq:expr, $out:expr, $workspace:expr) => {{
+    ($seq:expr, $out:expr, $workspace:expr, $tracking:expr) => {{
         let seq = $seq;
         let out = $out;
         let workspace = $workspace;
+        let tracking = $tracking || seq.rows.may_have_evidence_attachment();
+        let mut evidence_columns = AdmittedVec::new(workspace);
+        if tracking {
+            for variable in out.vars() {
+                evidence_columns.push(purrdf_core::evidence::aggregate_column_identity(
+                    variable.as_str(),
+                ))?;
+            }
+            evidence_columns.as_mut_slice().sort_unstable();
+        }
         // For each projected column, the source column in the inner schema (if any).
         let mut src = crate::workspace::AdmittedVec::new(workspace);
         for variable in out.vars() {
@@ -215,15 +252,10 @@ macro_rules! eval_project_sequence {
         // Reserve the exact row count, then use Vec's bulk extension so row capacity
         // and final length publication stay outside the per-row projection work.
         let mut rows = RowsBuilder::new(workspace);
-        for row in seq.rows.iter() {
-            let row = row.as_slice();
-            // Use SmallVec's reserved-slot bulk loop without a FromIterator wrapper
-            // or repeated push capacity/tag/length work for each projected cell.
-            rows.push_cells(
-                src.len(),
-                src.iter()
-                    .map(|source| source.and_then(|column| row[column])),
-            )?;
+        if tracking {
+            eval_project_rows!(seq, src, rows, workspace, &evidence_columns, true);
+        } else {
+            eval_project_rows!(seq, src, rows, workspace, &evidence_columns, false);
         }
         SolutionSeq {
             schema: out,
@@ -257,7 +289,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
         let schema = layout()?;
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
-    let projected = eval_project_sequence!(&seq, layout()?, &workspace);
+    let projected =
+        eval_project_sequence!(&seq, layout()?, &workspace, ctx.evidence_input.is_some());
     Ok(lift.finish(projected))
 }
 
@@ -284,7 +317,8 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
                     VarSchema::interned(variables)
                 };
                 let lift = Lift::at_admitted(node, &ctx.growth)?;
-                let projected = eval_project_sequence!(&seq, out, &ctx.growth);
+                let projected =
+                    eval_project_sequence!(&seq, out, &ctx.growth, ctx.evidence_input.is_some());
                 Ok(lift.finish(projected))
             },
             ctx,
@@ -299,10 +333,10 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
 /// `DISTINCT` is a stronger-but-permitted reduction than the spec's minimum (§18.5), so
 /// the two operators share this one body.
 ///
-/// De-duplication decides each row from the rows already seen, so it depends only on the
-/// prefix and commits **per input row**: a prefix of the input dedups to a prefix of the
-/// output, which is why a truncation below either operator keeps its bound instead of
-/// voiding every `SELECT DISTINCT` in the corpus.
+/// Binding de-duplication commits **per input row**: a prefix of the input dedups to
+/// a prefix of the output, so a truncation below either operator keeps its bound.
+/// Retained declarations also coalesce later witnesses for the same binding; an
+/// immutable downstream delivery therefore waits for that original witness bag.
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
 // Erase the ZST mode at the wrapper; the shared kernel keeps its call boundary.
 #[allow(clippy::inline_always)]
@@ -328,7 +362,11 @@ pub(crate) fn eval_dedup_with<D: DatasetView + Sync, const ADJACENT: bool>(
     // A shared blank's column is not part of a solution: two rows that differ only
     // there are the same solution (see `crate::blank_scope`).
     let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
-    Ok(lift.finish(dedup::<_, ADJACENT>(seq, &ctx.growth)?))
+    Ok(lift.finish(dedup::<_, ADJACENT>(
+        seq,
+        &ctx.growth,
+        ctx.evidence_input.is_some(),
+    )?))
 }
 
 // Erase the static delivery wrapper; the native operator retains its call boundary.
@@ -351,6 +389,28 @@ pub(crate) fn eval_dedup_delivered<
             eval_dedup(node, inner, ctx)
         };
     }
+    // A duplicate's later witness can improve a previously seen record. Keep
+    // the original operator owner live until all witnesses are coalesced before
+    // exposing immutable evidence to a downstream consumer.
+    // Native producer envelopes do not require an external EvidenceSource. The
+    // numbered subtree gives the same barrier proof without walking its algebra
+    // again; a raw or substituted tree without that identity stays conservative.
+    let native_evidence = !ctx.property_functions.is_empty()
+        && (!ctx.user_functions.is_empty()
+            || ctx.plan.as_ref().is_none_or(|plan| {
+                let Some(node) = plan.node_of(inner) else {
+                    return true;
+                };
+                let shape = plan.shape();
+                (node.index()..shape.subtree_end(node).index()).any(|index| {
+                    shape.kind(crate::plan::NodeId::from_index(index)).label() == "PropertyFunction"
+                })
+            }));
+    if ctx.evidence_input.is_some() || !ctx.shapes.providers.is_empty() || native_evidence {
+        let evaluated = eval_dedup_with::<D, ADJACENT>(node, inner, ctx)?;
+        crate::eval::deliver_evaluated(&evaluated, delivery, ctx)?;
+        return Ok(evaluated);
+    }
     eval_dedup_yielding::<D, ADJACENT, M>(node, inner, delivery, ctx)
 }
 
@@ -365,7 +425,7 @@ fn eval_dedup_yielding<
     delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut state = DedupState::<D::Id, ADJACENT>::new(&ctx.growth);
+    let mut state = DedupState::<RetainedRow<D::Id>, ADJACENT>::new(&ctx.growth);
     crate::eval::yield_transform(
         node,
         inner,
@@ -387,20 +447,28 @@ fn eval_dedup_yielding<
 fn dedup<I: ViewTermId, const ADJACENT: bool>(
     seq: SolutionSeq<I>,
     workspace: &crate::WorkspaceCapability,
+    coalesce: bool,
 ) -> Result<SolutionSeq<I>, EvalError> {
-    let mut state = DedupState::<I, ADJACENT>::new(workspace);
-    dedup_with_state(seq, &mut state, workspace)
+    if coalesce || seq.rows.may_have_evidence_attachment() {
+        let mut state = DedupState::<(RetainedRow<I>, usize), ADJACENT>::new(workspace);
+        dedup_with_state(seq, &mut state, workspace)
+    } else {
+        let mut state = DedupState::<RetainedRow<I>, ADJACENT>::new(workspace);
+        dedup_with_state(seq, &mut state, workspace)
+    }
 }
 
-fn dedup_with_state<I: ViewTermId, const ADJACENT: bool>(
-    seq: SolutionSeq<I>,
-    state: &mut DedupState<I, ADJACENT>,
+fn dedup_with_state<K: DedupKey, const ADJACENT: bool>(
+    seq: SolutionSeq<K::Id>,
+    state: &mut DedupState<K, ADJACENT>,
     workspace: &crate::WorkspaceCapability,
-) -> Result<SolutionSeq<I>, EvalError> {
+) -> Result<SolutionSeq<K::Id>, EvalError> {
     let mut rows = RowsBuilder::new(workspace);
     for row in seq.rows {
-        if state.keep(&row)? {
-            rows.push_row(row)?;
+        match state.survivor(&row, rows.len())? {
+            Some(ordinal) if K::COALESCE => rows.combine_evidence(ordinal, row.evidence())?,
+            Some(_) => {}
+            None => rows.push_row(row)?,
         }
     }
     Ok(SolutionSeq {
@@ -431,13 +499,36 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
         return Ok(lift.withheld());
     };
     let mut rows = RowsBuilder::new(&ctx.growth);
-    for row in seq
-        .rows
-        .into_iter()
-        .skip(start)
-        .take(length.unwrap_or(usize::MAX))
-    {
-        rows.push_row(row)?;
+    if ctx.candidate_scope.is_some() {
+        // Unknown membership belongs to the separate evidence partition. It
+        // neither consumes an established offset/depth nor disappears because
+        // an established prefix is full. Keep the original interleaving.
+        let mut position = 0usize;
+        let mut selected = 0usize;
+        for row in seq.rows {
+            if row.evidence().is_undecided() {
+                rows.push_row(row)?;
+            } else {
+                if position >= start && length.is_none_or(|limit| selected < limit) {
+                    rows.push_row(row)?;
+                    selected = selected
+                        .checked_add(1)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                }
+                position = position
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            }
+        }
+    } else {
+        for row in seq
+            .rows
+            .into_iter()
+            .skip(start)
+            .take(length.unwrap_or(usize::MAX))
+        {
+            rows.push_row(row)?;
+        }
     }
     Ok(lift.finish(SolutionSeq {
         schema: seq.schema,
@@ -471,6 +562,14 @@ fn eval_slice_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    if ctx.candidate_scope.is_some() {
+        // A prefix-only delivery cannot account for undecided candidates later
+        // in the original order. Use the same native slice owner, then deliver
+        // its established and undecided partitions without a second evaluation.
+        let evaluated = eval_slice(node, inner, start, length, ctx)?;
+        delivery.deliver(evaluated.rows(), ctx)?;
+        return Ok(evaluated);
+    }
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     if length == Some(0) {
         return Ok(
@@ -1205,7 +1304,7 @@ fn append_graph_rows<I: ViewTermId>(
         Some(column) => {
             for row in seq.rows {
                 if !matches!(row[column], Some(existing) if existing != candidate) {
-                    rows.push_cells(
+                    let bound = RetainedRow::from_cells(
                         schema.len(),
                         row.iter().enumerate().map(|(index, cell)| {
                             if index == column {
@@ -1214,7 +1313,9 @@ fn append_graph_rows<I: ViewTermId>(
                                 *cell
                             }
                         }),
+                        workspace,
                     )?;
+                    rows.push_row(bound.with_evidence_from(&row, workspace)?)?;
                 }
             }
         }
@@ -1222,7 +1323,7 @@ fn append_graph_rows<I: ViewTermId>(
             let column = schema.push_admitted(var.clone(), workspace)?;
             let width = schema.len();
             for row in seq.rows {
-                rows.push_cells(
+                let bound = RetainedRow::from_cells(
                     width,
                     (0..width).map(|index| {
                         if index == column {
@@ -1231,7 +1332,9 @@ fn append_graph_rows<I: ViewTermId>(
                             row.get(index).copied().flatten()
                         }
                     }),
+                    workspace,
                 )?;
+                rows.push_row(bound.with_evidence_from(&row, workspace)?)?;
             }
         }
     }
@@ -2002,6 +2105,44 @@ impl GroupDomain for &[Variable] {
     }
 }
 
+fn aggregate_evidence<D: DatasetView + Sync>(
+    evidence: &crate::evidence_exec::RowEvidence,
+    aggregates: &[(Variable, AggregateExpression)],
+    ctx: &EvalCtx<'_, D>,
+) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+    match &ctx.evidence_input {
+        Some(input) => {
+            input.aggregate_evidence(evidence, aggregates, ctx.active_graph, &ctx.growth)
+        }
+        None => evidence.native_aggregate(aggregates, &ctx.growth, || {
+            ctx.evidence_owner()?.query_owner(&ctx.growth)
+        }),
+    }
+}
+
+fn group_evidence<D: DatasetView + Sync>(
+    members: &[usize],
+    rows: &crate::solution::RowBag<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+    if ctx.evidence_input.is_none()
+        && rows.search_evidence().is_virtual()
+        && !members
+            .iter()
+            .any(|&member| rows[member].has_evidence_attachment())
+    {
+        return Ok(crate::evidence_exec::RowEvidence::default());
+    }
+    let mut evidence = rows.search_evidence().clone();
+    for &member in members {
+        evidence = evidence.combine(
+            rows[member].evidence(),
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        )?;
+    }
+    Ok(evidence)
+}
+
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
 #[inline(never)]
 pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
@@ -2042,6 +2183,13 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         return Ok(lift.finish(SolutionSeq::empty(out_schema)));
     };
     let in_schema = seq.schema.clone();
+    let search_evidence = seq.rows.search_evidence().clone();
+    // Inspect physical attachments once in input order. Ordinary groups need
+    // no per-group dictionary scan or aggregate evidence publication; an
+    // original search owner, rank or declaration always retains that path.
+    let group_tracking = ctx.evidence_input.is_some()
+        || !search_evidence.is_virtual()
+        || seq.rows.may_have_evidence_attachment();
     // Redundant GROUP BY keys do not create extra output columns. Derive both
     // partition keys and row offsets from the same first-seen schema, so adding
     // an aggregate after a repeated key cannot index past the output row.
@@ -2050,31 +2198,42 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         key_cols.push(in_schema.index_of(variable))?;
     }
 
-    // Partition rows into groups, keeping groups in first-seen order.
-    let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
-    let mut groups = AdmittedVec::new(&ctx.growth);
-    for (idx, row) in seq.rows.iter().enumerate() {
-        let key = RetainedRow::from_cells(
-            key_cols.len(),
-            key_cols.iter().map(|c| c.and_then(|c| row[c])),
-            &ctx.growth,
+    // The physical series strategy partitions the same native keys in one
+    // ordered pass, then restores first-seen groups and original member order.
+    // Every aggregate below still uses its original body and argument order.
+    let mut groups = if ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize) {
+        ctx.shape_state.work.add(
+            u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         )?;
-        let next_ordinal = groups.len();
-        if let Some(&ordinal) = group_index.get(&key) {
-            let (_, _, members): &mut (usize, RetainedRow<D::Id>, AdmittedVec<usize>) =
-                &mut groups.as_mut_slice()[ordinal];
-            members.push(idx)?;
-        } else {
-            let mut members = AdmittedVec::new(&ctx.growth);
-            members.push(idx)?;
-            let _ = group_index.insert_admitted(
-                key.clone_admitted(&ctx.growth)?,
-                next_ordinal,
+        crate::shapes::bucket::partition(&seq, &key_cols, &ctx.growth)?
+    } else {
+        let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
+        let mut groups = AdmittedVec::new(&ctx.growth);
+        for (idx, row) in seq.rows.iter().enumerate() {
+            let key = RetainedRow::from_cells(
+                key_cols.len(),
+                key_cols.iter().map(|c| c.and_then(|c| row[c])),
                 &ctx.growth,
             )?;
-            groups.push((next_ordinal, key, members))?;
+            let next_ordinal = groups.len();
+            if let Some(&ordinal) = group_index.get(&key) {
+                let (_, _, members): &mut (usize, RetainedRow<D::Id>, AdmittedVec<usize>) =
+                    &mut groups.as_mut_slice()[ordinal];
+                members.push(idx)?;
+            } else {
+                let mut members = AdmittedVec::new(&ctx.growth);
+                members.push(idx)?;
+                let _ = group_index.insert_admitted(
+                    key.clone_admitted(&ctx.growth)?,
+                    next_ordinal,
+                    &ctx.growth,
+                )?;
+                groups.push((next_ordinal, key, members))?;
+            }
         }
-    }
+        groups
+    };
     // No GROUP BY + empty input + aggregates → a single empty group.
     if groups.is_empty() && variables.is_empty() && !aggregates.is_empty() {
         groups.push((
@@ -2106,7 +2265,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
             .all(|(_, agg)| ctx.may_fork_aggregate(agg));
     let mut links = link_aggregates(node, aggregates, &in_schema, ctx)?;
 
-    let rows = if safe {
+    let mut rows = if safe {
         let base = ctx.scratch.computed_count();
         // Harvesting, for `crate::expr::eval_filter`'s reason: an aggregate's argument
         // expression can reach a property function through an embedded `EXISTS`, and
@@ -2139,7 +2298,20 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                     row[var_count + j] =
                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, child)?;
                 }
-                acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                let row = RetainedRow::from_resident(row);
+                let row = if group_tracking {
+                    row.with_evidence(
+                        aggregate_evidence(
+                            &group_evidence(idxs, &seq.rows, child)?,
+                            aggregates,
+                            child,
+                        )?,
+                        &child.growth,
+                    )?
+                } else {
+                    row
+                };
+                acc.push(crate::parallel::minted_row(&child.scratch, base, row)?);
                 ledger.settle(1, child);
                 Ok(())
             },
@@ -2155,14 +2327,13 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         // The commit re-interns each kept group's row in group order, charging the growth
         // at its group.
         let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
-            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
-                .map(RetainedRow::from_resident)
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row, &ctx.growth)
         };
         let (mut rows, resume) = if ctx.governor_state().is_none() {
             // Group workers have finished reading the input. A plain fold has no
             // continuation. Reuse its input only when that capacity does not exceed
             // the exact grouped output; otherwise release it before fresh admission.
-            let input = core::mem::take(&mut seq.rows)
+            let (input, _search_owner) = core::mem::take(&mut seq.rows)
                 .into_resident_rows()
                 .map_err(|_| {
                     EvalError::WorkspaceUnpriced("worker row buffer requires resident ownership")
@@ -2199,7 +2370,19 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                         ctx,
                     )?;
                 }
-                rows.push(RetainedRow::from_resident(row));
+                let row = RetainedRow::from_resident(row);
+                rows.push(if group_tracking {
+                    row.with_evidence(
+                        aggregate_evidence(
+                            &group_evidence(idxs, &seq.rows, ctx)?,
+                            aggregates,
+                            ctx,
+                        )?,
+                        &ctx.growth,
+                    )?
+                } else {
+                    row
+                });
             }
         }
         RowsBuilder::from_storage(
@@ -2231,11 +2414,19 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                 }
                 Ok(())
             })?;
-            rows.push_row(row)?;
+            rows.push_row(if group_tracking {
+                row.with_evidence(
+                    aggregate_evidence(&group_evidence(idxs, &seq.rows, ctx)?, aggregates, ctx)?,
+                    &growth,
+                )?
+            } else {
+                row
+            })?;
         }
         rows.finish()?
     };
 
+    rows.retain_search_evidence(search_evidence);
     // An `EXISTS` inside an aggregate argument is an opaque edge; see `eval_left_join`.
     if let Some(tripped) = ctx.expression_barrier.observed() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
@@ -2597,6 +2788,32 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
     let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
     let mut states =
         AdmittedVec::<(RetainedRow<D::Id>, AdmittedVec<ContextualLane<D::Id>>)>::new(&ctx.growth);
+    // The physical series mode orders keys once. Accumulator steps still run
+    // in ORIGINAL global row order, including contextual and volatile ones.
+    // Creating lanes at their first row preserves invocation/error precedence.
+    let mut bucket_input = None;
+    let mut bucket_ordinals = None;
+    if ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize) {
+        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+        let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+            return Ok(lift.finish(SolutionSeq::empty(out_schema)));
+        };
+        let groups = crate::shapes::bucket::partition(&seq, &key_cols, &ctx.growth)?;
+        let mut ordinals = AdmittedVec::with_capacity(seq.rows.len(), &ctx.growth)?;
+        for _ in &seq.rows {
+            ordinals.push(0usize)?;
+        }
+        for (ordinal, _, members) in groups {
+            for member in members {
+                ordinals.as_mut_slice()[member] = ordinal;
+            }
+        }
+        let rows = u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        ctx.shape_state.work.add(rows, rows)?;
+        bucket_ordinals = Some(ordinals);
+        bucket_input = Some(seq);
+    }
+    let mut input_ordinal = 0usize;
     let local_trip = std::cell::Cell::new(None);
     let visible = domain.visible(&in_schema, &ctx.growth)?;
     let mut consume = |input: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
@@ -2618,22 +2835,41 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                     }
                     Ok(())
                 })?;
-                let ordinal = if let Some(&ordinal) = group_index.get(&key) {
+                let physical_ordinal = bucket_ordinals
+                    .as_ref()
+                    .map(|ordinals| ordinals[input_ordinal]);
+                input_ordinal = input_ordinal
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let ordinal = if let Some(ordinal) =
+                    physical_ordinal.filter(|&ordinal| ordinal < states.len())
+                {
+                    ordinal
+                } else if physical_ordinal.is_none()
+                    && let Some(&ordinal) = group_index.get(&key)
+                {
                     ordinal
                 } else {
                     let ordinal = states.len();
                     let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
                         return Ok(std::ops::ControlFlow::Break(()));
                     };
-                    let _ = group_index.insert_admitted(
-                        key.clone_admitted(&ctx.growth)?,
-                        ordinal,
-                        &ctx.growth,
-                    )?;
-                    states.push((key, lanes))?;
+                    if physical_ordinal.is_none() {
+                        let _ = group_index.insert_admitted(
+                            key.clone_admitted(&ctx.growth)?,
+                            ordinal,
+                            &ctx.growth,
+                        )?;
+                    }
+                    states.push((key.with_evidence_from(row, &ctx.growth)?, lanes))?;
                     ordinal
                 };
-                let lanes = &mut states.as_mut_slice()[ordinal].1;
+                let (key, lanes) = &mut states.as_mut_slice()[ordinal];
+                key.combine_evidence(
+                    row.evidence(),
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                    &ctx.growth,
+                )?;
                 for ((lane, (_, agg)), links) in lanes
                     .as_mut_slice()
                     .iter_mut()
@@ -2752,13 +2988,17 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
         ctx.leave_node(restore);
         result
     };
-    let evaluated =
-        crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
+    let evaluated = if let Some(seq) = bucket_input {
+        let _ = consume(&seq, ctx)?;
+        Evaluated::Complete(seq)
+    } else {
+        crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?
+    };
     drop(consume);
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    if lift.absorb(0, evaluated).is_none() {
+    let Some(input) = lift.absorb(0, evaluated) else {
         return Ok(lift.finish(SolutionSeq::empty(out_schema)));
-    }
+    };
     if let Some(tripped) = local_trip
         .get()
         .or_else(|| ctx.expression_barrier.observed())
@@ -2809,16 +3049,28 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
             }
             Ok(())
         })?;
-        rows.push_row(row)?;
+        rows.push_row(row.with_evidence(
+            aggregate_evidence(
+                &key.evidence().combine(
+                    input.rows.search_evidence(),
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?,
+                aggregates,
+                ctx,
+            )?,
+            &ctx.growth,
+        )?)?;
     }
     if let Some(tripped) = local_trip.get() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
             node, tripped, out_schema,
         )));
     }
+    let mut rows = rows.finish()?;
+    rows.retain_search_evidence(input.rows.search_evidence().clone());
     Ok(lift.finish(SolutionSeq {
         schema: out_schema,
-        rows: rows.finish()?,
+        rows,
     }))
 }
 
@@ -2899,6 +3151,8 @@ struct AggregateSurvivors {
     values: AdmittedVec<TermValue>,
     // Original term owners outlive all of the values and the values' vector.
     grants: AdmittedVec<crate::WorkspaceAllocation>,
+    // Bounded term creation must pre-admit both destination arrays.
+    bounded: bool,
 }
 
 struct AggregateSurvivorOwners {
@@ -2928,20 +3182,31 @@ impl AggregateSurvivors {
         Self {
             values: AdmittedVec::new(workspace),
             grants: AdmittedVec::new(workspace),
+            bounded: workspace.is_bounded(),
         }
     }
 
     fn reserve_next(&mut self) -> Result<(), EvalError> {
         self.values.reserve_next()?;
-        self.grants.reserve_next()
+        if self.bounded {
+            self.grants.reserve_next()?;
+        }
+        Ok(())
     }
 
     fn push(&mut self, value: crate::WorkspaceTerm) -> Result<(), EvalError> {
-        self.reserve_next()?;
+        // Callers pre-admit the destinations before cloning the value.
+        // A foreign original owner must still survive even in a resident group.
+        let retained_owner = value.has_admission();
+        if retained_owner {
+            self.grants.reserve_next()?;
+        }
         let (value, allocation) = value.into_parts();
-        // Both destinations were admitted before moving the original payload.
+        // Only real owners need a retained slot; an empty allocation owns nothing.
         self.values.push_reserved(value);
-        self.grants.push_reserved(allocation);
+        if retained_owner {
+            self.grants.push_reserved(allocation);
+        }
         Ok(())
     }
 }
@@ -5227,6 +5492,212 @@ mod tests {
     }
 
     #[test]
+    fn delivered_distinct_seals_native_alternatives_without_an_external_source() {
+        use crate::property_fn::{
+            AdmittedPfRow, MemoryRelation, PfArgs, PfCursor, PropertyFunction,
+        };
+        use crate::{BindingPattern, PfArity, PropertyFunctionRegistry, QueryEvidence, Volatility};
+        use purrdf_core::evidence::{
+            EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
+        };
+        use purrdf_lex::allocation::{Memory, Resident};
+        use std::sync::Arc;
+
+        struct Producer(MemoryRelation, EvidenceRecord);
+        struct Cursor {
+            rows: crate::AdmittedVecIntoIter<AdmittedPfRow>,
+            query: QueryEvidence,
+            first: Option<crate::RowEvidence>,
+            _allocation: crate::WorkspaceAllocation,
+        }
+        impl PfCursor for Cursor {
+            fn carries_row_evidence(&self) -> bool {
+                true
+            }
+            fn next(&mut self) -> Result<Option<Vec<TermValue>>, EvalError> {
+                Err(EvalError::WorkspaceUnpriced(
+                    "native declared cursor requires envelopes",
+                ))
+            }
+            fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+                let Some(row) = self.rows.next() else {
+                    return Ok(None);
+                };
+                let evidence = if let Some(first) = self.first.take() {
+                    first
+                } else {
+                    self.query.retain(&EvidenceRecord::default())?
+                };
+                Ok(Some(row.with_evidence(evidence)))
+            }
+        }
+        impl PropertyFunction for Producer {
+            fn volatility(&self) -> Volatility {
+                self.0.volatility()
+            }
+            fn arity(&self) -> PfArity {
+                self.0.arity()
+            }
+            fn modes(&self) -> &[BindingPattern] {
+                self.0.modes()
+            }
+            fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+                self.0.rows_per_invocation(mode)
+            }
+            fn open(
+                &self,
+                args: &PfArgs<'_>,
+                ceiling: Option<u64>,
+            ) -> Result<Box<dyn PfCursor>, EvalError> {
+                self.open_admitted(args, ceiling, crate::WorkspaceCapability::default())
+            }
+            fn open_admitted(
+                &self,
+                _args: &PfArgs<'_>,
+                ceiling: Option<u64>,
+                workspace: crate::WorkspaceCapability,
+            ) -> Result<Box<dyn PfCursor>, EvalError> {
+                let mut rows = AdmittedVec::new(&workspace);
+                let count = ceiling.map_or(usize::MAX, |limit| {
+                    usize::try_from(limit).unwrap_or(usize::MAX)
+                });
+                for source in self.0.rows().iter().take(count) {
+                    rows.push(AdmittedPfRow::from_terms(
+                        [
+                            workspace.clone_term(&source[0])?,
+                            workspace.clone_term(&source[1])?,
+                        ]
+                        .into_iter(),
+                        &workspace,
+                    )?)?;
+                }
+                let query = QueryEvidence::new(&workspace)?;
+                let first = query.retain_undecided(&self.1)?;
+                let allocation = workspace.charge(
+                    u64::try_from(size_of::<Cursor>())
+                        .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+                )?;
+                purrdf_core::small::try_boxed(Cursor {
+                    rows: rows.into_iter(),
+                    query,
+                    first: Some(first),
+                    _allocation: allocation,
+                })
+                .map(|cursor| cursor as Box<dyn PfCursor>)
+                .map_err(|_| EvalError::AllocationFailed {
+                    construct: "native alternatives cursor",
+                })
+            }
+        }
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            "https://example.org/declared",
+            Arc::new(Producer(
+                MemoryRelation::new(
+                    1,
+                    1,
+                    vec![
+                        vec![
+                            iri("https://example.org/document"),
+                            TermValue::simple_literal("needle"),
+                        ],
+                        vec![
+                            iri("https://example.org/document"),
+                            TermValue::simple_literal("needle"),
+                        ],
+                    ],
+                )
+                .unwrap(),
+                EvidenceRecord::from_parts(
+                    &InformationMap::uniform(Information::Opposed),
+                    SearchCompleteness::Undetermined,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    &mut Memory::new(&mut Resident),
+                )
+                .unwrap(),
+            )),
+        );
+        let pattern = GraphPattern::Distinct {
+            inner: Child::new(GraphPattern::PropertyFunction(
+                purrdf_sparql_algebra::PropertyFunctionCall {
+                    iri: "https://example.org/declared".to_owned(),
+                    subject_args: vec![TermPattern::Variable(Variable::new("doc"))],
+                    object_args: vec![TermPattern::Literal(
+                        purrdf_sparql_algebra::Literal::new_simple("needle"),
+                    )],
+                },
+            )),
+        };
+        for numbered in [false, true] {
+            let mut ctx = EvalCtx::new(&dataset).with_property_functions(&registry);
+            if numbered {
+                ctx.plan = Some(crate::plan::Tree::build(&pattern).handle());
+            }
+            let mut observed = Vec::new();
+            let mut consume = |rows: &SolutionSeq, _: &mut EvalCtx<'_, _>| {
+                for row in &rows.rows {
+                    observed.push(row.evidence().clone());
+                }
+                Ok(std::ops::ControlFlow::Break(()))
+            };
+            crate::eval::eval_yielding(
+                &pattern,
+                &mut crate::eval::RowConsumer::new(&mut consume),
+                &mut ctx,
+            )
+            .unwrap();
+            drop(consume);
+            assert_eq!(observed.len(), 1);
+            assert!(!observed[0].is_undecided());
+            observed[0]
+                .with_record(|record| {
+                    assert_eq!(record.information().fallback(), Information::Both);
+                    assert_eq!(record.completeness(), SearchCompleteness::Complete);
+                })
+                .unwrap();
+        }
+        for query in [
+            purrdf_sparql_algebra::Query::Construct {
+                template: Vec::new(),
+                pattern: pattern.clone(),
+                dataset: purrdf_sparql_algebra::QueryDataset::default(),
+                base_iri: None,
+                version: None,
+            },
+            purrdf_sparql_algebra::Query::Describe {
+                targets: vec![NamedNodePattern::NamedNode(
+                    NamedNode::new("https://example.org/document").unwrap(),
+                )],
+                pattern,
+                dataset: purrdf_sparql_algebra::QueryDataset::default(),
+                base_iri: None,
+                version: None,
+            },
+        ] {
+            let mut ctx = EvalCtx::new(&dataset).with_property_functions(&registry);
+            assert!(matches!(
+                crate::eval::evaluate_query_evaluated(&query, &mut ctx).unwrap(),
+                crate::eval::EvaluatedOutcome::Complete(crate::eval::Outcome::Graph(_))
+            ));
+            let rows = ctx
+                .evidence_answer
+                .as_ref()
+                .expect("original native WHERE receipt");
+            assert_eq!(rows.rows.len(), 1);
+            rows.rows[0]
+                .evidence()
+                .with_record(|record| {
+                    assert_eq!(record.information().fallback(), Information::Both);
+                    assert_eq!(record.completeness(), SearchCompleteness::Complete);
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
     fn slice_offset_and_limit() {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
@@ -5438,6 +5909,131 @@ mod tests {
             o => format!("{o:?}"),
         };
         assert_eq!(c, "0");
+    }
+
+    #[test]
+    fn native_group_keeps_whole_search_for_empty_and_found_members() {
+        use purrdf_core::evidence::{
+            AggregateBound, EvidenceRecord, Frame, InformationMap, SearchCompleteness,
+            aggregate_column_identity,
+        };
+        use purrdf_lex::allocation::{Memory, Resident};
+        let dataset = ages();
+        let ctx = EvalCtx::new(&dataset);
+        let query = crate::QueryEvidence::new(&ctx.growth).unwrap();
+        let search = query
+            .retain(
+                &EvidenceRecord::from_parts(
+                    &InformationMap::default(),
+                    SearchCompleteness::Undetermined,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    &mut Memory::new(&mut Resident),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let aggregates = [(
+            Variable::new("count"),
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .unwrap(),
+        )];
+        for count in [0, 1] {
+            let mut rows = RowsBuilder::new(&ctx.growth);
+            for _ in 0..count {
+                rows.push_row(
+                    RetainedRow::from_cells(0, std::iter::empty(), &ctx.growth)
+                        .unwrap()
+                        .with_evidence(
+                            query.retain(&EvidenceRecord::default()).unwrap(),
+                            &ctx.growth,
+                        )
+                        .unwrap(),
+                )
+                .unwrap();
+            }
+            let mut rows = rows.finish().unwrap();
+            rows.retain_search_evidence(search.clone());
+            let members: Vec<_> = (0..count).collect();
+            let retained = group_evidence(&members, &rows, &ctx).unwrap();
+            let aggregate = aggregate_evidence(&retained, &aggregates, &ctx).unwrap();
+            drop(rows);
+            aggregate
+                .with_record(|record| {
+                    assert_eq!(record.completeness(), SearchCompleteness::Undetermined);
+                    assert_eq!(
+                        record.aggregate_bounds(),
+                        &[(aggregate_column_identity("count"), AggregateBound::Lower)]
+                    );
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn native_groups_from_ownerless_search_share_the_original_query() {
+        use purrdf_core::evidence::{
+            AggregateBound, EvidenceCombination, aggregate_column_identity,
+        };
+        let dataset = ages();
+        let context = EvalCtx::new(&dataset);
+        let search = crate::RowEvidence::default().with_unclosed_search(true);
+        let aggregates = [(
+            Variable::new("count"),
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .unwrap(),
+        )];
+        let mut combined = crate::RowEvidence::default();
+        for count in [0, 1, 2] {
+            let mut rows = RowsBuilder::new(&context.growth);
+            for _ in 0..count {
+                rows.push_row(
+                    RetainedRow::from_cells(0, std::iter::empty(), &context.growth).unwrap(),
+                )
+                .unwrap();
+            }
+            let mut rows = rows.finish().unwrap();
+            rows.retain_search_evidence(search.clone());
+            let members: Vec<_> = (0..count).collect();
+            let evidence = group_evidence(&members, &rows, &context).unwrap();
+            let aggregate = aggregate_evidence(&evidence, &aggregates, &context).unwrap();
+            assert!(!aggregate.permits_closed_absence());
+            aggregate
+                .with_record(|record| {
+                    assert_eq!(
+                        record.aggregate_bounds(),
+                        &[(aggregate_column_identity("count"), AggregateBound::Lower)]
+                    );
+                })
+                .unwrap();
+            combined = combined
+                .combine(&aggregate, EvidenceCombination::Alternatives)
+                .unwrap();
+        }
+        // An already admitted native owner survives a child even without a
+        // registry: original row/search carriers can reach the grouped path.
+        let worker = context.fork_for_worker().unwrap();
+        let next = aggregate_evidence(&search, &aggregates, &worker).unwrap();
+        drop(worker);
+        drop(context);
+        assert!(
+            combined
+                .combine(&next, EvidenceCombination::Alternatives)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -8927,7 +9523,7 @@ mod custom_owner_regressions {
             &mut ctx,
         )
         .unwrap()
-        .into_complete()
+        .into_complete(|_| ())
         .unwrap();
         assert_eq!(result.rows.len(), 1);
         let value = ctx

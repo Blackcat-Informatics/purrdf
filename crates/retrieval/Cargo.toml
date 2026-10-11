@@ -79,6 +79,10 @@ test = true
 name = "wasm_determinism"
 harness = false
 
+[[test]]
+name = "real_producers"
+harness = false
+
 # Peak-allocation evidence for the fused frontier, in its own process so the
 # tracking allocator's atomics skew no timed measurement. Report-only: it prints
 # `peak_allocated_bytes` and `rss_delta_kb` and asserts nothing, because this

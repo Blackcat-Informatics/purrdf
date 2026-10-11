@@ -96,6 +96,8 @@ pub(crate) enum Op {
     },
     /// Pop an effective boolean value; push its negation as a term.
     Not,
+    /// Negation of an existential pattern; evidence requires closed search.
+    NotExists,
     /// Pop two terms; push `=`.
     Equal,
     /// Pop two terms; push `sameTerm`.
@@ -546,7 +548,12 @@ impl<S: Admission + ?Sized> Compiler<'_, '_, S> {
             Expression::Not(operand) => {
                 out.push_with_memory(Task::Compile(operand, Mode::Term), self.memory)?;
                 out.push_with_memory(Task::Emit(Op::EbvOf), self.memory)?;
-                out.push_with_memory(Task::Emit(Op::Not), self.memory)?;
+                let op = if matches!(&**operand, Expression::Exists(_)) {
+                    Op::NotExists
+                } else {
+                    Op::Not
+                };
+                out.push_with_memory(Task::Emit(op), self.memory)?;
             }
             Expression::Equal(a, b)
             | Expression::SameTerm(a, b)

@@ -259,6 +259,22 @@ pub struct StreamContract {
 }
 
 impl StreamContract {
+    /// Carry the declaration through the original native domain owner.
+    ///
+    /// # Errors
+    /// Returns the original domain/key/container admission refusal.
+    pub fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        Ok(Self {
+            duplicates: self.duplicates,
+            exclusion: self.exclusion,
+            fidelity: self.fidelity.clone(),
+            domains: self.domains.clone_admitted(workspace)?,
+        })
+    }
+
     /// The contract `declaration` states, verbatim.
     #[must_use]
     pub fn declared(declaration: &RankedDeclaration) -> Self {
@@ -615,7 +631,7 @@ pub enum ProducerReceipt {
     /// The producer could not run. It emits no rows.
     ExecutionFailed {
         /// A human-readable reason, carried verbatim.
-        reason: String,
+        reason: purrdf_lex::allocation::OwnedText,
     },
     /// The producer declined the request terms it was given. It emits no rows.
     TermsRejected,
@@ -629,6 +645,8 @@ pub enum ProducerReceipt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProtocolError {
+    /// A native query or ownership refusal, retaining its original typed cause.
+    NativeFailure(purrdf_sparql_eval::EvalError),
     /// A rank arrived below the next expected rank — a producer that went
     /// backwards.
     OutOfOrderRanks {
@@ -1108,6 +1126,7 @@ pub enum ProtocolError {
 impl std::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NativeFailure(error) => error.fmt(f),
             Self::OutOfOrderRanks { expected, got } => write!(
                 f,
                 "stream rank went backwards: expected {expected}, got {got}"
@@ -1207,7 +1226,14 @@ impl std::fmt::Display for ProtocolError {
     }
 }
 
-impl std::error::Error for ProtocolError {}
+impl std::error::Error for ProtocolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NativeFailure(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// What a stream's read stands behind at the instant its consumer stops reading it.
 ///
@@ -1256,6 +1282,13 @@ pub struct ReadSettlement {
 // would instead exclude legitimate single-threaded producers.
 #[allow(async_fn_in_trait)]
 pub trait RankedStream {
+    /// Native execution authority retained by this producer, when its rows
+    /// originated in an admitted execution. Caller-owned streams need no native
+    /// account; fusion still uses the same fallible storage implementation.
+    fn workspace(&self) -> Option<purrdf_sparql_eval::WorkspaceCapability> {
+        None
+    }
+
     /// The item a row carries. It must round-trip through the caller's canonical
     /// term lexical so the layer can order and report it without parsing RDF.
     type Item: Clone + Ord + Into<Term>;

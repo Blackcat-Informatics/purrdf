@@ -106,6 +106,13 @@ macro_rules! constructors {
         }
     };
     (@items) => {};
+    (@items $(#[$meta:meta])* $visibility:vis fn $name:ident($field:ident: $source:ty) -> Self; $($rest:tt)*) => {
+        $(#[$meta])*
+        $visibility fn $name($field: $source) -> Self {
+            Self($field.into())
+        }
+        $crate::constructors!(@items $($rest)*);
+    };
     (@items $(#[$meta:meta])* $visibility:vis fn $name:ident($field:ident: $source:ty) -> Self { .. }; $($rest:tt)*) => {
         $(#[$meta])*
         $visibility fn $name($field: $source) -> Self {

@@ -1702,21 +1702,20 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     );
     let post_return_trip = ctx.stop_check();
     let error = match response {
-        Ok(mut response) => {
+        Ok(response) => {
             let schema = crate::eval::syntactic_schema_admitted(inner, &workspace)?;
-            if schema
+            let discard_bindings = schema
                 .vars()
                 .iter()
-                .all(crate::blank_scope::is_joined_blank)
-            {
-                response.bindings.variables.clear();
-                for row in &mut response.bindings.rows {
-                    row.clear();
-                }
-            }
+                .all(crate::blank_scope::is_joined_blank);
             if let Some(tripped) = post_return_trip {
                 let schema = VarSchema::from_vars_admitted(
-                    response.bindings.variables.iter().cloned(),
+                    response
+                        .bindings
+                        .variables
+                        .iter()
+                        .filter(|_| !discard_bindings)
+                        .cloned(),
                     &workspace,
                 )?
                 .shared_admitted(&workspace)?;
@@ -1724,7 +1723,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
                     Truncation::bag_only_origin(SolutionSeq::empty(schema), tripped),
                 )));
             }
-            let (seq, tripped) = ingest_admitted(&response, ctx)?;
+            let (seq, tripped) = ingest_admitted(&response, Some(endpoint), discard_bindings, ctx)?;
             return Ok(Invocation::Answered(match tripped {
                 None => Evaluated::Complete(seq),
                 Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
@@ -2076,11 +2075,39 @@ fn service_evaluation_error(
 
 fn ingest_admitted<D: DatasetView + Sync>(
     resolved: &AdmittedResolvedBindings,
+    endpoint: Option<&str>,
+    discard_bindings: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
     let response = resolved.bindings();
-    let schema = VarSchema::from_vars_admitted(response.variables.iter().cloned(), &ctx.growth)?
-        .shared_admitted(&ctx.growth)?;
+    let evidence_input = ctx.evidence_input.clone();
+    let service_scope = match (&evidence_input, endpoint) {
+        (Some(input), Some(endpoint)) => {
+            let scope = input.service_scope(endpoint, &ctx.growth)?;
+            let search = ctx
+                .evidence_search
+                .as_mut()
+                .and_then(|frames| frames.as_mut_slice().last_mut())
+                .ok_or_else(|| {
+                    EvalError::internal("SERVICE has no original evidence search frame")
+                })?;
+            *search = search.combine(
+                &scope,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+            Some(scope)
+        }
+        _ => None,
+    };
+    let schema = VarSchema::from_vars_admitted(
+        response
+            .variables
+            .iter()
+            .filter(|_| !discard_bindings)
+            .cloned(),
+        &ctx.growth,
+    )?
+    .shared_admitted(&ctx.growth)?;
     let ingest = crate::row_ingest::GovernedRowIngest::new(
         ctx,
         schema.len(),
@@ -2092,7 +2119,7 @@ fn ingest_admitted<D: DatasetView + Sync>(
     );
     let mut blanks = ResponseBlanks::default();
     let mut tripped = None;
-    'bindings: for binding in &response.rows {
+    'bindings: for (position, binding) in response.rows.iter().enumerate() {
         match ingest.admit(ctx, rows.len()) {
             crate::row_ingest::IngestVerdict::Abandoned(governor) => {
                 tripped = governor;
@@ -2117,7 +2144,27 @@ fn ingest_admitted<D: DatasetView + Sync>(
             };
             cells.push(value)?;
         }
-        rows.push_row(ingest.intern_row(ctx, cells)?)?;
+        let row = ingest.intern_row(ctx, cells)?;
+        let row = match (&evidence_input, endpoint, &service_scope) {
+            (Some(input), Some(endpoint), Some(scope)) => {
+                let evidence = input.service_row(
+                    endpoint,
+                    position,
+                    &response.variables,
+                    binding,
+                    &ctx.growth,
+                )?;
+                row.with_evidence(
+                    evidence.combine(
+                        scope,
+                        purrdf_core::evidence::EvidenceCombination::Conjunction,
+                    )?,
+                    &ctx.growth,
+                )?
+            }
+            _ => row,
+        };
+        rows.push_row(row)?;
     }
     if tripped.is_none()
         && let Some(attempted) = response.cell_limit_exceeded_at
@@ -2147,7 +2194,7 @@ fn ingest<D: DatasetView + Sync>(
         term_owners: crate::AdmittedVec::new(&ctx.growth),
         storage: ServiceStorage::Native(crate::workspace::LexicalFrame::new(&ctx.growth)),
     };
-    ingest_admitted(&response, ctx)
+    ingest_admitted(&response, None, false, ctx)
 }
 
 /// The same native parser, blank-scope and normalization producers, sharing the

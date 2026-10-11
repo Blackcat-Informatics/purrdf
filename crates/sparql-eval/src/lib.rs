@@ -157,11 +157,18 @@ mod row_ingest;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
+mod candidate_scope;
+pub mod evidence_exec;
+pub use candidate_scope::{CandidateConstraint, NativeCandidateScope};
+pub use evidence_exec::{
+    AcceptedPayloadRows, EvidenceScope, EvidenceSource, QueryEvidence, RowEvidence,
+};
 pub mod execution;
 #[doc(hidden)]
 pub mod fixture;
 pub mod service;
 mod service_endpoints;
+pub mod shapes;
 pub mod solution;
 // The guard every recursive evaluator entry passes through, over `purrdf-stack`'s
 // measurement (a host that switches the stack pointer onto a stack of its own installs
@@ -176,8 +183,9 @@ pub mod user_fn;
 mod vm;
 mod workspace;
 pub use workspace::{
-    AdmittedHeap, AdmittedMap, AdmittedVec, AdmittedVecIntoIter, WorkspaceAllocation,
-    WorkspaceCapability, WorkspaceTerm,
+    AdmittedHeap, AdmittedMap, AdmittedOrderedMap, AdmittedOrderedSet, AdmittedVec,
+    AdmittedVecIntoIter, OwnedIri, WorkspaceAllocation, WorkspaceArray, WorkspaceBox,
+    WorkspaceCapability, WorkspaceIri, WorkspaceTerm,
 };
 // The per-query record of what the relations a query invoked attested about the
 // indexes behind them — which generation answered, and whether it was whole.
@@ -269,12 +277,12 @@ pub use purrdf_xsd::exact::{DivisionPolicy, Rounding};
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, KnnObservations, Ranked};
 pub use property_fn::{
-    AcceptedTerm, AdmittedPfRow, CandidateDomains, Completeness, DeclaredArithmetic,
-    DepthPlacement, DomainTag, DuplicatePolicy, ExclusionBasis, IndexGeneration, MemoryRelation,
-    OrderFidelity, PfArgs, PfArity, PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration,
-    RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
-    generation_contained, service_level_contained,
+    AcceptedTerm, AdmittedPfRow, CandidateDomains, CandidateMembership, CandidateScope,
+    Completeness, DeclaredArithmetic, DepthPlacement, DomainTag, DuplicatePolicy, ExclusionBasis,
+    IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity, PfAttestation, PfCursor,
+    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic,
+    RankFidelity, RankedDeclaration, RequestFacet, ServiceLevel, TermKind, TermPattern,
+    TermPlacement, composed_order_fidelity, generation_contained, service_level_contained,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private
 // planning module beside the instance-bearing fingerprint, which renders it rather
@@ -288,7 +296,9 @@ pub use property_fn_plan::content_fingerprint as property_function_content_finge
 // The on-demand read of one property-function call, returned by
 // `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
 // ranked relation as soon as it has what it needs holds one of these.
-pub use property_fn_eval::CallCursor;
+pub use engine::{AdmittedInternedGoverned, EvaluationFailure};
+pub use property_fn_eval::{AdmittedPropertyRow, CallCursor, EvidencedPropertyRow};
+pub use workspace::SharedWorkspace;
 // The one shape description behind every question asked of a query's calls: which
 // of them each projected column's values come from, and whether the query is one call
 // read on demand. Returned by

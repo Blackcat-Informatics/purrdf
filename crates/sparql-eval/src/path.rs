@@ -160,9 +160,6 @@ impl<T> PathVec<T> {
         let storage = self.storage.clone();
         std::mem::replace(self, Self::new(&storage))
     }
-    fn into_admitted(self) -> crate::AdmittedVec<T> {
-        self.values
-    }
 }
 impl<T> std::ops::Deref for PathVec<T> {
     type Target = [T];
@@ -188,11 +185,15 @@ impl<T> IntoIterator for PathVec<T> {
 /// Set insertion removes duplicates; the separate vector preserves bag order.
 struct PathSet<I: ViewTermId> {
     values: PathVec<I>,
+    /// Only non-default witnesses allocate entries. Endpoint membership and
+    /// canonical order remain in the original admitted node array.
+    evidence: crate::AdmittedMap<I, crate::evidence_exec::RowEvidence>,
 }
 impl<I: ViewTermId> PathSet<I> {
     fn new(storage: &PathStorageOwner) -> Self {
         Self {
             values: PathVec::new(storage),
+            evidence: crate::AdmittedMap::default(),
         }
     }
     fn from_iter(values: impl IntoIterator<Item = I>, storage: &PathStorageOwner) -> Self {
@@ -201,10 +202,40 @@ impl<I: ViewTermId> PathSet<I> {
         set
     }
     fn insert(&mut self, value: I) -> bool {
+        self.insert_record(value, None)
+    }
+    fn insert_evidence(&mut self, value: I, evidence: crate::evidence_exec::RowEvidence) -> bool {
+        self.insert_record(value, Some(evidence))
+    }
+    fn insert_record(
+        &mut self,
+        value: I,
+        evidence: Option<crate::evidence_exec::RowEvidence>,
+    ) -> bool {
         if self.values.storage.failed.get() {
             return false;
         }
         let Err(index) = self.values.binary_search(&value) else {
+            if self.evidence.is_empty()
+                && evidence
+                    .as_ref()
+                    .is_none_or(crate::evidence_exec::RowEvidence::is_virtual)
+            {
+                return false;
+            }
+            let evidence = evidence.unwrap_or_default();
+            let original = self.evidence_of(value);
+            match original.combine(
+                &evidence,
+                purrdf_core::evidence::EvidenceCombination::Alternatives,
+            ) {
+                Ok(merged) => {
+                    let changed = !original.same_attachment(&merged);
+                    self.retain_evidence(value, merged);
+                    return changed && !self.values.storage.failed.get();
+                }
+                Err(error) => self.values.storage.fail(error),
+            }
             return false;
         };
         self.values.push(value);
@@ -212,7 +243,60 @@ impl<I: ViewTermId> PathSet<I> {
             return false;
         }
         self.values[index..].rotate_right(1);
-        true
+        if let Some(evidence) = evidence {
+            self.retain_evidence(value, evidence);
+        }
+        !self.values.storage.failed.get()
+    }
+    fn evidence_of(&self, value: I) -> crate::evidence_exec::RowEvidence {
+        self.evidence.get(&value).cloned().unwrap_or_default()
+    }
+    fn retain_evidence(&mut self, value: I, evidence: crate::evidence_exec::RowEvidence) {
+        // An ordinary path has no dictionary entries to remove. Do not route
+        // each unannotated edge through the evidence table.
+        if evidence.is_virtual() && self.evidence.is_empty() {
+            return;
+        }
+        if evidence.is_virtual() {
+            self.evidence.remove(&value);
+        } else if let Err(error) =
+            self.evidence
+                .insert_admitted(value, evidence, &self.values.storage.workspace)
+        {
+            self.values.storage.fail(error);
+        }
+    }
+    fn extend_witnesses(&mut self, other: &Self) {
+        if self.evidence.is_empty() && other.evidence.is_empty() {
+            self.extend(other.iter().copied());
+            return;
+        }
+        for &value in other.iter() {
+            self.insert_evidence(value, other.evidence_of(value));
+            if self.values.storage.failed.get() {
+                break;
+            }
+        }
+    }
+    fn insert_composed(
+        &mut self,
+        target: I,
+        premise: &crate::evidence_exec::RowEvidence,
+        step: &Self,
+    ) {
+        if premise.is_virtual() && step.evidence.is_empty() && self.evidence.is_empty() {
+            self.insert(target);
+            return;
+        }
+        match premise.combine(
+            &step.evidence_of(target),
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        ) {
+            Ok(evidence) => {
+                self.insert_evidence(target, evidence);
+            }
+            Err(error) => self.values.storage.fail(error),
+        }
     }
     fn extend(&mut self, values: impl IntoIterator<Item = I>) {
         for value in values {
@@ -228,15 +312,15 @@ impl<I: ViewTermId> PathSet<I> {
     fn take(&mut self) -> Self {
         Self {
             values: self.values.take(),
+            evidence: std::mem::take(&mut self.evidence),
         }
-    }
-    fn into_vec(self) -> PathVec<I> {
-        self.values
     }
 }
 impl<I: ViewTermId> Clone for PathSet<I> {
     fn clone(&self) -> Self {
-        Self::from_iter(self.iter().copied(), &self.values.storage)
+        let mut result = Self::new(&self.values.storage);
+        result.extend_witnesses(self);
+        result
     }
 }
 impl<I: ViewTermId> std::ops::Deref for PathSet<I> {
@@ -698,6 +782,7 @@ type PowerReachCache<I = TermId> = BTreeMap<(u32, I), Rc<BTreeSet<I>>>;
 /// reachability memo.
 struct PathCtx<'a, D: DatasetView + Sync> {
     dataset: &'a D,
+    evidence_input: Option<crate::evidence_exec::EvidenceInput<'a, D::Id>>,
     scope: GraphScope<D::Id>,
     program: PathProgram<'a, D::Id>,
     growth: crate::WorkspaceCapability,
@@ -719,6 +804,29 @@ struct PathCtx<'a, D: DatasetView + Sync> {
 }
 
 impl<D: DatasetView + Sync> PathCtx<'_, D> {
+    /// Retain the original matched edge's declaration at the actual leaf read.
+    /// Failure stops this traversal before any endpoint can be published.
+    fn insert_claim(
+        &self,
+        out: &mut PathSet<D::Id>,
+        quad: &purrdf_core::QuadIds<D::Id>,
+        target: D::Id,
+    ) {
+        let evidence = match &self.evidence_input {
+            Some(input) => match input.claim(quad, &self.growth) {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    self.storage.fail(error);
+                    return;
+                }
+            },
+            None => {
+                out.insert(target);
+                return;
+            }
+        };
+        out.insert_evidence(target, evidence);
+    }
     /// The `path-frontier-expansion` charge point: one unit per candidate relation edge
     /// examined.
     ///
@@ -781,6 +889,7 @@ impl<'a, D: DatasetView + Sync> PathCtx<'a, D> {
             storage,
             governors,
             ledger: None,
+            evidence_input: None,
         }
     }
 }
@@ -836,6 +945,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     let storage = PathStorage::new(&ctx.growth)?;
     let pctx = PathCtx {
         dataset,
+        evidence_input: ctx.evidence_input.clone(),
         scope,
         program: PathProgram::compile_admitted(path, dataset, &ctx.growth, |error| {
             ctx.workspace.source_error(error)
@@ -860,14 +970,14 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     // behind `node_reach`, which returns a `Vec` either way (with genuine
     // duplicates in the bag case, and none in the set case).
     let bag = !pctx.program.has_repetition();
-    let node_reach = |node: D::Id, forward: bool| -> Result<crate::AdmittedVec<D::Id>, EvalError> {
+    let node_reach = |node: D::Id, forward: bool| -> Result<PathBag<D::Id>, EvalError> {
         if bag {
             bag_reach(ROOT_OP, node, forward, &pctx)
         } else {
             let reached = reach(ROOT_OP, node, forward, &pctx)?;
-            let mut nodes = crate::AdmittedVec::with_capacity(reached.len(), &pctx.growth)?;
+            let mut nodes = PathBag::new(&pctx.growth);
             for &node in reached.iter() {
-                nodes.push(node)?;
+                nodes.push(node, reached.evidence.get(&node).cloned(), &pctx.growth)?;
             }
             Ok(nodes)
         }
@@ -885,7 +995,8 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     let push_pair = |ctx: &EvalCtx<'_, D>,
                      rows: &mut crate::solution::RowsBuilder<D::Id>,
                      s_id: Option<SolutionTerm<D::Id>>,
-                     o_id: Option<SolutionTerm<D::Id>>|
+                     o_id: Option<SolutionTerm<D::Id>>,
+                     evidence: Option<crate::evidence_exec::RowEvidence>|
      -> Result<bool, EvalError> {
         // LIMIT / answer-cap pushdown proves rows at and beyond this point irrelevant to
         // the query and may stop exactly at its bound. A cell ceiling is inclusive and
@@ -907,7 +1018,11 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             }
             Ok(())
         })?;
-        rows.push_row(row)?;
+        let evidence = match &ctx.evidence_input {
+            Some(input) => Some(input.found_witness(&evidence.unwrap_or_default(), &ctx.growth)?),
+            None => evidence,
+        };
+        rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
         Ok(true)
     };
 
@@ -920,14 +1035,31 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             // derivation count is a single O(log n) membership probe on the memoized
             // set — no O(n) collect-into-`Vec` + filter pass. The BAG case keeps its
             // multiset walk, where duplicates ARE the answer.
-            let count = if bag {
-                node_reach(sid, true)?.iter().filter(|&&y| y == oid).count()
+            if bag {
+                let reached = node_reach(sid, true)?;
+                for (position, &target) in reached.iter().enumerate() {
+                    if target == oid
+                        && !push_pair(
+                            ctx,
+                            &mut rows,
+                            None,
+                            None,
+                            reached.evidence.get(&position).cloned(),
+                        )?
+                    {
+                        break;
+                    }
+                }
             } else {
-                usize::from(reach(ROOT_OP, sid, true, &pctx)?.contains(&oid))
-            };
-            for _ in 0..count {
-                if !push_pair(ctx, &mut rows, None, None)? {
-                    break;
+                let reached = reach(ROOT_OP, sid, true, &pctx)?;
+                if reached.contains(&oid) {
+                    let _ = push_pair(
+                        ctx,
+                        &mut rows,
+                        None,
+                        None,
+                        reached.evidence.get(&oid).cloned(),
+                    )?;
                 }
             }
         }
@@ -936,7 +1068,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // SAME term (an absent node has no edges to traverse for anything else).
         (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
             if ctx.growth.terms_equal(&sval, &oval)? && pctx.program.is_reflexive() {
-                let _ = push_pair(ctx, &mut rows, None, None)?;
+                let _ = push_pair(ctx, &mut rows, None, None, None)?;
             }
         }
         // One side present in the dataset, the other absent: they cannot be the
@@ -946,12 +1078,14 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         | (Endpoint::BoundAbsent(_), Endpoint::Bound(_)) => {}
         // Subject ground, object variable: walk forward from the subject.
         (Endpoint::Bound(sid), Endpoint::Free { .. }) => {
-            for y in node_reach(sid, true)? {
+            let reached = node_reach(sid, true)?;
+            for (position, &y) in reached.iter().enumerate() {
                 if !push_pair(
                     ctx,
                     &mut rows,
                     Some(SolutionTerm::Existing(sid)),
                     Some(SolutionTerm::Existing(y)),
+                    reached.evidence.get(&position).cloned(),
                 )? {
                     break;
                 }
@@ -971,17 +1105,19 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // `purrdf_sparql_algebra`'s algebra validator on this same
                 // profile. See `ScratchInterner::intern`.
                 let term = ctx.intern_workspace_term(sval)?;
-                let _ = push_pair(ctx, &mut rows, term, term)?;
+                let _ = push_pair(ctx, &mut rows, term, term, None)?;
             }
         }
         // Object ground, subject variable: walk backward from the object.
         (Endpoint::Free { .. }, Endpoint::Bound(oid)) => {
-            for x in node_reach(oid, false)? {
+            let reached = node_reach(oid, false)?;
+            for (position, &x) in reached.iter().enumerate() {
                 if !push_pair(
                     ctx,
                     &mut rows,
                     Some(SolutionTerm::Existing(x)),
                     Some(SolutionTerm::Existing(oid)),
+                    reached.evidence.get(&position).cloned(),
                 )? {
                     break;
                 }
@@ -992,7 +1128,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if pctx.program.is_reflexive() {
                 let term = ctx.intern_workspace_term(oval)?;
-                let _ = push_pair(ctx, &mut rows, term, term)?;
+                let _ = push_pair(ctx, &mut rows, term, term, None)?;
             }
         }
         // Both variable: enumerate the node universe (so zero-length `*`/`?`/`{0,…}`
@@ -1010,23 +1146,28 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // itself — and for a bag path, count EACH derivation as its own row.
                 let reflexive = pctx.program.is_reflexive();
                 'nodes: for x in node_universe(&pctx)? {
-                    if reflexive {
+                    if reflexive && ctx.evidence_input.is_none() {
                         if !push_pair(
                             ctx,
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(x)),
+                            None,
                         )? {
                             break;
                         }
                     } else {
-                        let count = node_reach(x, true)?.into_iter().filter(|&y| y == x).count();
-                        for _ in 0..count {
+                        let reached = node_reach(x, true)?;
+                        for (position, &target) in reached.iter().enumerate() {
+                            if target != x {
+                                continue;
+                            }
                             if !push_pair(
                                 ctx,
                                 &mut rows,
                                 Some(SolutionTerm::Existing(x)),
                                 Some(SolutionTerm::Existing(x)),
+                                reached.evidence.get(&position).cloned(),
                             )? {
                                 break 'nodes;
                             }
@@ -1037,12 +1178,14 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // PINNED: spec-mandated distinct-var enumeration — enumerate every node
                 // in the universe and materialise all forward reachability. DO NOT alter.
                 'nodes: for x in node_universe(&pctx)? {
-                    for y in node_reach(x, true)? {
+                    let reached = node_reach(x, true)?;
+                    for (position, &y) in reached.iter().enumerate() {
                         if !push_pair(
                             ctx,
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(y)),
+                            reached.evidence.get(&position).cloned(),
                         )? {
                             break 'nodes;
                         }
@@ -1199,7 +1342,7 @@ fn reach<D: DatasetView + Sync>(
         let step = top.step(returned.take(), ctx);
         ctx.storage.check()?;
         match step {
-            Step::Call(frame) => frames.push(frame),
+            Step::Call(request) => frames.push(request.into_frame(&ctx.storage)),
             Step::Return(value) => {
                 let _ = frames.pop();
                 if frames.is_empty() {
@@ -1255,15 +1398,53 @@ impl<I: ViewTermId> Value<I> {
 }
 
 /// What a frame asks of the machine after one step.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the next path-machine step stays inline; boxing a frame would add a separate allocation beyond the original admitted frame array"
-)]
 enum Step<I: ViewTermId> {
-    /// Run `frame` to completion, then resume this frame with its value.
-    Call(Frame<I>),
+    /// Construct the child at the original admitted frame stack.
+    Call(FrameRequest<I>),
     /// This frame is finished with this value.
     Return(Value<I>),
+}
+
+/// Only a child request's inputs cross the stepping boundary. Suspended loop state
+/// belongs to the admitted frame stack rather than a copied return temporary.
+enum FrameRequest<I: ViewTermId> {
+    Reach(usize, I, bool),
+    Sequence(usize, I, bool),
+    Alternative(usize, I, bool),
+    Closure(usize, PathSet<I>, bool),
+    Range(usize, I, bool, u32, Option<u32>),
+    StepLevel(usize, PathSet<I>, bool),
+    ApplyPower(usize, PathSet<I>, bool, u32, PowerMemoOwner<I>),
+    PowerReach(usize, I, bool, u32, PowerMemoOwner<I>),
+}
+
+impl<I: ViewTermId> FrameRequest<I> {
+    fn into_frame(self, storage: &PathStorageOwner) -> Frame<I> {
+        match self {
+            Self::Reach(op, node, forward) => Frame::Reach(ReachFrame::new(op, node, forward)),
+            Self::Sequence(op, node, forward) => {
+                Frame::Sequence(SequenceFrame::new(op, node, forward, storage))
+            }
+            Self::Alternative(op, node, forward) => {
+                Frame::Alternative(AlternativeFrame::new(op, node, forward, storage))
+            }
+            Self::Closure(inner, seeds, forward) => {
+                Frame::Closure(ClosureFrame::new(inner, seeds, forward))
+            }
+            Self::Range(inner, node, forward, min, max) => {
+                Frame::Range(RangeFrame::new(inner, node, forward, min, max, storage))
+            }
+            Self::StepLevel(inner, current, forward) => {
+                Frame::StepLevel(StepLevelFrame::new(inner, current, forward))
+            }
+            Self::ApplyPower(inner, current, forward, bit, powers) => {
+                Frame::ApplyPower(ApplyPowerFrame::new(inner, current, forward, bit, powers))
+            }
+            Self::PowerReach(inner, node, forward, bit, powers) => {
+                Frame::PowerReach(PowerReachFrame::new(inner, node, forward, bit, powers))
+            }
+        }
+    }
 }
 
 /// One suspended operator of the reach machine, holding the loop state its
@@ -1390,43 +1571,36 @@ impl<I: ViewTermId> ReachFrame<I> {
             PathOp::Wildcard(namespace) => {
                 self.finish(step_wildcard(*namespace, self.node, self.forward, ctx), ctx)
             }
-            PathOp::Sequence(_) => Step::Call(Frame::Sequence(SequenceFrame::new(
-                self.op,
-                self.node,
-                self.forward,
-                &ctx.storage,
-            ))),
-            PathOp::Alternative(_) => Step::Call(Frame::Alternative(AlternativeFrame::new(
-                self.op,
-                self.node,
-                self.forward,
-                &ctx.storage,
-            ))),
+            PathOp::Sequence(_) => {
+                Step::Call(FrameRequest::Sequence(self.op, self.node, self.forward))
+            }
+            PathOp::Alternative(_) => {
+                Step::Call(FrameRequest::Alternative(self.op, self.node, self.forward))
+            }
             PathOp::ZeroOrOne(inner) => {
                 self.adds_node = true;
-                Step::Call(Frame::Reach(Self::new(*inner, self.node, self.forward)))
+                Step::Call(FrameRequest::Reach(*inner, self.node, self.forward))
             }
             PathOp::ZeroOrMore(inner) => {
                 self.adds_node = true;
-                Step::Call(Frame::Closure(ClosureFrame::new(
+                Step::Call(FrameRequest::Closure(
                     *inner,
-                    PathVec::from_iter([self.node], &ctx.storage),
+                    PathSet::from_iter([self.node], &ctx.storage),
                     self.forward,
-                )))
+                ))
             }
-            PathOp::OneOrMore(inner) => Step::Call(Frame::Closure(ClosureFrame::new(
+            PathOp::OneOrMore(inner) => Step::Call(FrameRequest::Closure(
                 *inner,
-                PathVec::from_iter([self.node], &ctx.storage),
+                PathSet::from_iter([self.node], &ctx.storage),
                 self.forward,
-            ))),
-            PathOp::Range { inner, min, max } => Step::Call(Frame::Range(RangeFrame::new(
+            )),
+            PathOp::Range { inner, min, max } => Step::Call(FrameRequest::Range(
                 *inner,
                 self.node,
                 self.forward,
                 *min,
                 *max,
-                &ctx.storage,
-            ))),
+            )),
             PathOp::Reverse(_) => {
                 unreachable!("every reverse at this op was resolved into the direction flag")
             }
@@ -1470,7 +1644,7 @@ struct SequenceFrame<I: ViewTermId> {
     /// How many elements the frontier has been stepped through.
     k: usize,
     /// The frontier after `k` elements, in ascending order.
-    frontier: PathVec<I>,
+    frontier: PathSet<I>,
     /// How many frontier nodes have been stepped through the current element.
     pos: usize,
     /// What the frontier has reached so far through the current element.
@@ -1483,7 +1657,7 @@ impl<I: ViewTermId> SequenceFrame<I> {
             op,
             forward,
             k: 0,
-            frontier: PathVec::from_iter([node], storage),
+            frontier: PathSet::from_iter([node], storage),
             pos: 0,
             next: PathSet::new(storage),
         }
@@ -1495,16 +1669,18 @@ impl<I: ViewTermId> SequenceFrame<I> {
         ctx: &PathCtx<'_, D>,
     ) -> Step<I> {
         if let Some(value) = returned {
-            self.next.extend(value.into_reach().iter().copied());
+            let reached = value.into_reach();
+            let original = self.frontier.evidence_of(self.frontier[self.pos]);
+            for &target in reached.iter() {
+                self.next
+                    .insert_composed(target, &original, reached.as_ref());
+            }
             self.pos += 1;
         }
         let elements = elements_of(&ctx.program, self.op);
         loop {
             if self.k == elements.len() {
-                return Step::Return(Value::Built(PathSet::from_iter(
-                    self.frontier.iter().copied(),
-                    &ctx.storage,
-                )));
+                return Step::Return(Value::Built(self.frontier.take()));
             }
             // A frontier that died stays dead: no later element can reach anything from it.
             if self.frontier.is_empty() {
@@ -1516,9 +1692,9 @@ impl<I: ViewTermId> SequenceFrame<I> {
                 } else {
                     elements.len() - 1 - self.k
                 }];
-                return Step::Call(Frame::Reach(ReachFrame::new(element, mid, self.forward)));
+                return Step::Call(FrameRequest::Reach(element, mid, self.forward));
             }
-            self.frontier = self.next.take().into_vec();
+            self.frontier = self.next.take();
             self.pos = 0;
             self.k += 1;
         }
@@ -1553,15 +1729,11 @@ impl<I: ViewTermId> AlternativeFrame<I> {
         ctx: &PathCtx<'_, D>,
     ) -> Step<I> {
         if let Some(value) = returned {
-            self.out.extend(value.into_reach().iter().copied());
+            self.out.extend_witnesses(value.into_reach().as_ref());
             self.i += 1;
         }
         match elements_of(&ctx.program, self.op).get(self.i) {
-            Some(&element) => Step::Call(Frame::Reach(ReachFrame::new(
-                element,
-                self.node,
-                self.forward,
-            ))),
+            Some(&element) => Step::Call(FrameRequest::Reach(element, self.node, self.forward)),
             None => Step::Return(Value::Built(self.out.take())),
         }
     }
@@ -1581,19 +1753,21 @@ struct ClosureFrame<I: ViewTermId> {
     inner: usize,
     forward: bool,
     /// The seeds whose one-step reaches make the initial frontier, in ascending order.
-    seeds: PathVec<I>,
+    seeds: PathSet<I>,
     /// How many seeds have been expanded into the frontier.
     seeded: usize,
     /// Whether every seed is expanded and the walk over the frontier has begun.
     walking: bool,
     frontier: PathVec<I>,
     visited: Visited<I>,
+    pending: crate::AdmittedMap<I, crate::evidence_exec::RowEvidence>,
+    expanded: Option<I>,
     result: PathSet<I>,
 }
 
 impl<I: ViewTermId> ClosureFrame<I> {
-    fn new(inner: usize, seeds: PathVec<I>, forward: bool) -> Self {
-        let storage = seeds.storage.clone();
+    fn new(inner: usize, seeds: PathSet<I>, forward: bool) -> Self {
+        let storage = seeds.values.storage.clone();
         Self {
             inner,
             forward,
@@ -1602,6 +1776,8 @@ impl<I: ViewTermId> ClosureFrame<I> {
             walking: false,
             frontier: PathVec::new(&storage),
             visited: Visited::new(&storage),
+            pending: crate::AdmittedMap::default(),
+            expanded: None,
             result: PathSet::new(&storage),
         }
     }
@@ -1613,36 +1789,97 @@ impl<I: ViewTermId> ClosureFrame<I> {
     ) -> Step<I> {
         if let Some(value) = returned {
             let reached = value.into_reach();
-            if self.walking {
-                for next in reached.iter().copied() {
-                    if !self.visited.contains(&next) {
-                        self.frontier.push(next);
+            let premise = if self.walking {
+                self.result.evidence_of(
+                    self.expanded
+                        .expect("a closure return follows an expanded node"),
+                )
+            } else {
+                self.seeds.evidence_of(self.seeds[self.seeded])
+            };
+            if premise.is_virtual()
+                && reached.evidence.is_empty()
+                && self.pending.is_empty()
+                && self.result.evidence.is_empty()
+            {
+                if self.walking {
+                    for &next in reached.iter() {
+                        if !self.visited.contains(&next) {
+                            self.frontier.push(next);
+                        }
                     }
+                } else {
+                    self.frontier.extend(reached.iter().copied());
                 }
             } else {
-                self.frontier.extend(reached.iter().copied());
+                for &next in reached.iter() {
+                    let combined = premise
+                        .combine(
+                            &reached.evidence_of(next),
+                            purrdf_core::evidence::EvidenceCombination::Conjunction,
+                        )
+                        .and_then(|incoming| {
+                            let original = self.pending.get(&next).cloned().unwrap_or_default();
+                            let merged = if self.pending.get(&next).is_some()
+                                || self.visited.contains(&next)
+                                || (!incoming.is_virtual() && self.frontier.contains(&next))
+                            {
+                                original.combine(
+                                    &incoming,
+                                    purrdf_core::evidence::EvidenceCombination::Alternatives,
+                                )?
+                            } else {
+                                incoming
+                            };
+                            let changed = !original.same_attachment(&merged);
+                            if merged.is_virtual() {
+                                self.pending.remove(&next);
+                            } else {
+                                self.pending.insert_admitted(next, merged, &ctx.growth)?;
+                            }
+                            Ok(changed)
+                        });
+                    match combined {
+                        Ok(changed) if changed || !self.visited.contains(&next) => {
+                            self.frontier.push(next);
+                        }
+                        Ok(_) => {}
+                        Err(error) => ctx.storage.fail(error),
+                    }
+                }
+            }
+            if !self.walking {
                 self.seeded += 1;
             }
         }
         if !self.walking {
             if let Some(&seed) = self.seeds.get(self.seeded) {
-                return Step::Call(Frame::Reach(ReachFrame::new(
-                    self.inner,
-                    seed,
-                    self.forward,
-                )));
+                return Step::Call(FrameRequest::Reach(self.inner, seed, self.forward));
             }
             self.walking = true;
         }
         while let Some(n) = self.frontier.pop() {
-            if !self.visited.insert(n) {
+            if self.pending.is_empty() && self.result.evidence.is_empty() {
+                if !self.visited.insert(n) {
+                    continue;
+                }
+                if ctx.stopped() {
+                    break;
+                }
+                self.result.insert(n);
+                self.expanded = Some(n);
+                return Step::Call(FrameRequest::Reach(self.inner, n, self.forward));
+            }
+            let evidence = self.pending.get(&n).cloned().unwrap_or_default();
+            if !self.visited.insert(n) && self.result.evidence_of(n).same_attachment(&evidence) {
                 continue;
             }
             if ctx.stopped() {
                 break;
             }
-            self.result.insert(n);
-            return Step::Call(Frame::Reach(ReachFrame::new(self.inner, n, self.forward)));
+            self.result.insert_evidence(n, evidence);
+            self.expanded = Some(n);
+            return Step::Call(FrameRequest::Reach(self.inner, n, self.forward));
         }
         Step::Return(Value::Built(self.result.take()))
     }
@@ -1746,11 +1983,11 @@ impl<I: ViewTermId> RangeFrame<I> {
 
     /// One frontier advance from `current`.
     fn advance(&mut self) -> Step<I> {
-        Step::Call(Frame::StepLevel(StepLevelFrame::new(
+        Step::Call(FrameRequest::StepLevel(
             self.inner,
             self.current.take(),
             self.forward,
-        )))
+        ))
     }
 
     fn step(&mut self, returned: Option<Value<I>>) -> Step<I> {
@@ -1810,7 +2047,7 @@ impl<I: ViewTermId> RangeFrame<I> {
                 self.level += 1;
             }
             RangePhase::Tail => {
-                self.out.extend(value.into_set());
+                self.out.extend_witnesses(&value.into_set());
                 return Some(self.finished());
             }
             RangePhase::Start => unreachable!("nothing is requested before the first step"),
@@ -1842,13 +2079,13 @@ impl<I: ViewTermId> RangeFrame<I> {
                         let Some(powers) = self.powers.as_ref() else {
                             return self.died();
                         };
-                        return Step::Call(Frame::ApplyPower(ApplyPowerFrame::new(
+                        return Step::Call(FrameRequest::ApplyPower(
                             self.inner,
                             self.current.take(),
                             self.forward,
                             self.bit,
                             Clone::clone(powers),
-                        )));
+                        ));
                     } else {
                         self.remaining >>= 1;
                         self.bit += 1;
@@ -1856,9 +2093,12 @@ impl<I: ViewTermId> RangeFrame<I> {
                 }
                 // The accumulating walk: union the levels in `[min, max]`.
                 RangePhase::Accumulate => {
-                    let before = self.out.len();
-                    self.out.extend(self.current.iter().copied());
-                    let grew = self.out.len() != before;
+                    let mut grew = false;
+                    for &target in self.current.iter() {
+                        grew |= self
+                            .out
+                            .insert_evidence(target, self.current.evidence_of(target));
+                    }
                     match self.max {
                         // The window closes at this level.
                         Some(m) if self.level >= m => return self.finished(),
@@ -1867,11 +2107,11 @@ impl<I: ViewTermId> RangeFrame<I> {
                         // since this arm always finishes.
                         None => {
                             self.phase = RangePhase::Tail;
-                            return Step::Call(Frame::Closure(ClosureFrame::new(
+                            return Step::Call(FrameRequest::Closure(
                                 self.inner,
-                                self.current.take().into_vec(),
+                                self.current.take(),
                                 self.forward,
-                            )));
+                            ));
                         }
                         Some(_) => {}
                     }
@@ -1897,7 +2137,7 @@ struct StepLevelFrame<I: ViewTermId> {
     inner: usize,
     forward: bool,
     /// The frontier being advanced, in ascending order.
-    current: PathVec<I>,
+    current: PathSet<I>,
     /// How many of its nodes have been expanded.
     pos: usize,
     next: PathSet<I>,
@@ -1909,7 +2149,7 @@ impl<I: ViewTermId> StepLevelFrame<I> {
         Self {
             inner,
             forward,
-            current: current.into_vec(),
+            current,
             pos: 0,
             next: PathSet::new(&storage),
         }
@@ -1934,13 +2174,17 @@ impl<I: ViewTermId> StepLevelFrame<I> {
                     if !ctx.charge_candidate() {
                         return Step::Return(Value::Level(None));
                     }
-                    self.next.insert(target);
+                    self.next.insert_composed(
+                        target,
+                        &self.current.evidence_of(self.current[self.pos]),
+                        reached.as_ref(),
+                    );
                 }
                 self.pos += 1;
             }
         }
         match self.current.get(self.pos) {
-            Some(&n) => Step::Call(Frame::Reach(ReachFrame::new(self.inner, n, self.forward))),
+            Some(&n) => Step::Call(FrameRequest::Reach(self.inner, n, self.forward)),
             None => Step::Return(Value::Level(Some(self.next.take()))),
         }
     }
@@ -1953,7 +2197,7 @@ struct ApplyPowerFrame<I: ViewTermId> {
     forward: bool,
     bit: u32,
     /// The sources, in ascending order.
-    current: PathVec<I>,
+    current: PathSet<I>,
     /// How many of them have been applied.
     pos: usize,
     out: PathSet<I>,
@@ -1973,7 +2217,7 @@ impl<I: ViewTermId> ApplyPowerFrame<I> {
             inner,
             forward,
             bit,
-            current: current.into_vec(),
+            current,
             pos: 0,
             out: PathSet::new(&storage),
             powers,
@@ -1994,18 +2238,22 @@ impl<I: ViewTermId> ApplyPowerFrame<I> {
                 if !ctx.charge_candidate() {
                     return Step::Return(Value::Level(None));
                 }
-                self.out.insert(target);
+                self.out.insert_composed(
+                    target,
+                    &self.current.evidence_of(self.current[self.pos]),
+                    reached.as_ref(),
+                );
             }
             self.pos += 1;
         }
         match self.current.get(self.pos) {
-            Some(&source) => Step::Call(Frame::PowerReach(PowerReachFrame::new(
+            Some(&source) => Step::Call(FrameRequest::PowerReach(
                 self.inner,
                 source,
                 self.forward,
                 self.bit,
                 Clone::clone(&self.powers),
-            ))),
+            )),
             None => Step::Return(Value::Level(Some(self.out.take()))),
         }
     }
@@ -2021,11 +2269,7 @@ enum PowerPhase<I: ViewTermId> {
     First,
     /// Composing the second half from each node of the first: `mids` are those nodes,
     /// `pos` how many have been composed, `out` what they reach.
-    Mids {
-        mids: PathVec<I>,
-        pos: usize,
-        out: PathSet<I>,
-    },
+    Mids { mids: SetRef<I>, pos: usize },
 }
 
 /// The nodes reachable from `node` by exactly `2^bit` applications of `inner`.
@@ -2039,6 +2283,7 @@ struct PowerReachFrame<I: ViewTermId> {
     bit: u32,
     powers: PowerMemoOwner<I>,
     phase: PowerPhase<I>,
+    out: Option<PathSet<I>>,
 }
 
 impl<I: ViewTermId> PowerReachFrame<I> {
@@ -2056,18 +2301,19 @@ impl<I: ViewTermId> PowerReachFrame<I> {
             bit,
             powers,
             phase: PowerPhase::Start,
+            out: None,
         }
     }
 
     /// The request for `inner^(2^(bit-1))` from `node`.
     fn half(&self, node: I) -> Step<I> {
-        Step::Call(Frame::PowerReach(Self::new(
+        Step::Call(FrameRequest::PowerReach(
             self.inner,
             node,
             self.forward,
             self.bit - 1,
             Clone::clone(&self.powers),
-        )))
+        ))
     }
 
     /// Return `reached`, memoized unless the budget cut it short.
@@ -2093,11 +2339,7 @@ impl<I: ViewTermId> PowerReachFrame<I> {
         note_power_expansion();
         if self.bit == 0 {
             self.phase = PowerPhase::Base;
-            return Step::Call(Frame::Reach(ReachFrame::new(
-                self.inner,
-                self.node,
-                self.forward,
-            )));
+            return Step::Call(FrameRequest::Reach(self.inner, self.node, self.forward));
         }
         self.phase = PowerPhase::First;
         self.half(self.node)
@@ -2119,12 +2361,16 @@ impl<I: ViewTermId> PowerReachFrame<I> {
                     return Step::Return(Value::Reach(SetRef::new(PathSet::new(&ctx.storage))));
                 }
                 self.phase = PowerPhase::Mids {
-                    mids: PathVec::from_iter(reached.iter().copied(), &ctx.storage),
+                    mids: reached,
                     pos: 0,
-                    out: PathSet::new(&ctx.storage),
                 };
+                self.out = Some(PathSet::new(&ctx.storage));
             }
-            PowerPhase::Mids { pos, out, .. } => {
+            PowerPhase::Mids { mids, pos } => {
+                let out = self
+                    .out
+                    .as_mut()
+                    .expect("the second half owns its original output");
                 if ctx.stopped() {
                     return Step::Return(Value::Reach(SetRef::new(out.take())));
                 }
@@ -2132,19 +2378,23 @@ impl<I: ViewTermId> PowerReachFrame<I> {
                     if !ctx.charge_candidate() {
                         return Step::Return(Value::Reach(SetRef::new(out.take())));
                     }
-                    out.insert(target);
+                    out.insert_composed(target, &mids.evidence_of(mids[*pos]), reached.as_ref());
                 }
                 *pos += 1;
             }
             PowerPhase::Start => unreachable!("nothing is requested before the first step"),
         }
-        let PowerPhase::Mids { mids, pos, out } = &mut self.phase else {
+        let PowerPhase::Mids { mids, pos } = &mut self.phase else {
             unreachable!("the second half is composed only after the first is known")
         };
         match mids.get(*pos) {
             Some(&mid) => self.half(mid),
             None => {
-                let reached = SetRef::new(out.take());
+                let reached = SetRef::new(
+                    self.out
+                        .take()
+                        .expect("a completed second half owns its output"),
+                );
                 self.finish(reached, ctx)
             }
         }
@@ -2154,6 +2404,63 @@ impl<I: ViewTermId> PowerReachFrame<I> {
 // ---------------------------------------------------------------------------
 // The bag machine (multiset semantics)
 // ---------------------------------------------------------------------------
+
+/// Native ordered derivations, retaining separate metadata even when several
+/// derivations reach the same endpoint. The default bag allocates only its
+/// original node buffer; non-default metadata is keyed by original ordinal.
+struct PathBag<I: ViewTermId> {
+    nodes: crate::AdmittedVec<I>,
+    evidence: crate::AdmittedMap<usize, crate::evidence_exec::RowEvidence>,
+}
+impl<I: ViewTermId> PathBag<I> {
+    fn from_set(
+        set: PathSet<I>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut bag = Self {
+            nodes: set.values.values,
+            evidence: crate::AdmittedMap::default(),
+        };
+        if !set.evidence.is_empty() {
+            for (position, &node) in bag.nodes.iter().enumerate() {
+                if let Some(evidence) = set.evidence.get(&node) {
+                    bag.evidence
+                        .insert_admitted(position, evidence.clone(), workspace)?;
+                }
+            }
+        }
+        Ok(bag)
+    }
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            nodes: crate::AdmittedVec::new(workspace),
+            evidence: crate::AdmittedMap::default(),
+        }
+    }
+    fn push(
+        &mut self,
+        node: I,
+        evidence: Option<crate::evidence_exec::RowEvidence>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let position = self.nodes.len();
+        self.nodes.push(node)?;
+        if let Some(evidence) = evidence.filter(|evidence| !evidence.is_virtual()) {
+            self.evidence
+                .insert_admitted(position, evidence, workspace)?;
+        }
+        Ok(())
+    }
+    fn evidence_of(&self, position: usize) -> crate::evidence_exec::RowEvidence {
+        self.evidence.get(&position).cloned().unwrap_or_default()
+    }
+}
+impl<I: ViewTermId> std::ops::Deref for PathBag<I> {
+    type Target = [I];
+    fn deref(&self) -> &[I] {
+        &self.nodes
+    }
+}
 
 /// The MULTISET of nodes `y` such that `(node,y)` (forward) or `(y,node)` (backward) is
 /// in `op`'s relation, for a path with NO repetition operator (see
@@ -2170,7 +2477,7 @@ fn bag_reach<D: DatasetView + Sync>(
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> Result<crate::AdmittedVec<D::Id>, EvalError> {
+) -> Result<PathBag<D::Id>, EvalError> {
     let mut frames = crate::AdmittedVec::new(&ctx.growth);
     frames.push(BagFrame::Reach { op, node, forward })?;
     let mut returned = None;
@@ -2203,7 +2510,7 @@ enum BagStep<I: ViewTermId> {
     /// This request becomes `frame`, which answers in its place.
     Replace(BagFrame<I>),
     /// This frame is finished with this bag.
-    Return(crate::AdmittedVec<I>),
+    Return(PathBag<I>),
 }
 
 /// One suspended operator of the bag machine.
@@ -2220,9 +2527,9 @@ enum BagFrame<I: ViewTermId> {
         op: usize,
         forward: bool,
         k: usize,
-        frontier: crate::AdmittedVec<I>,
+        frontier: PathBag<I>,
         pos: usize,
-        next: crate::AdmittedVec<I>,
+        next: PathBag<I>,
     },
     /// Each element's derivations in turn, in source order: the left-nested chain's bag
     /// union, `(a ⊎ b) ⊎ c`, concatenated the same way.
@@ -2231,14 +2538,14 @@ enum BagFrame<I: ViewTermId> {
         node: I,
         forward: bool,
         i: usize,
-        out: crate::AdmittedVec<I>,
+        out: PathBag<I>,
     },
 }
 
 impl<I: ViewTermId> BagFrame<I> {
     fn step<D: DatasetView<Id = I> + Sync>(
         &mut self,
-        returned: Option<crate::AdmittedVec<I>>,
+        returned: Option<PathBag<I>>,
         ctx: &PathCtx<'_, D>,
     ) -> Result<BagStep<I>, EvalError> {
         Ok(match self {
@@ -2252,8 +2559,23 @@ impl<I: ViewTermId> BagFrame<I> {
                 next,
             } => {
                 if let Some(bag) = returned {
-                    for node in bag {
-                        next.push(node)?;
+                    let premise = frontier.evidence.get(pos).cloned();
+                    for (position, &node) in bag.iter().enumerate() {
+                        let evidence = if premise.is_none() && bag.evidence.get(&position).is_none()
+                        {
+                            None
+                        } else {
+                            Some(
+                                premise
+                                    .as_ref()
+                                    .unwrap_or(&crate::evidence_exec::VIRTUAL_ROW_EVIDENCE)
+                                    .combine(
+                                        &bag.evidence_of(position),
+                                        purrdf_core::evidence::EvidenceCombination::Conjunction,
+                                    )?,
+                            )
+                        };
+                        next.push(node, evidence, &ctx.growth)?;
                     }
                     *pos += 1;
                 }
@@ -2262,11 +2584,11 @@ impl<I: ViewTermId> BagFrame<I> {
                     if *k == elements.len() {
                         return Ok(BagStep::Return(std::mem::replace(
                             frontier,
-                            crate::AdmittedVec::new(&ctx.growth),
+                            PathBag::new(&ctx.growth),
                         )));
                     }
                     if frontier.is_empty() {
-                        return Ok(BagStep::Return(crate::AdmittedVec::new(&ctx.growth)));
+                        return Ok(BagStep::Return(PathBag::new(&ctx.growth)));
                     }
                     if let Some(&mid) = frontier.get(*pos) {
                         let element = elements[if *forward {
@@ -2280,7 +2602,7 @@ impl<I: ViewTermId> BagFrame<I> {
                             forward: *forward,
                         }));
                     }
-                    *frontier = std::mem::replace(next, crate::AdmittedVec::new(&ctx.growth));
+                    *frontier = std::mem::replace(next, PathBag::new(&ctx.growth));
                     *pos = 0;
                     *k += 1;
                 }
@@ -2293,8 +2615,8 @@ impl<I: ViewTermId> BagFrame<I> {
                 out,
             } => {
                 if let Some(bag) = returned {
-                    for node in bag {
-                        out.push(node)?;
+                    for (position, &node) in bag.iter().enumerate() {
+                        out.push(node, bag.evidence.get(&position).cloned(), &ctx.growth)?;
                     }
                     *i += 1;
                 }
@@ -2304,10 +2626,7 @@ impl<I: ViewTermId> BagFrame<I> {
                         node: *node,
                         forward: *forward,
                     }),
-                    None => BagStep::Return(std::mem::replace(
-                        out,
-                        crate::AdmittedVec::new(&ctx.growth),
-                    )),
+                    None => BagStep::Return(std::mem::replace(out, PathBag::new(&ctx.growth))),
                 }
             }
         })
@@ -2333,7 +2652,7 @@ impl<I: ViewTermId> BagFrame<I> {
         };
         if let Some(leaf) = leaf {
             ctx.storage.check()?;
-            return Ok(BagStep::Return(leaf.into_vec().into_admitted()));
+            return Ok(BagStep::Return(PathBag::from_set(leaf, &ctx.growth)?));
         }
         Ok(match &ctx.program.ops[*op] {
             PathOp::Sequence(_) => BagStep::Replace(Self::Sequence {
@@ -2341,19 +2660,22 @@ impl<I: ViewTermId> BagFrame<I> {
                 forward: *forward,
                 k: 0,
                 frontier: {
-                    let mut frontier = crate::AdmittedVec::with_capacity(1, &ctx.growth)?;
-                    frontier.push(node)?;
+                    let mut frontier = PathBag {
+                        nodes: crate::AdmittedVec::with_capacity(1, &ctx.growth)?,
+                        evidence: crate::AdmittedMap::default(),
+                    };
+                    frontier.push(node, None, &ctx.growth)?;
                     frontier
                 },
                 pos: 0,
-                next: crate::AdmittedVec::new(&ctx.growth),
+                next: PathBag::new(&ctx.growth),
             }),
             PathOp::Alternative(_) => BagStep::Replace(Self::Alternative {
                 op: *op,
                 node,
                 forward: *forward,
                 i: 0,
-                out: crate::AdmittedVec::new(&ctx.growth),
+                out: PathBag::new(&ctx.growth),
             }),
             PathOp::ZeroOrMore(_)
             | PathOp::OneOrMore(_)
@@ -2399,7 +2721,7 @@ fn step_predicate<D: DatasetView + Sync>(
                     stopped = true;
                     return;
                 }
-                out.insert(q.o);
+                ctx.insert_claim(&mut out, &q, q.o);
             });
     } else {
         ctx.scope
@@ -2411,7 +2733,7 @@ fn step_predicate<D: DatasetView + Sync>(
                     stopped = true;
                     return;
                 }
-                out.insert(q.s);
+                ctx.insert_claim(&mut out, &q, q.s);
             });
     }
     out
@@ -2431,10 +2753,10 @@ fn step_negated<D: DatasetView + Sync>(
 ) -> PathSet<D::Id> {
     let mut out = PathSet::new(&ctx.storage);
     if let Some(excluded) = &sets.forward {
-        out.extend(step_excluding(excluded, node, forward, ctx));
+        out.extend_witnesses(&step_excluding(excluded, node, forward, ctx));
     }
     if let Some(excluded) = &sets.inverse {
-        out.extend(step_excluding(excluded, node, !forward, ctx));
+        out.extend_witnesses(&step_excluding(excluded, node, !forward, ctx));
     }
     out
 }
@@ -2461,7 +2783,7 @@ fn step_excluding<D: DatasetView + Sync>(
                     return;
                 }
                 if !excluded.contains(&q.p) {
-                    out.insert(q.o);
+                    ctx.insert_claim(&mut out, &q, q.o);
                 }
             });
     } else {
@@ -2475,7 +2797,7 @@ fn step_excluding<D: DatasetView + Sync>(
                     return;
                 }
                 if !excluded.contains(&q.p) {
-                    out.insert(q.s);
+                    ctx.insert_claim(&mut out, &q, q.s);
                 }
             });
     }
@@ -2516,7 +2838,7 @@ fn step_wildcard<D: DatasetView + Sync>(
                     return;
                 }
                 if pred_ok(q.p) {
-                    out.insert(q.o);
+                    ctx.insert_claim(&mut out, &q, q.o);
                 }
             });
     } else {
@@ -2530,7 +2852,7 @@ fn step_wildcard<D: DatasetView + Sync>(
                     return;
                 }
                 if pred_ok(q.p) {
-                    out.insert(q.s);
+                    ctx.insert_claim(&mut out, &q, q.s);
                 }
             });
     }

@@ -18,6 +18,8 @@ pub use boxed::{try_boxed, try_boxed_one};
 pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText};
 mod text;
 pub use text::OwnedText;
+mod ordered;
+pub use ordered::{OrderedIter, OrderedRange, OrderedTable};
 
 use core::alloc::Layout;
 use core::fmt;
@@ -67,6 +69,12 @@ pub struct Resident;
 impl Admission for Resident {
     fn resize(&mut self, _live_bytes: usize) -> Result<(), StorageError> {
         Ok(())
+    }
+}
+
+impl<A: Admission + ?Sized> Admission for &mut A {
+    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+        (**self).resize(live)
     }
 }
 
@@ -299,7 +307,9 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         match try_boxed(value) {
             Ok(value) => Ok(value),
             Err(_) => {
-                self.release_bytes(bytes)?;
+                // The allocator refused first. A subsequent refund refusal
+                // must not replace that original physical failure.
+                let _ = self.release_bytes(bytes);
                 Err(StorageError::AllocationFailed)
             }
         }
@@ -531,6 +541,25 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         self.push_str(text, ch.encode_utf8(&mut utf8))
     }
 
+    /// Append through the shared lexical emitters, admitting physical growth
+    /// before allocation and retaining the first failed fragment's cause.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn append_text(
+        &mut self,
+        text: &mut String,
+        emit: impl FnOnce(&mut dyn crate::text_out::TextOut),
+    ) -> Result<(), StorageError> {
+        let mut sink = FormatSink {
+            memory: self,
+            text,
+            failure: None,
+        };
+        emit(&mut sink);
+        sink.failure.map_or(Ok(()), Err)
+    }
+
     /// Render borrowed native fields once, admitting each actual UTF-8 growth
     /// before allocation. The Display implementation must itself allocate no
     /// payload storage; this sink owns the rendered destination.
@@ -576,11 +605,30 @@ struct FormatSink<'m, 'a, S: Admission + ?Sized> {
 
 impl<S: Admission + ?Sized> fmt::Write for FormatSink<'_, '_, S> {
     fn write_str(&mut self, text: &str) -> fmt::Result {
+        if self.failure.is_some() {
+            return Err(fmt::Error);
+        }
         let result = self.memory.push_str(self.text, text);
         result.map_err(|failure| {
             self.failure = Some(failure);
             fmt::Error
         })
+    }
+}
+
+impl<S: Admission + ?Sized> crate::text_out::TextOut for FormatSink<'_, '_, S> {
+    fn push_str(&mut self, text: &str) {
+        // TextOut records failures in its sink; append_text returns that cause.
+        let _ = fmt::Write::write_str(self, text);
+    }
+
+    fn push(&mut self, ch: char) {
+        let mut utf8 = [0; 4];
+        crate::text_out::TextOut::push_str(self, ch.encode_utf8(&mut utf8));
+    }
+
+    fn failed(&self) -> bool {
+        self.failure.is_some()
     }
 }
 

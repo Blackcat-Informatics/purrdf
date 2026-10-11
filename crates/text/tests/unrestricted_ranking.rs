@@ -28,44 +28,51 @@ fn a_complete_five_thousand_term_needle_reaches_the_public_relation() {
         Arc::new(TextSearchRelation::new(index)),
     );
     let environment = ExtensionEnv::over_relations(registry).expect("registry");
-    let query = format!(
-        "SELECT ?doc ?score ?rank ?matched WHERE {{ ?doc <https://example.org/search> (\"{needle}\" ?score ?rank ?lang ?matched) }} ORDER BY ?rank"
+    let scoped = format!(
+        "<<( <{}> <{}> \"{needle}\" )>>",
+        cases::NOTE,
+        purrdf_core::vocab::rdf::VALUE
     );
-    let result = NativeSparqlEngine::new()
-        .query_with_options_view(
-            &*dataset,
-            SparqlRequest {
-                query: &query,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions::new().with_env(&environment),
-        )
-        .expect("actual public query");
-    let SparqlResult::Solutions { rows, .. } = result else {
-        panic!("SELECT result");
-    };
-    assert_eq!(rows.len(), 2);
-    for (at, row) in rows.iter().enumerate() {
-        assert_eq!(
-            row[0],
-            Some(TermValue::iri(format!(
-                "https://example.org/{}",
-                if at == 0 { "a" } else { "b" }
-            )))
+    for argument in [format!("\"{needle}\""), scoped] {
+        let query = format!(
+            "SELECT ?doc ?score ?rank ?matched WHERE {{ ?doc <https://example.org/search> ({argument} ?score ?rank ?lang ?matched) }} ORDER BY ?rank"
         );
-        assert_eq!(
-            row[1],
-            Some(TermValue::typed_literal(
-                Fixed::from_raw(expected[at]).to_decimal_lexical(),
-                purrdf_core::datatype::XSD_DECIMAL
-            ))
-        );
-        assert_eq!(row[2], Some(TermValue::integer((at + 1) as i128)));
-        assert_eq!(
-            row[3],
-            Some(TermValue::integer(if at == 0 { 5_000 } else { 2_500 }))
-        );
+        let result = NativeSparqlEngine::new()
+            .query_with_options_view(
+                &*dataset,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::new().with_env(&environment),
+            )
+            .expect("actual public query");
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("SELECT result");
+        };
+        assert_eq!(rows.len(), 2);
+        for (at, row) in rows.iter().enumerate() {
+            assert_eq!(
+                row[0],
+                Some(TermValue::iri(format!(
+                    "https://example.org/{}",
+                    if at == 0 { "a" } else { "b" }
+                )))
+            );
+            assert_eq!(
+                row[1],
+                Some(TermValue::typed_literal(
+                    Fixed::from_raw(expected[at]).to_decimal_lexical(),
+                    purrdf_core::datatype::XSD_DECIMAL
+                ))
+            );
+            assert_eq!(row[2], Some(TermValue::integer((at + 1) as i128)));
+            assert_eq!(
+                row[3],
+                Some(TermValue::integer(if at == 0 { 5_000 } else { 2_500 }))
+            );
+        }
     }
 }
 

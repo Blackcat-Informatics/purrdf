@@ -51,7 +51,7 @@
 //!   exhaustion, so a target whose finality test read one rank further would hand
 //!   back a different terminal report for identical streams.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use purrdf_retrieval::{
     CandidateDepths, CandidateDomains, CandidateExecutionResult, DecayRule, DomainTag,
@@ -557,8 +557,11 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     expected.push(1); // this one declared itself short
     framed(&mut expected, REASON);
     assert_eq!(
-        result.trailer.evidence_canonical_bytes(),
-        expected,
+        &**result
+            .trailer
+            .evidence_canonical_bytes()
+            .expect("canonical export is admitted"),
+        expected.as_slice(),
         "the evidence encoding is the same bytes on both targets"
     );
 
@@ -582,9 +585,9 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     assert_eq!(
         result.trailer.exactness,
         ScoreExactness::Estimated {
-            deficit: BTreeSet::from([iri(STRATUM_TWO)]),
-            inflation: BTreeSet::from([iri(STRATUM_TWO)]),
-            unbounded: BTreeSet::new(),
+            deficit: purrdf_retrieval::fixture::iri_members([iri(STRATUM_TWO)]),
+            inflation: purrdf_retrieval::fixture::iri_members([iri(STRATUM_TWO)]),
+            unbounded: purrdf_retrieval::fixture::iri_members([]),
         },
         "the shortfall reaches the exactness verdict identically on both targets"
     );
@@ -673,28 +676,49 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     );
     let result = ready(union(
         CandidateExecutionResult {
-            streams: vec![ReadStratum {
-                stratum: stratum.clone(),
-                plan_id,
-                requested_depth: 3,
-                contract: contract.clone(),
-                attestation: PfAttestation::UNDECLARED,
-                stream: RankedStreamImpl::new(
-                    vec![
-                        (1, Term::new("alpha"), RowBlock::Undeclared),
-                        (2, Term::new("alpha"), RowBlock::Undeclared),
-                        (3, Term::new("beta"), RowBlock::Undeclared),
-                    ],
-                    StreamEnding::Exhausted,
-                ),
-            }],
-            statuses: purrdf_core::FastMap::default(),
-            contracts: std::iter::once((stratum.clone(), contract)).collect(),
+            streams: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                [ReadStratum {
+                    admission_failure_settlement: None,
+                    stratum: stratum.clone(),
+                    plan_id,
+                    requested_depth: 3,
+                    contract: contract.clone(),
+                    attestation: PfAttestation::UNDECLARED,
+                    stream: RankedStreamImpl::new(
+                        vec![
+                            (1, Term::new("alpha"), RowBlock::Undeclared),
+                            (2, Term::new("alpha"), RowBlock::Undeclared),
+                            (3, Term::new("beta"), RowBlock::Undeclared),
+                        ],
+                        StreamEnding::Exhausted,
+                    ),
+                }],
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller fixture storage"),
+            statuses: purrdf_sparql_eval::AdmittedOrderedMap::new(
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            ),
+            contracts: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    std::iter::once(Ok((stratum.clone(), contract))),
+                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                )
+                .expect("caller contract arena"),
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller contract control"),
             plan_id,
             depths: depths.clone(),
-            unserved_terms: Vec::new(),
-            producer_bindings: Vec::new(),
-            producer_decisions: Vec::new(),
+            unserved_terms: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedVec::new(
+                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                ),
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller empty loss"),
+            producer_bindings: std::sync::Arc::new(Vec::new()).into(),
+            producer_decisions: std::sync::Arc::new(Vec::new()).into(),
         },
         &depths,
     ))
@@ -702,10 +726,13 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     assert!(result.completed_prefix);
     assert_eq!(result.candidates.len(), 2);
     assert_eq!(
-        result.candidates[&Term::new("alpha")].ranks[&stratum],
+        result.candidates[&Term::new("alpha")].ranks[&stratum].as_slice(),
         [1, 2]
     );
-    assert_eq!(result.candidates[&Term::new("beta")].ranks[&stratum], [3]);
+    assert_eq!(
+        result.candidates[&Term::new("beta")].ranks[&stratum].as_slice(),
+        [3]
+    );
     let mut expected = Vec::new();
     expected.extend_from_slice(&1_u16.to_le_bytes());
     framed(&mut expected, "candidate-union");
@@ -749,7 +776,12 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
         // original bindings, decisions, unserved terms
         expected.extend_from_slice(&0_u64.to_le_bytes());
     }
-    assert_eq!(result.canonical_bytes(), expected);
+    assert_eq!(
+        &**result
+            .canonical_bytes()
+            .expect("canonical export is admitted"),
+        expected.as_slice()
+    );
 }
 
 fn caller_candidate_depths_reach_the_same_native_query_bounds_on_both_targets() {

@@ -11,10 +11,10 @@
 //! always remain authored.
 
 use super::{
-    ATOM_ARITY, ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, JoinGroup,
-    JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
-    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor, TermId,
-    delta_can_match, emit_solution, extend_slot_solutions, extend_solutions_leapfrog,
+    ATOM_ARITY, ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence,
+    JoinGroup, JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore,
+    RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
+    TermId, delta_can_match, emit_solution, extend_slot_solutions, extend_solutions_leapfrog,
     source_heights, source_preference,
 };
 
@@ -155,6 +155,7 @@ fn full_matches(
     entry: RuleEntry<'_>,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
 ) -> Result<Vec<SlotSolution>, EvalError> {
     factor_matches(
         factor,
@@ -162,6 +163,7 @@ fn full_matches(
         snapshot,
         governor,
         JoinScan::Uniform(Scan::Full),
+        evidence,
     )
 }
 
@@ -172,6 +174,7 @@ fn factor_matches(
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
     scan: JoinScan,
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
 ) -> Result<Vec<SlotSolution>, EvalError> {
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
     let binary = |position, partial: &[SlotSolution], governor: &mut StepGovernor| {
@@ -225,15 +228,25 @@ fn factor_matches(
             break;
         }
         solution.sources.sort_by_key(|source| source.body_index);
-        if factor.negated.iter().any(|&index| {
-            governor.spent()
-                || entry.runtime.negated[index].satisfied(&solution, snapshot.rel, governor)
-        }) {
+        let mut blocked = false;
+        for &index in &factor.negated {
+            if governor.spent()
+                || entry.runtime.negated[index].blocks(
+                    &mut solution,
+                    snapshot.rel,
+                    governor,
+                    evidence,
+                )?
+            {
+                blocked = true;
+                break;
+            }
+        }
+        if blocked {
             continue;
         }
-        let mut blocked = false;
         for &index in &factor.negations {
-            if entry.runtime.negations[index].holds(
+            let (holds, negative) = entry.runtime.negations[index].blocks(
                 GroupProbe {
                     solution: &solution,
                     rel: snapshot.rel,
@@ -242,7 +255,12 @@ fn factor_matches(
                     clause: entry.rule,
                 },
                 governor,
-            )? {
+                evidence,
+            )?;
+            if let (Some(id), Some(owner)) = (negative, evidence.as_deref_mut()) {
+                solution.retain_negative(id, owner)?;
+            }
+            if holds {
                 blocked = true;
                 break;
             }
@@ -271,6 +289,7 @@ fn new_matches(
     entry: RuleEntry<'_>,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
 ) -> Result<Vec<SlotSolution>, EvalError> {
     let join = JoinSnapshot {
         rel: snapshot.rel,
@@ -287,6 +306,7 @@ fn new_matches(
             snapshot,
             governor,
             JoinScan::DeltaPosition(position),
+            evidence,
         )?);
         if governor.spent() {
             break;
@@ -300,10 +320,11 @@ fn partial_relations(
     entry: RuleEntry<'_>,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
 ) -> Result<Vec<Vec<SlotSolution>>, EvalError> {
     let mut relations = Vec::with_capacity(entry.runtime.factors.len());
     for factor in &entry.runtime.factors {
-        relations.push(new_matches(factor, entry, snapshot, governor)?);
+        relations.push(new_matches(factor, entry, snapshot, governor, evidence)?);
         if governor.spent() {
             return Ok(Vec::new());
         }
@@ -319,7 +340,7 @@ fn partial_relations(
         if productive[..position].iter().any(|&active| active) {
             // A preceding New anchor requires this factor Full. Reuse that owned
             // relation for every mode instead of retaining a second New copy.
-            relations[position] = full_matches(factor, entry, snapshot, governor)?;
+            relations[position] = full_matches(factor, entry, snapshot, governor, evidence)?;
         } else if productive[position + 1..].iter().any(|&active| active) {
             // Only later anchors need this factor, so Full tuples are unnecessary:
             // retain its discovered New tuples and match the disjoint Old context.
@@ -329,6 +350,7 @@ fn partial_relations(
                 snapshot,
                 governor,
                 JoinScan::Uniform(Scan::OldOnly),
+                evidence,
             )?);
         }
         if relations[position].is_empty() || governor.spent() {
@@ -351,17 +373,19 @@ struct Threshold<'a> {
 
 /// Exact prefix frontiers for one projected binding and one scan mode.
 #[derive(Debug)]
-struct Frontier<'a> {
+pub(super) struct Frontier<'a> {
     /// Sorted distinct height thresholds; each stores both cumulative winners.
     thresholds: Vec<Threshold<'a>>,
+    /// Original projected witnesses retained only by an evidence-enabled query.
+    witnesses: Option<Vec<Witness<'a>>>,
 }
 
 impl<'a> Frontier<'a> {
     /// Build cumulative frontiers without assuming local height preference composes.
-    fn new(mut witnesses: Vec<Witness<'a>>, rel: &RelationStore) -> Self {
+    fn new(mut witnesses: Vec<Witness<'a>>, rel: &RelationStore, retain_witnesses: bool) -> Self {
         witnesses.sort_by_key(|witness| witness.maximum);
         let mut thresholds: Vec<Threshold<'a>> = Vec::new();
-        for witness in witnesses {
+        for witness in witnesses.iter().copied() {
             let mut next = thresholds.last().copied().unwrap_or(Threshold {
                 height: witness.maximum,
                 summed: witness,
@@ -389,7 +413,18 @@ impl<'a> Frontier<'a> {
                 thresholds.push(next);
             }
         }
-        Self { thresholds }
+        Self {
+            thresholds,
+            witnesses: retain_witnesses.then_some(witnesses),
+        }
+    }
+
+    pub(super) fn witnesses(&self) -> impl Iterator<Item = &SlotSolution> {
+        self.witnesses
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|witness| witness.solution)
     }
 
     /// Minimum attainable raw maximum.
@@ -423,6 +458,7 @@ fn project<'a>(
     slots: &[usize],
     snapshot: RoundSnapshot<'_>,
     delta: Delta,
+    retain_witnesses: bool,
 ) -> Projection<'a> {
     let mut full: BTreeMap<Vec<TermId>, Vec<Witness<'a>>> = BTreeMap::new();
     let mut old: BTreeMap<Vec<TermId>, Vec<Witness<'a>>> = BTreeMap::new();
@@ -457,7 +493,12 @@ fn project<'a>(
     let seal = |table: BTreeMap<Vec<TermId>, Vec<Witness<'a>>>| {
         table
             .into_iter()
-            .map(|(key, witnesses)| (key, Frontier::new(witnesses, snapshot.rel)))
+            .map(|(key, witnesses)| {
+                (
+                    key,
+                    Frontier::new(witnesses, snapshot.rel, retain_witnesses),
+                )
+            })
             .collect()
     };
     Projection {
@@ -496,7 +537,12 @@ struct Product<'a, 'r> {
 
 impl<'r> Product<'_, 'r> {
     /// Stream necessary projected combinations with a borrowed heap odometer.
-    fn visit(&self, buffer: &mut RoundBuffer<'r>, governor: &mut StepGovernor) {
+    fn visit(
+        &self,
+        buffer: &mut RoundBuffer<'r>,
+        governor: &mut StepGovernor,
+        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
+    ) -> Result<(), EvalError> {
         let mut cursors: Vec<_> = self.tables.iter().map(|table| table.values()).collect();
         let mut chosen = Vec::with_capacity(self.tables.len());
         let mut position = 0;
@@ -504,7 +550,7 @@ impl<'r> Product<'_, 'r> {
             if let Some(frontier) = cursors[position].next() {
                 chosen.push(frontier);
                 if chosen.len() == self.tables.len() {
-                    self.emit(&chosen, buffer, governor);
+                    self.emit(&chosen, buffer, governor, evidence)?;
                     chosen.pop();
                 } else {
                     position += 1;
@@ -517,6 +563,7 @@ impl<'r> Product<'_, 'r> {
                 chosen.pop();
             }
         }
+        Ok(())
     }
 
     /// Choose the exact global witness for one projected combination, then emit it.
@@ -525,9 +572,10 @@ impl<'r> Product<'_, 'r> {
         chosen: &[&Frontier<'_>],
         buffer: &mut RoundBuffer<'r>,
         governor: &mut StepGovernor,
-    ) {
+        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
+    ) -> Result<(), EvalError> {
         if !governor.charge() {
-            return;
+            return Ok(());
         }
         // Height masking means a factor's locally shortest proof may not minimize the
         // global sum. Saturated sums in turn mask that sum: pure lex then decides.
@@ -560,21 +608,41 @@ impl<'r> Product<'_, 'r> {
                 .extend_from_slice(&witness.solution.sources);
         }
         solution.sources.sort_by_key(|source| source.body_index);
+        let witness = match evidence.as_mut() {
+            Some(owner) => Some(owner.product(chosen)?),
+            None => None,
+        };
         emit_solution(
             buffer,
             self.head,
             &solution,
             self.entry.index,
             self.snapshot,
-        );
+            evidence,
+            HeadEvidence {
+                witness,
+                uses_absence: !self.entry.runtime.negated.is_empty()
+                    || !self.entry.runtime.negations.is_empty(),
+            },
+        )
     }
 }
 
 /// Evaluate independent factors and stream each conjunctive head's necessary product.
+#[cfg(test)]
 pub(super) fn evaluate<'r>(
     entry: RuleEntry<'r>,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
+) -> Result<RoundBuffer<'r>, EvalError> {
+    evaluate_with_evidence(entry, snapshot, governor, None)
+}
+
+pub(super) fn evaluate_with_evidence<'r>(
+    entry: RuleEntry<'r>,
+    snapshot: RoundSnapshot<'_>,
+    governor: &mut StepGovernor,
+    mut evidence: Option<&mut dyn super::evidence::RuleEvidence>,
 ) -> Result<RoundBuffer<'r>, EvalError> {
     let mut buffer = RoundBuffer::new();
     let join = JoinSnapshot {
@@ -589,14 +657,15 @@ pub(super) fn evaluate<'r>(
     {
         return Ok(buffer);
     }
-    if ground_blocked(entry, snapshot, governor)? {
+    let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
+    if blocked {
         buffer.join_steps = governor.consumed;
         return Ok(buffer);
     }
-    let relations = if entry.delta == Delta::all(snapshot.rel.row_count()) {
+    let mut relations = if entry.delta == Delta::all(snapshot.rel.row_count()) {
         let mut relations = Vec::with_capacity(entry.runtime.factors.len());
         for factor in &entry.runtime.factors {
-            let matches = full_matches(factor, entry, snapshot, governor)?;
+            let matches = full_matches(factor, entry, snapshot, governor, &mut evidence)?;
             if matches.is_empty() || governor.spent() {
                 buffer.join_steps = governor.consumed;
                 return Ok(buffer);
@@ -605,11 +674,18 @@ pub(super) fn evaluate<'r>(
         }
         relations
     } else {
-        partial_relations(entry, snapshot, governor)?
+        partial_relations(entry, snapshot, governor, &mut evidence)?
     };
     if relations.is_empty() {
         buffer.join_steps = governor.consumed;
         return Ok(buffer);
+    }
+    // A round-wide negative premise belongs to every product. Attach it to one
+    // existing factor's witnesses so the original product law carries it once.
+    if let (Some(id), Some(owner)) = (ground_evidence, evidence.as_deref_mut()) {
+        for solution in &mut relations[0] {
+            solution.retain_negative(id, owner)?;
+        }
     }
     for head in &entry.runtime.head {
         let projections: Vec<_> = entry
@@ -630,6 +706,7 @@ pub(super) fn evaluate<'r>(
                     &slots.into_iter().collect::<Vec<_>>(),
                     snapshot,
                     entry.delta,
+                    evidence.is_some(),
                 )
             })
             .collect();
@@ -652,7 +729,7 @@ pub(super) fn evaluate<'r>(
                 entry,
                 snapshot,
             }
-            .visit(&mut buffer, governor);
+            .visit(&mut buffer, governor, &mut evidence)?;
             if governor.spent() {
                 break;
             }
@@ -671,32 +748,34 @@ fn ground_blocked(
     entry: RuleEntry<'_>,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
-) -> Result<bool, EvalError> {
-    let empty = SlotSolution::empty(entry.plan.variables().len());
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
+) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError> {
+    let mut empty = SlotSolution::empty(entry.plan.variables().len());
     for (index, atom) in entry.runtime.negated.iter().enumerate() {
         if governor.spent() {
-            return Ok(true);
+            return Ok((true, empty.negative_evidence));
         }
         if !entry
             .runtime
             .factors
             .iter()
             .any(|factor| factor.negated.contains(&index))
-            && atom.satisfied(&empty, snapshot.rel, governor)
+            && atom.blocks(&mut empty, snapshot.rel, governor, evidence)?
         {
-            return Ok(true);
+            return Ok((true, empty.negative_evidence));
         }
     }
     for (index, group) in entry.runtime.negations.iter().enumerate() {
         if governor.spent() {
-            return Ok(true);
+            return Ok((true, empty.negative_evidence));
         }
         if !entry
             .runtime
             .factors
             .iter()
             .any(|factor| factor.negations.contains(&index))
-            && group.holds(
+        {
+            let (blocked, negative) = group.blocks(
                 GroupProbe {
                     solution: &empty,
                     rel: snapshot.rel,
@@ -705,12 +784,17 @@ fn ground_blocked(
                     clause: entry.rule,
                 },
                 governor,
-            )?
-        {
-            return Ok(true);
+                evidence,
+            )?;
+            if let (Some(id), Some(owner)) = (negative, evidence.as_deref_mut()) {
+                empty.retain_negative(id, owner)?;
+            }
+            if blocked {
+                return Ok((true, empty.negative_evidence));
+            }
         }
     }
-    Ok(false)
+    Ok((false, empty.negative_evidence))
 }
 
 #[cfg(test)]
@@ -1066,7 +1150,7 @@ mod tests {
             let mut stored_rows = 0;
             let mut stored_thresholds = 0;
             for factor in &runtime.factors {
-                let matches = full_matches(factor, entry, snapshot, &mut governor)
+                let matches = full_matches(factor, entry, snapshot, &mut governor, &mut None)
                     .expect("Full factor completes");
                 stored_rows += matches.len();
                 let slots = if factor.slots.contains(&head_slot) {
@@ -1074,7 +1158,7 @@ mod tests {
                 } else {
                     Vec::new()
                 };
-                let projection = project(&matches, &slots, snapshot, entry.delta);
+                let projection = project(&matches, &slots, snapshot, entry.delta, false);
                 assert!(projection.old.is_empty());
                 for frontier in projection.full.values().chain(projection.new.values()) {
                     stored_thresholds += frontier.thresholds.len();
@@ -1951,6 +2035,7 @@ mod tests {
                 },
             ],
             &rel,
+            false,
         );
         assert_eq!(frontier.at(u32::MAX - 1).lexical.solution, &summed);
         assert_eq!(frontier.at(u32::MAX).summed.solution, &summed);
