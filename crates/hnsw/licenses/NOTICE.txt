@@ -11,4 +11,3 @@ retains that grant. No trademark rights are granted.
 This inventory preserves notices for the source material and resolved
 build inputs described below. Platform alternatives and build inputs
 need not occur in every compiled binary. Test data is source-only.
-

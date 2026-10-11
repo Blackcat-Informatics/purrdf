@@ -51,4 +51,3 @@ Source: https://github.com/w3c/rdf-canon
 Evidence: LICENSING.md
 Notice: third-party/rdfc/0-W3C-software-document-2015.html
 Notice: third-party/rdfc/1-LICENSE.md
-
