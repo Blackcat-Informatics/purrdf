@@ -1,0 +1,52 @@
+$ stagectl pr-checks 532
+NEUTRAL    CodeQL
+IN_PROGRESS aarch64
+SUCCESS    windows-mtime
+SUCCESS    projection-oracles
+IN_PROGRESS Build The PurRDF Book
+SUCCESS    miri
+IN_PROGRESS cross-arch
+IN_PROGRESS test (lib)
+FAILURE    simd-asm-config (aarch64)
+FAILURE    simd-asm-config (x86_64)
+IN_PROGRESS wasm-exec
+IN_PROGRESS capi
+IN_PROGRESS simd-asm-config (x86_64-v3)
+IN_PROGRESS test (doc)
+IN_PROGRESS test (integration-4)
+IN_PROGRESS test (integration-3)
+FAILURE    doc
+FAILURE    msrv
+SUCCESS    wasm
+IN_PROGRESS wasm-package
+IN_PROGRESS test (integration-2)
+SUCCESS    wasm-schema-oracles
+IN_PROGRESS test (integration-1)
+FAILURE    workspace
+FAILURE    simd-asm-config (x86_64-v4)
+IN_PROGRESS conformance (core)
+IN_PROGRESS simd-asm-config (aarch64-neoverse-v1)
+SUCCESS    simd-asm-config (wasm32)
+SUCCESS    simd-asm-config (wasm32-simd128)
+IN_PROGRESS conformance (python)
+SUCCESS    conformance (shapes)
+IN_PROGRESS test (integration-5)
+SUCCESS    conformance (sparql)
+IN_PROGRESS cross-arch-riscv64 (suites)
+IN_PROGRESS cross-arch-riscv64 (determinism-serial)
+IN_PROGRESS cross-arch-riscv64 (determinism-one-worker)
+IN_PROGRESS cross-arch-riscv64 (determinism-more-workers)
+IN_PROGRESS avx512-sde
+IN_PROGRESS pytest
+SUCCESS    python-publisher
+SUCCESS    Analyze (python)
+SUCCESS    Analyze (c-cpp)
+SUCCESS    Analyze (javascript-typescript)
+IN_PROGRESS Analyze (rust)
+SUCCESS    Analyze (actions)
+SKIPPED    simd-asm-projection
+SKIPPED    native-profile-admission
+SKIPPED    native-profile
+SKIPPED    native-profile-comparison
+PENDING    CodeRabbit
+state: fail

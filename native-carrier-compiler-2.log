@@ -1,0 +1,51 @@
+Running as unit: ledger-native-carrier-compiler-2.service
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+error[E0592]: duplicate definitions with name `visit_terms_with_memory`
+   --> crates/rdf-core/src/ir/term_walk.rs:330:5
+    |
+290 | /     pub fn visit_terms_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, B>(
+291 | |         &self,
+292 | |         mut visit: impl FnMut(
+293 | |             &Self,
+...   |
+296 | |         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+297 | |     ) -> Result<ControlFlow<B>, purrdf_lex::allocation::StorageError> {
+    | |_____________________________________________________________________- other definition for `visit_terms_with_memory`
+...
+330 | /     pub fn visit_terms_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized, B>(
+331 | |         &'a self,
+332 | |         mut visit: impl FnMut(
+333 | |             &'a Self,
+...   |
+336 | |         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+337 | |     ) -> Result<ControlFlow<B>, purrdf_lex::allocation::StorageError> {
+    | |_____________________________________________________________________^ duplicate definitions for `visit_terms_with_memory`
+
+error[E0521]: borrowed data escapes outside of closure
+   --> crates/rdf-core/src/evidence/ledger/terms.rs:380:17
+    |
+375 |     let mut pending = Vec::new();
+    |         ----------- `pending` declared here, outside of the closure body
+...
+379 |             |term, memory| {
+    |              ---- `term` is a reference that is only valid in the closure body
+380 |                 memory.push(&mut pending, term)?;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `term` escapes the closure body here
+    |
+    = note: requirement occurs because of a mutable reference to `Vec<&TermValue>`
+    = note: mutable references are invariant over their type parameter
+    = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+Some errors have detailed explanations: E0521, E0592.
+For more information about an error, try `rustc --explain E0521`.
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 20.215s
+             CPU time consumed: 163ms
+                   Memory peak: 45.2M (swap: 0B)

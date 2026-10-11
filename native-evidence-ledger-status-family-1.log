@@ -1,0 +1,27 @@
+Running as unit: purrdf-evidence-native-ledger-family-1.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 1.99s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 4m 03s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/96ff3be4e197661d/out/evidence_ingress-96ff3be4e197661d)
+
+running 9 tests
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4min 7.311s
+             CPU time consumed: 285ms
+                   Memory peak: 64.7M (swap: 0B)

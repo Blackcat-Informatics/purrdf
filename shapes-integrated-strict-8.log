@@ -1,0 +1,1171 @@
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+error: an inclusive range would be more readable
+   --> crates/text/benches/../tests/support/shape_cases.rs:198:26
+    |
+198 |                         (0..(entry % 3 + 1))
+    |                          ^^^^^^^^^^^^^^^^^^ help: use: `0..=(entry % 3)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#range_plus_one
+    = note: `-D clippy::range-plus-one` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::range_plus_one)]`
+
+error: used `assert!` to check that a value is not empty
+   --> crates/text/benches/../tests/support/shape_cases.rs:453:5
+    |
+453 |     assert!(!rows.solutions().unwrap().1.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+    |
+453 -     assert!(!rows.solutions().unwrap().1.is_empty());
+453 +     assert_ne!(rows.solutions().unwrap().1, []);
+    |
+
+error: implicit borrow as raw pointer
+   --> crates/text/benches/../tests/support/shape_cases.rs:571:43
+    |
+571 |                         std::ptr::eq(row, &rows.rows()[index]),
+    |                                           ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+571 |                         std::ptr::eq(row, &raw const rows.rows()[index]),
+    |                                            +++++++++
+
+error: casts from `u64` to `i128` can be expressed infallibly using `From`
+   --> crates/text/benches/../tests/support/shape_cases.rs:702:33
+    |
+702 |                     .map(|at| ((seed as i128 % 19) - at as i128 / 2).to_string())
+    |                                 ^^^^^^^^^^^^
+    |
+    = help: an `as` cast can become silently lossy if the types change in the future
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#cast_lossless
+    = note: `-D clippy::cast-lossless` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::cast_lossless)]`
+help: use `i128::from` instead
+    |
+702 -                     .map(|at| ((seed as i128 % 19) - at as i128 / 2).to_string())
+702 +                     .map(|at| ((i128::from(seed) % 19) - at as i128 / 2).to_string())
+    |
+
+error: unnecessary structure name repetition
+    --> crates/text/benches/../tests/support/shape_cases.rs:1015:13
+     |
+1015 |             InvalidShape(self.0),
+     |             ^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+     = note: `-D clippy::use-self` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: redundant clone
+    --> crates/text/benches/../tests/support/shape_cases.rs:1115:26
+     |
+1115 |             fixture.index.clone(),
+     |                          ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/text/benches/../tests/support/shape_cases.rs:1115:13
+     |
+1115 |             fixture.index.clone(),
+     |             ^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+     = note: `-D clippy::redundant-clone` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: redundant clone
+    --> crates/text/benches/../tests/support/shape_cases.rs:1433:30
+     |
+1433 |                 fixture.index.clone(),
+     |                              ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/text/benches/../tests/support/shape_cases.rs:1433:17
+     |
+1433 |                 fixture.index.clone(),
+     |                 ^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+
+error: redundant closure
+    --> crates/text/benches/../tests/support/shape_cases.rs:1721:50
+     |
+1721 | ...                   .with_record(|record| record.identity())
+     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+     = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+    --> crates/text/benches/../tests/support/shape_cases.rs:1730:38
+     |
+1730 |                         .with_record(|record| record.identity())
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+    --> crates/text/benches/../tests/support/shape_cases.rs:1733:38
+     |
+1733 |                         .with_record(|record| record.identity())
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: used `assert!` to check that a value is not empty
+    --> crates/text/benches/../tests/support/shape_cases.rs:1984:5
+     |
+1984 |     assert!(!answer.rows.is_empty());
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+1984 -     assert!(!answer.rows.is_empty());
+1984 +     assert_ne!(answer.rows, [] as [(std::vec::Vec<std::option::Option<purrdf_core::TermValue>>, purrdf_hash::hex::Digest32, bool); 0]);
+     |
+
+error: redundant closure
+    --> crates/text/benches/../tests/support/shape_cases.rs:1993:26
+     |
+1993 |             .with_record(|record| record.identity())
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: used `assert!` to check that a value is not empty
+    --> crates/text/benches/../tests/support/shape_cases.rs:2052:13
+     |
+2052 |             assert!(!dictionary.rows.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+2052 -             assert!(!dictionary.rows.is_empty());
+2052 +             assert_ne!(dictionary.rows, [] as [(std::vec::Vec<std::option::Option<purrdf_core::TermValue>>, purrdf_hash::hex::Digest32, bool); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/text/benches/../tests/support/shape_cases.rs:2071:13
+     |
+2071 |             assert!(retained.rows.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+2071 -             assert!(retained.rows.is_empty());
+2071 +             assert_eq!(retained.rows, [] as [(std::vec::Vec<std::option::Option<purrdf_core::TermValue>>, purrdf_hash::hex::Digest32, bool); 0]);
+     |
+
+error: redundant closure
+    --> crates/text/benches/../tests/support/shape_cases.rs:2075:34
+     |
+2075 |                     .with_record(|record| record.identity())
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/text/benches/physical_shapes.rs:79:17
+   |
+79 | /                 b.iter(|| {
+80 | |                     black_box(
+81 | |                         compiled
+82 | |                             .scan(fixture.index.clone(), None, &capability)
+...  |
+85 | |                 })
+   | |__________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+   = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+   |
+79 |                 b.iter(|| {
+...
+84 |                     )
+85 ~                 });
+   |
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/text/benches/physical_shapes.rs:88:17
+   |
+88 | /                 b.iter(|| {
+89 | |                     black_box(
+90 | |                         cache
+91 | |                             .get(&fixture.index, black_box(&entries), &capability)
+...  |
+94 | |                 })
+   | |__________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+   |
+88 |                 b.iter(|| {
+...
+93 |                     )
+94 ~                 });
+   |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/text/benches/physical_shapes.rs:97:17
+    |
+ 97 | /                 b.iter(|| {
+ 98 | |                     cache.clear();
+ 99 | |                     black_box(
+100 | |                         cache
+...   |
+104 | |                 })
+    | |__________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+ 97 |                 b.iter(|| {
+...
+103 |                     )
+104 ~                 });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/text/benches/physical_shapes.rs:107:17
+    |
+107 |                 b.iter(|| black_box(fixture.answer(black_box(&query), false)))
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `b.iter(|| black_box(fixture.answer(black_box(&query), false)));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/text/benches/physical_shapes.rs:157:25
+    |
+157 | /                         b.iter(|| {
+158 | |                             black_box(
+159 | |                                 native
+160 | |                                     .query_with_options_view(
+...   |
+167 | |                         })
+    | |__________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+157 |                         b.iter(|| {
+...
+166 |                             )
+167 ~                         });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/text/benches/physical_shapes.rs:237:25
+    |
+237 | /                         b.iter(|| {
+238 | |                             black_box(
+239 | |                                 native
+240 | |                                     .query_with_options_view(
+...   |
+247 | |                         })
+    | |__________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+237 |                         b.iter(|| {
+...
+246 |                             )
+247 ~                         });
+    |
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:30:1
+   |
+30 | pub const NOTE: &str = "https://example.org/note";
+   | ---^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+   = note: `-D unreachable-pub` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unreachable_pub)]`
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:31:1
+   |
+31 | pub const OTHER: &str = "https://example.org/other";
+   | ---^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:32:1
+   |
+32 | pub const PHRASE: &str = "https://example.org/phrase";
+   | ---^^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:33:1
+   |
+33 | pub const OCCURS: &str = "https://example.org/occurs";
+   | ---^^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:38:1
+   |
+38 | pub struct Fixture {
+   | ---^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:45:5
+   |
+45 |     pub fn text(rows: &[(String, String, Option<String>, bool)]) -> Self {
+   |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:85:5
+   |
+85 |     pub fn answer(&self, query: &str, disabled: bool) -> SparqlResult {
+   |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+  --> crates/text/benches/../tests/support/shape_cases.rs:94:5
+   |
+94 |     pub fn equal(&self, query: &str) -> SparqlResult {
+   |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:104:5
+    |
+104 |     pub fn report(&self, query: &str, operator: &str) -> purrdf_sparql_eval::QueryExplanation {
+    |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     |
+    |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:123:1
+    |
+123 | pub fn engine(disabled: bool) -> NativeSparqlEngine {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:130:1
+    |
+130 | pub fn request(query: &str) -> SparqlRequest<'_> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:137:1
+    |
+137 | pub fn bytes(result: &SparqlResult) -> Vec<u8> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:148:1
+    |
+148 | pub fn phrase_query(phrases: &[String]) -> String {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:175:1
+    |
+175 | pub fn dictionary_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:237:1
+    |
+237 | pub fn expanded_dictionary_and_union() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:276:1
+    |
+276 | pub fn dictionary_cache_and_size() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:380:1
+    |
+380 | pub fn dictionary_projection_and_aliases() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:458:1
+    |
+458 | pub fn longest_first_reference() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:601:1
+    |
+601 | pub fn positions(values: &[String]) -> Arc<RdfDataset> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:624:1
+    |
+624 | pub fn window_barrier_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:643:1
+    |
+643 | pub fn dictionary_analyzer_identity() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:691:1
+    |
+691 | pub fn window_query(bound: &str) -> String {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:696:1
+    |
+696 | pub fn window_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:753:1
+    |
+753 | pub fn series() -> Arc<RdfDataset> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:783:1
+    |
+783 | pub fn typed_series_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/benches/../tests/support/shape_cases.rs:945:1
+    |
+945 | pub fn bucket_custom_and_parallel_order() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1040:1
+     |
+1040 | pub fn host_refusal_and_governor_boundary() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1091:1
+     |
+1091 | pub fn dictionary_long_phrase_and_determinism() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1151:1
+     |
+1151 | pub fn segmented(dataset: &RdfDataset) -> purrdf_core::SegmentedImage {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1178:1
+     |
+1178 | pub fn bounded_shapes_keep_original_owners() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1359:1
+     |
+1359 | pub fn cache_refusal_keeps_previous_owner() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1512:1
+     |
+1512 | pub fn registered_host_and_decline() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1550:1
+     |
+1550 | pub fn prepared_and_query_forms() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:1880:1
+     |
+1880 | pub fn false_expression_gaps_keep_original_traversal() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:2019:1
+     |
+2019 | pub fn original_evidence_and_empty_barriers() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/benches/../tests/support/shape_cases.rs:2154:1
+     |
+2154 | pub fn scoped_streams_and_update_where() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: could not compile `purrdf-text` (bench "physical_shapes") due to 57 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: an inclusive range would be more readable
+   --> crates/text/tests/support/shape_cases.rs:198:26
+    |
+198 |                         (0..(entry % 3 + 1))
+    |                          ^^^^^^^^^^^^^^^^^^ help: use: `0..=(entry % 3)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#range_plus_one
+    = note: `-D clippy::range-plus-one` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::range_plus_one)]`
+
+error: used `assert!` to check that a value is not empty
+   --> crates/text/tests/support/shape_cases.rs:453:5
+    |
+453 |     assert!(!rows.solutions().unwrap().1.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+    |
+453 -     assert!(!rows.solutions().unwrap().1.is_empty());
+453 +     assert_ne!(rows.solutions().unwrap().1, []);
+    |
+
+error: implicit borrow as raw pointer
+   --> crates/text/tests/support/shape_cases.rs:571:43
+    |
+571 |                         std::ptr::eq(row, &rows.rows()[index]),
+    |                                           ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+571 |                         std::ptr::eq(row, &raw const rows.rows()[index]),
+    |                                            +++++++++
+
+error: casts from `u64` to `i128` can be expressed infallibly using `From`
+   --> crates/text/tests/support/shape_cases.rs:702:33
+    |
+702 |                     .map(|at| ((seed as i128 % 19) - at as i128 / 2).to_string())
+    |                                 ^^^^^^^^^^^^
+    |
+    = help: an `as` cast can become silently lossy if the types change in the future
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#cast_lossless
+    = note: `-D clippy::cast-lossless` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::cast_lossless)]`
+help: use `i128::from` instead
+    |
+702 -                     .map(|at| ((seed as i128 % 19) - at as i128 / 2).to_string())
+702 +                     .map(|at| ((i128::from(seed) % 19) - at as i128 / 2).to_string())
+    |
+
+error: unnecessary structure name repetition
+    --> crates/text/tests/support/shape_cases.rs:1015:13
+     |
+1015 |             InvalidShape(self.0),
+     |             ^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+     = note: `-D clippy::use-self` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: redundant clone
+    --> crates/text/tests/support/shape_cases.rs:1115:26
+     |
+1115 |             fixture.index.clone(),
+     |                          ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/text/tests/support/shape_cases.rs:1115:13
+     |
+1115 |             fixture.index.clone(),
+     |             ^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+     = note: `-D clippy::redundant-clone` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: redundant clone
+    --> crates/text/tests/support/shape_cases.rs:1433:30
+     |
+1433 |                 fixture.index.clone(),
+     |                              ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/text/tests/support/shape_cases.rs:1433:17
+     |
+1433 |                 fixture.index.clone(),
+     |                 ^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+
+error: redundant closure
+    --> crates/text/tests/support/shape_cases.rs:1721:50
+     |
+1721 | ...                   .with_record(|record| record.identity())
+     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+     = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+    --> crates/text/tests/support/shape_cases.rs:1730:38
+     |
+1730 |                         .with_record(|record| record.identity())
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+    --> crates/text/tests/support/shape_cases.rs:1733:38
+     |
+1733 |                         .with_record(|record| record.identity())
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: used `assert!` to check that a value is not empty
+    --> crates/text/tests/support/shape_cases.rs:1984:5
+     |
+1984 |     assert!(!answer.rows.is_empty());
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+1984 -     assert!(!answer.rows.is_empty());
+1984 +     assert_ne!(answer.rows, [] as [(std::vec::Vec<std::option::Option<purrdf_core::TermValue>>, purrdf_hash::hex::Digest32, bool); 0]);
+     |
+
+error: redundant closure
+    --> crates/text/tests/support/shape_cases.rs:1993:26
+     |
+1993 |             .with_record(|record| record.identity())
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: used `assert!` to check that a value is not empty
+    --> crates/text/tests/support/shape_cases.rs:2052:13
+     |
+2052 |             assert!(!dictionary.rows.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+2052 -             assert!(!dictionary.rows.is_empty());
+2052 +             assert_ne!(dictionary.rows, [] as [(std::vec::Vec<std::option::Option<purrdf_core::TermValue>>, purrdf_hash::hex::Digest32, bool); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/text/tests/support/shape_cases.rs:2071:13
+     |
+2071 |             assert!(retained.rows.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+2071 -             assert!(retained.rows.is_empty());
+2071 +             assert_eq!(retained.rows, [] as [(std::vec::Vec<std::option::Option<purrdf_core::TermValue>>, purrdf_hash::hex::Digest32, bool); 0]);
+     |
+
+error: redundant closure
+    --> crates/text/tests/support/shape_cases.rs:2075:34
+     |
+2075 |                     .with_record(|record| record.identity())
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::identity`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:30:1
+   |
+30 | pub const NOTE: &str = "https://example.org/note";
+   | ---^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+   = note: `-D unreachable-pub` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unreachable_pub)]`
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:31:1
+   |
+31 | pub const OTHER: &str = "https://example.org/other";
+   | ---^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:32:1
+   |
+32 | pub const PHRASE: &str = "https://example.org/phrase";
+   | ---^^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:33:1
+   |
+33 | pub const OCCURS: &str = "https://example.org/occurs";
+   | ---^^^^^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:38:1
+   |
+38 | pub struct Fixture {
+   | ---^^^^^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:45:5
+   |
+45 |     pub fn text(rows: &[(String, String, Option<String>, bool)]) -> Self {
+   |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:85:5
+   |
+85 |     pub fn answer(&self, query: &str, disabled: bool) -> SparqlResult {
+   |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+  --> crates/text/tests/support/shape_cases.rs:94:5
+   |
+94 |     pub fn equal(&self, query: &str) -> SparqlResult {
+   |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:104:5
+    |
+104 |     pub fn report(&self, query: &str, operator: &str) -> purrdf_sparql_eval::QueryExplanation {
+    |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     |
+    |     help: consider restricting its visibility: `pub(crate)`
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:123:1
+    |
+123 | pub fn engine(disabled: bool) -> NativeSparqlEngine {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:130:1
+    |
+130 | pub fn request(query: &str) -> SparqlRequest<'_> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:137:1
+    |
+137 | pub fn bytes(result: &SparqlResult) -> Vec<u8> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:148:1
+    |
+148 | pub fn phrase_query(phrases: &[String]) -> String {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:175:1
+    |
+175 | pub fn dictionary_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:237:1
+    |
+237 | pub fn expanded_dictionary_and_union() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:276:1
+    |
+276 | pub fn dictionary_cache_and_size() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:380:1
+    |
+380 | pub fn dictionary_projection_and_aliases() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:458:1
+    |
+458 | pub fn longest_first_reference() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:601:1
+    |
+601 | pub fn positions(values: &[String]) -> Arc<RdfDataset> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:624:1
+    |
+624 | pub fn window_barrier_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:643:1
+    |
+643 | pub fn dictionary_analyzer_identity() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:691:1
+    |
+691 | pub fn window_query(bound: &str) -> String {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:696:1
+    |
+696 | pub fn window_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:753:1
+    |
+753 | pub fn series() -> Arc<RdfDataset> {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:783:1
+    |
+783 | pub fn typed_series_property() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+   --> crates/text/tests/support/shape_cases.rs:945:1
+    |
+945 | pub fn bucket_custom_and_parallel_order() {
+    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1040:1
+     |
+1040 | pub fn host_refusal_and_governor_boundary() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1091:1
+     |
+1091 | pub fn dictionary_long_phrase_and_determinism() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1151:1
+     |
+1151 | pub fn segmented(dataset: &RdfDataset) -> purrdf_core::SegmentedImage {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1178:1
+     |
+1178 | pub fn bounded_shapes_keep_original_owners() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1359:1
+     |
+1359 | pub fn cache_refusal_keeps_previous_owner() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1512:1
+     |
+1512 | pub fn registered_host_and_decline() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1550:1
+     |
+1550 | pub fn prepared_and_query_forms() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:1880:1
+     |
+1880 | pub fn false_expression_gaps_keep_original_traversal() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:2019:1
+     |
+2019 | pub fn original_evidence_and_empty_barriers() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: unreachable `pub` item
+    --> crates/text/tests/support/shape_cases.rs:2154:1
+     |
+2154 | pub fn scoped_streams_and_update_where() {
+     | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |
+     | help: consider restricting its visibility: `pub(crate)`
+     |
+     = help: or consider exporting it for use by other crates
+
+error: could not compile `purrdf-text` (test "physical_shapes") due to 51 previous errors

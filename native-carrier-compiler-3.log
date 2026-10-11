@@ -1,0 +1,47 @@
+Running as unit: ledger-native-carrier-compiler-3.service
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:2532:29
+     |
+2531 |                         let merged = merge_admitted(
+     |                                      -------------- arguments to this function are incorrect
+2532 |                             lrow,
+     |                             ^^^^ expected `&RetainedRow<<D as DatasetView>::Id>`, found `&SmallVec<[Option<SolutionTerm<_>>; 4]>`
+     |
+     = note: expected reference `&RetainedRow<<D as DatasetView>::Id>`
+                found reference `&SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>`
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1985:4
+     |
+1985 | fn merge_admitted<I: ViewTermId>(
+     |    ^^^^^^^^^^^^^^
+1986 |     left: &RetainedRow<I>,
+     |     ---------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:2551:29
+     |
+2550 |                         let merged = merge_admitted(
+     |                                      -------------- arguments to this function are incorrect
+2551 |                             lrow,
+     |                             ^^^^ expected `&RetainedRow<<D as DatasetView>::Id>`, found `&SmallVec<[Option<SolutionTerm<_>>; 4]>`
+     |
+     = note: expected reference `&RetainedRow<<D as DatasetView>::Id>`
+                found reference `&SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>`
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1985:4
+     |
+1985 | fn merge_admitted<I: ViewTermId>(
+     |    ^^^^^^^^^^^^^^
+1986 |     left: &RetainedRow<I>,
+     |     ---------------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 3min 24.600s
+             CPU time consumed: 135ms
+                   Memory peak: 31M (swap: 0B)

@@ -1,0 +1,22 @@
+Running as unit: run-p3991726-i8122049.scope; invocation ID: a6bf9b0d3ec947babe1a9dd2e5e74f7c
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/evidence_ingress.rs:734:13
+    |
+727 | /         engine.query_interned_evidence_view(
+728 | |             &dataset,
+729 | |             request(query),
+730 | |             QueryOptions::default(),
+731 | |             &source,
+732 | |             |_| panic!("source refusal cannot publish an unknown answer"),
+733 | |         ),
+    | |_________- this expression has type `std::result::Result<_, purrdf_core::RdfDiagnostic>`
+734 |           Err(EvalError::WorkspaceUnpriced(
+    |  _____________^
+735 | |             "original claim source refusal"
+736 | |         ))
+    | |_________^ expected `RdfDiagnostic`, found `EvalError`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

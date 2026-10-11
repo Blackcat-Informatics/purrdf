@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized] target(s) in 0.20s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 4 tests
+test evidence_exec::tests::default_rows_do_not_materialize_a_table ... ok
+test evidence_exec::tests::retained_row_clone_keeps_the_original_dictionary ... ok
+test evidence_exec::tests::native_table_rejects_foreign_query_ids ... ok
+test evidence_exec::tests::candidate_reason_and_undecided_membership_keep_the_original_query_owner ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1503 filtered out; finished in 0.01s
+

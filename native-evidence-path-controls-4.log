@@ -1,0 +1,51 @@
+Running as unit: purrdf-evidence-path-controls-20261010-4.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/evidence_ledger_query.rs:218:9
+    |
+218 |       let SparqlResult::Solutions {
+    |  _________^
+219 | |         variables,
+220 | |         rows: grouped,
+221 | |         ..
+222 | |     } = grouped.result
+    | |     ^   -------------- this expression has type `purrdf_sparql_eval::RetainedSparqlResult`
+    | |_____|
+    |       expected `RetainedSparqlResult`, found `SparqlResult`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/evidence_ledger_query.rs:250:9
+    |
+250 |     let SparqlResult::Graph(graph) = projected.result else {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^   ---------------- this expression has type `purrdf_sparql_eval::RetainedSparqlResult`
+    |         |
+    |         expected `RetainedSparqlResult`, found `SparqlResult`
+
+error[E0599]: no method named `expect` found for struct `purrdf_core::QuadRef<'a, Id>` in the current scope
+   --> crates/sparql-eval/tests/evidence_ledger_query.rs:257:29
+    |
+257 |             let quad = quad.expect("resident graph");
+    |                             ^^^^^^ method not found in `purrdf_core::QuadRef<'_>`
+    |
+help: one of the expressions' fields has a method of the same name
+    |
+257 |             let quad = quad.g.expect("resident graph");
+    |                             ++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/evidence_ledger_query.rs:349:9
+    |
+349 |     let SparqlResult::Solutions { rows, .. } = result.result else {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ------------- this expression has type `purrdf_sparql_eval::RetainedSparqlResult`
+    |         |
+    |         expected `RetainedSparqlResult`, found `SparqlResult`
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ledger_query") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 32.418s
+             CPU time consumed: 156ms
+                   Memory peak: 38.5M (swap: 0B)

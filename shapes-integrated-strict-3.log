@@ -1,0 +1,288 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: unnecessary closure used with `bool::then`
+   --> crates/sparql-eval/src/bgp.rs:385:18
+    |
+385 |       let window = input
+    |  __________________^
+386 | |         .is_none()
+387 | |         .then(|| ctx.window_bgp.as_ref())
+    | |_________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_lazy_evaluations
+    = note: `-D clippy::unnecessary-lazy-evaluations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_lazy_evaluations)]`
+help: use `then_some` instead
+    |
+387 -         .then(|| ctx.window_bgp.as_ref())
+387 +         .then_some(ctx.window_bgp.as_ref())
+    |
+
+error: more than 3 bools in a struct
+   --> crates/sparql-eval/src/eval.rs:509:1
+    |
+509 | / pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+510 | |     /// One original hard-membership owner lent to actual producer invocations.
+511 | |     pub(crate) candidate_scope: Option<&'d dyn crate::CandidateScope>,
+512 | |     /// The frozen read view being queried, driven through the [`DatasetView`] trait.
+...   |
+925 | |     pub(crate) witnessing: bool,
+926 | | }
+    | |_^
+    |
+    = help: consider using a state machine or refactoring bools into two-variant enums
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#struct_excessive_bools
+    = note: `-D clippy::struct-excessive-bools` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::struct_excessive_bools)]`
+
+error: expression can be simplified using `Option::unwrap_or()`
+   --> crates/sparql-eval/src/governor/ledger.rs:700:21
+    |
+700 |                     shape.node.map_or(0, |node| node),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#map_or_identity
+    = note: `-D clippy::map-or-identity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::map_or_identity)]`
+help: consider using `unwrap_or`
+    |
+700 -                     shape.node.map_or(0, |node| node),
+700 +                     shape.node.unwrap_or(0),
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/property_fn_eval.rs:1049:29
+     |
+1049 |                 for cell in mu.iter() {
+     |                             ^^^^^^^^^ help: to write this more concisely, try: `mu`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+     = note: `-D clippy::explicit-iter-loop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::explicit_iter_loop)]`
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/shapes/barrier.rs:98:9
+    |
+ 98 | /         if let Expression::Not(inner) = expression
+ 99 | |             && let Expression::Exists(body) = &**inner
+100 | |         {
+101 | |             if dataset_only(body, workspace)? {
+...   |
+104 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+ 99 ~             && let Expression::Exists(body) = &**inner
+100 ~             && dataset_only(body, workspace)? {
+101 |                 continue;
+102 ~             }
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/shapes/barrier.rs:181:17
+    |
+181 |                 pending.push(inner)?
+    |                 ^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `pending.push(inner)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/sparql-eval/src/shapes/barrier.rs:301:9
+    |
+301 |         drop(memory);
+    |         ^^^^^^^^^^^^
+    |
+note: argument has type `purrdf_lex::allocation::Memory<'_, workspace::LexicalFrame>`
+   --> crates/sparql-eval/src/shapes/barrier.rs:301:14
+    |
+301 |         drop(memory);
+    |              ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+    = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: wildcard matches only a single variant and will also match any future added variants
+   --> crates/sparql-eval/src/shapes/barrier.rs:397:13
+    |
+397 |             truncated => return Ok(Some(truncated)),
+    |             ^^^^^^^^^ help: try: `truncated @ Evaluated::Truncated(_)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#match_wildcard_for_single_variants
+    = note: `-D clippy::match-wildcard-for-single-variants` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::match_wildcard_for_single_variants)]`
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/src/shapes/bucket.rs:15:14
+   |
+15 |     request: ShapeRequest<'_>,
+   |              ^^^^^^^^^^^^^^^^
+   |
+help: or consider marking this type as `Copy`
+  --> crates/sparql-eval/src/shapes/mod.rs:34:1
+   |
+34 | pub struct ShapeRequest<'a> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+15 |     request: &ShapeRequest<'_>,
+   |              +
+
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/sparql-eval/src/shapes/bucket.rs:65:6
+   |
+65 | ) -> Result<AdmittedVec<(usize, RetainedRow<I>, AdmittedVec<usize>)>, EvalError> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+   = note: `-D clippy::type-complexity` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/src/shapes/dictionary.rs:24:14
+   |
+24 |     request: ShapeRequest<'_>,
+   |              ^^^^^^^^^^^^^^^^
+   |
+help: or consider marking this type as `Copy`
+  --> crates/sparql-eval/src/shapes/mod.rs:34:1
+   |
+34 | pub struct ShapeRequest<'a> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+24 |     request: &ShapeRequest<'_>,
+   |              +
+
+error: field name ends with the struct's name
+   --> crates/sparql-eval/src/shapes/dictionary.rs:169:5
+    |
+169 |     union_arm: Option<usize>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#struct_field_names
+    = note: `-D clippy::struct-field-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::struct_field_names)]`
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/shapes/dictionary.rs:480:13
+    |
+480 |     inputs: AdmittedVec<SolutionSeq<D::Id>>,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+480 |     inputs: &AdmittedVec<SolutionSeq<D::Id>>,
+    |             +
+
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/sparql-eval/src/shapes/runtime.rs:19:17
+   |
+19 |       selections: AdmittedMap<
+   |  _________________^
+20 | |         (
+21 | |             crate::plan::TreeKey,
+22 | |             crate::plan::NodeId,
+...  |
+27 | |         Option<SharedWorkspace<ShapeOffer>>,
+28 | |     >,
+   | |_____^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: the borrowed expression implements the required traits
+   --> crates/sparql-eval/src/shapes/runtime.rs:155:9
+    |
+155 |         &message,
+    |         ^^^^^^^^ help: change this to: `message`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+    = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/sparql-eval/src/shapes/runtime.rs:373:37
+    |
+373 |     fn row(&self, row: ShapeRow) -> Result<(&SolutionSeq<D::Id>, &RetainedRow<D::Id>), EvalError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: manual implementation of `isolate_lowest_one`
+   --> crates/sparql-eval/src/shapes/spans.rs:138:26
+    |
+138 |             .checked_add(index & index.wrapping_neg())
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `.isolate_lowest_one()`: `index.isolate_lowest_one()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_isolate_lowest_one
+    = note: `-D clippy::manual-isolate-lowest-one` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_isolate_lowest_one)]`
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/src/shapes/window.rs:36:14
+   |
+36 |     request: ShapeRequest<'_>,
+   |              ^^^^^^^^^^^^^^^^
+   |
+help: or consider marking this type as `Copy`
+  --> crates/sparql-eval/src/shapes/mod.rs:34:1
+   |
+34 | pub struct ShapeRequest<'a> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+36 |     request: &ShapeRequest<'_>,
+   |              +
+
+error: this parameter is a mutable reference but is not used mutably
+  --> crates/sparql-eval/src/shapes/runtime.rs:69:9
+   |
+69 |         &mut self,
+   |         ^----^^^^
+   |          |
+   |          help: consider removing this `mut`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+   = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: type does not implement `std::fmt::Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+  --> crates/sparql-eval/src/shapes/mod.rs:34:1
+   |
+34 | / pub struct ShapeRequest<'a> {
+35 | |     /// The original logical subtree. Offers must not retain this borrow.
+36 | |     pub pattern: &'a GraphPattern,
+37 | |     /// Exact original output column order.
+...  |
+47 | |     pub costs: &'a dyn ShapeCosts,
+48 | | }
+   | |_^
+   |
+   = note: `-D missing-debug-implementations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 20 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: associated function `compile` is never used
+   --> crates/sparql-eval/src/property_fn_eval.rs:242:8
+    |
+239 | impl CallPlan {
+    | ------------- associated function in this implementation
+...
+242 |     fn compile(call: &PropertyFunctionCall, input: &VarSchema) -> Result<Self, EvalError> {
+    |        ^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 21 previous errors

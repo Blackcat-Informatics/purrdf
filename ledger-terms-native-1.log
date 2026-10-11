@@ -1,0 +1,34 @@
+Running as unit: purrdf-ledger-terms-native-1.service
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+error[E0425]: cannot find value `STRING` in module `purrdf_xsd::datatype`
+   --> crates/rdf-core/src/evidence/ledger/terms.rs:285:49
+    |
+285 |                 datatype: purrdf_xsd::datatype::STRING.into(),
+    |                                                 ^^^^^^ not found in `purrdf_xsd::datatype`
+
+error[E0425]: cannot find value `STRING` in module `purrdf_xsd::datatype`
+   --> crates/rdf-core/src/evidence/ledger/terms.rs:331:53
+    |
+331 |             Some(TermRef::Iri(purrdf_xsd::datatype::STRING))
+    |                                                     ^^^^^^ not found in `purrdf_xsd::datatype`
+
+error: unused imports: `BorrowedLedgerTerms` and `LedgerTermId`
+  --> crates/rdf-core/src/evidence/ledger.rs:16:17
+   |
+16 | pub use terms::{BorrowedLedgerTerms, LedgerTermId};
+   |                 ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-core` (lib test) due to 3 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 35.940s
+             CPU time consumed: 148ms
+                   Memory peak: 26.1M (swap: 0B)

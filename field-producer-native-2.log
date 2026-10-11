@@ -1,0 +1,308 @@
+Running as unit: purrdf-field-producer-native-2.service
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 7m 22s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-retrieval/6a3985d31521e24d/out/purrdf_retrieval-6a3985d31521e24d)
+
+running 113 tests
+test document::tests::a_non_finite_embedding_component_writes_null_which_does_not_read_back ... ok
+test compile::tests::only_the_streaming_text_renders_a_depth ... ok
+test document::tests::a_shape_refusal_names_the_pointer_of_the_offending_value ... ok
+test document::tests::an_iri_that_does_not_parse_keeps_its_own_refusal ... ok
+test embedding::tests::a_lower_case_spelling_is_refused_but_the_upper_case_one_decodes ... ok
+test document::tests::a_repeated_member_is_refused_where_a_single_one_reads ... ok
+test document::tests::every_request_term_writes_its_pinned_document_and_reads_it_back ... ok
+test embedding::tests::every_component_round_trips_bit_for_bit ... ok
+test document::tests::a_unit_variant_reads_as_a_name_or_a_null_bodied_object ... ok
+test embedding::tests::signed_zeroes_are_two_lexicals ... ok
+test compile::tests::a_quoted_triple_argument_keeps_the_callers_equalities ... ok
+test compile::tests::a_driven_call_keeps_the_pattern_binding_its_seed ... ok
+test embedding::tests::the_documented_example_is_the_documented_text ... ok
+test compile::tests::a_call_whose_input_nothing_binds_is_refused_by_name_where_its_relation_needs_it ... ok
+test execute::tests::a_blank_candidate_is_named_and_does_not_take_its_stratum_down ... ok
+test execute::tests::a_candidate_is_the_canonical_lexical_and_decodes_back_to_its_value ... ok
+test embedding::tests::text_that_is_not_this_form_is_refused_but_a_long_vector_is_not ... ok
+test execute::tests::a_row_past_the_declaration_is_refused_and_an_honest_one_is_not ... ok
+test execute::tests::a_self_bounding_producer_at_its_declaration_reports_the_bound_that_stopped_it ... ok
+test execute::tests::a_single_block_declaration_entails_every_rows_block_and_nothing_else_does ... ok
+test execute::tests::a_unit_that_projects_no_candidate_column_is_refused ... ok
+test execute::tests::a_unit_with_no_block_column_carries_the_entailed_block ... ok
+test execute::tests::a_witness_naming_no_relation_is_refused_and_names_the_count ... ok
+test execute::tests::a_witness_naming_two_relations_is_refused_and_names_the_count ... ok
+test execute::tests::a_witness_with_one_relation_and_one_generation_is_that_units_attestation ... ok
+test execute::tests::an_empty_witness_refuses_only_when_the_unit_returned_rows ... ok
+test compile::tests::a_supplied_call_derives_the_rendered_lookup_and_frees_its_depth ... ok
+test execute::tests::an_unspellable_literal_is_refused_and_its_well_formed_neighbours_are_named ... ok
+test execute::tests::one_relation_attesting_two_generations_is_refused_and_names_the_count ... ok
+test execute::tests::one_relation_attesting_two_incompleteness_reasons_is_refused_and_names_the_count ... ok
+test execute::tests::seven_invocations_of_one_relation_are_accepted ... ok
+test execute::tests::the_candidate_column_is_read_by_name_not_by_first_binding ... ok
+test execute::tests::the_block_column_is_read_as_an_iri_or_the_unit_is_refused ... ok
+test execute::tests::the_evidence_digest_does_not_move_with_the_invocation_count ... ok
+test execute::tests::the_probe_row_changes_the_ending_and_nothing_else ... ok
+test execute::tests::refused_candidate_lookup_cannot_become_an_owned_value_fallback ... ok
+test iri::tests::display_is_exactly_the_underlying_text ... ok
+test iri::tests::display_neither_quotes_nor_escapes ... ok
+test matching::tests::a_blank_seed_is_refused_but_an_iri_seed_places ... ok
+test matching::tests::a_depth_argument_is_refused_when_undeclared_and_placed_when_declared ... ok
+test matching::tests::a_numeric_range_renders_its_endpoints_in_exact_base_ten ... ok
+test matching::tests::a_half_open_interval_refuses_the_endpoint_it_does_not_carry_but_places_the_one_it_does ... ok
+test matching::tests::a_quoted_triple_seed_is_a_triple_and_not_an_iri ... ok
+test matching::tests::a_refusal_names_the_lowest_refusing_term_in_either_order ... ok
+test matching::tests::a_seed_places ... ok
+test matching::tests::a_different_value_at_one_position_conflicts_but_the_same_value_does_not ... ok
+test matching::tests::an_interval_is_reached_by_a_literal_pattern_and_by_its_own_predicate ... ok
+test matching::tests::a_temporal_interval_renders_both_endpoints_under_the_declared_datatype ... ok
+test matching::tests::an_interval_refuses_a_value_placement_and_says_where_its_endpoints_go ... ok
+test matching::tests::an_iri_seed_is_still_an_iri_and_not_a_triple ... ok
+test matching::tests::an_untagged_needle_with_a_language_placement_is_refused_but_a_tagged_one_places ... ok
+test matching::tests::an_untyped_embedding_is_refused_but_a_typed_one_places_exactly ... ok
+test matching::tests::an_untyped_endpoint_is_refused_but_a_typed_one_places ... ok
+test matching::tests::bound_indices_are_consumed_in_ascending_order ... ok
+test matching::tests::lexical_value_carries_the_tag_only_when_no_language_placement_does ... ok
+test matching::tests::field_scope_requires_transport_and_keeps_the_original_tag ... ok
+test matching::tests::seed_classification_agrees_with_the_decoder ... ok
+test reciprocal_rank::tests::a_depth_of_one_costs_the_lightest_weight_and_a_depth_of_none_is_refused ... ok
+test reciprocal_rank::tests::a_negative_weight_truncates_toward_zero ... ok
+test reciprocal_rank::tests::a_rank_of_zero_is_refused_rather_than_anchoring_a_class_of_one ... ok
+test reciprocal_rank::tests::a_tolerance_of_zero_is_refused_rather_than_read_as_the_narrowest_real_one ... ok
+test reciprocal_rank::tests::a_weight_above_one_buys_depth_under_the_weighted_rule ... ok
+test reciprocal_rank::tests::a_weight_near_the_raw_unit_truncates_a_measurable_share_of_each_contribution ... ok
+test reciprocal_rank::tests::a_weight_below_one_lowers_the_bound ... ok
+test reciprocal_rank::tests::a_weight_above_one_buys_no_depth_under_the_truncated_rule ... ok
+test reciprocal_rank::tests::a_weight_that_truncates_to_nothing_has_a_bound_of_one ... ok
+test reciprocal_rank::tests::an_unusable_constant_is_refused_while_a_zero_weight_measures_the_single_rank_it_orders ... ok
+test reciprocal_rank::tests::both_rules_refuse_a_zero_constant_and_a_zero_rank ... ok
+test reciprocal_rank::tests::adjacent_ranks_stay_distinct_to_the_bound_and_collide_beyond_it ... ok
+test reciprocal_rank::tests::an_unusable_smoothing_constant_is_propagated_rather_than_rendered_as_a_measurement ... ok
+test reciprocal_rank::tests::ceil_div_rounds_up_at_every_boundary ... ok
+test reciprocal_rank::tests::a_zero_smoothing_constant_is_refused_as_a_malformed_law_on_every_path ... ok
+test reciprocal_rank::tests::a_flat_shortfall_spans_only_separated_ranks ... ok
+test reciprocal_rank::tests::the_dispatcher_selects_the_named_rule ... ok
+test reciprocal_rank::tests::the_separation_walk_propagates_an_unusable_operand_rather_than_naming_the_rank_it_failed_at ... ok
+test reciprocal_rank::tests::the_shortfall_is_exactly_what_the_contribution_loses ... ok
+test reciprocal_rank::tests::the_smoothing_constant_shifts_the_bound_one_for_one ... ok
+test reciprocal_rank::tests::the_weighted_guarantee_is_the_integer_test_it_claims_to_be ... ok
+test reciprocal_rank::tests::the_weighted_rule_is_the_truncated_rule_computed_more_accurately ... ok
+test render::tests::a_base_direction_rides_after_the_tag ... ok
+test fusion_stream::tests::an_upper_bound_beyond_the_range_is_answered_as_the_walk_answers_it ... ok
+test render::tests::a_blank_node_has_no_constant_form_but_an_iri_does ... ok
+test render::tests::a_direction_without_a_language_is_refused_but_with_one_renders ... ok
+test render::tests::a_language_tag_is_written_verbatim ... ok
+test render::tests::a_malformed_tag_is_refused_but_a_well_formed_one_renders ... ok
+test render::tests::a_signed_uchar_is_refused ... ok
+test render::tests::a_triple_term_renders_in_its_value_form ... ok
+test reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank ... ok
+test render::tests::a_typed_literal_carries_its_datatype ... ok
+test reciprocal_rank::tests::the_accelerated_search_agrees_with_a_walk_from_rank_one ... ok
+test render::tests::control_characters_and_quotes_are_escaped ... ok
+test render::tests::an_iri_escapes_only_what_the_production_forbids ... ok
+test render::tests::an_unsigned_uchar_still_decodes ... ok
+test render::tests::form_feed_does_not_separate_terms ... ok
+test render::tests::decoding_inverts_rendering ... ok
+test render::tests::plain_string_uses_the_short_form ... ok
+test render::tests::space_tab_carriage_return_and_line_feed_still_separate_terms ... ok
+test render::tests::the_counters_are_the_documented_set_in_the_documented_order ... ok
+test render::tests::decoding_refuses_text_that_is_not_one_term ... ok
+test scope::tests::operational_failure_cannot_publish_partial_counts_or_an_unknown_row ... ok
+test render::tests::the_rendering_is_the_counters_and_nothing_else ... ok
+test scope::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test scope::tests::unknown_time_is_counted_separately_even_when_place_rejects ... ok
+test render::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_terms ... ok
+test reciprocal_rank::tests::every_positive_weight_under_a_usable_constant_measures_a_bound_rather_than_refusing ... ok
+test reciprocal_rank::tests::the_minimum_weight_agrees_with_an_exhaustive_search ... ok
+test reciprocal_rank::tests::the_bound_is_exact_at_unit_weight ... ok
+test fusion_stream::tests::selection_work_is_linear_in_a_plateau_as_long_as_the_streams ... ok
+test render::term_walk_tests::a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread ... ok
+test reciprocal_rank::tests::the_tolerance_walk_lands_near_the_square_root_of_the_tolerance ... ok
+test fusion_stream::tests::the_index_selects_what_the_pairwise_definition_selects ... ok
+test reciprocal_rank::tests::the_deepest_expressible_depth_is_priced_and_one_past_it_is_a_plan_range_refusal ... ok
+test reciprocal_rank::tests::a_tolerated_depth_that_saturates_is_reported_as_saturation_and_not_as_a_number ... ok
+
+test result: ok. 113 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+
+     Running tests/admission_tests.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-retrieval/fb9ba7c985a58297/out/admission_tests-fb9ba7c985a58297)
+
+running 52 tests
+test a_binding_pushed_onto_a_term_the_producer_does_receive_is_admitted ... FAILED
+test a_mandatory_producer_that_places_nothing_must_be_present_and_serves_no_term ... FAILED
+test a_mandatory_producer_that_accepts_nothing_of_a_request_is_not_required_by_it ... ok
+test a_mandatory_producer_bound_to_some_of_what_it_accepts_is_refused ... FAILED
+test a_binding_pushed_onto_a_term_the_producer_places_nowhere_is_refused ... FAILED
+test a_depth_past_the_weighted_profiles_own_range_reports_a_coarser_resolution ... ok
+test a_deserialized_plan_against_different_declarations_is_refused ... ok
+test a_mandatory_producer_dropped_from_a_term_it_accepts_is_refused_by_name ... FAILED
+test a_depth_exactly_at_the_monotone_bound_is_admitted_and_still_orders_by_rank ... ok
+test a_depth_beyond_the_profiles_monotone_range_is_admitted_and_records_its_resolution ... ok
+test a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_profile ... ok
+test a_hollow_binding_is_refused_on_every_decode_path ... ok
+test a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero ... ok
+test a_declared_row_bound_still_refuses_a_raised_depth ... ok
+test a_plan_recording_unanswered_subjects_still_admits ... ok
+test a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it ... ok
+test a_mandatory_text_producer_admits_a_request_it_can_only_partly_accept ... FAILED
+test a_plan_version_this_build_does_not_write_is_refused_while_the_current_version_admits ... FAILED
+test a_deserialized_plan_is_admitted_against_a_rebuilt_registry ... ok
+test a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused ... FAILED
+test a_plan_that_binds_two_producers_to_one_stratum_is_refused ... ok
+test a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_mandatory ... ok
+test a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under ... FAILED
+test a_profile_weighting_a_stratum_no_producer_emits_under_is_admitted ... ok
+test a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all ... ok
+test a_same_process_plan_is_still_held_to_its_live_instance ... ok
+test a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling ... ok
+test a_stratum_whose_producer_declares_no_mode_bounds_no_depth ... ok
+test a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range ... FAILED
+test a_stratum_with_no_producer_to_invoke_is_bounded_at_its_widest_declared_mode ... FAILED
+test a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live ... ok
+test admission_refuses_a_binding_whose_stratum_has_no_depth ... FAILED
+test admission_rejects_depth_bound_violation ... ok
+test admission_rejects_insufficient_bindings ... FAILED
+test admission_rejects_edited_plan_dropping_mandatory ... ok
+test admission_rejects_missing_mandatory ... ok
+test admission_accepts_fresh_plan ... FAILED
+test admission_rejects_registry_fingerprint_mismatch ... ok
+test admission_rejects_registry_instance_mismatch ... ok
+test admission_rejects_roundtrip_with_dropped_producer ... ok
+test admission_rejects_stale_statistics ... ok
+test origin_is_what_selects_the_identity_a_plan_is_held_to ... ok
+test admission_rejects_tampered_deserialized ... ok
+test same_fingerprint_different_implementation_refused ... ok
+test an_environment_that_names_no_profile_reports_no_resolution ... ok
+test every_bound_stratum_with_a_depth_emits_its_branch ... FAILED
+test execute_refuses_a_different_registry_instance ... ok
+test compiled_retrieval_carries_both_identities ... ok
+test one_stratum_failure_others_continue ... ok
+test narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported ... FAILED
+test narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory ... FAILED
+test pinned_plan_replay_reproduces_candidate_set_and_ranks ... ok
+
+failures:
+
+---- a_binding_pushed_onto_a_term_the_producer_does_receive_is_admitted stdout ----
+
+thread 'a_binding_pushed_onto_a_term_the_producer_does_receive_is_admitted' (1704092) panicked at crates/retrieval/tests/admission_tests.rs:2968:68:
+the request plans: NoApplicableProducers
+
+---- a_mandatory_producer_that_places_nothing_must_be_present_and_serves_no_term stdout ----
+
+thread 'a_mandatory_producer_that_places_nothing_must_be_present_and_serves_no_term' (1704107) panicked at crates/retrieval/tests/admission_tests.rs:2663:5:
+assertion `left == right` failed: the vector term reached only a producer that declared nowhere to put it; the other two are served by producers that do place them
+  left: [UnservedTerm { request_term: 0, reason: EveryAcceptingProducerRejected }, UnservedTerm { request_term: 1, reason: AcceptedWithoutPlacement }]
+ right: [UnservedTerm { request_term: 1, reason: AcceptedWithoutPlacement }]
+
+---- a_mandatory_producer_bound_to_some_of_what_it_accepts_is_refused stdout ----
+
+thread 'a_mandatory_producer_bound_to_some_of_what_it_accepts_is_refused' (1704104) panicked at crates/retrieval/tests/admission_tests.rs:2578:61:
+two of the three reach it: NoApplicableProducers
+
+---- a_binding_pushed_onto_a_term_the_producer_places_nowhere_is_refused stdout ----
+
+thread 'a_binding_pushed_onto_a_term_the_producer_places_nowhere_is_refused' (1704093) panicked at crates/retrieval/tests/admission_tests.rs:2919:5:
+assertion `left == right` failed: and the vector term is reported as reaching nowhere to be put
+  left: [UnservedTerm { request_term: 0, reason: EveryAcceptingProducerRejected }, UnservedTerm { request_term: 1, reason: AcceptedWithoutPlacement }]
+ right: [UnservedTerm { request_term: 1, reason: AcceptedWithoutPlacement }]
+
+---- a_mandatory_producer_dropped_from_a_term_it_accepts_is_refused_by_name stdout ----
+
+thread 'a_mandatory_producer_dropped_from_a_term_it_accepts_is_refused_by_name' (1704105) panicked at crates/retrieval/tests/admission_tests.rs:2539:10:
+the request plans: NoApplicableProducers
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_mandatory_text_producer_admits_a_request_it_can_only_partly_accept stdout ----
+
+thread 'a_mandatory_text_producer_admits_a_request_it_can_only_partly_accept' (1704108) panicked at crates/retrieval/tests/admission_tests.rs:2505:10:
+the lexical term reaches the producer, so the request plans: NoApplicableProducers
+
+---- a_plan_version_this_build_does_not_write_is_refused_while_the_current_version_admits stdout ----
+
+thread 'a_plan_version_this_build_does_not_write_is_refused_while_the_current_version_admits' (1704112) panicked at crates/retrieval/tests/admission_tests.rs:1060:5:
+assertion `left == right` failed: one unit per declared stratum
+  left: 2
+ right: 3
+
+---- a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused stdout ----
+
+thread 'a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused' (1704111) panicked at crates/retrieval/tests/admission_tests.rs:2773:5:
+term 0 is bound
+
+---- a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under stdout ----
+
+thread 'a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under' (1704115) panicked at crates/retrieval/tests/admission_tests.rs:1781:28:
+no entry found for key
+
+---- a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range stdout ----
+
+thread 'a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range' (1704119) panicked at crates/retrieval/tests/admission_tests.rs:603:35:
+no entry found for key
+
+---- a_stratum_with_no_producer_to_invoke_is_bounded_at_its_widest_declared_mode stdout ----
+
+thread 'a_stratum_with_no_producer_to_invoke_is_bounded_at_its_widest_declared_mode' (1704121) panicked at crates/retrieval/tests/admission_tests.rs:1552:28:
+no entry found for key
+
+---- admission_refuses_a_binding_whose_stratum_has_no_depth stdout ----
+
+thread 'admission_refuses_a_binding_whose_stratum_has_no_depth' (1704124) panicked at crates/retrieval/tests/admission_tests.rs:1383:10:
+the planner recorded a depth for the text stratum
+
+---- admission_rejects_insufficient_bindings stdout ----
+
+thread 'admission_rejects_insufficient_bindings' (1704127) panicked at crates/retrieval/tests/admission_tests.rs:378:10:
+the fixture request plans: NoApplicableProducers
+
+---- admission_accepts_fresh_plan stdout ----
+
+thread 'admission_accepts_fresh_plan' (1704123) panicked at crates/retrieval/tests/admission_tests.rs:219:5:
+assertion `left == right` failed: one unit per declared stratum
+  left: 2
+ right: 3
+
+---- every_bound_stratum_with_a_depth_emits_its_branch stdout ----
+
+thread 'every_bound_stratum_with_a_depth_emits_its_branch' (1704136) panicked at crates/retrieval/tests/admission_tests.rs:1430:5:
+assertion `left == right` failed: three producers are bound
+  left: 2
+ right: 3
+
+---- narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported stdout ----
+
+thread 'narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported' (1704139) panicked at crates/retrieval/tests/admission_tests.rs:2860:80:
+plans: NoApplicableProducers
+
+---- narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory stdout ----
+
+thread 'narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory' (1704138) panicked at crates/retrieval/tests/admission_tests.rs:2277:10:
+the request plans: NoApplicableProducers
+
+
+failures:
+    a_binding_pushed_onto_a_term_the_producer_does_receive_is_admitted
+    a_binding_pushed_onto_a_term_the_producer_places_nowhere_is_refused
+    a_mandatory_producer_bound_to_some_of_what_it_accepts_is_refused
+    a_mandatory_producer_dropped_from_a_term_it_accepts_is_refused_by_name
+    a_mandatory_producer_that_places_nothing_must_be_present_and_serves_no_term
+    a_mandatory_text_producer_admits_a_request_it_can_only_partly_accept
+    a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused
+    a_plan_version_this_build_does_not_write_is_refused_while_the_current_version_admits
+    a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under
+    a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range
+    a_stratum_with_no_producer_to_invoke_is_bounded_at_its_widest_declared_mode
+    admission_accepts_fresh_plan
+    admission_refuses_a_binding_whose_stratum_has_no_depth
+    admission_rejects_insufficient_bindings
+    every_bound_stratum_with_a_depth_emits_its_branch
+    narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory
+    narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported
+
+test result: FAILED. 35 passed; 17 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-retrieval --test admission_tests`
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 7min 24.766s
+             CPU time consumed: 153ms
+                   Memory peak: 26M (swap: 0B)

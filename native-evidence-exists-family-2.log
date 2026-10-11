@@ -1,0 +1,82 @@
+Running as unit: run-p32414-i8435283.scope; invocation ID: 68b3dbe11ce24ff9b9260b0c8db7d62f
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/vm/mod.rs:583:17
+    |
+571 |       ) -> Result<VmStep<'e, 'd, I>, EvalError> {
+    |  _______________________________________________-
+572 | |         let Self {
+573 | |             program,
+574 | |             slots,
+...   |
+583 | |         let mut records = evidence
+    | |                 ^^^^^^^
+...   |
+954 | |         Ok(VmStep::Value(value))
+955 | |     }
+    | |_____- temporary `records` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: merge the temporary construction with its single usage
+    |
+583 ~         
+584 +             let record = evidence
+585 +             .as_ref()
+586 +             .map(|owner| owner.lock().map_err(|_| evidence_poisoned()))
+587 +             .transpose()?.flatten();
+588 |         let ops = &program.ops;
+...
+591 |             let before = stack.len();
+592 ~             
+    |
+
+error: `if _ { .. } else { .. }` is an expression
+   --> crates/sparql-eval/src/vm/mod.rs:643:21
+    |
+643 | /                     let mut value = pop_ebv(stack)?.map(|value| !value);
+644 | |                     if matches!(op, Op::NotExists)
+645 | |                         && let Some(record) = &record
+646 | |                         && !record.is_undecided()
+...   |
+652 | |                         })?);
+653 | |                     }
+    | |_____________________^
+    |
+    = note: you might not need `mut` at all
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#useless_let_if_seq
+    = note: `-D clippy::useless-let-if-seq` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::useless_let_if_seq)]`
+help: it is more idiomatic to write
+    |
+643 ~                     let <mut> value = if matches!(op, Op::NotExists)
+644 +                         && let Some(record) = &record
+645 +                         && !record.is_undecided() { Some(record.with_record(|record| {
+646 +                             record.information().fallback()
+647 +                                 != purrdf_core::evidence::Information::Opposed
+648 +                                 || !record.information().entries().is_empty()
+649 +                         })?) } else { pop_ebv(stack)?.map(|value| !value) };
+    |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/vm/mod.rs:1016:6
+     |
+1016 |   ) -> Result<
+     |  ______^
+1017 | |     (
+1018 | |         Option<SolutionTerm<D::Id>>,
+1019 | |         Option<crate::evidence_exec::RowEvidence>,
+1020 | |     ),
+1021 | |     EvalError,
+1022 | | > {
+     | |_^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 3 previous errors

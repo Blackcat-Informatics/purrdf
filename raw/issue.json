@@ -1,0 +1,36 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Summary\n\nPer-row **evidence** through `sparql-eval` and `datalog`. Each solution row carries a small id into a per-query interned evidence table. Each entry holds three independent parts:\n\n1. **information state per standpoint**: GMEOW's four values, `supported`, `opposed`, `both`, `neither` (Belnap's FOUR), from the matched claims' polarity;\n2. **completeness**: `complete`, `undetermined` or `not-evaluated`, with ledger reasons;\n3. **frame**: the non-actual contexts the row rests on (counterfactual, assumed, imagined, licensed falsehood), or none.\n\nEvery operator combines its inputs' evidence into its output's. Id 0 is the common case (`supported`, `complete`, actual), so the fast path pays nothing. Combination is a lookup memoised over pairs of ids, and the table is canonically ordered, so output stays byte-identical.\n\nToday the closest thing is `FallibleDatasetView::operation_status`, whose `Evidence` is per **view**. This asks for evidence per **row**.\n\n## Why\n\nKatamari ADR-0045 45.20 (Proposed; Patrick approved this design 2026-10-09). Design note: `katamari/docs/design/PURRDF-SEAM.md` \u00a73 at `e65fe50`. Four reasons:\n- A join of an incomplete input with a complete one must not come out looking complete.\n- `both` (a contradiction within a standpoint) must not be read as \"unknown\".\n- Negation over missing data must not succeed: deception by omission.\n- No conclusion from a counterfactual or imagined premise may reach the actual frame.\n\n## Combination rules (per standpoint, pointwise)\n\n| Operator | Information state | Completeness | Frame |\n|---|---|---|---|\n| Join | truth-order meet (t\u2227t=t, t\u2227f=f, t\u2227both=both, t\u2227neither=neither, both\u2227neither=f, f\u2227x=f) | the worse; ledgers united | the meet of frames |\n| Duplicate solutions merged | information-order join (t\u2295f=both, t\u2295neither=t, x\u2295x=x) | the better | actual if either is actual |\n| `UNION` | each branch's row keeps its own | own | own |\n| `FILTER` that decides | unchanged | unchanged | unchanged |\n| `FILTER` the data cannot decide | unchanged | `undetermined`; the row moves to a separate undecided partition, counted and enumerable on demand | unchanged |\n| `OPTIONAL` with no match | left side's | `undetermined` for the optional part unless the right side was complete | left side's |\n| `EXISTS P` | information-order join over matches; `neither` if none | P's | union over matches |\n| `NOT EXISTS P` / `MINUS` | negation of `EXISTS` (\u00act=f, \u00acf=t, \u00acboth=both, \u00acneither=neither) **only if** P is complete **and** a closure is declared (`logic:ClosureEntry`); otherwise `undetermined` | as stated | P's |\n| Property path | a found path is a witness, and **complete** | \"no path\" complete only under the `NOT EXISTS` conditions | along the witness |\n| Aggregates | per standpoint | `COUNT`, and `SUM` over non-negatives, are lower bounds; `MAX` a lower bound, `MIN` an upper bound; `AVG` undetermined; each labelled | union |\n\nThe principle: **incompleteness never weakens a found witness, only conclusions from absence and totals.**\n\n**Standpoints** follow GMEOW's `gmeow:sharpens` poset (Standpoint Logic): a claim according to S2 counts for S1 whenever S1 sharpens S2. `gmeow:unspecifiedStandpoint` sits outside the order and is reported as unscoped evidence. **Frames** join at their meet: the intersection of standpoints, or the conjunction of scenarios. An actual premise joined with a scenario premise holds in the scenario.\n\n## Acceptance criteria\n\n- Property tests: evidence combines per the table for random algebras.\n- A join with a locked or incomplete input is labelled incomplete.\n- `NOT EXISTS` over incomplete input is `undetermined`, and true only with completeness and a declared closure.\n- A found property path is complete even when other data is missing.\n- Output is byte-identical across runs and targets.\n- With all-default evidence, throughput is within noise of today's.\n- No compiled-in limit.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABavLmQA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "## Addendum: answer tiers, so a yes or no stays cheap\n\n\"Was there a blue thing here before?\" wants `yes`, `no`, `both` or `unknown`, not thousands of annotated rows. So the evaluator should take the **tier** a query asks for and compute only that:\n- **verdict**: one value, or rows plus one answer-level status;\n- **summary**: plus per-reason counts;\n- **rows**: per-row evidence;\n- **ledger**: the RDF 1.2 ledger (#516).\n\nThe witness rule gives early termination at the verdict tier:\n- `yes` stops at the first supported witness;\n- `both` stops at a supported and an opposed witness;\n- `no` needs a complete search under a declared closure, and the evaluator stops as soon as `no` is unreachable (an incomplete input), answering `unknown`.\n\nEvidence ids are still tracked at every tier, since `no` *is* a completeness judgement, but nothing is rendered below the tier asked for. Design: Katamari `docs/design/PURRDF-SEAM.md` \u00a73.7.\n",
+      "createdAt": "2026-10-09T21:07:06Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/515#issuecomment-6089270848",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-09T21:03:38Z",
+  "labels": [],
+  "milestone": null,
+  "number": 515,
+  "state": "OPEN",
+  "title": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+  "updatedAt": "2026-10-09T21:07:06Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/515"
+}

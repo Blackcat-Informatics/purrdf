@@ -1,0 +1,27 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 2m 51s
+     Running tests/real_producers.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-retrieval/7dd51078f7fc582f/out/real_producers-7dd51078f7fc582f)
+
+running 17 tests
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

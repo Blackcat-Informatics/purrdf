@@ -1,0 +1,3 @@
+e7de085fbca4aa93a9e2f1f355bb5dbb4314ea6eec687f1d54fb8dc1f9638925  crates/sparql-eval/src/governor/mod.rs
+4d5306b2a457beee00e7b7cf7af4bfdcbe6960dfd31dfa07edfdc0ae90dbaf5d  crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
+d340a35c395227b5fa6a4c133abf961f44804625c74e6b41fdb546fd8527d02c  docs/SPARQL-GOVERNOR-PROFILE.md

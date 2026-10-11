@@ -1,0 +1,53 @@
+Running as unit: purrdf-evidence-production-20261010-1.service
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+error[E0599]: no method named `next` found for struct `cursor::RowCursor<'a>` in the current scope
+   --> crates/datalog/src/seminaive/evidence.rs:213:10
+    |
+210 | /     store
+211 | |         .partition(predicate, graph)?
+212 | |         .select(crate::store::Bound::Both(subject, object))
+213 | |         .next()
+    | |         -^^^^ method not found in `cursor::RowCursor<'_>`
+    | |_________|
+    |
+    |
+   ::: crates/datalog/src/cursor.rs:68:8
+    |
+ 68 |       fn next(&mut self) -> Option<Self::Item<'_>>;
+    |          ---- the method is available for `cursor::RowCursor<'_>` here
+...
+105 |   pub struct RowCursor<'a> {
+    |   ------------------------ method `next` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `LendingIterator` which provides `next` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use crate::cursor::LendingIterator;
+    |
+
+error[E0505]: cannot move out of `groups` because it is borrowed
+   --> crates/datalog/src/seminaive/evidence.rs:150:52
+    |
+144 |             .native_operation(|_, memory| Ok(memory.collect(groups.iter().map(Vec::as_slice))?))?;
+    |                               -----------                   ------ borrow occurs due to use in closure
+    |                               |
+    |                               borrow of `groups` occurs here
+...
+150 |         self.rows.workspace_mut().native_operation(|_, memory| {
+    |                                                    ^^^^^^^^^^^ move out of `groups` occurs here
+151 |             memory.release_vec(references)?;
+    |                                ---------- borrow later captured here by closure
+...
+155 |             memory.release_vec(groups)?;
+    |                                ------ move occurs due to use in closure
+
+Some errors have detailed explanations: E0505, E0599.
+For more information about an error, try `rustc --explain E0505`.
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 1min 43.876s
+             CPU time consumed: 172ms
+                   Memory peak: 20.4M (swap: 0B)

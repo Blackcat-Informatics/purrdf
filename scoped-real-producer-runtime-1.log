@@ -1,0 +1,11 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 2m 27s
+     Running tests/real_producers.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-retrieval/7dd51078f7fc582f/out/real_producers-7dd51078f7fc582f)
+
+running 1 test
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+

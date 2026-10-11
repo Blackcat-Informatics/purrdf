@@ -1,0 +1,163 @@
+Running as unit: purrdf-evidence-filter-family-1.service
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/alloc-probe)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: this `if` statement can be collapsed
+  --> crates/sparql-eval/src/modifier/owners.rs:45:13
+   |
+45 | /             if let Some((previous, index)) = &self.previous {
+46 | |                 if previous == row {
+47 | |                     return Ok(Some(*index));
+48 | |                 }
+49 | |             }
+   | |_____________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+   = note: `-D clippy::collapsible-if` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+   |
+45 ~             if let Some((previous, index)) = &self.previous
+46 ~                 && previous == row {
+47 |                     return Ok(Some(*index));
+48 ~                 }
+   |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/evidence_exec.rs:349:13
+    |
+348 |       fn require_reasons(&self, ids: impl IntoIterator<Item = ReasonId>) -> Result<(), EvalError> {
+    |  _________________________________________________________________________________________________-
+349 | |         let table = self
+    | |             ^^^^^
+350 | |             .state
+351 | |             .reasons
+...   |
+357 | |         Ok(())
+358 | |     }
+    | |_____- temporary `table` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+355 ~             table.get(id).map_err(|error| self.reason_failure(error))?;
+356 +             drop(table);
+    |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/evidence_exec.rs:365:17
+    |
+364 |       ) -> Result<(), EvalError> {
+    |  ________________________________-
+365 | |         let mut table = self
+    | |                 ^^^^^
+366 | |             .state
+367 | |             .reasons
+...   |
+415 | |         Ok(())
+416 | |     }
+    | |_____- temporary `table` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+414 ~             .map_err(|error| self.reason_failure(error))?;
+415 +         drop(table);
+    |
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/evidence_exec.rs:436:46
+    |
+436 |             .is_none_or(|owner| std::ptr::eq(&*self.state, &*owner.state))
+    |                                              ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+436 |             .is_none_or(|owner| std::ptr::eq(&raw const *self.state, &*owner.state))
+    |                                               +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/evidence_exec.rs:436:60
+    |
+436 |             .is_none_or(|owner| std::ptr::eq(&*self.state, &*owner.state))
+    |                                                            ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+436 |             .is_none_or(|owner| std::ptr::eq(&*self.state, &raw const *owner.state))
+    |                                                             +++++++++
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/evidence_exec.rs:597:13
+    |
+593 |       pub fn with_record<R>(&self, read: impl FnOnce(&EvidenceRecord) -> R) -> Result<R, EvalError> {
+    |  ___________________________________________________________________________________________________-
+594 | |         let Some(owner) = &self.owner else {
+595 | |             return Ok(read(&EvidenceRecord::default()));
+596 | |         };
+597 | |         let table = owner
+    | |             ^^^^^
+...   |
+603 | |         Ok(read(record))
+604 | |     }
+    | |_____- temporary `table` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+602 ~         let record = table.get(self.id).map_err(|error| owner.failure(error))?;
+603 +         drop(table);
+    |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/evidence_exec.rs:623:13
+    |
+615 |       ) -> Result<R, EvalError> {
+    |  _______________________________-
+616 | |         let Some(owner) = &self.owner else {
+617 | |             return Err(NativeDiagnostic::error(
+618 | |                 NativeDiagnosticKind::Internal,
+...   |
+623 | |         let table = owner
+    | |             ^^^^^
+...   |
+629 | |         Ok(read(reason.description()))
+630 | |     }
+    | |_____- temporary `table` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+628 ~         let reason = table.get(id).map_err(|error| owner.reason_failure(error))?;
+629 +         drop(table);
+    |
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 7 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 49.659s
+             CPU time consumed: 117ms
+                   Memory peak: 16.9M (swap: 0B)

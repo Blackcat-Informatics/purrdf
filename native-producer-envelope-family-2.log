@@ -1,0 +1,28 @@
+Running as unit: run-p595825-i8899610.scope; invocation ID: 32c5c5c670ae4d6f91b3ff32b8df0808
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn.rs:2036:39
+     |
+2036 |     pub fn try_into_resident(self) -> Result<PfRow, Self> {
+     |                                       ^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn::AdmittedPfRow`, for example by boxing large elements or replacing it with `Box<property_fn::AdmittedPfRow>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+     = note: `-D clippy::result-large-err` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/property_fn_eval.rs:3602:10
+     |
+3602 |     ) -> Result<Option<(Vec<Option<TermValue>>, crate::RowEvidence)>, EvalError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 2 previous errors

@@ -1,0 +1,159 @@
+diff --git crates/text/src/relation.rs crates/text/src/relation.rs
+index a7b5c7b37..f5d40d159 100644
+--- crates/text/src/relation.rs
++++ crates/text/src/relation.rs
+@@ -43,6 +43,7 @@ use std::sync::Arc;
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
+ use purrdf_core::binding_pattern::BindingPattern;
++use purrdf_core::query_scope::LexicalQuery;
+ use purrdf_core::{DatasetView, Iri, TermValue};
+ use purrdf_sparql_eval::{
+     AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis, IndexGeneration,
+@@ -53,7 +54,8 @@ use purrdf_sparql_eval::{
+ use crate::error::TextError;
+ use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
+ use crate::score::{
+-    Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
++    Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, matches_predicate,
++    score_located, select_in_predicate_counted,
+ };
+ 
+ // `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
+@@ -812,9 +814,13 @@ impl TextSearchRelation {
+     ///
+     /// * **Candidate at [`Self::DOC`]** — the document subject is the term a
+     ///   consumer fuses and joins on; every other position is about the row.
+-    /// * **One accepted alternative: a literal request term**, with its value
+-    ///   rendered into [`Self::NEEDLE`]. That is the only position this relation
+-    ///   requires bound, and a needle is the only thing it can be asked for.
++    /// * **One accepted alternative: a literal request term**, with its scoped
++    ///   lexical value rendered into [`Self::NEEDLE`]. An explicit predicate
++    ///   travels with the original literal through
++    ///   [`purrdf_core::query_scope::LexicalQuery`]; field membership is applied
++    ///   before candidate depth, without changing corpus statistics or weights.
++    ///   Unscoped requests retain their ordinary literal spelling. This is the
++    ///   only position the relation requires bound; its six-cell arity is fixed.
+     /// * **No datatype on that placement.** This relation reads `xsd:string`,
+     ///   `rdf:langString` and `rdf:dirLangString`, and an absent datatype is
+     ///   what lets a *language-tagged* request term render as `"needle"@tag`
+@@ -951,7 +957,7 @@ impl TextSearchRelation {
+                     predicate,
+                 },
+                 placements: vec![TermPlacement {
+-                    facet: RequestFacet::Value,
++                    facet: RequestFacet::ScopedLexicalValue,
+                     position: Self::NEEDLE,
+                     datatype: None,
+                 }],
+@@ -1152,13 +1158,15 @@ impl TextSearchRelation {
+         filter: &PartitionFilter,
+         ceiling: Option<u64>,
+         partition_rank: Option<u32>,
++        predicate: Option<&TermValue>,
+     ) -> Result<Vec<Scored>, TextError> {
+         self.observations.rankings.fetch_add(1, Ordering::Relaxed);
+         let mut work = ScoringWork::default();
+-        let rows = select_counted(
++        let rows = select_in_predicate_counted(
+             &self.index,
+             needle,
+             filter,
++            predicate,
+             ceiling,
+             partition_rank,
+             &mut work,
+@@ -1315,7 +1323,22 @@ impl PropertyFunction for TextSearchRelation {
+                  its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"
+             )));
+         };
+-        let text = needle_text(needle, SEARCH_NEEDLE)?;
++        let query =
++            LexicalQuery::decode(needle).map_err(|error| EvalError::function(error.to_string()))?;
++        let text = needle_text(query.needle, SEARCH_NEEDLE)?;
++        if let Some(predicate) = query.predicate {
++            if self
++                .index
++                .config()
++                .predicates()
++                .binary_search(predicate)
++                .is_err()
++            {
++                return Err(EvalError::function(
++                    "field scope predicate is not selected by this text index",
++                ));
++            }
++        }
+ 
+         let rank = match args.get(SEARCH_RANK) {
+             Some(value) => rank_bound(value)?,
+@@ -1362,7 +1385,7 @@ impl PropertyFunction for TextSearchRelation {
+             // else is bound, and is answered without entering the ranker.
+             _ if rank == RankBound::BeyondTheIndex => Vec::new(),
+             None => self
+-                .ranked(&analyzed, &filter, select_ceiling, at)?
++                .ranked(&analyzed, &filter, select_ceiling, at, query.predicate)?
+                 .into_iter()
+                 .map(Hit::from)
+                 .collect(),
+@@ -1372,7 +1395,20 @@ impl PropertyFunction for TextSearchRelation {
+             // document is then answered.
+             Some(subject) => {
+                 let terms = distinct_terms(&analyzed);
+-                let holdings = self.holdings(subject, &terms, &filter);
++                let holdings = self
++                    .holdings(subject, &terms, &filter)
++                    .into_iter()
++                    .map(|holding| {
++                        matches_predicate(
++                            &self.index,
++                            holding.document,
++                            terms.iter().copied(),
++                            query.predicate,
++                        )
++                        .map(|matches| matches.then_some(holding))
++                    })
++                    .filter_map(Result::transpose)
++                    .collect::<Result<Vec<_>, _>>()?;
+                 if holdings.is_empty() {
+                     Vec::new()
+                 } else if args.is_unobserved(SEARCH_RANK) {
+@@ -1384,11 +1420,17 @@ impl PropertyFunction for TextSearchRelation {
+                     // The subject's own rows and nothing else reach the cursor:
+                     // every other candidate was needed to rank these, and is not
+                     // a row this invocation can emit.
+-                    self.ranked(&analyzed, &filter.restricted_to(keys), select_ceiling, at)?
+-                        .into_iter()
+-                        .filter(|row| documents.contains(&row.document))
+-                        .map(Hit::from)
+-                        .collect()
++                    self.ranked(
++                        &analyzed,
++                        &filter.restricted_to(keys),
++                        select_ceiling,
++                        at,
++                        query.predicate,
++                    )?
++                    .into_iter()
++                    .filter(|row| documents.contains(&row.document))
++                    .map(Hit::from)
++                    .collect()
+                 }
+             }
+         };
+@@ -2312,12 +2354,12 @@ mod tests {
+         assert_eq!(
+             accepted.placements,
+             vec![TermPlacement {
+-                facet: RequestFacet::Value,
++                facet: RequestFacet::ScopedLexicalValue,
+                 position: TextSearchRelation::NEEDLE,
+                 datatype: None,
+             }],
+-            "the needle renders into the one position this relation requires bound, \
+-             with no datatype so a language-tagged needle keeps its tag"
++            "the scoped needle renders into the same input position, retaining \
++             predicate membership and every original literal facet"
+         );
+ 
+         // The positions are the relation's own, not a second spelling of them.

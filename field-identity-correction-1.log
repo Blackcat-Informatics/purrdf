@@ -1,0 +1,84 @@
+Running as unit: purrdf-field-identity-correction-1.service
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 23.18s
+     Running tests/planner_golden.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-retrieval/6056fa71f559cea5/out/planner_golden-6056fa71f559cea5)
+
+running 48 tests
+test a_cardinality_carrying_plan_records_every_value_version_three_did ... ok
+test a_consulted_but_silent_stratum_records_both_statistics_absent ... ok
+test a_bounded_request_records_its_licensed_prefix_and_names_it_as_the_cause ... ok
+test a_depth_the_ceiling_cut_is_explained_as_the_ceiling ... ok
+test a_prefix_of_no_rows_is_the_floor_rather_than_the_prefix ... ok
+test a_declaration_deeper_than_a_read_can_reach_is_explained_as_the_ceiling ... ok
+test a_producer_that_reads_nothing_of_the_request_still_plans_and_serves_no_term ... ok
+test a_named_cause_names_the_number_recorded ... ok
+test a_reported_stratum_selectivity_bounds_that_stratum_and_only_that_stratum ... ok
+test a_request_that_reaches_nothing_is_refused ... ok
+test a_request_every_term_of_which_is_served_records_nothing ... ok
+test a_selectivity_cannot_narrow_a_stratum_whose_producer_receives_no_term ... ok
+test a_selectivity_only_stratum_is_recorded_and_narrows_the_depth ... ok
+test a_subject_that_is_both_a_stratum_and_a_request_predicate_records_the_derivation ... ok
+test a_subject_the_provider_reports_but_nothing_consults_is_absent ... ok
+test a_term_every_acceptor_of_which_was_rejected_is_recorded_as_such ... ok
+test a_selectivity_rounds_up_and_never_raises_a_declared_depth ... ok
+test a_term_no_declaration_accepts_is_recorded_as_unserved ... ok
+test an_interval_predicate_reaches_the_statistics_snapshot ... ok
+test a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound ... ok
+test an_interval_term_no_registry_producer_takes_is_reported_per_term ... ok
+test an_unbounded_declaration_names_which_road_reached_the_ceiling ... ok
+test an_inverted_numeric_range_is_refused_but_a_degenerate_one_plans ... ok
+test an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans ... ok
+test an_interval_term_reaches_a_producer_that_declares_its_predicate ... ok
+test an_unbounded_stratum_records_no_applied_selectivity ... ok
+test an_undeclared_row_bound_is_not_a_declaration_of_zero_rows ... ok
+test depths_come_from_the_registry_row_bound_capped_by_statistics ... ok
+test an_unbounded_stratum_without_statistics_reads_to_the_ceiling ... ok
+test entity_seed_matches_an_iri_producer ... ok
+test every_golden_plan_certifies_at_the_depths_version_three_recorded ... ok
+test every_stratum_records_the_row_bound_its_own_producer_declared ... ok
+test an_unconstrained_producer_matches_every_term_and_holds_the_ones_it_places ... ok
+test language_and_predicate_constraints_are_enforced ... ok
+test lexical_term_matches_a_literal_producer ... ok
+test golden_mixed_request_matches ... ok
+test golden_lexical_request_matches ... ok
+test regenerate_planner_goldens ... ignored, regenerates the committed golden fixtures; run explicitly with -- --ignored
+test malformed_terms_are_refused_with_a_name ... ok
+test statistics_lower_but_never_raise_the_declared_bound ... ok
+test selectivities_across_the_terms_one_stratum_receives_are_summed ... ok
+test the_planner_reads_the_registry_row_bound_not_a_parallel_field ... ok
+test planning_is_a_pure_replay ... ok
+test the_planner_redeclares_no_seam_declaration_and_reads_no_ambient_state ... ok
+test the_record_names_exactly_the_consulted_subjects ... ok
+test the_snapshot_names_every_stratum_a_depth_was_derived_for ... ok
+test unmatched_and_unranked_producers_are_rejected ... ok
+test the_snapshot_records_the_consulted_selectivity ... ok
+
+test result: ok. 47 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/real_producers.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-retrieval/6c0f0cf1356b86f3/out/real_producers-6c0f0cf1356b86f3)
+
+running 16 tests
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 24.233s
+             CPU time consumed: 207ms
+                   Memory peak: 25.9M (swap: 0B)

@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 3m 54s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test modifier::tests::delivered_distinct_seals_native_alternatives_without_an_external_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1506 filtered out; finished in 0.00s
+

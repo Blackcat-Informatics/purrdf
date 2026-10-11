@@ -1,0 +1,34 @@
+Running as unit: purrdf-evidence-native-acceptance-strict-1.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/tests/evidence_ingress.rs:696:52
+    |
+696 |                 assert!(std::ptr::eq(accepted.row, &rows.rows()[0]));
+    |                                                    ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+696 |                 assert!(std::ptr::eq(accepted.row, &raw const rows.rows()[0]));
+    |                                                     +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/tests/evidence_ingress.rs:741:56
+    |
+741 |                         assert!(std::ptr::eq(item.row, &rows.rows()[position]));
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+741 |                         assert!(std::ptr::eq(item.row, &raw const rows.rows()[position]));
+    |                                                         +++++++++
+
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 2 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 19.166s
+             CPU time consumed: 167ms
+                   Memory peak: 49.9M (swap: 0B)

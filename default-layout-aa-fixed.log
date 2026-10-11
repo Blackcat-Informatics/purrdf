@@ -1,0 +1,19 @@
+00040000
+SAMPLE 1
+4633972
+    PID  NI CLS RTPRIO COMMAND
+1084134  16   B      0 query_eval-8e4f
+value_dispatch/int_plus_int_numeric_add_control time:   [16.47 ns 16.47 ns 16.48 ns]  mad: 10.49 ps  (100 samples × 4672536 iterations)
+                         outliers: 2 of 100 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+2991872
+SAMPLE 2
+2986404
+    PID  NI CLS RTPRIO COMMAND
+1084296  -4   B      0 query_eval-8e4f
+value_dispatch/int_plus_int_numeric_add_control time:   [17.62 ns 17.67 ns 17.83 ns]  mad: 204.3 ps  (100 samples × 2919166 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 2 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+2969557

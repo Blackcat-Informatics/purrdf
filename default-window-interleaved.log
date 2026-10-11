@@ -1,0 +1,1303 @@
+7bb8ab6e42fbe8cf1a842d47bae2f1f34877921eeebd7c87c52d1758f6089d72  /opt/purrdf-evidence-default-baseline/build/release/build/purrdf-sparql-eval/8e4ffe4ed9e13b7f/out/query_eval-8e4ffe4ed9e13b7f
+2e9ad96353d88767a6200a65ddf62cc27e3a0fb682f1e28e4f59f15a9c672a8b  /opt/purrdf-evidence-default-current/build/release/build/purrdf-sparql-eval/8e4ffe4ed9e13b7f/out/query_eval-8e4ffe4ed9e13b7f
+05b81c6b92ed1420a80de920ad0a384fc0fc1da814b36832cb13681abe4f6e81  crates/sparql-eval/src/bgp/window.rs
+dd030435c013445bd1b6406959af6eb2c578e8030c3313043b4123797f452570  crates/sparql-eval/src/solution.rs
+40c2c2213f29e13f39ef6a19fee9cc160eefc43ff40da26684c117787d6a17bf  crates/sparql-eval/benches/query_eval.rs
+
+BEGIN baseline query_eval/a_selective_join
+2026-10-11T01:22:45Z
+29.68 36.54 37.02 8/2728 116842
+some avg10=0.68 avg60=9.81 avg300=15.64 total=6385390493
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 211114 3284663 569612 7031193 478356 56581 23357 0 0 0
+cpu24 128271 4855423 433754 5983767 96108 48700 10581 0 0 0
+2985969
+query_eval/a_selective_join time:   [1.134 ms 1.140 ms 1.156 ms]  mad: 5.722 µs  (10 samples × 81 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.251 user=3.168 sys=0.058 cpu=99.00
+2026-10-11T01:22:48Z
+27.95 36.07 36.87 5/2717 117350
+some avg10=0.78 avg60=9.24 avg300=15.44 total=6385432382
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 211114 3284980 569618 7031193 478359 56582 23357 0 0 0
+cpu24 128271 4855441 433757 5984078 96108 48701 10581 0 0 0
+2989796
+
+BEGIN current query_eval/a_selective_join
+query_eval/a_selective_join time:   [786.8 µs 797.6 µs 823.0 µs]  mad: 14.74 µs  (10 samples × 127 iterations)
+                         change: [-31.4492% -30.0255% -27.7974%] against `original-main`: Performance has improved.
+
+1 benchmark measured; 0 failed
+elapsed=3.181 user=3.107 sys=0.054 cpu=99.00
+2026-10-11T01:22:51Z
+27.95 36.07 36.87 13/2717 117873
+some avg10=1.00 avg60=9.01 avg300=15.35 total=6385483419
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 211426 3284980 569624 7031193 478360 56583 23358 0 0 0
+cpu24 128273 4855441 433758 5984398 96108 48701 10581 0 0 0
+4490937
+END pair query_eval/a_selective_join
+
+BEGIN baseline query_eval/b_scan_filter
+2026-10-11T01:22:51Z
+27.95 36.07 36.87 14/2717 117877
+some avg10=1.00 avg60=9.01 avg300=15.35 total=6385483462
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 211426 3284980 569625 7031193 478360 56583 23358 0 0 0
+cpu24 128273 4855441 433758 5984398 96108 48701 10581 0 0 0
+4539118
+warning: query_eval/b_scan_filter: 10 samples cannot finish in 1.0 s; they will take about 1.8 s
+query_eval/b_scan_filter time:   [101.8 ms 109.7 ms 123.3 ms]  mad: 9.005 ms  (10 samples × 2 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.211 user=4.093 sys=0.049 cpu=98.00
+2026-10-11T01:22:56Z
+26.91 35.72 36.75 22/2741 118565
+some avg10=0.70 avg60=8.18 avg300=15.04 total=6385513896
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 211835 3284980 569632 7031193 478366 56584 23359 0 0 0
+cpu24 128293 4855576 433782 5984629 96124 48703 10581 0 0 0
+4213052
+
+BEGIN current query_eval/b_scan_filter
+query_eval/b_scan_filter time:   [125.8 ms 128.8 ms 131.5 ms]  mad: 2.269 ms  (10 samples × 1 iterations)
+                         change: [+4.8868% +17.4912% +26.7277%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.859 user=3.687 sys=0.066 cpu=97.00
+2026-10-11T01:23:00Z
+27.56 35.71 36.74 20/2751 119186
+some avg10=1.12 avg60=7.78 avg300=14.87 total=6385621192
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 212205 3284987 569641 7031193 478402 56586 23360 0 0 0
+cpu24 128304 4855852 433821 5984712 96135 48712 10581 0 0 0
+4533000
+END pair query_eval/b_scan_filter
+
+BEGIN baseline query_eval/c_optional_heavy
+2026-10-11T01:23:00Z
+27.56 35.71 36.74 38/2759 119199
+some avg10=1.12 avg60=7.78 avg300=14.87 total=6385623294
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 212205 3284987 569641 7031193 478402 56586 23360 0 0 0
+cpu24 128304 4855852 433821 5984712 96135 48712 10581 0 0 0
+4525565
+warning: query_eval/c_optional_heavy: 10 samples cannot finish in 1.0 s; they will take about 4.0 s
+query_eval/c_optional_heavy time:   [278.1 ms 294.5 ms 360.7 ms]  mad: 18.49 ms  (10 samples × 1 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=7.022 user=5.016 sys=0.264 cpu=75.00
+2026-10-11T01:23:07Z
+30.72 36.23 36.90 51/2773 120301
+some avg10=10.07 avg60=8.88 avg300=14.95 total=6387265443
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 212718 3285115 569697 7031193 478403 56591 23363 0 0 0
+cpu24 128346 4856473 433851 5984715 96139 48717 10583 0 0 0
+2962426
+
+BEGIN current query_eval/c_optional_heavy
+warning: query_eval/c_optional_heavy: 10 samples cannot finish in 1.0 s; they will take about 3.3 s
+query_eval/c_optional_heavy time:   [231.9 ms 242.2 ms 246.8 ms]  mad: 4.379 ms  (10 samples × 1 iterations)
+                         change: [-33.4226% -17.7734% -12.7971%] against `original-main`: Performance has improved.
+                         outliers: 3 of 10 (1 low severe, 1 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=7.299 user=5.493 sys=0.305 cpu=79.00
+2026-10-11T01:23:14Z
+32.83 36.50 36.98 40/2771 121548
+some avg10=20.93 avg60=11.56 avg300=15.37 total=6389356377
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 213291 3285196 569771 7031193 478403 56597 23365 0 0 0
+cpu24 128376 4857135 433884 5984716 96141 48723 10584 0 0 0
+2962821
+END pair query_eval/c_optional_heavy
+
+BEGIN baseline query_eval/d_union_4
+2026-10-11T01:23:14Z
+32.83 36.50 36.98 31/2771 121553
+some avg10=20.93 avg60=11.56 avg300=15.37 total=6389362762
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 213291 3285196 569772 7031193 478403 56597 23365 0 0 0
+cpu24 128376 4857136 433884 5984716 96141 48723 10584 0 0 0
+2966050
+query_eval/d_union_4     time:   [53.34 ms 54.24 ms 55.09 ms]  mad: 846.7 µs  (10 samples × 2 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.845 user=4.306 sys=0.323 cpu=95.00
+2026-10-11T01:23:19Z
+32.60 36.39 36.95 23/2750 122374
+some avg10=17.24 avg60=11.48 avg300=15.31 total=6389712032
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 213731 3285197 569812 7031193 478404 56600 23367 0 0 0
+cpu24 128381 4857606 433892 5984716 96142 48726 10584 0 0 0
+2964590
+
+BEGIN current query_eval/d_union_4
+query_eval/d_union_4     time:   [45.72 ms 46.19 ms 46.79 ms]  mad: 510.6 µs  (10 samples × 3 iterations)
+                         change: [-16.4379% -14.8378% -12.9850%] against `original-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.815 user=4.568 sys=0.202 cpu=99.00
+2026-10-11T01:23:24Z
+31.11 36.02 36.82 17/2752 123272
+some avg10=10.70 avg60=10.65 avg300=15.05 total=6389842301
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 214188 3285197 569833 7031193 478404 56602 23368 0 0 0
+cpu24 128393 4857872 433896 5984916 96145 48728 10585 0 0 0
+2976531
+END pair query_eval/d_union_4
+
+BEGIN baseline query_eval/e_group_aggregate
+2026-10-11T01:23:24Z
+31.11 36.02 36.82 17/2752 123276
+some avg10=10.70 avg60=10.65 avg300=15.05 total=6389842315
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 214189 3285197 569834 7031193 478404 56602 23368 0 0 0
+cpu24 128393 4857872 433896 5984916 96145 48728 10585 0 0 0
+2964661
+query_eval/e_group_aggregate time:   [61.19 ms 62.60 ms 63.44 ms]  mad: 996.2 µs  (10 samples × 2 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.015 user=3.950 sys=0.046 cpu=99.00
+2026-10-11T01:23:28Z
+29.74 35.65 36.70 14/2743 123965
+some avg10=8.05 avg60=10.12 avg300=14.88 total=6389968238
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 214584 3285197 569838 7031193 478404 56603 23369 0 0 0
+cpu24 128406 4857894 433901 5985279 96149 48728 10585 0 0 0
+2973827
+
+BEGIN current query_eval/e_group_aggregate
+query_eval/e_group_aggregate time:   [63.06 ms 64.45 ms 64.86 ms]  mad: 513.2 µs  (10 samples × 2 iterations)
+                         change: [+0.0693% +2.9550% +5.3639%] against `original-main`: Change within noise threshold.
+
+1 benchmark measured; 0 failed
+elapsed=4.017 user=3.952 sys=0.046 cpu=99.00
+2026-10-11T01:23:32Z
+29.74 35.65 36.70 14/2732 124379
+some avg10=6.60 avg60=9.70 avg300=14.72 total=6390131883
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 214979 3285197 569844 7031193 478404 56604 23369 0 0 0
+cpu24 128406 4857899 433904 5985675 96153 48729 10585 0 0 0
+2978197
+END pair query_eval/e_group_aggregate
+
+BEGIN baseline query_eval/f_path_transitive
+2026-10-11T01:23:32Z
+29.74 35.65 36.70 9/2732 124383
+some avg10=6.60 avg60=9.70 avg300=14.72 total=6390131900
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 214980 3285197 569844 7031193 478404 56604 23369 0 0 0
+cpu24 128406 4857899 433904 5985675 96153 48729 10585 0 0 0
+2967668
+query_eval/f_path_transitive time:   [42.96 ms 43.52 ms 50.73 ms]  mad: 656.7 µs  (10 samples × 3 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.821 user=3.752 sys=0.043 cpu=99.00
+2026-10-11T01:23:36Z
+28.40 35.28 36.57 11/2761 125110
+some avg10=4.72 avg60=9.14 avg300=14.53 total=6390167015
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 215355 3285198 569849 7031193 478404 56606 23370 0 0 0
+cpu24 128408 4857962 433906 5985995 96155 48730 10585 0 0 0
+2972545
+
+BEGIN current query_eval/f_path_transitive
+query_eval/f_path_transitive time:   [49.52 ms 50.42 ms 53.96 ms]  mad: 1.053 ms  (10 samples × 2 iterations)
+                         change: [+0.3268% +15.8572% +23.2733%] against `original-main`: Change within noise threshold.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.963 user=3.874 sys=0.063 cpu=99.00
+2026-10-11T01:23:40Z
+27.00 34.87 36.44 11/2762 125540
+some avg10=3.31 avg60=8.58 avg300=14.34 total=6390198819
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 215744 3285198 569856 7031193 478406 56607 23371 0 0 0
+cpu24 128412 4858095 433908 5986253 96156 48732 10585 0 0 0
+2985425
+END pair query_eval/f_path_transitive
+
+BEGIN baseline query_eval/g_order_by_limit
+2026-10-11T01:23:40Z
+27.00 34.87 36.44 12/2762 125544
+some avg10=3.31 avg60=8.58 avg300=14.34 total=6390199671
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 215744 3285198 569856 7031193 478406 56607 23371 0 0 0
+cpu24 128412 4858095 433908 5986254 96156 48732 10585 0 0 0
+2969652
+query_eval/g_order_by_limit time:   [21.11 ms 21.36 ms 22.63 ms]  mad: 544.2 µs  (10 samples × 5 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.528 user=3.435 sys=0.059 cpu=99.00
+2026-10-11T01:23:44Z
+25.64 34.46 36.29 7/2733 125971
+some avg10=2.89 avg60=8.33 avg300=14.25 total=6390237438
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 216088 3285199 569863 7031193 478407 56608 23371 0 0 0
+cpu24 128425 4858109 433912 5986572 96166 48732 10585 0 0 0
+4612004
+
+BEGIN current query_eval/g_order_by_limit
+query_eval/g_order_by_limit time:   [26.91 ms 40.25 ms 46.82 ms]  mad: 7.199 ms  (10 samples × 5 iterations)
+                         change: [+23.7998% +88.4123% +119.4228%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=3.868 user=3.787 sys=0.051 cpu=99.00
+2026-10-11T01:23:47Z
+25.64 34.46 36.29 30/2755 126363
+some avg10=2.12 avg60=7.83 avg300=14.06 total=6390271314
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 216467 3285199 569869 7031193 478407 56610 23372 0 0 0
+cpu24 128556 4858135 433917 5986798 96170 48735 10585 0 0 0
+4176349
+END pair query_eval/g_order_by_limit
+
+BEGIN baseline query_eval/h_distinct_dept
+2026-10-11T01:23:47Z
+25.64 34.46 36.29 28/2757 126369
+some avg10=2.12 avg60=7.83 avg300=14.06 total=6390271365
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 216467 3285199 569870 7031193 478407 56610 23372 0 0 0
+cpu24 128557 4858135 433917 5986798 96170 48735 10585 0 0 0
+4135871
+query_eval/h_distinct_dept time:   [2.814 ms 2.979 ms 3.148 ms]  mad: 151.9 µs  (10 samples × 38 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.813 user=3.588 sys=0.051 cpu=95.00
+2026-10-11T01:23:51Z
+25.91 34.37 36.25 34/2771 126909
+some avg10=2.87 avg60=7.58 avg300=13.92 total=6390589449
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 216837 3285200 569878 7031194 478408 56612 23373 0 0 0
+cpu24 128807 4858262 433920 5986799 96170 48737 10586 0 0 0
+3797221
+
+BEGIN current query_eval/h_distinct_dept
+query_eval/h_distinct_dept time:   [2.995 ms 3.310 ms 4.170 ms]  mad: 511.9 µs  (10 samples × 45 iterations)
+                         change: [+1.4655% +11.0911% +40.7322%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=3.877 user=3.782 sys=0.067 cpu=99.00
+2026-10-11T01:23:55Z
+25.12 34.06 36.14 26/2757 127296
+some avg10=3.11 avg60=7.35 avg300=13.79 total=6390618274
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 217216 3285200 569886 7031194 478408 56613 23374 0 0 0
+cpu24 128821 4858441 433927 5986982 96177 48739 10586 0 0 0
+2964958
+END pair query_eval/h_distinct_dept
+
+BEGIN baseline query_eval/i_construct_blank_free
+2026-10-11T01:23:55Z
+25.12 34.06 36.14 25/2757 127300
+some avg10=3.11 avg60=7.35 avg300=13.79 total=6390618283
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 217216 3285200 569886 7031194 478408 56613 23374 0 0 0
+cpu24 128821 4858442 433927 5986982 96177 48739 10586 0 0 0
+2962381
+warning: query_eval/i_construct_blank_free: 10 samples cannot finish in 1.0 s; they will take about 1.7 s
+query_eval/i_construct_blank_free time:   [66.54 ms 78.46 ms 91.86 ms]  mad: 10.23 ms  (10 samples × 2 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.830 user=4.486 sys=0.076 cpu=94.00
+2026-10-11T01:24:00Z
+25.75 34.05 36.13 37/2784 127875
+some avg10=5.16 avg60=7.30 avg300=13.64 total=6391090368
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 217675 3285209 569900 7031194 478409 56616 23375 0 0 0
+cpu24 128835 4858846 433957 5987008 96183 48746 10587 0 0 0
+2965178
+
+BEGIN current query_eval/i_construct_blank_free
+warning: query_eval/i_construct_blank_free: 10 samples cannot finish in 1.0 s; they will take about 1.6 s
+query_eval/i_construct_blank_free time:   [68.14 ms 75.81 ms 82.51 ms]  mad: 6.602 ms  (10 samples × 2 iterations)
+                         change: [-18.7790% -3.3783% +16.4726%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=5.097 user=4.652 sys=0.092 cpu=93.00
+2026-10-11T01:24:05Z
+27.45 34.26 36.19 31/2784 128454
+some avg10=7.08 avg60=7.54 avg300=13.61 total=6391644401
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 218153 3285217 569919 7031194 478409 56619 23377 0 0 0
+cpu24 128872 4859270 433994 5987012 96184 48753 10587 0 0 0
+2967875
+END pair query_eval/i_construct_blank_free
+
+BEGIN baseline query_eval/j_construct_blank_bearing
+2026-10-11T01:24:05Z
+27.45 34.26 36.19 33/2786 128460
+some avg10=7.08 avg60=7.54 avg300=13.61 total=6391644546
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 218153 3285217 569919 7031194 478409 56619 23377 0 0 0
+cpu24 128872 4859271 433994 5987012 96184 48753 10587 0 0 0
+2951889
+query_eval/j_construct_blank_bearing time:   [97.85 ms 102.0 ms 108.7 ms]  mad: 4.593 ms  (10 samples × 1 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.290 user=4.175 sys=0.062 cpu=98.00
+2026-10-11T01:24:09Z
+27.50 34.16 36.14 33/2785 128972
+some avg10=6.12 avg60=7.34 avg300=13.48 total=6391722797
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 218571 3285218 569927 7031194 478409 56621 23378 0 0 0
+cpu24 128882 4859632 434006 5987052 96185 48757 10588 0 0 0
+2962014
+
+BEGIN current query_eval/j_construct_blank_bearing
+query_eval/j_construct_blank_bearing time:   [55.46 ms 59.36 ms 64.40 ms]  mad: 4.470 ms  (10 samples × 2 iterations)
+                         change: [-46.9537% -41.8005% -36.4049%] against `original-main`: Performance has improved.
+
+1 benchmark measured; 0 failed
+elapsed=4.541 user=4.395 sys=0.061 cpu=98.00
+2026-10-11T01:24:14Z
+26.33 33.81 36.02 13/2752 129418
+some avg10=3.77 avg60=6.73 avg300=13.23 total=6391777650
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 219014 3285218 569937 7031194 478409 56623 23379 0 0 0
+cpu24 128914 4859739 434025 5987347 96194 48759 10588 0 0 0
+2975045
+END pair query_eval/j_construct_blank_bearing
+
+BEGIN baseline query_eval/l_single_group_aggregate
+2026-10-11T01:24:14Z
+26.33 33.81 36.02 11/2752 129422
+some avg10=3.77 avg60=6.73 avg300=13.23 total=6391777762
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 219014 3285218 569937 7031194 478409 56623 23379 0 0 0
+cpu24 128914 4859739 434025 5987347 96194 48759 10588 0 0 0
+2975351
+query_eval/l_single_group_aggregate time:   [28.18 ms 28.24 ms 28.44 ms]  mad: 71.08 µs  (10 samples × 4 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.753 user=3.697 sys=0.040 cpu=99.00
+2026-10-11T01:24:18Z
+24.95 33.39 35.87 8/2752 129806
+some avg10=3.76 avg60=6.53 avg300=13.09 total=6391942923
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 219384 3285218 569941 7031194 478409 56624 23379 0 0 0
+cpu24 128917 4859757 434026 5987704 96194 48759 10588 0 0 0
+2987879
+
+BEGIN current query_eval/l_single_group_aggregate
+query_eval/l_single_group_aggregate time:   [29.92 ms 30.26 ms 34.87 ms]  mad: 458.3 µs  (10 samples × 3 iterations)
+                         change: [+5.7262% +7.1173% +23.3538%] against `original-main`: Performance has regressed.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.796 user=3.661 sys=0.063 cpu=98.00
+2026-10-11T01:24:22Z
+24.95 33.39 35.87 12/2750 130343
+some avg10=3.99 avg60=6.48 avg300=13.04 total=6392124738
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 219752 3285221 569950 7031194 478409 56626 23380 0 0 0
+cpu24 128947 4859871 434049 5987907 96202 48769 10589 0 0 0
+2982057
+END pair query_eval/l_single_group_aggregate
+
+BEGIN baseline query_eval/m_arithmetic_dense_filter
+2026-10-11T01:24:22Z
+24.95 33.39 35.87 12/2750 130347
+some avg10=3.99 avg60=6.48 avg300=13.04 total=6392125401
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 219752 3285221 569950 7031194 478409 56626 23380 0 0 0
+cpu24 128947 4859871 434049 5987907 96202 48769 10589 0 0 0
+2976337
+query_eval/m_arithmetic_dense_filter time:   [114.9 ms 115.3 ms 115.7 ms]  mad: 390.2 µs  (10 samples × 1 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.692 user=3.645 sys=0.034 cpu=99.00
+2026-10-11T01:24:25Z
+23.67 32.99 35.73 6/2748 130724
+some avg10=3.30 avg60=6.19 avg300=12.89 total=6392168944
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 220117 3285221 569954 7031194 478409 56626 23380 0 0 0
+cpu24 128949 4859871 434051 5988277 96203 48769 10589 0 0 0
+2983628
+
+BEGIN current query_eval/m_arithmetic_dense_filter
+query_eval/m_arithmetic_dense_filter time:   [121.8 ms 134.0 ms 171.6 ms]  mad: 12.63 ms  (10 samples × 1 iterations)
+                         change: [+5.6367% +16.1526% +48.7623%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=4.192 user=4.094 sys=0.046 cpu=98.00
+2026-10-11T01:24:29Z
+22.73 32.64 35.60 36/2795 131970
+some avg10=2.57 avg60=5.85 avg300=12.72 total=6392289527
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 220527 3285221 569960 7031194 478410 56628 23382 0 0 0
+cpu24 128960 4859951 434068 5988588 96209 48770 10589 0 0 0
+2953462
+END pair query_eval/m_arithmetic_dense_filter
+
+BEGIN baseline query_eval/n_optional_filter
+2026-10-11T01:24:29Z
+22.73 32.64 35.60 34/2795 131974
+some avg10=2.57 avg60=5.85 avg300=12.72 total=6392290077
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 220527 3285221 569961 7031194 478410 56628 23382 0 0 0
+cpu24 128960 4859952 434068 5988588 96209 48770 10589 0 0 0
+2963356
+query_eval/n_optional_filter time:   [8.647 ms 9.257 ms 11.61 ms]  mad: 943.1 µs  (10 samples × 8 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.486 user=3.419 sys=0.045 cpu=99.00
+2026-10-11T01:24:33Z
+22.11 32.35 35.49 8/2764 132357
+some avg10=2.35 avg60=5.60 avg300=12.58 total=6392331391
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 220870 3285221 569966 7031194 478410 56629 23382 0 0 0
+cpu24 128966 4859984 434072 5988897 96211 48770 10589 0 0 0
+4480071
+
+BEGIN current query_eval/n_optional_filter
+query_eval/n_optional_filter time:   [16.06 ms 16.82 ms 18.09 ms]  mad: 1.001 ms  (10 samples × 8 iterations)
+                         change: [+42.8686% +81.6999% +102.7414%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=3.416 user=3.356 sys=0.033 cpu=99.00
+2026-10-11T01:24:36Z
+22.11 32.35 35.49 18/2786 132866
+some avg10=1.90 avg60=5.31 avg300=12.42 total=6392382588
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 221205 3285224 569972 7031194 478411 56630 23383 0 0 0
+cpu24 128972 4860068 434093 5989117 96229 48772 10589 0 0 0
+3949651
+END pair query_eval/n_optional_filter
+
+BEGIN baseline query_eval/o_minus_disjoint
+2026-10-11T01:24:36Z
+22.11 32.35 35.49 24/2789 132876
+some avg10=1.90 avg60=5.31 avg300=12.42 total=6392383598
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 221205 3285224 569972 7031194 478411 56630 23383 0 0 0
+cpu24 128972 4860069 434093 5989117 96230 48772 10589 0 0 0
+3970998
+query_eval/o_minus_disjoint time:   [11.41 ms 11.94 ms 12.11 ms]  mad: 366.5 µs  (10 samples × 9 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.394 user=3.796 sys=0.059 cpu=87.00
+2026-10-11T01:24:41Z
+23.63 32.49 35.52 20/2787 133370
+some avg10=6.73 avg60=6.03 avg300=12.47 total=6393109068
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 221591 3285255 569991 7031194 478413 56633 23384 0 0 0
+cpu24 128982 4860444 434127 5989126 96238 48776 10590 0 0 0
+4239783
+
+BEGIN current query_eval/o_minus_disjoint
+query_eval/o_minus_disjoint time:   [14.40 ms 15.26 ms 15.55 ms]  mad: 556.1 µs  (10 samples × 8 iterations)
+                         change: [+20.1373% +27.7874% +34.9805%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=4.297 user=4.076 sys=0.075 cpu=96.00
+2026-10-11T01:24:45Z
+23.82 32.38 35.47 25/2814 133781
+some avg10=5.28 avg60=5.80 avg300=12.34 total=6393194158
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 221999 3285263 570001 7031194 478417 56635 23385 0 0 0
+cpu24 128987 4860833 434139 5989146 96241 48779 10590 0 0 0
+2964960
+END pair query_eval/o_minus_disjoint
+
+BEGIN baseline query_eval/p_langmatches_filter
+2026-10-11T01:24:45Z
+23.82 32.38 35.47 19/2814 133785
+some avg10=5.28 avg60=5.80 avg300=12.34 total=6393195227
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 222000 3285263 570002 7031194 478417 56635 23385 0 0 0
+cpu24 128987 4860833 434139 5989147 96241 48780 10590 0 0 0
+2961175
+query_eval/p_langmatches_filter time:   [23.52 ms 23.77 ms 23.87 ms]  mad: 130.8 µs  (10 samples × 5 iterations)
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.798 user=4.587 sys=0.076 cpu=97.00
+2026-10-11T01:24:50Z
+25.11 32.51 35.49 31/2782 134731
+some avg10=7.01 avg60=6.08 avg300=12.26 total=6393704749
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 222461 3285266 570016 7031194 478417 56638 23386 0 0 0
+cpu24 128991 4861269 434160 5989156 96248 48783 10591 0 0 0
+2975840
+
+BEGIN current query_eval/p_langmatches_filter
+query_eval/p_langmatches_filter time:   [24.61 ms 25.10 ms 26.89 ms]  mad: 780.5 µs  (10 samples × 5 iterations)
+                         change: [+3.7213% +5.5735% +13.4311%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.545 user=4.373 sys=0.078 cpu=97.00
+2026-10-11T01:24:55Z
+25.51 32.47 35.46 30/2803 134800
+some avg10=5.54 avg60=5.85 avg300=12.13 total=6393864544
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 222900 3285267 570029 7031194 478417 56640 23387 0 0 0
+cpu24 129021 4861454 434241 5989276 96289 48788 10592 0 0 0
+2971791
+END pair query_eval/p_langmatches_filter
+
+BEGIN baseline query_eval/q_construct_blank_coref
+2026-10-11T01:24:55Z
+25.51 32.47 35.46 32/2803 134804
+some avg10=5.54 avg60=5.85 avg300=12.13 total=6393865991
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 222900 3285267 570030 7031194 478417 56640 23387 0 0 0
+cpu24 129021 4861455 434241 5989276 96289 48788 10592 0 0 0
+2957936
+warning: query_eval/q_construct_blank_coref: 10 samples cannot finish in 1.0 s; they will take about 2.2 s
+query_eval/q_construct_blank_coref time:   [170.8 ms 181.2 ms 191.9 ms]  mad: 10.56 ms  (10 samples × 1 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=5.166 user=4.896 sys=0.061 cpu=95.00
+2026-10-11T01:25:00Z
+25.95 32.44 35.44 28/2788 135131
+some avg10=5.41 avg60=5.82 avg300=12.00 total=6394184406
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 223393 3285268 570048 7031194 478418 56643 23389 0 0 0
+cpu24 129044 4861843 434297 5989304 96306 48793 10593 0 0 0
+2974343
+
+BEGIN current query_eval/q_construct_blank_coref
+warning: query_eval/q_construct_blank_coref: 10 samples cannot finish in 1.0 s; they will take about 1.9 s
+query_eval/q_construct_blank_coref time:   [191.4 ms 198.9 ms 204.0 ms]  mad: 4.242 ms  (10 samples × 1 iterations)
+                         change: [+3.2100% +9.8006% +16.8004%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=5.356 user=5.181 sys=0.085 cpu=98.00
+2026-10-11T01:25:05Z
+26.51 32.45 35.42 32/2785 135309
+some avg10=3.95 avg60=5.51 avg300=11.85 total=6394321002
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 223911 3285269 570061 7031194 478420 56646 23390 0 0 0
+cpu24 129057 4862312 434320 5989327 96313 48797 10593 0 0 0
+2967742
+END pair query_eval/q_construct_blank_coref
+
+BEGIN baseline query_eval/r_path_reverse_star
+2026-10-11T01:25:05Z
+26.51 32.45 35.42 29/2785 135313
+some avg10=3.95 avg60=5.51 avg300=11.85 total=6394321415
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 223912 3285269 570062 7031194 478420 56646 23390 0 0 0
+cpu24 129057 4862313 434320 5989327 96313 48797 10593 0 0 0
+2955164
+query_eval/r_path_reverse_star time:   [61.56 ms 62.99 ms 66.51 ms]  mad: 1.938 ms  (10 samples × 2 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.884 user=4.737 sys=0.070 cpu=98.00
+2026-10-11T01:25:10Z
+26.47 32.34 35.37 42/2786 135430
+some avg10=4.36 avg60=5.46 avg300=11.71 total=6394567860
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 224387 3285270 570072 7031194 478420 56649 23391 0 0 0
+cpu24 129075 4862642 434396 5989383 96321 48802 10594 0 0 0
+2957193
+
+BEGIN current query_eval/r_path_reverse_star
+query_eval/r_path_reverse_star time:   [73.55 ms 75.29 ms 93.17 ms]  mad: 577.1 µs  (10 samples × 2 iterations)
+                         change: [+12.8399% +19.5236% +45.7829%] against `original-main`: Performance has regressed.
+                         outliers: 4 of 10 (2 low severe, 0 low mild, 0 high mild, 2 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=5.037 user=4.657 sys=0.086 cpu=94.00
+2026-10-11T01:25:15Z
+26.67 32.29 35.34 62/2795 135501
+some avg10=3.73 avg60=5.27 avg300=11.58 total=6394925218
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 224852 3285297 570084 7031194 478420 56651 23392 0 0 0
+cpu24 129083 4863079 434424 5989400 96334 48807 10595 0 0 0
+2974684
+END pair query_eval/r_path_reverse_star
+
+BEGIN baseline query_eval/s_guarded_recursion
+2026-10-11T01:25:15Z
+26.67 32.29 35.34 49/2795 135505
+some avg10=3.73 avg60=5.27 avg300=11.58 total=6394948887
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 224852 3285299 570085 7031194 478420 56652 23392 0 0 0
+cpu24 129083 4863082 434424 5989400 96334 48807 10595 0 0 0
+2974916
+warning: query_eval/s_guarded_recursion: 10 samples cannot finish in 1.0 s; they will take about 9.7 s
+query_eval/s_guarded_recursion time:   [525.3 ms 687.6 ms 835.1 ms]  mad: 154.9 ms  (10 samples × 1 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=11.784 user=10.530 sys=0.070 cpu=89.00
+2026-10-11T01:25:27Z
+27.65 32.33 35.32 28/2759 135678
+some avg10=8.19 avg60=6.75 avg300=11.68 total=6396440272
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 225909 3285396 570104 7031194 478421 56658 23395 0 0 0
+cpu24 129102 4864010 434486 5989549 96347 48820 10596 0 0 0
+4254701
+
+BEGIN current query_eval/s_guarded_recursion
+warning: query_eval/s_guarded_recursion: 10 samples cannot finish in 1.0 s; they will take about 7.7 s
+query_eval/s_guarded_recursion time:   [738.4 ms 769.6 ms 992.6 ms]  mad: 45.10 ms  (10 samples × 1 iterations)
+                         change: [-7.8927% +11.9386% +60.5897%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=11.446 user=11.254 sys=0.056 cpu=98.00
+2026-10-11T01:25:38Z
+28.76 32.34 35.28 34/2778 135944
+some avg10=4.42 avg60=6.04 avg300=11.32 total=6396830750
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 227036 3285398 570114 7031194 478421 56663 23396 0 0 0
+cpu24 129111 4865080 434521 5989568 96352 48828 10597 0 0 0
+2963899
+END pair query_eval/s_guarded_recursion
+
+BEGIN baseline query_eval/k_property_function_join
+2026-10-11T01:25:38Z
+28.76 32.34 35.28 30/2778 135948
+some avg10=4.42 avg60=6.04 avg300=11.32 total=6396831191
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 227036 3285398 570114 7031194 478421 56663 23396 0 0 0
+cpu24 129111 4865081 434521 5989568 96352 48828 10597 0 0 0
+2964993
+warning: query_eval/k_property_function_join: 10 samples cannot finish in 1.0 s; they will take about 1.6 s
+query_eval/k_property_function_join time:   [82.14 ms 83.04 ms 83.46 ms]  mad: 552.8 µs  (10 samples × 2 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.969 user=4.840 sys=0.074 cpu=98.00
+2026-10-11T01:25:43Z
+29.18 32.37 35.27 31/2786 135971
+some avg10=3.92 avg60=5.84 avg300=11.21 total=6396985869
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 227521 3285399 570124 7031194 478421 56666 23396 0 0 0
+cpu24 129115 4865528 434558 5989573 96353 48831 10597 0 0 0
+2975913
+
+BEGIN current query_eval/k_property_function_join
+warning: query_eval/k_property_function_join: 10 samples cannot finish in 1.0 s; they will take about 1.7 s
+query_eval/k_property_function_join time:   [85.20 ms 86.31 ms 87.05 ms]  mad: 579.0 µs  (10 samples × 2 iterations)
+                         change: [+2.7311% +3.9427% +5.4356%] against `original-main`: Performance has regressed.
+                         outliers: 3 of 10 (1 low severe, 1 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=5.196 user=5.045 sys=0.086 cpu=98.00
+2026-10-11T01:25:49Z
+29.57 32.40 35.26 52/2782 136033
+some avg10=3.95 avg60=5.64 avg300=11.05 total=6397268754
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 228027 3285400 570136 7031194 478421 56668 23397 0 0 0
+cpu24 129119 4866017 434574 5989577 96356 48836 10598 0 0 0
+2966403
+END pair query_eval/k_property_function_join
+
+BEGIN baseline value_dispatch/int_plus_int_value_add
+2026-10-11T01:25:49Z
+29.57 32.40 35.26 52/2783 136038
+some avg10=3.95 avg60=5.64 avg300=11.05 total=6397270984
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 228027 3285400 570137 7031194 478421 56668 23397 0 0 0
+cpu24 129119 4866018 434574 5989577 96356 48836 10598 0 0 0
+2965587
+value_dispatch/int_plus_int_value_add time:   [19.20 ns 19.36 ns 19.81 ns]  mad: 139.4 ps  (10 samples × 4915001 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.562 user=4.311 sys=0.079 cpu=96.00
+2026-10-11T01:25:53Z
+30.32 32.51 35.28 43/2781 136066
+some avg10=5.98 avg60=5.92 avg300=11.04 total=6397825749
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 228463 3285401 570152 7031194 478421 56671 23398 0 0 0
+cpu24 129120 4866446 434592 5989577 96358 48842 10598 0 0 0
+2964950
+
+BEGIN current value_dispatch/int_plus_int_value_add
+value_dispatch/int_plus_int_value_add time:   [19.26 ns 19.96 ns 22.14 ns]  mad: 914.1 ps  (10 samples × 4850083 iterations)
+                         change: [-0.9832% +3.1176% +14.7591%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=4.780 user=4.406 sys=0.076 cpu=93.00
+2026-10-11T01:25:58Z
+32.14 32.85 35.38 35/2801 136106
+some avg10=11.85 avg60=7.14 avg300=11.19 total=6398732009
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 228908 3285417 570169 7031194 478422 56674 23399 0 0 0
+cpu24 129122 4866901 434611 5989577 96359 48848 10599 0 0 0
+2968510
+END pair value_dispatch/int_plus_int_value_add
+
+BEGIN baseline value_dispatch/int_plus_int_numeric_add_control
+2026-10-11T01:25:58Z
+32.14 32.85 35.38 35/2801 136110
+some avg10=11.85 avg60=7.14 avg300=11.19 total=6398736759
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 228908 3285417 570170 7031194 478422 56674 23399 0 0 0
+cpu24 129123 4866901 434612 5989577 96359 48848 10599 0 0 0
+2969497
+value_dispatch/int_plus_int_numeric_add_control time:   [16.81 ns 17.49 ns 17.74 ns]  mad: 309.7 ps  (10 samples × 5437648 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.139 user=4.027 sys=0.073 cpu=99.00
+2026-10-11T01:26:02Z
+32.14 32.85 35.38 28/2787 136122
+some avg10=9.11 avg60=6.90 avg300=11.09 total=6398878489
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 229311 3285417 570179 7031194 478422 56676 23399 0 0 0
+cpu24 129126 4867263 434621 5989610 96364 48851 10600 0 0 0
+2970168
+
+BEGIN current value_dispatch/int_plus_int_numeric_add_control
+value_dispatch/int_plus_int_numeric_add_control time:   [17.63 ns 17.65 ns 17.75 ns]  mad: 28.32 ps  (10 samples × 5605893 iterations)
+                         change: [-0.4748% +0.8908% +5.1920%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=4.963 user=4.287 sys=0.053 cpu=87.00
+2026-10-11T01:26:07Z
+33.17 33.05 35.43 28/2764 136146
+some avg10=6.44 avg60=6.52 avg300=10.95 total=6398930679
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 229740 3285452 570192 7031194 478442 56678 23400 0 0 0
+cpu24 129127 4867728 434626 5989632 96367 48855 10600 0 0 0
+2960033
+END pair value_dispatch/int_plus_int_numeric_add_control
+
+BEGIN baseline value_dispatch/dec_plus_dec_value_add
+2026-10-11T01:26:07Z
+33.17 33.05 35.43 28/2764 136150
+some avg10=6.44 avg60=6.52 avg300=10.95 total=6398930874
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 229741 3285452 570192 7031194 478442 56678 23400 0 0 0
+cpu24 129127 4867729 434626 5989632 96367 48855 10600 0 0 0
+2964978
+value_dispatch/dec_plus_dec_value_add time:   [22.44 ns 22.85 ns 24.49 ns]  mad: 550.8 ps  (10 samples × 4533241 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.437 user=4.320 sys=0.077 cpu=99.00
+2026-10-11T01:26:12Z
+32.92 33.00 35.40 30/2782 136181
+some avg10=4.04 avg60=6.00 avg300=10.75 total=6399013345
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 230172 3285453 570202 7031194 478442 56680 23400 0 0 0
+cpu24 129131 4868144 434640 5989639 96370 48857 10600 0 0 0
+2962521
+
+BEGIN current value_dispatch/dec_plus_dec_value_add
+value_dispatch/dec_plus_dec_value_add time:   [15.25 ns 15.81 ns 16.00 ns]  mad: 257.0 ps  (10 samples × 6213942 iterations)
+                         change: [-35.6170% -30.8205% -29.3801%] against `original-main`: Performance has improved.
+
+1 benchmark measured; 0 failed
+elapsed=3.974 user=3.873 sys=0.077 cpu=99.00
+2026-10-11T01:26:16Z
+32.92 33.00 35.39 22/2767 136273
+some avg10=2.86 avg60=5.64 avg300=10.61 total=6399055212
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 230560 3285453 570211 7031194 478443 56681 23401 0 0 0
+cpu24 129131 4868510 434667 5989641 96370 48859 10601 0 0 0
+4376093
+END pair value_dispatch/dec_plus_dec_value_add
+
+BEGIN baseline value_dispatch/int_plus_dec_value_add
+2026-10-11T01:26:16Z
+32.92 33.00 35.39 22/2767 136277
+some avg10=2.86 avg60=5.64 avg300=10.61 total=6399055265
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 230560 3285453 570211 7031194 478443 56681 23401 0 0 0
+cpu24 129131 4868510 434667 5989641 96370 48859 10601 0 0 0
+4332328
+value_dispatch/int_plus_dec_value_add time:   [13.36 ns 13.71 ns 14.21 ns]  mad: 383.0 ps  (10 samples × 7445972 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.479 user=3.410 sys=0.054 cpu=99.00
+2026-10-11T01:26:19Z
+31.49 32.70 35.28 11/2733 136286
+some avg10=2.34 avg60=5.46 avg300=10.53 total=6399075186
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 230901 3285454 570218 7031194 478443 56682 23401 0 0 0
+cpu24 129168 4868516 434701 5989892 96400 48862 10601 0 0 0
+4290238
+
+BEGIN current value_dispatch/int_plus_dec_value_add
+value_dispatch/int_plus_dec_value_add time:   [14.54 ns 15.49 ns 15.89 ns]  mad: 513.1 ps  (10 samples × 6466345 iterations)
+                         change: [+4.6938% +12.9608% +17.4317%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=3.219 user=3.114 sys=0.066 cpu=98.00
+2026-10-11T01:26:22Z
+31.49 32.70 35.28 24/2760 136432
+some avg10=1.57 avg60=5.11 avg300=10.39 total=6399106697
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 231213 3285455 570226 7031194 478444 56683 23401 0 0 0
+cpu24 129184 4868658 434739 5990000 96419 48865 10601 0 0 0
+3979858
+END pair value_dispatch/int_plus_dec_value_add
+
+BEGIN baseline value_dispatch/datetime_minus_datetime_value_sub
+2026-10-11T01:26:22Z
+31.49 32.70 35.28 25/2760 136436
+some avg10=1.57 avg60=5.11 avg300=10.39 total=6399107154
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 231213 3285455 570226 7031194 478444 56683 23401 0 0 0
+cpu24 129184 4868658 434739 5990000 96419 48865 10601 0 0 0
+3935081
+value_dispatch/datetime_minus_datetime_value_sub time:   [76.65 ns 77.39 ns 78.40 ns]  mad: 874.3 ps  (10 samples × 1721465 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.207 user=4.088 sys=0.058 cpu=98.00
+2026-10-11T01:26:27Z
+30.97 32.57 35.22 20/2755 136526
+some avg10=1.59 avg60=4.87 avg300=10.27 total=6399189924
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 231623 3285456 570235 7031194 478445 56685 23402 0 0 0
+cpu24 129190 4868996 434759 5990050 96427 48869 10602 0 0 0
+2967260
+
+BEGIN current value_dispatch/datetime_minus_datetime_value_sub
+value_dispatch/datetime_minus_datetime_value_sub time:   [72.99 ns 76.44 ns 77.20 ns]  mad: 763.6 ps  (10 samples × 1436732 iterations)
+                         change: [-5.8257% -1.2295% +0.2490%] against `original-main`: No change in performance detected.
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.079 user=3.969 sys=0.071 cpu=99.00
+2026-10-11T01:26:31Z
+30.25 32.40 35.15 16/2744 136542
+some avg10=1.07 avg60=4.56 avg300=10.13 total=6399221773
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 232021 3285456 570244 7031194 478445 56687 23402 0 0 0
+cpu24 129191 4869295 434776 5990135 96433 48871 10602 0 0 0
+2968973
+END pair value_dispatch/datetime_minus_datetime_value_sub
+
+BEGIN baseline sort_order/int_vs_int_total
+2026-10-11T01:26:31Z
+30.25 32.40 35.15 17/2744 136546
+some avg10=1.07 avg60=4.56 avg300=10.13 total=6399221782
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 232021 3285456 570244 7031194 478445 56687 23402 0 0 0
+cpu24 129191 4869295 434776 5990135 96433 48871 10602 0 0 0
+2968945
+sort_order/int_vs_int_total time:   [3.117 ns 3.162 ns 3.317 ns]  mad: 50.17 ps  (10 samples × 30616039 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.966 user=3.895 sys=0.049 cpu=99.00
+2026-10-11T01:26:35Z
+29.11 32.12 35.05 9/2725 136579
+some avg10=0.71 avg60=4.27 avg300=9.99 total=6399258306
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 232411 3285457 570249 7031194 478446 56689 23402 0 0 0
+cpu24 129199 4869376 434802 5990409 96446 48873 10602 0 0 0
+2970023
+
+BEGIN current sort_order/int_vs_int_total
+sort_order/int_vs_int_total time:   [6.230 ns 7.094 ns 7.137 ns]  mad: 87.40 ps  (10 samples × 14944696 iterations)
+                         change: [+92.0347% +124.3458% +128.2060%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (1 low severe, 0 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.743 user=3.671 sys=0.056 cpu=99.00
+2026-10-11T01:26:38Z
+28.54 31.96 34.98 23/2722 136603
+some avg10=0.62 avg60=4.02 avg300=9.86 total=6399295064
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 232778 3285457 570256 7031194 478446 56690 23402 0 0 0
+cpu24 129199 4869398 434989 5990574 96447 48876 10602 0 0 0
+2968451
+END pair sort_order/int_vs_int_total
+
+BEGIN baseline sort_order/int_vs_int_promoted_control
+2026-10-11T01:26:38Z
+28.54 31.96 34.98 23/2722 136607
+some avg10=0.62 avg60=4.02 avg300=9.86 total=6399295080
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 232778 3285457 570256 7031194 478446 56690 23402 0 0 0
+cpu24 129199 4869398 434989 5990574 96447 48876 10602 0 0 0
+2969785
+sort_order/int_vs_int_promoted_control time:   [2.752 ns 3.106 ns 4.833 ns]  mad: 371.1 ps  (10 samples × 16827660 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.985 user=3.905 sys=0.057 cpu=99.00
+2026-10-11T01:26:42Z
+28.54 31.96 34.98 21/2744 136641
+some avg10=0.42 avg60=3.76 avg300=9.73 total=6399331189
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 233169 3285457 570263 7031194 478446 56691 23403 0 0 0
+cpu24 129204 4869625 435081 5990631 96467 48878 10603 0 0 0
+2969784
+
+BEGIN current sort_order/int_vs_int_promoted_control
+sort_order/int_vs_int_promoted_control time:   [4.182 ns 4.429 ns 4.467 ns]  mad: 46.48 ps  (10 samples × 28725193 iterations)
+                         change: [-8.3074% +42.5691% +61.5662%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=4.911 user=4.797 sys=0.064 cpu=98.00
+2026-10-11T01:26:47Z
+28.01 31.79 34.91 21/2723 136742
+some avg10=0.57 avg60=3.58 avg300=9.61 total=6399412380
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 233650 3285457 570271 7031194 478447 56694 23403 0 0 0
+cpu24 129205 4870066 435088 5990666 96474 48881 10603 0 0 0
+2970680
+END pair sort_order/int_vs_int_promoted_control
+
+BEGIN baseline sort_order/dec_vs_dec_total
+2026-10-11T01:26:47Z
+28.01 31.79 34.91 22/2723 136746
+some avg10=0.57 avg60=3.58 avg300=9.61 total=6399412583
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 233650 3285457 570272 7031194 478447 56694 23403 0 0 0
+cpu24 129205 4870067 435088 5990666 96474 48881 10603 0 0 0
+2972671
+sort_order/dec_vs_dec_total time:   [20.01 ns 34.48 ns 37.64 ns]  mad: 3.287 ns  (10 samples × 3029961 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=4.223 user=4.118 sys=0.075 cpu=99.00
+2026-10-11T01:26:52Z
+27.77 31.68 34.85 22/2721 136765
+some avg10=0.38 avg60=3.35 avg300=9.47 total=6399439223
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 234061 3285458 570281 7031194 478448 56696 23404 0 0 0
+cpu24 129205 4870440 435090 5990713 96474 48884 10603 0 0 0
+2975065
+
+BEGIN current sort_order/dec_vs_dec_total
+sort_order/dec_vs_dec_total time:   [28.45 ns 32.73 ns 38.16 ns]  mad: 5.393 ns  (10 samples × 3121198 iterations)
+                         change: [-20.1581% -5.0745% +69.9102%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=4.527 user=4.416 sys=0.071 cpu=99.00
+2026-10-11T01:26:56Z
+27.15 31.48 34.77 18/2734 136823
+some avg10=0.36 avg60=3.06 avg300=9.29 total=6399482573
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 234503 3285458 570290 7031194 478448 56697 23404 0 0 0
+cpu24 129208 4870782 435107 5990782 96498 48887 10604 0 0 0
+2955941
+END pair sort_order/dec_vs_dec_total
+
+BEGIN baseline sort_order/dec_vs_dec_promoted_control
+2026-10-11T01:26:56Z
+27.15 31.48 34.77 20/2734 136827
+some avg10=0.36 avg60=3.06 avg300=9.29 total=6399482736
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 234503 3285458 570291 7031194 478448 56697 23404 0 0 0
+cpu24 129208 4870783 435107 5990782 96498 48887 10604 0 0 0
+2951614
+sort_order/dec_vs_dec_promoted_control time:   [18.41 ns 18.58 ns 19.45 ns]  mad: 209.0 ps  (10 samples × 4187801 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.668 user=3.598 sys=0.053 cpu=99.00
+2026-10-11T01:27:00Z
+26.34 31.24 34.68 13/2714 136834
+some avg10=0.24 avg60=2.87 avg300=9.16 total=6399507162
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 234863 3285458 570297 7031195 478449 56698 23404 0 0 0
+cpu24 129208 4870932 435116 5990986 96506 48888 10604 0 0 0
+2975617
+
+BEGIN current sort_order/dec_vs_dec_promoted_control
+sort_order/dec_vs_dec_promoted_control time:   [12.03 ns 17.21 ns 18.02 ns]  mad: 854.9 ps  (10 samples × 5136916 iterations)
+                         change: [-35.5900% -7.3712% -2.3161%] against `original-main`: Performance has improved.
+
+1 benchmark measured; 0 failed
+elapsed=3.637 user=3.521 sys=0.063 cpu=98.00
+2026-10-11T01:27:04Z
+25.27 30.94 34.56 9/2717 136860
+some avg10=0.37 avg60=2.80 avg300=9.10 total=6399533737
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 235215 3285460 570304 7031195 478454 56700 23404 0 0 0
+cpu24 129212 4871033 435126 5991231 96514 48889 10604 0 0 0
+4620520
+END pair sort_order/dec_vs_dec_promoted_control
+
+BEGIN baseline sort_order/double_vs_double_total
+2026-10-11T01:27:04Z
+25.27 30.94 34.56 13/2717 136864
+some avg10=0.37 avg60=2.80 avg300=9.10 total=6399533752
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 235215 3285460 570304 7031195 478454 56700 23404 0 0 0
+cpu24 129212 4871033 435126 5991232 96514 48889 10604 0 0 0
+4621346
+sort_order/double_vs_double_total time:   [1.886 ns 1.905 ns 1.911 ns]  mad: 8.712 ps  (10 samples × 52237584 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=2.722 user=2.659 sys=0.044 cpu=99.00
+2026-10-11T01:27:06Z
+25.27 30.94 34.56 9/2712 136876
+some avg10=0.43 avg60=2.66 avg300=8.99 total=6399556777
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 235482 3285460 570309 7031195 478455 56700 23404 0 0 0
+cpu24 129212 4871033 435127 5991506 96515 48889 10604 0 0 0
+4629939
+
+BEGIN current sort_order/double_vs_double_total
+sort_order/double_vs_double_total time:   [1.910 ns 2.022 ns 2.053 ns]  mad: 39.61 ps  (10 samples × 49619429 iterations)
+                         change: [+0.0432% +6.1286% +7.9553%] against `original-main`: Change within noise threshold.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=2.821 user=2.744 sys=0.049 cpu=99.00
+2026-10-11T01:27:09Z
+24.05 30.59 34.43 10/2722 136992
+some avg10=0.53 avg60=2.60 avg300=8.93 total=6399585977
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 235756 3285462 570315 7031195 478472 56701 23405 0 0 0
+cpu24 129212 4871040 435127 5991800 96516 48889 10604 0 0 0
+4642057
+END pair sort_order/double_vs_double_total
+
+BEGIN baseline sort_order/double_vs_double_promoted_control
+2026-10-11T01:27:09Z
+24.05 30.59 34.43 10/2722 136996
+some avg10=0.53 avg60=2.60 avg300=8.93 total=6399586320
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 235756 3285462 570316 7031195 478472 56701 23405 0 0 0
+cpu24 129212 4871040 435127 5991800 96516 48889 10604 0 0 0
+4637220
+sort_order/double_vs_double_promoted_control time:   [5.001 ns 5.158 ns 5.332 ns]  mad: 160.7 ps  (10 samples × 19960460 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=2.959 user=2.860 sys=0.050 cpu=98.00
+2026-10-11T01:27:12Z
+24.05 30.59 34.43 17/2724 137040
+some avg10=0.36 avg60=2.43 avg300=8.81 total=6399613194
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 236042 3285462 570322 7031195 478476 56702 23405 0 0 0
+cpu24 129212 4871041 435129 5992098 96518 48890 10604 0 0 0
+3940966
+
+BEGIN current sort_order/double_vs_double_promoted_control
+sort_order/double_vs_double_promoted_control time:   [6.010 ns 6.579 ns 10.39 ns]  mad: 602.5 ps  (10 samples × 12313625 iterations)
+                         change: [+15.2616% +27.5598% +99.1215%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=2.909 user=2.842 sys=0.047 cpu=99.00
+2026-10-11T01:27:15Z
+23.56 30.38 34.34 18/2721 137052
+some avg10=0.29 avg60=2.35 avg300=8.75 total=6399631081
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 236327 3285463 570328 7031195 478478 56702 23405 0 0 0
+cpu24 129213 4871112 435166 5992283 96520 48890 10604 0 0 0
+4056156
+END pair sort_order/double_vs_double_promoted_control
+
+BEGIN baseline sort_order/int_vs_double_window_total
+2026-10-11T01:27:15Z
+23.56 30.38 34.34 18/2721 137056
+some avg10=0.29 avg60=2.35 avg300=8.75 total=6399631125
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 236327 3285463 570328 7031195 478478 56702 23405 0 0 0
+cpu24 129213 4871113 435166 5992283 96520 48890 10604 0 0 0
+4051341
+sort_order/int_vs_double_window_total time:   [14.72 ns 15.02 ns 15.28 ns]  mad: 270.4 ps  (10 samples × 9696409 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=4.531 user=4.432 sys=0.073 cpu=99.00
+2026-10-11T01:27:20Z
+23.20 30.19 34.26 20/2721 137074
+some avg10=0.16 avg60=2.13 avg300=8.57 total=6399653399
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 236770 3285463 570337 7031195 478480 56704 23405 0 0 0
+cpu24 129214 4871467 435182 5992366 96521 48893 10604 0 0 0
+2960216
+
+BEGIN current sort_order/int_vs_double_window_total
+sort_order/int_vs_double_window_total time:   [8.863 ns 9.098 ns 13.29 ns]  mad: 265.0 ps  (10 samples × 11223860 iterations)
+                         change: [-41.1200% -39.4357% -11.9056%] against `original-main`: Performance has improved.
+
+1 benchmark measured; 0 failed
+elapsed=4.049 user=3.953 sys=0.077 cpu=99.00
+2026-10-11T01:27:24Z
+22.38 29.91 34.14 14/2725 137102
+some avg10=0.10 avg60=1.99 avg300=8.45 total=6399677921
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 237165 3285463 570346 7031195 478480 56706 23406 0 0 0
+cpu24 129218 4871633 435190 5992596 96524 48895 10605 0 0 0
+2984355
+END pair sort_order/int_vs_double_window_total
+
+BEGIN baseline sort_order/int_vs_double_window_promoted_control
+2026-10-11T01:27:24Z
+22.38 29.91 34.14 15/2725 137106
+some avg10=0.10 avg60=1.99 avg300=8.45 total=6399678103
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 237166 3285463 570346 7031195 478480 56706 23406 0 0 0
+cpu24 129218 4871633 435190 5992597 96524 48895 10605 0 0 0
+2983093
+sort_order/int_vs_double_window_promoted_control time:   [10.92 ns 10.95 ns 10.99 ns]  mad: 30.63 ps  (10 samples × 8532266 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.604 user=3.518 sys=0.065 cpu=99.00
+2026-10-11T01:27:27Z
+22.38 29.91 34.14 8/2721 137115
+some avg10=0.26 avg60=1.96 avg300=8.40 total=6399706355
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 237518 3285463 570354 7031195 478482 56707 23406 0 0 0
+cpu24 129219 4871683 435196 5992906 96525 48896 10605 0 0 0
+2967037
+
+BEGIN current sort_order/int_vs_double_window_promoted_control
+sort_order/int_vs_double_window_promoted_control time:   [11.31 ns 11.35 ns 11.41 ns]  mad: 34.94 ps  (10 samples × 8017248 iterations)
+                         change: [+3.1658% +3.7071% +4.1459%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.482 user=3.422 sys=0.045 cpu=99.00
+2026-10-11T01:27:31Z
+21.23 29.54 34.00 7/2711 137123
+some avg10=0.36 avg60=1.86 avg300=8.29 total=6399744408
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 237860 3285463 570359 7031195 478482 56708 23406 0 0 0
+cpu24 129222 4871699 435196 5993237 96525 48896 10605 0 0 0
+2985507
+END pair sort_order/int_vs_double_window_promoted_control
+
+BEGIN baseline sort_order/dec_vs_double_u128_total
+2026-10-11T01:27:31Z
+21.23 29.54 34.00 8/2711 137127
+some avg10=0.36 avg60=1.86 avg300=8.29 total=6399744491
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 237860 3285463 570360 7031195 478482 56708 23406 0 0 0
+cpu24 129222 4871699 435196 5993238 96525 48896 10605 0 0 0
+2992407
+sort_order/dec_vs_double_u128_total time:   [12.88 ns 12.90 ns 12.92 ns]  mad: 18.14 ps  (10 samples × 7541170 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.496 user=3.434 sys=0.045 cpu=99.00
+2026-10-11T01:27:34Z
+20.17 29.19 33.86 7/2705 137144
+some avg10=0.39 avg60=1.77 avg300=8.19 total=6399784365
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 238204 3285463 570365 7031195 478484 56708 23406 0 0 0
+cpu24 129222 4871704 435196 5993585 96525 48897 10605 0 0 0
+2989653
+
+BEGIN current sort_order/dec_vs_double_u128_total
+sort_order/dec_vs_double_u128_total time:   [12.94 ns 12.95 ns 12.97 ns]  mad: 12.12 ps  (10 samples × 7725358 iterations)
+                         change: [+0.2209% +0.3692% +0.5759%] against `original-main`: Change within noise threshold.
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.668 user=3.597 sys=0.057 cpu=99.00
+2026-10-11T01:27:38Z
+19.19 28.83 33.72 9/2706 137243
+some avg10=0.41 avg60=1.69 avg300=8.08 total=6399826605
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 238564 3285463 570371 7031195 478484 56709 23406 0 0 0
+cpu24 129222 4871724 435196 5993933 96525 48897 10605 0 0 0
+2990173
+END pair sort_order/dec_vs_double_u128_total
+
+BEGIN baseline sort_order/dec_vs_double_u128_promoted_control
+2026-10-11T01:27:38Z
+19.19 28.83 33.72 8/2706 137247
+some avg10=0.41 avg60=1.69 avg300=8.08 total=6399826631
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 238564 3285463 570371 7031195 478484 56709 23406 0 0 0
+cpu24 129222 4871724 435196 5993934 96525 48897 10605 0 0 0
+2989246
+sort_order/dec_vs_double_u128_promoted_control time:   [22.11 ns 22.15 ns 22.18 ns]  mad: 25.83 ps  (10 samples × 4522740 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.381 user=3.324 sys=0.045 cpu=99.00
+2026-10-11T01:27:42Z
+19.19 28.83 33.72 7/2714 137264
+some avg10=0.51 avg60=1.67 avg300=8.03 total=6399863877
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 238896 3285463 570376 7031195 478484 56710 23406 0 0 0
+cpu24 129222 4871726 435196 5994275 96525 48897 10605 0 0 0
+2985751
+
+BEGIN current sort_order/dec_vs_double_u128_promoted_control
+sort_order/dec_vs_double_u128_promoted_control time:   [22.42 ns 22.45 ns 22.46 ns]  mad: 15.80 ps  (10 samples × 4461695 iterations)
+                         change: [+1.1758% +1.3507% +1.5395%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.542 user=3.470 sys=0.052 cpu=99.00
+2026-10-11T01:27:45Z
+18.30 28.49 33.58 11/2710 137274
+some avg10=0.52 avg60=1.59 avg300=7.93 total=6399892096
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 239244 3285463 570383 7031195 478486 56711 23407 0 0 0
+cpu24 129223 4871739 435197 5994619 96525 48897 10605 0 0 0
+2982194
+END pair sort_order/dec_vs_double_u128_promoted_control
+
+BEGIN baseline sort_order/dec_vs_double_bigint_total
+2026-10-11T01:27:45Z
+18.30 28.49 33.58 11/2710 137278
+some avg10=0.52 avg60=1.59 avg300=7.93 total=6399892255
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 239244 3285463 570383 7031195 478486 56711 23407 0 0 0
+cpu24 129223 4871739 435197 5994619 96525 48897 10605 0 0 0
+2981516
+sort_order/dec_vs_double_bigint_total time:   [130.8 ns 130.8 ns 131.0 ns]  mad: 47.99 ps  (10 samples × 764868 iterations)
+                         outliers: 3 of 10 (1 low severe, 0 low mild, 0 high mild, 2 high severe)
+
+1 benchmark measured; 0 failed
+elapsed=3.246 user=3.192 sys=0.039 cpu=99.00
+2026-10-11T01:27:48Z
+17.71 28.20 33.46 14/2708 137290
+some avg10=0.35 avg60=1.49 avg300=7.82 total=6399923283
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 239563 3285464 570388 7031195 478487 56712 23407 0 0 0
+cpu24 129223 4871751 435198 5994936 96525 48897 10605 0 0 0
+2982779
+
+BEGIN current sort_order/dec_vs_double_bigint_total
+sort_order/dec_vs_double_bigint_total time:   [127.3 ns 150.8 ns 163.6 ns]  mad: 13.70 ns  (10 samples × 795853 iterations)
+                         change: [-2.7254% +15.2722% +24.9211%] against `original-main`: No change in performance detected.
+
+1 benchmark measured; 0 failed
+elapsed=3.563 user=3.433 sys=0.052 cpu=97.00
+2026-10-11T01:27:52Z
+17.71 28.20 33.46 43/2742 137342
+some avg10=0.56 avg60=1.46 avg300=7.73 total=6399973855
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 239907 3285471 570396 7031195 478493 56713 23407 0 0 0
+cpu24 129224 4871810 435226 5995206 96534 48902 10605 0 0 0
+2969797
+END pair sort_order/dec_vs_double_bigint_total
+
+BEGIN baseline sort_order/dec_vs_double_bigint_promoted_control
+2026-10-11T01:27:52Z
+17.71 28.20 33.46 46/2742 137346
+some avg10=0.56 avg60=1.46 avg300=7.73 total=6399978334
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 239907 3285471 570397 7031195 478493 56713 23407 0 0 0
+cpu24 129224 4871810 435226 5995206 96534 48902 10605 0 0 0
+2966265
+sort_order/dec_vs_double_bigint_promoted_control time:   [16.31 ns 16.96 ns 17.14 ns]  mad: 318.0 ps  (10 samples × 5781975 iterations)
+
+1 benchmark measured; 0 failed
+elapsed=3.916 user=3.796 sys=0.068 cpu=98.00
+2026-10-11T01:27:56Z
+18.86 28.26 33.45 28/2742 137366
+some avg10=1.15 avg60=1.52 avg300=7.66 total=6400092621
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 240287 3285473 570405 7031195 478494 56715 23408 0 0 0
+cpu24 129231 4872156 435242 5995220 96540 48906 10605 0 0 0
+4387884
+
+BEGIN current sort_order/dec_vs_double_bigint_promoted_control
+sort_order/dec_vs_double_bigint_promoted_control time:   [18.01 ns 18.96 ns 19.27 ns]  mad: 449.0 ps  (10 samples × 5366832 iterations)
+                         change: [+7.2901% +11.7636% +17.2662%] against `original-main`: Performance has regressed.
+
+1 benchmark measured; 0 failed
+elapsed=3.850 user=3.760 sys=0.070 cpu=99.00
+2026-10-11T01:28:00Z
+20.15 28.37 33.46 29/2744 137424
+some avg10=1.25 avg60=1.52 avg300=7.57 total=6400161580
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+cpu8 240663 3285473 570413 7031195 478495 56716 23408 0 0 0
+cpu24 129231 4872538 435246 5995220 96540 48908 10605 0 0 0
+4039574
+END pair sort_order/dec_vs_double_bigint_promoted_control

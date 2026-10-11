@@ -1,0 +1,52 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against a4bb1232d3b4 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/sparql-eval/src/vm/mod.rs'.
+[paudley/515-sparql-eval-datalog-per-row-evidence f49c2f1a5] Carry query evidence and scoped ranked retrieval through physical shapes
+ 167 files changed, 38034 insertions(+), 3053 deletions(-)
+ create mode 100644 crates/datalog/src/evidence.rs
+ create mode 100644 crates/datalog/src/seminaive/evidence.rs
+ create mode 100644 crates/lex/src/allocation/ordered.rs
+ create mode 100644 crates/rdf-core/src/evidence.rs
+ create mode 100644 crates/rdf-core/src/evidence/accepted.rs
+ create mode 100644 crates/rdf-core/src/evidence/answer.rs
+ create mode 100644 crates/rdf-core/src/evidence/column.rs
+ create mode 100644 crates/rdf-core/src/evidence/conversion.rs
+ create mode 100644 crates/rdf-core/src/evidence/dictionary.rs
+ create mode 100644 crates/rdf-core/src/evidence/frame.rs
+ create mode 100644 crates/rdf-core/src/evidence/information.rs
+ create mode 100644 crates/rdf-core/src/evidence/ledger.rs
+ create mode 100644 crates/rdf-core/src/evidence/ledger/frame.rs
+ create mode 100644 crates/rdf-core/src/evidence/ledger/row.rs
+ create mode 100644 crates/rdf-core/src/evidence/ledger/source.rs
+ create mode 100644 crates/rdf-core/src/evidence/ledger/terms.rs
+ create mode 100644 crates/rdf-core/src/evidence/ledger/view.rs
+ create mode 100644 crates/rdf-core/src/evidence/reason.rs
+ create mode 100644 crates/rdf-core/src/evidence/record.rs
+ create mode 100644 crates/rdf-core/src/evidence/standpoint.rs
+ create mode 100644 crates/rdf-core/src/evidence/workspace.rs
+ create mode 100644 crates/rdf-core/src/query_scope.rs
+ create mode 100644 crates/rdf-core/src/query_scope/counters.rs
+ create mode 100644 crates/retrieval/src/scope.rs
+ create mode 100644 crates/sparql-eval/src/bgp/window.rs
+ create mode 100644 crates/sparql-eval/src/candidate_scope.rs
+ create mode 100644 crates/sparql-eval/src/evidence_exec.rs
+ create mode 100644 crates/sparql-eval/src/shapes/barrier.rs
+ create mode 100644 crates/sparql-eval/src/shapes/bucket.rs
+ create mode 100644 crates/sparql-eval/src/shapes/dictionary.rs
+ create mode 100644 crates/sparql-eval/src/shapes/mod.rs
+ create mode 100644 crates/sparql-eval/src/shapes/runtime.rs
+ create mode 100644 crates/sparql-eval/src/shapes/spans.rs
+ create mode 100644 crates/sparql-eval/src/shapes/window.rs
+ create mode 100644 crates/sparql-eval/src/vm/evidence.rs
+ create mode 100644 crates/sparql-eval/src/workspace/array.rs
+ create mode 100644 crates/sparql-eval/src/workspace/boxed.rs
+ create mode 100644 crates/sparql-eval/src/workspace/ordered.rs
+ create mode 100644 crates/sparql-eval/tests/evidence_ingress.rs
+ create mode 100644 crates/sparql-eval/tests/evidence_ledger_query.rs
+ create mode 100644 crates/text/benches/physical_shapes.rs
+ create mode 100644 crates/text/src/dictionary.rs
+ create mode 100644 crates/text/src/dictionary_relation.rs
+ create mode 100644 crates/text/src/occurrence_dictionary.rs
+ create mode 100644 crates/text/tests/physical_shapes.rs
+ create mode 100644 crates/text/tests/support/scoped_candidates.rs
+ create mode 100644 crates/text/tests/support/shape_cases.rs
+ create mode 100644 docs/design/purrdf-physical-shapes.md

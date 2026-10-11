@@ -1,0 +1,768 @@
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/on_demand_receipt.rs:872:15
+    |
+872 |         rows: fused.rows,
+    |               ^^^^^^^^^^ expected `Vec<FusedRow>`, found `SharedWorkspace<AdmittedVec<FusedRow>>`
+    |
+    = note: expected struct `Vec<FusedRow>`
+               found struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+help: try using a conversion method
+    |
+872 |         rows: fused.rows.to_vec(),
+    |                         +++++++++
+
+error[E0277]: can't compare `Vec<FusedRow>` with `SharedWorkspace<AdmittedVec<FusedRow>>`
+   --> crates/retrieval/tests/on_demand_receipt.rs:903:9
+    |
+903 | /         assert_eq!(
+904 | |             on_demand.rows, reference.rows,
+905 | |             "the caller's {name} answers what the rendered unit answers"
+906 | |         );
+    | |_________^ no implementation for `Vec<FusedRow> == SharedWorkspace<AdmittedVec<FusedRow>>`
+    |
+    = help: the trait `PartialEq<SharedWorkspace<AdmittedVec<FusedRow>>>` is not implemented for `Vec<FusedRow>`
+    = help: the following other types implement trait `PartialEq<Rhs>`:
+              `Vec<T, A1>` implements `PartialEq<Vec<U, A2>>`
+              `Vec<T, A>` implements `PartialEq<&[U; N]>`
+              `Vec<T, A>` implements `PartialEq<&[U]>`
+              `Vec<T, A>` implements `PartialEq<&mut [U]>`
+              `Vec<T, A>` implements `PartialEq<Cow<'_, [U]>>`
+              `Vec<T, A>` implements `PartialEq<[U; N]>`
+              `Vec<T, A>` implements `PartialEq<[U]>`
+              `Vec<u8>` implements `PartialEq<ByteStr>`
+              `Vec<u8>` implements `PartialEq<ByteString>`
+
+error[E0277]: can't compare `Vec<FusedRow>` with `SharedWorkspace<AdmittedVec<FusedRow>>`
+   --> crates/retrieval/tests/on_demand_receipt.rs:927:5
+    |
+927 | /     assert_eq!(
+928 | |         read.rows, reference.rows,
+929 | |         "the caller's {name} answers what the rendered unit answers"
+930 | |     );
+    | |_____^ no implementation for `Vec<FusedRow> == SharedWorkspace<AdmittedVec<FusedRow>>`
+    |
+    = help: the trait `PartialEq<SharedWorkspace<AdmittedVec<FusedRow>>>` is not implemented for `Vec<FusedRow>`
+    = help: the following other types implement trait `PartialEq<Rhs>`:
+              `Vec<T, A1>` implements `PartialEq<Vec<U, A2>>`
+              `Vec<T, A>` implements `PartialEq<&[U; N]>`
+              `Vec<T, A>` implements `PartialEq<&[U]>`
+              `Vec<T, A>` implements `PartialEq<&mut [U]>`
+              `Vec<T, A>` implements `PartialEq<Cow<'_, [U]>>`
+              `Vec<T, A>` implements `PartialEq<[U; N]>`
+              `Vec<T, A>` implements `PartialEq<[U]>`
+              `Vec<u8>` implements `PartialEq<ByteStr>`
+              `Vec<u8>` implements `PartialEq<ByteString>`
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-retrieval` (test "on_demand_receipt") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no method named `entry` found for struct `AdmittedOrderedMap<K, V>` in the current scope
+   --> crates/retrieval/tests/search.rs:200:18
+    |
+199 | /             statuses
+200 | |                 .entry(stream.stratum.clone())
+    | |                 -^^^^^ method not found in `AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>`
+    | |_________________|
+    |
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/search.rs:1262:9
+     |
+1262 |         whole.rows[..3].to_vec(),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<FusedRow>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<FusedRow>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/search.rs:1394:9
+     |
+1394 |         Vec::new(),
+     |         ^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<_>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<_>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/search.rs:1752:9
+     |
+1752 | /         BTreeMap::from([
+1753 | |             declared("pf/any", "stratum/universal"),
+1754 | |             declared("pf/literal", "stratum/text"),
+1755 | |             declared("pf/iri", "stratum/graph"),
+1756 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, CandidateDomains>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, CandidateDomains>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, CandidateDomains>`
+
+error[E0277]: a value of type `Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>` cannot be built from an iterator over elements of type `(Term, Fixed, SharedWorkspace<AdmittedVec<(Iri, u64, Fixed)>>)`
+    --> crates/retrieval/tests/search.rs:1780:14
+     |
+1780 |             .collect()
+     |              ^^^^^^^ value of type `Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>` cannot be built from `std::iter::Iterator<Item=(Term, Fixed, SharedWorkspace<AdmittedVec<(Iri, u64, Fixed)>>)>`
+     |
+help: the trait `FromIterator<(Term, Fixed, SharedWorkspace<AdmittedVec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>>)>` is not implemented for `Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>`
+      but trait `FromIterator<(Term, Fixed, Vec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>)>` is implemented for it
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `Vec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>`, found `SharedWorkspace<AdmittedVec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>>`
+note: required by a bound in `collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+     = note: the full name for the type has been written to '/opt/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-retrieval/b9ba617615417bac/out/search-b9ba617615417bac.long-type-7409146854846312360.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/search.rs:1789:9
+     |
+1789 | /         BTreeMap::from([
+1790 | |             (
+1791 | |                 iri(&ex("stratum/universal")),
+1792 | |                 CandidateDomains::Unrestricted
+...    |
+1795 | |             (iri(&ex("stratum/graph")), CandidateDomains::Unrestricted),
+1796 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, CandidateDomains>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, CandidateDomains>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, CandidateDomains>`
+
+error[E0277]: a value of type `Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>` cannot be built from an iterator over elements of type `(Term, Fixed, SharedWorkspace<AdmittedVec<(Iri, u64, Fixed)>>)`
+    --> crates/retrieval/tests/search.rs:2287:10
+     |
+2287 |         .collect()
+     |          ^^^^^^^ value of type `Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>` cannot be built from `std::iter::Iterator<Item=(Term, Fixed, SharedWorkspace<AdmittedVec<(Iri, u64, Fixed)>>)>`
+     |
+help: the trait `FromIterator<(Term, Fixed, SharedWorkspace<AdmittedVec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>>)>` is not implemented for `Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>`
+      but trait `FromIterator<(Term, Fixed, Vec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>)>` is implemented for it
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `Vec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>`, found `SharedWorkspace<AdmittedVec<(purrdf_retrieval::Iri, u64, purrdf_retrieval::Fixed)>>`
+note: required by a bound in `collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+     = note: the full name for the type has been written to '/opt/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-retrieval/b9ba617615417bac/out/search-b9ba617615417bac.long-type-7409146854846312360.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+error: could not compile `purrdf-retrieval` (test "search") due to 7 previous errors
+error: unused import: `FastMap`
+  --> crates/retrieval/tests/candidate_union.rs:10:19
+   |
+10 | use purrdf_core::{FastMap, TermValue, datatype::XSD_INTEGER};
+   |                   ^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/candidate_union.rs:116:13
+    |
+116 |             BTreeMap::from([(iri("lexical"), vec![2]), (iri("vector"), vec![1])])
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, Vec<{integer}>>`
+    |
+    = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, AdmittedVec<u64>>>`
+               found struct `BTreeMap<purrdf_retrieval::Iri, Vec<{integer}>>`
+
+error[E0596]: cannot borrow data in dereference of `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, StreamContract>>` as mutable
+   --> crates/retrieval/tests/candidate_union.rs:440:5
+    |
+440 |     execution.contracts.insert(iri("scripted"), contract);
+    |     ^^^^^^^^^^^^^^^^^^^ cannot borrow as mutable
+    |
+    = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, StreamContract>>`
+
+Some errors have detailed explanations: E0308, E0596.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (test "candidate_union") due to 3 previous errors
+error[E0277]: `AdmittedVec<StratumStream<'_>>` is not an iterator
+    --> crates/retrieval/tests/supplied_exclusion_lookup.rs:3940:23
+     |
+3940 |         for stream in &mut streams {
+     |                       ^^^^^^^^^^^^ `AdmittedVec<StratumStream<'_>>` is not an iterator
+     |
+     = help: the trait `Iterator` is not implemented for `AdmittedVec<StratumStream<'_>>`
+     = note: required for `&mut AdmittedVec<StratumStream<'_>>` to implement `Iterator`
+     = note: required for `&mut AdmittedVec<StratumStream<'_>>` to implement `IntoIterator`
+help: consider removing the leading `&`-reference
+     |
+3940 -         for stream in &mut streams {
+3940 +         for stream in streams {
+     |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-retrieval` (test "supplied_exclusion_lookup") due to 1 previous error
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1277:55
+     |
+1277 |         status = measured.both("the terminal status", &measured.status),
+     |                           ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                           |
+     |                           arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1328:46
+     |
+1328 |         measured.both("the terminal status", &measured.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1396:46
+     |
+1396 |         measured.both("the terminal status", &measured.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1478:46
+     |
+1478 |         measured.both("the terminal status", &measured.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1733:46
+     |
+1733 |         distinct.both("the terminal status", &distinct.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1734:44
+     |
+1734 |         shared.both("the terminal status", &shared.status),
+     |                ----                        ^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                |
+     |                arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1846:46
+     |
+1846 |         disjoint.both("the terminal status", &disjoint.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1874:46
+     |
+1874 |         measured.both("the terminal status", &measured.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1939:50
+     |
+1939 |             searched.both("the terminal status", &searched.status),
+     |                      ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                      |
+     |                      arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1940:46
+     |
+1940 |             full.both("the terminal status", &full.status),
+     |                  ----                        ^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:3392:46
+     |
+3392 |         measured.both("the terminal status", &measured.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:3569:46
+     |
+3569 |         measured.both("the terminal status", &measured.status),
+     |                  ----                        ^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:3570:42
+     |
+3570 |         full.both("the terminal status", &full.status),
+     |              ----                        ^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |              |
+     |              arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:4211:49
+     |
+4211 |             drained.both("the terminal status", &drained.status),
+     |                     ----                        ^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:4219:47
+     |
+4219 |             short.both("the terminal status", &short.status),
+     |                   ----                        ^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                   |
+     |                   arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:4236:49
+     |
+4236 |             drained.both("the terminal status", &drained.status),
+     |                     ----                        ^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:4239:47
+     |
+4239 |             short.both("the terminal status", &short.status),
+     |                   ----                        ^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                   |
+     |                   arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/multimodal_read_bound.rs:4256:51
+     |
+4256 |             ceilinged.both("the terminal status", &ceilinged.status),
+     |                       ----                        ^^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, _>`, found `&SharedWorkspace<_>`
+     |                       |
+     |                       arguments to this method are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf_retrieval::Iri, _>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+note: method defined here
+    --> crates/retrieval/tests/multimodal_read_bound.rs:1047:8
+     |
+1047 |     fn both<T: Clone + PartialEq + std::fmt::Debug>(
+     |        ^^^^
+...
+1050 |         field: &BTreeMap<Iri, T>,
+     |         ------------------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (test "multimodal_read_bound") due to 18 previous errors
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/boundary.rs:1034:9
+     |
+1034 | /         BTreeMap::from([
+1035 | |             (stratum("s1"), PfAttestation::UNDECLARED),
+1036 | |             (stratum("s2"), PfAttestation::UNDECLARED),
+1037 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, PfAttestation>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, PfAttestation>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, PfAttestation>`
+
+error[E0599]: no method named `next` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/boundary.rs:1516:33
+     |
+1516 |     let first = block_on(fusion.next())
+     |                                 ^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `next` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2672:5
+     |
+2672 |     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `FusionStream<'_, ScriptedStream>` value, panicking if the value is a `Result::Err`
+     |
+1516 |     let first = block_on(fusion.expect("REASON").next())
+     |                                +++++++++++++++++
+
+error[E0599]: no method named `next` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/boundary.rs:1543:27
+     |
+1543 |     while block_on(fusion.next()).expect("fusion pulls").is_some() {}
+     |                           ^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `next` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2672:5
+     |
+2672 |     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `FusionStream<'_, ScriptedStream>` value, panicking if the value is a `Result::Err`
+     |
+1543 |     while block_on(fusion.expect("REASON").next()).expect("fusion pulls").is_some() {}
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `trailer` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/boundary.rs:1544:35
+     |
+1544 |     let trailer = block_on(fusion.trailer()).expect("the trailer is produced");
+     |                                   ^^^^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `trailer` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2822:5
+     |
+2822 |     pub async fn trailer(&mut self) -> Result<FusionTrailer, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `FusionStream<'_, ScriptedStream>` value, panicking if the value is a `Result::Err`
+     |
+1544 |     let trailer = block_on(fusion.expect("REASON").trailer()).expect("the trailer is produced");
+     |                                  +++++++++++++++++
+
+Some errors have detailed explanations: E0308, E0599.
+error: could not compile `purrdf-retrieval` (test "boundary") due to 4 previous errors
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+error[E0599]: no method named `next` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/exclusion_lookup.rs:847:41
+     |
+ 847 |         let Some(row) = block_on(fusion.next())? else {
+     |                                         ^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `next` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2672:5
+     |
+2672 |     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `FusionStream<'_, ScriptedStream>` value, propagating a `Result::Err` value to the caller
+     |
+ 847 |         let Some(row) = block_on(fusion?.next())? else {
+     |                                        +
+
+error[E0599]: no method named `trailer` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/exclusion_lookup.rs:852:35
+     |
+ 852 |     let trailer = block_on(fusion.trailer())?;
+     |                                   ^^^^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `trailer` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2822:5
+     |
+2822 |     pub async fn trailer(&mut self) -> Result<FusionTrailer, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `FusionStream<'_, ScriptedStream>` value, propagating a `Result::Err` value to the caller
+     |
+ 852 |     let trailer = block_on(fusion?.trailer())?;
+     |                                  +
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-retrieval` (test "exclusion_lookup") due to 2 previous errors
+error[E0425]: cannot find function `evidence_canonical_bytes` in module `crate::fusion_stream`
+    --> crates/retrieval/src/execute.rs:3941:35
+     |
+3941 |             crate::fusion_stream::evidence_canonical_bytes(
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^ not found in `crate::fusion_stream`
+
+error[E0425]: cannot find function `evidence_canonical_bytes` in module `crate::fusion_stream`
+    --> crates/retrieval/src/execute.rs:3958:35
+     |
+3958 |             crate::fusion_stream::evidence_canonical_bytes(
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^ not found in `crate::fusion_stream`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1534:9
+     |
+1534 |         whole.rows[..2].to_vec(),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<FusedRow>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<FusedRow>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1641:9
+     |
+1641 | /         BTreeMap::from([
+1642 | |             (stratum("text"), stopped_at(2)),
+1643 | |             (stratum("geo"), failed.clone()),
+1644 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, ProducerStatus>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, ProducerStatus>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1664:9
+     |
+1664 | /         BTreeMap::from([
+1665 | |             (stratum("text"), stopped_at(1)),
+1666 | |             (stratum("geo"), failed.clone()),
+1667 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, ProducerStatus>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, ProducerStatus>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1679:9
+     |
+1679 | /         BTreeMap::from([
+1680 | |             (
+1681 | |                 stratum("text"),
+1682 | |                 ProducerStatus::Exhausted { rows_emitted: 3 }
+1683 | |             ),
+1684 | |             (stratum("geo"), failed),
+1685 | |         ])
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, ProducerStatus>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, ProducerStatus>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1849:9
+     |
+1849 |         Vec::new(),
+     |         ^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<_>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<_>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:4856:9
+     |
+4856 |         Vec::new(),
+     |         ^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<_>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<_>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:5169:9
+     |
+5169 | /         BTreeMap::from([
+5170 | |             (stratum("text"), attests("a")),
+5171 | |             (
+5172 | |                 stratum("vector"),
+...    |
+5175 | |             (stratum("geo"), PfAttestation::UNDECLARED),
+5176 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, PfAttestation>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, PfAttestation>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, PfAttestation>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:7139:9
+     |
+7139 | /         BTreeMap::from([
+7140 | |             (stratum("docs"), within(&[DOMAIN_DOCS])),
+7141 | |             (stratum("people"), within(&[DOMAIN_PEOPLE])),
+7142 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, CandidateDomains>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, CandidateDomains>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, CandidateDomains>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:7150:9
+     |
+7150 | /         BTreeMap::from([
+7151 | |             (stratum("docs"), CandidateDomains::Unrestricted),
+7152 | |             (stratum("people"), CandidateDomains::Unrestricted),
+7153 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, CandidateDomains>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, CandidateDomains>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, CandidateDomains>`
+
+error: could not compile `purrdf-retrieval` (test "fusion") due to 9 previous errors
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-retrieval` (lib test) due to 2 previous errors
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)

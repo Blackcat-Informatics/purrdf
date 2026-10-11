@@ -1,0 +1,399 @@
+Running as unit: run-p1569390-i22574182.scope; invocation ID: f21c43625baf4248a3fd7c6d614b4198
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Finished `test` profile [optimized] target(s) in 14.44s
+     Running tests/physical_shapes.rs (target/native-build/debug/build/purrdf-text/fcf071b21c1fe68c/out/physical_shapes-fcf071b21c1fe68c)
+
+running 19 tests
+test dictionary_projection_and_aliases ... ok
+test expanded_dictionary_and_union ... ok
+test longest_first_reference ... ok
+test typed_series_property ... ok
+test registered_host_and_decline ... ok
+test prepared_and_query_forms ... ok
+test dictionary_property ... ok
+test dictionary_analyzer_identity ... ok
+test bucket_custom_and_parallel_order ... ok
+test host_refusal_and_governor_boundary ... ok
+test dictionary_long_phrase_and_determinism ... ok
+test bounded_shapes_keep_original_owners ... ok
+test original_evidence_and_empty_barriers ... ok
+test scoped_streams_and_update_where ... ok
+test cache_refusal_keeps_previous_owner ... ok
+test false_expression_gaps_keep_original_traversal ... ok
+test window_property ... ok
+test window_barrier_property ... ok
+test dictionary_cache_and_size ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+ok: a panicking case fails the run
+ok: the passing neighbour of the panicking case passes
+ok: the case list is the fixture's, in its order
+ok: an unimplemented flag is refused
+ok: an implemented flag is accepted
+ok: a_host_clock_read_inside_the_seal_fails: a sealed Date.now read fails by name
+ok: a_host_entropy_read_inside_the_seal_fails: a sealed Math.random read fails by name
+ok: a_host_clock_read_after_a_nested_seal_fails: a sealed Date.now read fails by name
+ok: a_host_clock_read_outside_the_seal_passes: the unsealed neighbour passes
+ok: a_host_entropy_read_outside_the_seal_passes: the unsealed neighbour passes
+ok: a_host_clock_read_after_the_seal_passes: the unsealed neighbour passes
+ok: the_seal_returns_the_computations_value_passes: the unsealed neighbour passes
+ok: a module that never reports an exit status is refused
+ok: the print fixture reports its status and its lines reach the console
+OK: the wasm32 test runner fails a panicking case, a refused flag, sealed host reads and a silent module, and passes each neighbour
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 1m 04s
+     Running tests/turtle_chains.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-rdf/381c29da78c8e419/out/turtle_chains-381c29da78c8e419.wasm)
+
+running 7 tests
+test blank_chains_at_one_hundred_thousand ... packed/100000: 33094118 938071ed811f977dad0bb575dae44701c657a74fc12dea4af80518613201208b
+turtle/100000: 4878216 5ab357ea2c8db6c837529ec198b8b37359d7d4ad8f1ecfba721877b05dc6f630
+trig/100000: 5078161 f48e53d4b763e58c34c191f7d717e12abc9c5869468a8897c8e3d2f28f38085e
+ok
+test blank_chains_at_one_million ... packed/1000000: 330994118 8dcbafdf63c599dcc6bc781de652d70c6f7dae9cb35127dafb28a1b1a203f72a
+turtle/1000000: 50778216 fb165514a50a577964997db5bc344863d25928f8fe3ec232efa55ea3d7eb7384
+trig/1000000: 52778161 8ac01ee650c82b0054aa54fc03e75250346bf3728a7180e0198964bc5e373094
+ok
+test exact_guard_neighbors_and_permuted_interning ... ok
+test cycles_shared_and_quoted_blanks_preserve_statements ... ok
+test tied_guarded_branches_keep_order_under_permutation ... ok
+test a_long_collection_keeps_every_member ... ok
+test continuation_objects_saturate_at_the_same_indent_guard ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.33s
+
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/entail)
+    Finished `test` profile [optimized] target(s) in 9.80s
+     Running tests/regular_role_chains.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-entail/b853416d725f1aa8/out/regular_role_chains-b853416d725f1aa8.wasm)
+
+running 16 tests
+test top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling ... ok
+test stopping_during_regular_role_reads_never_publishes_a_completed_answer ... ok
+test all_nine_consumer_shapes_are_exact_and_contradictions_are_detected ... ok
+test inverse_heads_nested_dependencies_and_simple_equivalence_cycles ... ok
+test universal_obligations_clash_after_recursive_paths_and_blocking ... ok
+test cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure ... ok
+test printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass ... ok
+test literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name ... ok
+test recorded_chain_consequence_replays_against_the_original_rbox ... ok
+test chain_derived_types_reach_all_query_services_and_materialization ... ok
+test fixed_top_is_universal_and_bottom_chain_clashes ... ok
+test fixed_top_aliases_without_a_chain_reach_query_only_individuals ... ok
+test non_simple_characteristics_and_malformed_chain_lists_hard_refuse ... ok
+test role_language_work_exhaustion_is_unknown_never_a_consistency_proof ... ok
+test cancelling_an_existing_regular_role_owner_cannot_publish_a_decision ... ok
+test nominal_merges_and_simple_functionality_preserve_role_obligations ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 0.57s
+     Running tests/knn_wasm_reassociated.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/820ebbe39f202404/out/knn_wasm_reassociated-820ebbe39f202404.wasm)
+
+running 1 test
+test the_reassociated_path_is_the_one_this_build_was_made_for ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2.55s
+     Running tests/stack_refusal.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/ad48f4f513767b5a/out/stack_refusal-ad48f4f513767b5a.wasm)
+
+running 1 test
+test prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 0.64s
+     Running tests/model_traits.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-core/ded37d6649ed1f35/out/model_traits-ded37d6649ed1f35.wasm)
+
+running 1 test
+test owned_term_walks_stay_inside_the_wasm_shadow_stack_floor ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+    Finished `test` profile [optimized] target(s) in 1.91s
+     Running tests/wasm_reassociated.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-hnsw/68293afb7e0cd1de/out/wasm_reassociated-68293afb7e0cd1de.wasm)
+
+running 2 tests
+test an_image_recorded_on_another_wasm_path_is_refused_by_name ... ok
+test the_image_records_the_path_and_shape_this_build_was_made_for ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/blake3.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/fc74ca7f0c1e12da/out/blake3-fc74ca7f0c1e12da.wasm)
+
+running 1 test
+test required_backends_are_available ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/bench.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-testkit/664c29f9a6ed7d9e/out/bench-664c29f9a6ed7d9e.wasm)
+
+running 2 tests
+test the_store_options_are_refused_on_wasm32 ... ok
+test a_measured_run_reports_its_estimates ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.05s
+
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/on_stack.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-stack/76be44e2c6c716a3/out/on_stack-76be44e2c6c716a3.wasm)
+
+running 4 tests
+test an_in_floor_request_runs ... ok
+test a_scoped_in_floor_request_borrows_the_caller_s_locals ... ok
+test an_over_floor_request_is_refused ... ok
+test an_over_floor_scoped_request_is_refused ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/deflate_conformance.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-deflate/fb601c314ea208a8/out/deflate_conformance-fb601c314ea208a8.wasm)
+
+running 1 test
+test selected_backend_is_reported ... deflate: selected path portable
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/exact_wasm_determinism.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-xsd/b02b0ba327fad33a/out/exact_wasm_determinism-b02b0ba327fad33a.wasm)
+
+running 3 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+ok
+test the_oracle_vectors_replay_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 0.83s
+     Running tests/numeric_wasm_determinism.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/862cb291024e4bde/out/numeric_wasm_determinism-862cb291024e4bde.wasm)
+
+running 2 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=sparql-numeric-transcript digest=da3900a93723c4ac corpus_len=2727
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Finished `test` profile [optimized] target(s) in 5.76s
+     Running tests/wasm_determinism.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-text/a5f35081898311ae/out/wasm_determinism-a5f35081898311ae.wasm)
+
+running 8 tests
+test scoped_text_bound_candidates_retain_unknown_membership ... ok
+test scoped_text_depth_preserves_original_unknown_rows_and_scores ... ok
+test scoped_text_preserves_original_constraint_failure ... ok
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+test declared_large_corpora_are_exact ... ok
+test five_thousand_term_index ... ok
+test promoted_field_arithmetic_is_exact ... ok
+test thirty_two_index_fields_are_exact ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.14s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Finished `test` profile [optimized] target(s) in 11.76s
+     Running tests/physical_shapes.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-text/4cce366cd08645c9/out/physical_shapes-4cce366cd08645c9.wasm)
+
+running 19 tests
+test dictionary_property ... ok
+test expanded_dictionary_and_union ... ok
+test dictionary_cache_and_size ... ok
+test dictionary_projection_and_aliases ... ok
+test longest_first_reference ... ok
+test window_property ... ok
+test typed_series_property ... ok
+test registered_host_and_decline ... ok
+test prepared_and_query_forms ... ok
+test window_barrier_property ... ok
+test dictionary_analyzer_identity ... ok
+test bucket_custom_and_parallel_order ... ok
+test host_refusal_and_governor_boundary ... ok
+test dictionary_long_phrase_and_determinism ... ok
+test bounded_shapes_keep_original_owners ... ok
+test original_evidence_and_empty_barriers ... ok
+test scoped_streams_and_update_where ... ok
+test cache_refusal_keeps_previous_owner ... ok
+test false_expression_gaps_keep_original_traversal ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 17.18s
+     Running tests/real_producers.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-retrieval/efcaf9f1238deedc/out/real_producers-efcaf9f1238deedc.wasm)
+
+running 21 tests
+test scoped_native_owner_refusal_precedes_original_producer_open ... ok
+test native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows ... ok
+test scoped_fused_acceptance_retains_original_two_stratum_scores_and_order ... ok
+test scoped_native_admission_refusal_invalidates_before_any_ranked_row ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 21.10s
+     Running tests/evidence_ingress.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/cac74e2e939c887a/out/evidence_ingress-cac74e2e939c887a.wasm)
+
+running 20 tests
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.14s
+
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/mime)
+    Finished `test` profile [optimized] target(s) in 10.97s
+     Running tests/lossless.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-mime/73a84610e1af9f0c/out/lossless-73a84610e1af9f0c.wasm)
+
+running 1 test
+test production_rdf_round_trip_is_deterministic_for_original_and_broken_messages ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 1.62s
+
+   Compiling typenum v1.20.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling unicode-ident v1.0.24
+   Compiling rayon-core v1.13.0
+   Compiling wasm-bindgen v0.2.125
+   Compiling once_cell v1.21.4
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-epoch v0.9.18
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling rayon v1.12.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+   Compiling regex v1.12.4
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 11s
+     Running tests/knn_wasm_reassociated.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/e3f07b78bec6b18c/out/knn_wasm_reassociated-e3f07b78bec6b18c.wasm)
+
+running 2 tests
+test the_reassociated_distance_is_within_the_error_bound_of_the_exact_one ... ok
+test the_reassociated_path_is_the_one_this_build_was_made_for ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+    Finished `test` profile [optimized] target(s) in 1.92s
+     Running tests/wasm_reassociated.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-hnsw/56180369caf11027/out/wasm_reassociated-56180369caf11027.wasm)
+
+running 2 tests
+test an_image_recorded_on_another_wasm_path_is_refused_by_name ... ok
+test the_image_records_the_path_and_shape_this_build_was_made_for ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 3.49s
+     Running tests/hex.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/315790574a5a3260/out/hex-315790574a5a3260.wasm)
+
+running 1 test
+test every_path_matches_portable ... hex: wasm32-simd128, portable checked; wasm32-simd128 selected
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.02s
+
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 0.98s
+     Running tests/blake3.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/97d1b61a7ea6d7cf/out/blake3-97d1b61a7ea6d7cf.wasm)
+
+running 2 tests
+test required_backends_are_available ... ok
+test random_inputs_cover_irregular_trees_and_alignment ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.28s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2.01s
+     Running tests/csv_scan_wasm.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-core/44bd5a87725d1860/out/csv_scan_wasm-44bd5a87725d1860.wasm)
+
+running 3 tests
+test every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length ... ok
+test every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs ... ok
+test the_target_explicit_kernel_is_among_those_compared ... csv scan: dispatch, simd128, portable checked; simd128 selected
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.30s
+
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Finished `test` profile [optimized] target(s) in 1.82s
+     Running tests/deflate_conformance.rs (target/native-build/wasm32-unknown-unknown/debug/build/purrdf-deflate/e20c7b3a4664fdf1/out/deflate_conformance-e20c7b3a4664fdf1.wasm)
+
+running 5 tests
+test every_kernel_path_encodes_and_decodes_the_same_bytes ... deflate: simd128 agrees
+deflate: portable agrees
+ok
+test copy_kernels_match_portable ... ok
+test match_length_kernels_match_portable ... ok
+test hash_kernels_match_portable ... ok
+test selected_backend_is_reported ... deflate: selected path simd128
+ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.03s
+
+terminal_status=0

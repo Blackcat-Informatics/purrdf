@@ -1,0 +1,67 @@
+Running as unit: run-p261053-i8695994.scope; invocation ID: 2e8fd11b1afd4eeab0b0c4b11b8f5ee3
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0603]: enum import `EvidenceCombination` is private
+   --> crates/sparql-eval/src/property_fn_eval.rs:856:43
+    |
+856 |                     crate::evidence_exec::EvidenceCombination::Conjunctive,
+    |                                           ^^^^^^^^^^^^^^^^^^^ private enum import
+    |
+note: the enum import `EvidenceCombination` is defined here...
+   --> crates/sparql-eval/src/evidence_exec.rs:9:5
+    |
+  9 |     EvidenceCombination, EvidenceDictionaryError, EvidenceId, EvidenceRecord, EvidenceRecordError,
+    |     ^^^^^^^^^^^^^^^^^^^
+note: ...and refers to the enum `EvidenceCombination` which is defined here
+   --> crates/rdf-core/src/evidence.rs:46:1
+    |
+ 46 | pub enum EvidenceCombination {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ you could import this directly
+help: consider importing this enum instead
+    |
+856 -                     crate::evidence_exec::EvidenceCombination::Conjunctive,
+856 +                     purrdf_core::evidence::EvidenceCombination::Conjunctive,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/evidence_exec.rs:321:17
+    |
+321 |                 crate::error::NativeDiagnostic::error(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+321 -                 crate::error::NativeDiagnostic::error(
+321 +                 NativeDiagnostic::error(
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/evidence_exec.rs:322:21
+    |
+322 |                     crate::error::NativeDiagnosticKind::Config,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+322 -                     crate::error::NativeDiagnosticKind::Config,
+322 +                     NativeDiagnosticKind::Config,
+    |
+
+error[E0599]: no variant, associated function, or constant named `Conjunctive` found for enum `purrdf_core::evidence::EvidenceCombination` in the current scope
+   --> crates/sparql-eval/src/property_fn_eval.rs:856:64
+    |
+856 |                     crate::evidence_exec::EvidenceCombination::Conjunctive,
+    |                                                                ^^^^^^^^^^^ variant, associated function, or constant not found in `purrdf_core::evidence::EvidenceCombination`
+    |
+help: there is a variant with a similar name
+    |
+856 -                     crate::evidence_exec::EvidenceCombination::Conjunctive,
+856 +                     crate::evidence_exec::EvidenceCombination::Conjunction,
+    |
+
+Some errors have detailed explanations: E0599, E0603.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 4 previous errors

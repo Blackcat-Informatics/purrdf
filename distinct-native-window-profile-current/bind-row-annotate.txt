@@ -1,0 +1,1331 @@
+ Percent |	Source code & Disassembly of distinct-fixed-work-current for instructions:u (13637 samples, percent: local period)
+----------------------------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3      Disassembly of section .text:
+         :
+         : 5      000000000047cc00 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>>:
+    0.10 :   47cc00: push   %rbp
+    0.77 :   47cc01: push   %r15
+    0.00 :   47cc03: push   %r14
+    0.00 :   47cc05: push   %r13
+    0.01 :   47cc07: push   %r12
+    0.00 :   47cc09: push   %rbx
+    0.00 :   47cc0a: sub    $0x498,%rsp
+    0.01 :   47cc11: mov    %rdx,%rbx
+    0.64 :   47cc14: mov    %rdi,0x40(%rsp)
+    0.05 :   47cc19: mov    (%rsi),%rax
+    0.01 :   47cc1c: mov    %rsi,%r12
+    0.00 :   47cc1f: mov    %rax,0x1b0(%rsp)
+    0.00 :   47cc27: test   %rax,%rax
+    0.00 :   47cc2a: jne    47cc47 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x47>
+    0.00 :   47cc2c: mov    0x10(%rsi),%r12
+    0.00 :   47cc30: cmpl   $0x1,0x8(%rsi)
+    0.00 :   47cc34: jne    47cc47 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x47>
+    0.00 :   47cc36: mov    0x28(%r12),%r12
+    0.00 :   47cc3b: cmpl   $0x2,(%r12)
+    0.00 :   47cc40: jne    47cc63 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x63>
+    0.00 :   47cc42: mov    0x8(%r12),%r12
+    0.00 :   47cc47: mov    (%r12),%r9
+    0.01 :   47cc4b: dec    %r9
+    0.12 :   47cc4e: cmp    $0x5,%r9
+    0.38 :   47cc52: jb     47cc74 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x74>
+    0.00 :   47cc54: mov    0x10(%r12),%r9
+    0.00 :   47cc59: mov    0x8(%r12),%r12
+    0.00 :   47cc5e: dec    %r9
+    0.00 :   47cc61: jmp    47cc78 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x78>
+    0.00 :   47cc63: add    $0x18,%r12
+    0.00 :   47cc67: mov    (%r12),%r9
+    0.00 :   47cc6b: dec    %r9
+    0.00 :   47cc6e: cmp    $0x5,%r9
+    0.00 :   47cc72: jae    47cc54 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x54>
+    0.00 :   47cc74: add    $0x8,%r12
+    0.01 :   47cc78: mov    0x7e8(%r8),%rax
+    0.01 :   47cc7f: mov    %rax,0x290(%rsp)
+    0.01 :   47cc87: mov    (%rcx),%ebp
+    1.75 :   47cc89: mov    0x4(%rcx),%r11d
+    0.18 :   47cc8d: mov    0x8(%rcx),%r10d
+    0.02 :   47cc91: mov    (%rbx),%rdx
+    0.01 :   47cc94: sub    $0x2,%rdx
+    0.00 :   47cc98: mov    $0x2,%eax
+    0.01 :   47cc9d: cmovae %rdx,%rax
+    0.00 :   47cca1: test   %rax,%rax
+    0.01 :   47cca4: mov    %rsi,0x168(%rsp)
+    0.18 :   47ccac: je     47ccbe <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xbe>
+    0.00 :   47ccae: cmp    $0x1,%rax
+    0.00 :   47ccb2: jne    47ccdf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xdf>
+    0.00 :   47ccb4: cmp    %ebp,0x8(%rbx)
+    0.00 :   47ccb7: je     47ccdf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xdf>
+    0.00 :   47ccb9: jmp    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.10 :   47ccbe: mov    0x8(%rbx),%rdi
+    0.03 :   47ccc2: cmp    %r9,%rdi
+    0.00 :   47ccc5: jae    47e47f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x187f>
+    0.00 :   47cccb: mov    (%r12,%rdi,8),%eax
+    0.04 :   47cccf: cmp    $0x2,%eax
+    0.00 :   47ccd2: je     47ccdf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xdf>
+    0.00 :   47ccd4: test   %eax,%eax
+    0.00 :   47ccd6: jne    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47ccd8: cmp    %ebp,0x4(%r12,%rdi,8)
+    0.00 :   47ccdd: jne    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47ccdf: lea    0x40(%rbx),%r13
+    0.01 :   47cce3: mov    0x0(%r13),%rdx
+    0.00 :   47cce7: sub    $0x2,%rdx
+    0.18 :   47cceb: mov    $0x2,%eax
+    0.28 :   47ccf0: cmovae %rdx,%rax
+    0.01 :   47ccf4: test   %rax,%rax
+    0.01 :   47ccf7: je     47cd07 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x107>
+    0.00 :   47ccf9: cmp    $0x2,%rax
+    0.12 :   47ccfd: je     47cd28 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x128>
+    0.00 :   47ccff: cmp    %r11d,0x48(%rbx)
+    0.00 :   47cd03: je     47cd28 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x128>
+    0.00 :   47cd05: jmp    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47cd07: mov    0x48(%rbx),%rdi
+    0.00 :   47cd0b: cmp    %r9,%rdi
+    0.00 :   47cd0e: jae    47e47f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x187f>
+    0.00 :   47cd14: mov    (%r12,%rdi,8),%eax
+    0.00 :   47cd18: cmp    $0x2,%eax
+    0.00 :   47cd1b: je     47cd28 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x128>
+    0.00 :   47cd1d: test   %eax,%eax
+    0.00 :   47cd1f: jne    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47cd21: cmp    %r11d,0x4(%r12,%rdi,8)
+    0.00 :   47cd26: jne    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47cd28: lea    0x80(%rbx),%rsi
+    0.03 :   47cd2f: mov    (%rsi),%rdx
+    0.01 :   47cd32: sub    $0x2,%rdx
+    0.20 :   47cd36: mov    $0x2,%eax
+    0.12 :   47cd3b: cmovae %rdx,%rax
+    0.00 :   47cd3f: test   %rax,%rax
+    0.01 :   47cd42: je     47cd6c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x16c>
+    0.00 :   47cd44: cmp    $0x2,%rax
+    0.00 :   47cd48: je     47cd90 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x190>
+    0.00 :   47cd4a: cmp    %r10d,0x88(%rbx)
+    0.00 :   47cd51: je     47cd90 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x190>
+    0.00 :   47cd53: mov    0x40(%rsp),%rax
+    0.00 :   47cd58: movq   $0x0,0x8(%rax)
+    0.00 :   47cd60: movq   $0xffffffffffffffff,(%rax)
+    0.00 :   47cd67: jmp    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47cd6c: mov    0x88(%rbx),%rdi
+    0.10 :   47cd73: cmp    %r9,%rdi
+    0.01 :   47cd76: jae    47e47f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x187f>
+    0.00 :   47cd7c: mov    (%r12,%rdi,8),%eax
+    0.18 :   47cd80: cmp    $0x2,%eax
+    0.00 :   47cd83: je     47cd90 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x190>
+    0.00 :   47cd85: test   %eax,%eax
+    0.00 :   47cd87: jne    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47cd89: cmp    %r10d,0x4(%r12,%rdi,8)
+    0.00 :   47cd8e: jne    47cd53 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x153>
+    0.00 :   47cd90: mov    %rsi,0xf8(%rsp)
+    0.44 :   47cd98: mov    %rcx,0x288(%rsp)
+    0.04 :   47cda0: mov    %r8,0x160(%rsp)
+    0.01 :   47cda8: lea    0x810(%r8),%rax
+    0.00 :   47cdaf: mov    %rax,0xf0(%rsp)
+    0.00 :   47cdb7: mov    (%rax),%r14
+    0.03 :   47cdba: mov    %r9,0x298(%rsp)
+    0.03 :   47cdc2: mov    $0x40,%r15d
+    0.00 :   47cdc8: cmp    $0x4,%r9
+    0.12 :   47cdcc: mov    %r14,0x8(%rsp)
+    0.04 :   47cdd1: jbe    47cdf5 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1f5>
+    0.00 :   47cdd3: mov    %r9,%rax
+    0.00 :   47cdd6: shr    $0x3c,%rax
+    0.00 :   47cdda: je     47cded <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1ed>
+    0.00 :   47cddc: xor    %eax,%eax
+    0.00 :   47cdde: movabs $0x800000000000000a,%r14
+    0.00 :   47cde8: jmp    47cef9 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x2f9>
+    0.00 :   47cded: lea    0x40(,%r9,8),%r15
+    0.01 :   47cdf5: mov    %ebp,0x50(%rsp)
+    0.06 :   47cdf9: mov    %r11d,(%rsp)
+    0.00 :   47cdfd: mov    %r10d,0x2c(%rsp)
+    0.03 :   47ce02: mov    %r9,0xe8(%rsp)
+    0.04 :   47ce0a: test   %r14,%r14
+    0.00 :   47ce0d: je     47ce45 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x245>
+    0.00 :   47ce0f: movabs $0x800000000000000a,%rbp
+    0.00 :   47ce19: mov    %rbp,0x2a0(%rsp)
+    0.00 :   47ce21: lea    0x2a0(%rsp),%rdi
+    0.00 :   47ce29: call   41b800 <core::ptr::drop_glue::<purrdf_sparql_eval::error::EvalError>>
+    0.00 :   47ce2e: mov    (%r14),%rdi
+    0.00 :   47ce31: mov    0x8(%r14),%rax
+    0.00 :   47ce35: call   *0x20(%rax)
+    0.00 :   47ce38: test   %al,%al
+    0.00 :   47ce3a: je     47ce4c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x24c>
+    0.00 :   47ce3c: add    $0xfffffffffffffffc,%rbp
+    0.00 :   47ce40: mov    %rbp,%r14
+    0.00 :   47ce43: jmp    47ce98 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x298>
+    0.00 :   47ce45: xor    %eax,%eax
+    0.24 :   47ce47: jmp    47cf7f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x37f>
+    0.00 :   47ce4c: mov    (%r14),%rsi
+    0.00 :   47ce4f: mov    0x8(%r14),%rax
+    0.00 :   47ce53: lea    0x70(%rsp),%rdi
+    0.00 :   47ce58: mov    %r15,%rdx
+    0.00 :   47ce5b: call   *0x28(%rax)
+    0.00 :   47ce5e: mov    %r14,%rcx
+    0.00 :   47ce61: mov    0x70(%rsp),%r14
+    0.00 :   47ce66: mov    0x78(%rsp),%rbp
+    0.00 :   47ce6b: mov    0x80(%rsp),%rax
+    0.00 :   47ce73: cmp    $0xffffffffffffffff,%r14
+    0.00 :   47ce77: je     47cf5f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x35f>
+    0.00 :   47ce7d: mov    0x88(%rsp),%rcx
+    0.00 :   47ce85: mov    %rcx,0x1a8(%rsp)
+    0.00 :   47ce8d: mov    %rax,0xe0(%rsp)
+    0.00 :   47ce95: mov    %rbp,%rax
+    0.00 :   47ce98: movaps 0x90(%rsp),%xmm0
+    0.00 :   47cea0: movaps 0xa0(%rsp),%xmm1
+    0.00 :   47cea8: movaps 0xb0(%rsp),%xmm2
+    0.00 :   47ceb0: movaps 0xc0(%rsp),%xmm3
+    0.00 :   47ceb8: movaps %xmm0,0x400(%rsp)
+    0.00 :   47cec0: movaps %xmm1,0x100(%rsp)
+    0.00 :   47cec8: movaps %xmm2,0x110(%rsp)
+    0.00 :   47ced0: movaps %xmm3,0x120(%rsp)
+    0.00 :   47ced8: mov    %rax,%rcx
+    0.00 :   47cedb: shr    $0x8,%rcx
+    0.00 :   47cedf: shl    $0x8,%rcx
+    0.00 :   47cee3: movzbl %al,%eax
+    0.00 :   47cee6: or     %rcx,%rax
+    0.00 :   47cee9: mov    0x1a8(%rsp),%rdx
+    0.00 :   47cef1: mov    0xe0(%rsp),%rsi
+    0.00 :   47cef9: movaps 0x400(%rsp),%xmm0
+    0.00 :   47cf01: movaps %xmm0,0x460(%rsp)
+    0.00 :   47cf09: movaps 0x100(%rsp),%xmm0
+    0.00 :   47cf11: movaps 0x110(%rsp),%xmm1
+    0.00 :   47cf19: movaps 0x120(%rsp),%xmm2
+    0.00 :   47cf21: mov    0x40(%rsp),%rcx
+    0.00 :   47cf26: movaps %xmm2,0x50(%rcx)
+    0.00 :   47cf2a: movaps %xmm1,0x40(%rcx)
+    0.00 :   47cf2e: movaps %xmm0,0x30(%rcx)
+    0.00 :   47cf32: movaps 0x460(%rsp),%xmm0
+    0.00 :   47cf3a: movaps %xmm0,0x20(%rcx)
+    0.00 :   47cf3e: mov    %r14,(%rcx)
+    0.00 :   47cf41: mov    %rax,0x8(%rcx)
+    0.00 :   47cf45: mov    %rsi,0x10(%rcx)
+    0.00 :   47cf49: mov    %rdx,0x18(%rcx)
+    1.11 :   47cf4d: add    $0x498,%rsp
+    0.01 :   47cf54: pop    %rbx
+    0.00 :   47cf55: pop    %r12
+    0.29 :   47cf57: pop    %r13
+    0.79 :   47cf59: pop    %r14
+    0.00 :   47cf5b: pop    %r15
+    0.00 :   47cf5d: pop    %rbp
+    0.00 :   47cf5e: ret
+    0.00 :   47cf5f: mov    %rbp,0x420(%rsp)
+    0.00 :   47cf67: mov    %rax,0xd8(%rsp)
+    0.00 :   47cf6f: mov    %rax,0x428(%rsp)
+    0.00 :   47cf77: mov    $0x1,%eax
+    0.00 :   47cf7c: mov    %rcx,%r14
+    0.02 :   47cf7f: mov    %rax,0x418(%rsp)
+    0.16 :   47cf87: movq   $0x1,0x130(%rsp)
+    0.01 :   47cf93: mov    0xe8(%rsp),%r15
+    0.22 :   47cf9b: cmp    $0x4,%r15
+    0.01 :   47cf9f: mov    %rbp,0x20(%rsp)
+    0.02 :   47cfa4: jbe    47d065 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x465>
+    0.00 :   47cfaa: lea    0x130(%rsp),%rdi
+    0.00 :   47cfb2: mov    %r15,%rsi
+    0.00 :   47cfb5: call   69cdd0 <<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::try_grow>
+    0.00 :   47cfba: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47cfbe: je     47d065 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x465>
+    0.00 :   47cfc4: lea    -0x3e45d7(%rip),%rcx        # 989f4 <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x827>
+    0.00 :   47cfcb: mov    %rcx,%rax
+    0.00 :   47cfce: shr    $0x8,%rax
+    0.00 :   47cfd2: mov    %rax,0x30(%rsp)
+    0.00 :   47cfd7: movabs $0x800000000000000a,%r14
+    0.00 :   47cfe1: inc    %r14
+    0.00 :   47cfe4: mov    $0x12,%eax
+    0.00 :   47cfe9: mov    %rax,0xe0(%rsp)
+    0.00 :   47cff1: mov    %rcx,%rax
+    0.00 :   47cff4: cmpq   $0x6,0x130(%rsp)
+    0.00 :   47cffd: jb     47d013 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x413>
+    0.00 :   47cfff: mov    0x138(%rsp),%rdi
+    0.00 :   47d007: mov    %rax,%rbx
+    0.00 :   47d00a: call   *0x51dbd0(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d010: mov    %rbx,%rax
+    0.00 :   47d013: cmpq   $0x0,0x8(%rsp)
+    0.00 :   47d019: je     47da94 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe94>
+    0.00 :   47d01f: test   %rbp,%rbp
+    0.00 :   47d022: je     47da94 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe94>
+    0.00 :   47d028: mov    %rax,%rbx
+    0.00 :   47d02b: mov    0xd8(%rsp),%rax
+    0.00 :   47d033: mov    (%rax),%rax
+    0.00 :   47d036: test   %rax,%rax
+    0.00 :   47d039: je     47d040 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x440>
+    0.00 :   47d03b: mov    %rbp,%rdi
+    0.00 :   47d03e: call   *%rax
+    0.00 :   47d040: mov    0xd8(%rsp),%rax
+    0.00 :   47d048: cmpq   $0x0,0x8(%rax)
+    0.00 :   47d04d: je     47d058 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x458>
+    0.00 :   47d04f: mov    %rbp,%rdi
+    0.00 :   47d052: call   *0x51db88(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d058: mov    0x30(%rsp),%rcx
+    0.00 :   47d05d: mov    %rbx,%rax
+    0.00 :   47d060: jmp    47cedf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x2df>
+    0.00 :   47d065: lea    0x130(%rsp),%rdi
+    0.23 :   47d06d: mov    %r15,%rsi
+    0.01 :   47d070: call   69cc10 <<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::resize>
+    0.26 :   47d075: mov    0x130(%rsp),%rax
+    0.46 :   47d07d: mov    %rax,%rdi
+    0.18 :   47d080: cmp    $0x6,%rax
+    0.12 :   47d084: jb     47d08e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x48e>
+    0.00 :   47d086: mov    0x140(%rsp),%rdi
+    0.01 :   47d08e: dec    %rdi
+    0.04 :   47d091: cmp    0xe8(%rsp),%rdi
+    0.02 :   47d099: jne    47e413 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1813>
+    0.00 :   47d09f: lea    0x138(%rsp),%rdi
+    0.01 :   47d0a7: cmp    $0x6,%rax
+    0.45 :   47d0ab: jb     47d0b5 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x4b5>
+    0.00 :   47d0ad: mov    0x138(%rsp),%rdi
+    0.00 :   47d0b5: mov    0xe8(%rsp),%rax
+    0.18 :   47d0bd: lea    0x0(,%rax,8),%rdx
+    0.01 :   47d0c5: mov    %r12,%rsi
+    0.15 :   47d0c8: call   *0x51db22(%rip)        # 99abf0 <memcpy@GLIBC_2.14>
+    2.30 :   47d0ce: movq   $0x3,0x228(%rsp)
+    0.03 :   47d0da: mov    %rbx,0x230(%rsp)
+    0.15 :   47d0e2: mov    0x50(%rsp),%eax
+    0.01 :   47d0e6: mov    %eax,0x238(%rsp)
+    0.04 :   47d0ed: mov    %r13,0x240(%rsp)
+    0.02 :   47d0f5: mov    (%rsp),%eax
+    0.18 :   47d0f8: mov    %eax,0x248(%rsp)
+    0.04 :   47d0ff: mov    0xf8(%rsp),%rax
+    0.40 :   47d107: mov    %rax,0x250(%rsp)
+    0.00 :   47d10f: mov    0x2c(%rsp),%eax
+    0.00 :   47d113: mov    %eax,0x258(%rsp)
+    0.00 :   47d11a: lea    0x78(%rsp),%r13
+    0.01 :   47d11f: lea    -0x3e362b(%rip),%rax        # 99afb <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x192e>
+    0.01 :   47d126: shr    $0x8,%rax
+    0.12 :   47d12a: mov    %rax,0x158(%rsp)
+    0.02 :   47d132: xor    %r15d,%r15d
+    1.08 :   47d135: lea    0x70(%rsp),%r12
+    0.01 :   47d13a: lea    0x511def(%rip),%rax        # 98ef30 <anon.44049c1f6db1c90388586f067021d866.455.llvm.15447233937092479704+0xa50>
+    0.02 :   47d141: mov    %rax,0x1a0(%rsp)
+    0.01 :   47d149: jmp    47d15a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x55a>
+    0.00 :   47d14b: nopl   0x0(%rax,%rax,1)
+    0.00 :   47d150: cmp    $0x3,%r15
+    0.40 :   47d154: je     47da8f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe8f>
+    0.01 :   47d15a: mov    %r15,%rax
+    0.40 :   47d15d: inc    %r15
+    0.46 :   47d160: mov    %r15,0x220(%rsp)
+    0.46 :   47d168: shl    $0x4,%rax
+    1.90 :   47d16c: lea    0x230(%rsp),%rdx
+    0.02 :   47d174: mov    (%rdx,%rax,1),%rcx
+    2.97 :   47d178: mov    0x8(%rdx,%rax,1),%eax
+    1.36 :   47d17c: mov    0xf0(%rsp),%rdx
+    0.05 :   47d184: mov    (%rdx),%rdx
+    0.54 :   47d187: mov    %rdx,0x1b8(%rsp)
+    0.01 :   47d18f: mov    %rcx,0x78(%rsp)
+    0.69 :   47d194: mov    %eax,0x80(%rsp)
+    0.08 :   47d19b: movq   $0x2,0x70(%rsp)
+    0.02 :   47d1a4: movq   $0x0,0x60(%rsp)
+    0.62 :   47d1ad: mov    $0x1,%esi
+    0.59 :   47d1b2: mov    $0x2,%eax
+    0.04 :   47d1b7: mov    %r12,%rcx
+    0.28 :   47d1ba: xor    %edx,%edx
+    0.01 :   47d1bc: movq   $0x0,0x50(%rsp)
+    0.51 :   47d1c5: mov    %r15,0x48(%rsp)
+    0.05 :   47d1ca: jmp    47d20c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x60c>
+    0.00 :   47d1cc: nopl   0x0(%rax)
+    0.03 :   47d1d0: cmp    %edx,0x8(%rbx)
+    0.59 :   47d1d3: jne    47d87a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xc7a>
+    0.12 :   47d1d9: mov    0x70(%rsp),%rdi
+    8.53 :   47d1de: xor    %edx,%edx
+    0.22 :   47d1e0: cmp    $0x6,%rdi
+    0.00 :   47d1e4: setae  %dl
+    0.99 :   47d1e7: mov    %r12,%rcx
+    0.14 :   47d1ea: lea    0x80(%rsp),%rax
+    0.07 :   47d1f2: cmovae %rax,%rcx
+    0.15 :   47d1f6: mov    %edx,%eax
+    0.21 :   47d1f8: shl    $0x4,%eax
+    0.00 :   47d1fb: mov    0x70(%rsp,%rax,1),%rax
+    0.70 :   47d200: mov    %rax,%rsi
+    0.17 :   47d203: dec    %rsi
+    0.00 :   47d206: je     47d820 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xc20>
+    0.02 :   47d20c: mov    %r13,%rdi
+    0.85 :   47d20f: test   $0x1,%dl
+    0.47 :   47d212: je     47d219 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x619>
+    0.00 :   47d214: mov    0x78(%rsp),%rdi
+    0.00 :   47d219: mov    %rsi,(%rcx)
+    1.30 :   47d21c: shl    $0x4,%rax
+    0.62 :   47d220: mov    -0x20(%rdi,%rax,1),%rbx
+    0.76 :   47d225: mov    -0x18(%rdi,%rax,1),%edx
+    2.32 :   47d229: mov    (%rbx),%rax
+    0.92 :   47d22c: sub    $0x2,%rax
+    0.03 :   47d230: mov    $0x2,%ecx
+    0.67 :   47d235: cmovb  %rcx,%rax
+    0.49 :   47d239: test   %rax,%rax
+    0.18 :   47d23c: je     47d3b0 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x7b0>
+    0.00 :   47d242: cmp    $0x1,%rax
+    0.31 :   47d246: je     47d1d0 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x5d0>
+    0.00 :   47d248: lea    0x2a0(%rsp),%rdi
+    0.00 :   47d250: mov    0x290(%rsp),%rsi
+    0.00 :   47d258: call   6e6660 <<purrdf_core::ir::dataset::RdfDataset>::resolve>
+    0.00 :   47d25d: xor    %eax,%eax
+    0.00 :   47d25f: cmpb   $0x3,0x2a0(%rsp)
+    0.00 :   47d267: mov    $0xffffffffffffffff,%r14
+    0.00 :   47d26e: jne    47d92b <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd2b>
+    0.00 :   47d274: mov    0x2a4(%rsp),%ecx
+    0.00 :   47d27b: mov    %ecx,0x2c(%rsp)
+    0.00 :   47d27f: test   %ecx,%ecx
+    0.00 :   47d281: mov    0x20(%rsp),%rbp
+    0.00 :   47d286: je     47d930 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd30>
+    0.00 :   47d28c: mov    0x70(%rsp),%r14
+    0.00 :   47d291: mov    0x80(%rsp),%r12
+    0.00 :   47d299: dec    %r14
+    0.00 :   47d29c: dec    %r12
+    0.00 :   47d29f: cmp    $0x5,%r14
+    0.00 :   47d2a3: cmovb  %r14,%r12
+    0.00 :   47d2a7: cmp    $0xfffffffffffffffc,%r12
+    0.00 :   47d2ab: ja     47da4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe4d>
+    0.00 :   47d2b1: mov    0x2a8(%rsp),%r15d
+    0.00 :   47d2b9: mov    0x2ac(%rsp),%eax
+    0.00 :   47d2c0: mov    %eax,0xf8(%rsp)
+    0.00 :   47d2c7: movabs $0x800000000000000a,%rax
+    0.00 :   47d2d1: mov    %rax,0x2a0(%rsp)
+    0.00 :   47d2d9: lea    0x2a0(%rsp),%rdi
+    0.00 :   47d2e1: call   41b800 <core::ptr::drop_glue::<purrdf_sparql_eval::error::EvalError>>
+    0.00 :   47d2e6: lea    0x3(%r12),%rbp
+    0.00 :   47d2eb: cmp    $0x5,%r14
+    0.00 :   47d2ef: mov    $0x4,%r13d
+    0.00 :   47d2f5: cmovae %r14,%r13
+    0.00 :   47d2f9: cmp    %r13,%rbp
+    0.00 :   47d2fc: jbe    47d45a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x85a>
+    0.00 :   47d302: test   %r14,%r14
+    0.00 :   47d305: js     47da73 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe73>
+    0.00 :   47d30b: movabs $0x800000000000000a,%rax
+    0.00 :   47d315: mov    %rax,0x2a0(%rsp)
+    0.00 :   47d31d: lea    0x2a0(%rsp),%rdi
+    0.00 :   47d325: call   41b800 <core::ptr::drop_glue::<purrdf_sparql_eval::error::EvalError>>
+    0.00 :   47d32a: lea    0x0(,%r13,2),%rax
+    0.00 :   47d332: cmp    %rbp,%rax
+    0.00 :   47d335: cmova  %rax,%rbp
+    0.00 :   47d339: mov    %rbp,%rax
+    0.00 :   47d33c: shr    $0x3b,%rax
+    0.00 :   47d340: jne    47d894 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xc94>
+    0.00 :   47d346: mov    0x1b8(%rsp),%rax
+    0.00 :   47d34e: test   %rax,%rax
+    0.00 :   47d351: je     47d47f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x87f>
+    0.00 :   47d357: mov    (%rax),%rdi
+    0.00 :   47d35a: mov    0x8(%rax),%rax
+    0.00 :   47d35e: call   *0x20(%rax)
+    0.00 :   47d361: test   %al,%al
+    0.00 :   47d363: jne    47d8a5 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xca5>
+    0.00 :   47d369: mov    %rbp,%rdx
+    0.00 :   47d36c: shl    $0x4,%rdx
+    0.00 :   47d370: mov    0x1b8(%rsp),%rax
+    0.00 :   47d378: mov    (%rax),%rsi
+    0.00 :   47d37b: mov    0x8(%rax),%rax
+    0.00 :   47d37f: lea    0x2a0(%rsp),%rdi
+    0.00 :   47d387: call   *0x28(%rax)
+    0.00 :   47d38a: mov    0x2a0(%rsp),%r14
+    0.00 :   47d392: mov    0x2a8(%rsp),%rax
+    0.00 :   47d39a: mov    %rax,0x10(%rsp)
+    0.00 :   47d39f: cmp    $0xffffffffffffffff,%r14
+    0.00 :   47d3a3: je     47d488 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x888>
+    0.00 :   47d3a9: jmp    47d8c0 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xcc0>
+    0.00 :   47d3ae: xchg   %ax,%ax
+    0.01 :   47d3b0: mov    0x8(%rbx),%rdi
+    1.47 :   47d3b4: mov    0x130(%rsp),%rax
+    0.06 :   47d3bc: lea    -0x1(%rax),%r8
+    0.42 :   47d3c0: mov    0x140(%rsp),%rcx
+    0.30 :   47d3c8: lea    -0x1(%rcx),%rsi
+    0.01 :   47d3cc: cmp    $0x5,%r8
+    1.54 :   47d3d0: cmovb  %r8,%rsi
+    0.89 :   47d3d4: cmp    %rsi,%rdi
+    0.65 :   47d3d7: jae    47e46a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x186a>
+    0.00 :   47d3dd: mov    0x138(%rsp),%rsi
+    1.61 :   47d3e5: cmp    $0x5,%r8
+    0.24 :   47d3e9: lea    0x138(%rsp),%r8
+    0.43 :   47d3f1: cmovae %rsi,%r8
+    1.15 :   47d3f5: mov    (%r8,%rdi,8),%r9d
+    0.62 :   47d3f9: cmp    $0x2,%r9d
+    0.02 :   47d3fd: jne    47d433 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x833>
+    0.01 :   47d3ff: cmp    $0x6,%rax
+    0.18 :   47d403: cmovb  %rax,%rcx
+    0.14 :   47d407: dec    %rcx
+    0.03 :   47d40a: cmp    %rcx,%rdi
+    0.00 :   47d40d: jae    47e458 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1858>
+    0.00 :   47d413: cmp    $0x6,%rax
+    0.10 :   47d417: lea    0x138(%rsp),%rax
+    0.23 :   47d41f: cmovb  %rax,%rsi
+    0.14 :   47d423: movl   $0x0,(%rsi,%rdi,8)
+    0.92 :   47d42a: mov    %edx,0x4(%rsi,%rdi,8)
+    4.97 :   47d42e: jmp    47d1d9 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x5d9>
+    0.00 :   47d433: xor    %eax,%eax
+    0.00 :   47d435: mov    $0xffffffffffffffff,%r14
+    0.00 :   47d43c: test   %r9d,%r9d
+    0.00 :   47d43f: jne    47d93f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd3f>
+    0.00 :   47d445: cmp    %edx,0x4(%r8,%rdi,8)
+    0.00 :   47d44a: jne    47d93f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd3f>
+    0.00 :   47d450: mov    0x8(%rsp),%r14
+    0.00 :   47d455: jmp    47d1d9 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x5d9>
+    0.00 :   47d45a: mov    0x8(%rsp),%r14
+    0.00 :   47d45f: lea    0x78(%rsp),%r13
+    0.00 :   47d464: lea    0x70(%rsp),%r12
+    0.00 :   47d469: mov    0x2c(%rsp),%ebp
+    0.00 :   47d46d: mov    0x30(%rbx),%rbx
+    0.00 :   47d471: test   %rbx,%rbx
+    0.00 :   47d474: jne    47d550 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x950>
+    0.00 :   47d47a: jmp    47dfa4 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x13a4>
+    0.00 :   47d47f: movq   $0x0,0x10(%rsp)
+    0.00 :   47d488: mov    0x2b0(%rsp),%rax
+    0.00 :   47d490: mov    %rax,0x68(%rsp)
+    0.00 :   47d495: mov    %rbp,%rax
+    0.00 :   47d498: sub    %r12,%rax
+    0.00 :   47d49b: sub    %r12,%r13
+    0.00 :   47d49e: cmp    %rax,%r13
+    0.00 :   47d4a1: mov    0x8(%rsp),%r14
+    0.00 :   47d4a6: lea    0x78(%rsp),%r13
+    0.00 :   47d4ab: jae    47d4cd <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x8cd>
+    0.00 :   47d4ad: cmp    %r12,%rbp
+    0.00 :   47d4b0: jb     47d7a8 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xba8>
+    0.00 :   47d4b6: lea    0x70(%rsp),%rdi
+    0.00 :   47d4bb: mov    %rbp,%rsi
+    0.00 :   47d4be: call   69d260 <<purrdf_core::small::SmallVec<[core::option::Option<usize>; 4]>>::try_grow>
+    0.00 :   47d4c3: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47d4c7: jne    47d9b5 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xdb5>
+    0.00 :   47d4cd: mov    $0x1,%eax
+    0.00 :   47d4d2: mov    %rax,0x60(%rsp)
+    0.00 :   47d4d7: cmpq   $0x0,0x50(%rsp)
+    0.00 :   47d4dd: je     47d741 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xb41>
+    0.00 :   47d4e3: cmpq   $0x0,(%rsp)
+    0.00 :   47d4e8: lea    0x70(%rsp),%r12
+    0.00 :   47d4ed: mov    0x2c(%rsp),%ebp
+    0.00 :   47d4f1: je     47d51c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x91c>
+    0.00 :   47d4f3: mov    0x18(%rsp),%rax
+    0.00 :   47d4f8: mov    (%rax),%rax
+    0.00 :   47d4fb: test   %rax,%rax
+    0.00 :   47d4fe: je     47d506 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x906>
+    0.00 :   47d500: mov    (%rsp),%rdi
+    0.00 :   47d504: call   *%rax
+    0.00 :   47d506: mov    0x18(%rsp),%rax
+    0.00 :   47d50b: cmpq   $0x0,0x8(%rax)
+    0.00 :   47d510: je     47d51c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x91c>
+    0.00 :   47d512: mov    (%rsp),%rdi
+    0.00 :   47d516: call   *0x51d6c4(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d51c: mov    0x10(%rsp),%rax
+    0.00 :   47d521: mov    %rax,0x38(%rsp)
+    0.00 :   47d526: mov    0x68(%rsp),%rcx
+    0.00 :   47d52b: mov    %rcx,0x58(%rsp)
+    0.00 :   47d530: mov    %rcx,0x18(%rsp)
+    0.00 :   47d535: mov    %rax,(%rsp)
+    0.00 :   47d539: mov    $0x1,%eax
+    0.00 :   47d53e: mov    %rax,0x50(%rsp)
+    0.00 :   47d543: mov    0x30(%rbx),%rbx
+    0.00 :   47d547: test   %rbx,%rbx
+    0.00 :   47d54a: je     47dfa4 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x13a4>
+    0.00 :   47d550: mov    0x70(%rsp),%rdx
+    0.00 :   47d555: mov    0x80(%rsp),%rsi
+    0.00 :   47d55d: dec    %rdx
+    0.00 :   47d560: dec    %rsi
+    0.00 :   47d563: cmp    $0x5,%rdx
+    0.00 :   47d567: cmovb  %rdx,%rsi
+    0.00 :   47d56b: mov    $0x4,%eax
+    0.00 :   47d570: cmovae %rdx,%rax
+    0.00 :   47d574: mov    %rax,%rcx
+    0.00 :   47d577: sub    %rsi,%rcx
+    0.00 :   47d57a: cmp    $0x2,%rcx
+    0.00 :   47d57e: jbe    47d77b <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xb7b>
+    0.00 :   47d584: xor    %ecx,%ecx
+    0.00 :   47d586: mov    %r13,%r8
+    0.00 :   47d589: cmp    $0x5,%rdx
+    0.00 :   47d58d: setae  %dil
+    0.00 :   47d591: jb     47d598 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x998>
+    0.00 :   47d593: mov    0x78(%rsp),%r8
+    0.00 :   47d598: lea    0x80(%rbx),%rsi
+    0.00 :   47d59f: lea    0x40(%rbx),%rdx
+    0.00 :   47d5a3: mov    %dil,%cl
+    0.00 :   47d5a6: shl    $0x4,%ecx
+    0.00 :   47d5a9: mov    0x70(%rsp,%rcx,1),%rdi
+    0.00 :   47d5ae: lea    -0x1(%rdi),%r9
+    0.00 :   47d5b2: cmp    %rax,%r9
+    0.00 :   47d5b5: jae    47d61e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa1e>
+    0.00 :   47d5b7: shl    $0x4,%r9
+    0.00 :   47d5bb: mov    %rsi,(%r8,%r9,1)
+    0.00 :   47d5bf: mov    0xf8(%rsp),%r10d
+    0.00 :   47d5c7: mov    %r10d,0x8(%r8,%r9,1)
+    0.00 :   47d5cc: mov    $0x1,%r14d
+    0.00 :   47d5d2: cmp    %rax,%rdi
+    0.00 :   47d5d5: je     47d616 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa16>
+    0.00 :   47d5d7: mov    %rdi,%r9
+    0.00 :   47d5da: shl    $0x4,%r9
+    0.00 :   47d5de: mov    %rdx,(%r8,%r9,1)
+    0.00 :   47d5e2: mov    %r15d,0x8(%r8,%r9,1)
+    0.00 :   47d5e7: lea    0x1(%rdi),%r9
+    0.00 :   47d5eb: mov    $0x2,%r14d
+    0.00 :   47d5f1: cmp    %rax,%r9
+    0.00 :   47d5f4: je     47d616 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa16>
+    0.00 :   47d5f6: shl    $0x4,%r9
+    0.00 :   47d5fa: mov    %rbx,(%r8,%r9,1)
+    0.00 :   47d5fe: mov    %ebp,0x8(%r8,%r9,1)
+    0.00 :   47d603: lea    0x2(%rdi),%r8
+    0.00 :   47d607: mov    $0x3,%r14d
+    0.00 :   47d60d: cmp    %rax,%r8
+    0.00 :   47d610: jne    47d76d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xb6d>
+    0.00 :   47d616: inc    %rax
+    0.00 :   47d619: mov    %rax,%rdi
+    0.00 :   47d61c: jmp    47d621 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa21>
+    0.00 :   47d61e: xor    %r14d,%r14d
+    0.00 :   47d621: mov    %rdi,0x70(%rsp,%rcx,1)
+    0.00 :   47d626: mov    %r14,0x2a0(%rsp)
+    0.00 :   47d62e: movq   $0x3,0x2a8(%rsp)
+    0.00 :   47d63a: mov    %rsi,0x2b0(%rsp)
+    0.00 :   47d642: mov    0xf8(%rsp),%eax
+    0.00 :   47d649: mov    %eax,0x2b8(%rsp)
+    0.00 :   47d650: mov    %rdx,0x2c0(%rsp)
+    0.00 :   47d658: mov    %r15d,0x2c8(%rsp)
+    0.00 :   47d660: mov    %rbx,0x2d0(%rsp)
+    0.00 :   47d668: mov    %ebp,0x2d8(%rsp)
+    0.00 :   47d66f: cmp    $0x3,%r14
+    0.00 :   47d673: jne    47d689 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa89>
+    0.00 :   47d675: mov    0x8(%rsp),%r14
+    0.00 :   47d67a: mov    0x20(%rsp),%rbp
+    0.00 :   47d67f: mov    0x48(%rsp),%r15
+    0.00 :   47d684: jmp    47d1d9 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x5d9>
+    0.00 :   47d689: shl    $0x4,%r14d
+    0.00 :   47d68d: nopl   (%rax)
+    0.00 :   47d690: mov    0x2b0(%rsp,%r14,1),%rbx
+    0.00 :   47d698: mov    0x2b8(%rsp,%r14,1),%ebp
+    0.00 :   47d6a0: mov    0x70(%rsp),%rsi
+    0.00 :   47d6a5: dec    %rsi
+    0.00 :   47d6a8: xor    %edx,%edx
+    0.00 :   47d6aa: cmp    $0x5,%rsi
+    0.00 :   47d6ae: setae  %dl
+    0.00 :   47d6b1: mov    0x78(%rsp),%rax
+    0.00 :   47d6b6: cmovb  %r13,%rax
+    0.00 :   47d6ba: mov    %r12,%rcx
+    0.00 :   47d6bd: lea    0x80(%rsp),%rdi
+    0.00 :   47d6c5: cmovae %rdi,%rcx
+    0.00 :   47d6c9: mov    $0x4,%edi
+    0.00 :   47d6ce: cmovb  %rdi,%rsi
+    0.00 :   47d6d2: shl    $0x4,%edx
+    0.00 :   47d6d5: mov    0x70(%rsp,%rdx,1),%r15
+    0.00 :   47d6da: lea    -0x1(%r15),%r12
+    0.00 :   47d6de: cmp    %rsi,%r12
+    0.00 :   47d6e1: je     47d70a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xb0a>
+    0.00 :   47d6e3: shl    $0x4,%r12
+    0.00 :   47d6e7: mov    %rbx,(%rax,%r12,1)
+    0.00 :   47d6eb: mov    %ebp,0x8(%rax,%r12,1)
+    0.00 :   47d6f0: inc    %r15
+    0.00 :   47d6f3: mov    %r15,(%rcx)
+    0.00 :   47d6f6: add    $0x10,%r14
+    0.00 :   47d6fa: cmp    $0x30,%r14
+    0.00 :   47d6fe: lea    0x70(%rsp),%r12
+    0.00 :   47d703: jne    47d690 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa90>
+    0.00 :   47d705: jmp    47d675 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa75>
+    0.00 :   47d70a: mov    $0x1,%edx
+    0.00 :   47d70f: lea    0x70(%rsp),%rdi
+    0.00 :   47d714: mov    $0x1,%ecx
+    0.00 :   47d719: call   *0x51e819(%rip)        # 99bf38 <_DYNAMIC+0x1560>
+    0.00 :   47d71f: cmpq   $0x6,0x70(%rsp)
+    0.00 :   47d725: mov    0x78(%rsp),%rax
+    0.00 :   47d72a: cmovb  %r13,%rax
+    0.00 :   47d72e: lea    0x70(%rsp),%rcx
+    0.00 :   47d733: lea    0x80(%rsp),%rdx
+    0.00 :   47d73b: cmovae %rdx,%rcx
+    0.00 :   47d73f: jmp    47d6e3 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xae3>
+    0.00 :   47d741: mov    0x10(%rsp),%rax
+    0.00 :   47d746: mov    %rax,0x38(%rsp)
+    0.00 :   47d74b: mov    0x68(%rsp),%rcx
+    0.00 :   47d750: mov    %rcx,0x58(%rsp)
+    0.00 :   47d755: mov    %rcx,0x18(%rsp)
+    0.00 :   47d75a: mov    %rax,(%rsp)
+    0.00 :   47d75e: mov    $0x1,%eax
+    0.00 :   47d763: mov    %rax,0x50(%rsp)
+    0.00 :   47d768: jmp    47d464 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x864>
+    0.00 :   47d76d: add    $0x3,%rdi
+    0.00 :   47d771: mov    %rdi,0x70(%rsp,%rcx,1)
+    0.00 :   47d776: jmp    47d675 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xa75>
+    0.00 :   47d77b: mov    $0x3,%edx
+    0.00 :   47d780: mov    %r12,%rdi
+    0.00 :   47d783: mov    $0x1,%ecx
+    0.00 :   47d788: call   *0x51e7aa(%rip)        # 99bf38 <_DYNAMIC+0x1560>
+    0.00 :   47d78e: mov    0x70(%rsp),%rdx
+    0.00 :   47d793: dec    %rdx
+    0.00 :   47d796: cmp    $0x5,%rdx
+    0.00 :   47d79a: mov    $0x4,%eax
+    0.00 :   47d79f: cmovae %rdx,%rax
+    0.00 :   47d7a3: jmp    47d584 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x984>
+    0.00 :   47d7a8: movq   $0x0,0x2a0(%rsp)
+    0.00 :   47d7b4: movq   $0x1,0x2a8(%rsp)
+    0.00 :   47d7c0: movq   $0x0,0x2b0(%rsp)
+    0.00 :   47d7cc: mov    $0x1,%edx
+    0.00 :   47d7d1: mov    $0x1,%ecx
+    0.00 :   47d7d6: lea    0x2a0(%rsp),%rdi
+    0.00 :   47d7de: mov    $0xffffffffffffffff,%rsi
+    0.00 :   47d7e5: call   67d460 <<alloc::raw_vec::RawVecInner>::try_reserve_exact>
+    0.00 :   47d7ea: cmpq   $0x0,0x2a0(%rsp)
+    0.00 :   47d7f3: je     47d4c3 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x8c3>
+    0.00 :   47d7f9: mov    0x2a8(%rsp),%rdi
+    0.00 :   47d801: mov    %rax,%r14
+    0.00 :   47d804: call   *0x51d3d6(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d80a: mov    %r14,%rax
+    0.00 :   47d80d: mov    0x8(%rsp),%r14
+    0.00 :   47d812: jmp    47d4c3 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x8c3>
+    0.00 :   47d817: nopw   0x0(%rax,%rax,1)
+    0.05 :   47d820: cmp    $0x6,%rdi
+    1.02 :   47d824: jb     47d831 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xc31>
+    0.00 :   47d826: mov    0x78(%rsp),%rdi
+    0.00 :   47d82b: call   *0x51d3af(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d831: cmpq   $0x0,0x50(%rsp)
+    0.81 :   47d837: je     47d150 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x550>
+    0.00 :   47d83d: cmpq   $0x0,(%rsp)
+    0.00 :   47d842: je     47d150 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x550>
+    0.00 :   47d848: mov    0x18(%rsp),%rax
+    0.00 :   47d84d: mov    (%rax),%rax
+    0.00 :   47d850: test   %rax,%rax
+    0.00 :   47d853: je     47d85b <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xc5b>
+    0.00 :   47d855: mov    (%rsp),%rdi
+    0.00 :   47d859: call   *%rax
+    0.00 :   47d85b: mov    0x18(%rsp),%rax
+    0.00 :   47d860: cmpq   $0x0,0x8(%rax)
+    0.00 :   47d865: je     47d150 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x550>
+    0.00 :   47d86b: mov    (%rsp),%rdi
+    0.00 :   47d86f: call   *0x51d36b(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d875: jmp    47d150 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x550>
+    0.00 :   47d87a: mov    $0xffffffffffffffff,%r14
+    0.00 :   47d881: xor    %eax,%eax
+    0.00 :   47d883: cmpq   $0x6,0x70(%rsp)
+    0.00 :   47d889: jb     47d958 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd58>
+    0.00 :   47d88f: jmp    47d947 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd47>
+    0.00 :   47d894: mov    $0x1,%al
+    0.00 :   47d896: movabs $0x800000000000000a,%r14
+    0.00 :   47d8a0: jmp    47d92b <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd2b>
+    0.00 :   47d8a5: mov    0x2a8(%rsp),%rax
+    0.00 :   47d8ad: mov    %rax,0x10(%rsp)
+    0.00 :   47d8b2: movabs $0x800000000000000a,%rax
+    0.00 :   47d8bc: lea    -0x4(%rax),%r14
+    0.00 :   47d8c0: mov    0x2b0(%rsp),%rax
+    0.00 :   47d8c8: mov    %rax,0xe0(%rsp)
+    0.00 :   47d8d0: mov    0x2b8(%rsp),%rax
+    0.00 :   47d8d8: mov    %rax,0x1a8(%rsp)
+    0.00 :   47d8e0: lea    0x2c0(%rsp),%rax
+    0.00 :   47d8e8: movaps (%rax),%xmm0
+    0.00 :   47d8eb: movaps %xmm0,0x480(%rsp)
+    0.00 :   47d8f3: movaps 0x10(%rax),%xmm0
+    0.00 :   47d8f7: movaps 0x20(%rax),%xmm1
+    0.00 :   47d8fb: movaps 0x30(%rax),%xmm2
+    0.00 :   47d8ff: movaps %xmm2,0x1e0(%rsp)
+    0.00 :   47d907: movaps %xmm1,0x1d0(%rsp)
+    0.00 :   47d90f: movaps %xmm0,0x1c0(%rsp)
+    0.00 :   47d917: mov    0x10(%rsp),%rcx
+    0.00 :   47d91c: mov    %rcx,%rax
+    0.00 :   47d91f: shr    $0x8,%rax
+    0.00 :   47d923: mov    %rax,0x30(%rsp)
+    0.00 :   47d928: mov    %rcx,%rax
+    0.00 :   47d92b: mov    0x20(%rsp),%rbp
+    0.00 :   47d930: lea    0x78(%rsp),%r13
+    0.00 :   47d935: mov    0x48(%rsp),%r15
+    0.00 :   47d93a: lea    0x70(%rsp),%r12
+    0.00 :   47d93f: cmpq   $0x6,0x70(%rsp)
+    0.00 :   47d945: jb     47d958 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd58>
+    0.00 :   47d947: mov    0x78(%rsp),%rdi
+    0.00 :   47d94c: mov    %rax,%rbx
+    0.00 :   47d94f: call   *0x51d28b(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d955: mov    %rbx,%rax
+    0.00 :   47d958: cmpq   $0x0,0x50(%rsp)
+    0.00 :   47d95e: je     47d999 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd99>
+    0.00 :   47d960: cmpq   $0x0,(%rsp)
+    0.00 :   47d965: je     47d999 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd99>
+    0.00 :   47d967: mov    %rax,%rbx
+    0.00 :   47d96a: mov    0x18(%rsp),%rax
+    0.00 :   47d96f: mov    (%rax),%rax
+    0.00 :   47d972: test   %rax,%rax
+    0.00 :   47d975: je     47d97d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd7d>
+    0.00 :   47d977: mov    (%rsp),%rdi
+    0.00 :   47d97b: call   *%rax
+    0.00 :   47d97d: mov    0x18(%rsp),%rax
+    0.00 :   47d982: cmpq   $0x0,0x8(%rax)
+    0.00 :   47d987: mov    %rbx,%rax
+    0.00 :   47d98a: je     47d999 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd99>
+    0.00 :   47d98c: mov    (%rsp),%rdi
+    0.00 :   47d990: call   *0x51d24a(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47d996: mov    %rbx,%rax
+    0.00 :   47d999: cmp    $0xffffffffffffffff,%r14
+    0.00 :   47d99d: jne    47da9e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe9e>
+    0.00 :   47d9a3: cmp    $0x1,%al
+    0.00 :   47d9a5: mov    0x8(%rsp),%r14
+    0.00 :   47d9aa: je     47d150 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x550>
+    0.00 :   47d9b0: jmp    47daf2 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xef2>
+    0.00 :   47d9b5: movabs $0x800000000000000a,%rax
+    0.00 :   47d9bf: lea    0x1(%rax),%r14
+    0.00 :   47d9c3: mov    $0x19,%eax
+    0.00 :   47d9c8: mov    %rax,0xe0(%rsp)
+    0.00 :   47d9d0: cmpq   $0x0,0x10(%rsp)
+    0.00 :   47d9d6: mov    0x20(%rsp),%rbp
+    0.00 :   47d9db: mov    0x48(%rsp),%r15
+    0.00 :   47d9e0: je     47da34 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe34>
+    0.00 :   47d9e2: mov    0x68(%rsp),%r12
+    0.00 :   47d9e7: mov    (%r12),%rax
+    0.00 :   47d9eb: test   %rax,%rax
+    0.00 :   47d9ee: je     47d9f7 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xdf7>
+    0.00 :   47d9f0: mov    0x10(%rsp),%rdi
+    0.00 :   47d9f5: call   *%rax
+    0.00 :   47d9f7: cmpq   $0x0,0x8(%r12)
+    0.00 :   47d9fd: lea    0x70(%rsp),%r12
+    0.00 :   47da02: je     47da0f <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xe0f>
+    0.00 :   47da04: mov    0x10(%rsp),%rdi
+    0.00 :   47da09: call   *0x51d1d1(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47da0f: mov    0x158(%rsp),%rax
+    0.00 :   47da17: mov    %rax,0x30(%rsp)
+    0.00 :   47da1c: lea    -0x3e3f28(%rip),%rax        # 99afb <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x192e>
+    0.00 :   47da23: cmpq   $0x6,0x70(%rsp)
+    0.00 :   47da29: jb     47d958 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd58>
+    0.00 :   47da2f: jmp    47d947 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd47>
+    0.00 :   47da34: mov    0x158(%rsp),%rax
+    0.00 :   47da3c: mov    %rax,0x30(%rsp)
+    0.00 :   47da41: lea    -0x3e3f4d(%rip),%rax        # 99afb <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x192e>
+    0.00 :   47da48: jmp    47d93a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd3a>
+    0.00 :   47da4d: mov    0x2a8(%rsp),%rcx
+    0.00 :   47da55: mov    %rcx,%rax
+    0.00 :   47da58: shr    $0x8,%rax
+    0.00 :   47da5c: mov    %rax,0x30(%rsp)
+    0.00 :   47da61: mov    %rcx,%rax
+    0.00 :   47da64: movabs $0x800000000000000a,%r14
+    0.00 :   47da6e: jmp    47d930 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xd30>
+    0.00 :   47da73: mov    0x2a8(%rsp),%rcx
+    0.00 :   47da7b: mov    %rcx,%rax
+    0.00 :   47da7e: shr    $0x8,%rax
+    0.00 :   47da82: mov    %rax,0x30(%rsp)
+    0.00 :   47da87: mov    %rcx,%rax
+    0.00 :   47da8a: jmp    47d896 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xc96>
+    0.00 :   47da8f: mov    $0x1,%bpl
+    3.12 :   47da92: jmp    47daf4 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xef4>
+    0.00 :   47da94: mov    0x30(%rsp),%rcx
+    0.00 :   47da99: jmp    47cedf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x2df>
+    0.00 :   47da9e: movaps 0x480(%rsp),%xmm0
+    0.00 :   47daa6: movaps %xmm0,0x400(%rsp)
+    0.00 :   47daae: movaps 0x1c0(%rsp),%xmm0
+    0.00 :   47dab6: movaps 0x1d0(%rsp),%xmm1
+    0.00 :   47dabe: movaps 0x1e0(%rsp),%xmm2
+    0.00 :   47dac6: movaps %xmm0,0x100(%rsp)
+    0.00 :   47dace: movaps %xmm1,0x110(%rsp)
+    0.00 :   47dad6: movaps %xmm2,0x120(%rsp)
+    0.00 :   47dade: cmpq   $0x6,0x130(%rsp)
+    0.00 :   47dae7: jae    47cfff <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x3ff>
+    0.00 :   47daed: jmp    47d013 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x413>
+    0.00 :   47daf2: xor    %ebp,%ebp
+    0.00 :   47daf4: mov    0x130(%rsp),%r13
+    0.38 :   47dafc: mov    0x140(%rsp),%rbx
+    3.56 :   47db04: lea    -0x1(%r13),%rax
+    0.01 :   47db08: lea    -0x1(%rbx),%rcx
+    0.00 :   47db0c: cmp    $0x5,%rax
+    0.09 :   47db10: cmovb  %rax,%rcx
+    0.23 :   47db14: mov    %rcx,0x2a0(%rsp)
+    0.41 :   47db1c: cmp    0xe8(%rsp),%rcx
+    0.00 :   47db24: jne    47e42a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x182a>
+    0.00 :   47db2a: test   %r14,%r14
+    0.00 :   47db2d: je     47db91 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xf91>
+    0.00 :   47db2f: mov    0x138(%rsp),%r14
+    0.00 :   47db37: mov    $0x40,%edi
+    0.00 :   47db3c: call   *0x51d08e(%rip)        # 99abd0 <malloc@GLIBC_2.2.5>
+    0.00 :   47db42: test   %rax,%rax
+    0.00 :   47db45: je     47dd0a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x110a>
+    0.00 :   47db4b: mov    %rax,%rbx
+    0.00 :   47db4e: mov    %r13,(%rax)
+    0.00 :   47db51: mov    %r14,0x8(%rax)
+    0.00 :   47db55: lea    0x140(%rsp),%rax
+    0.00 :   47db5d: movups (%rax),%xmm0
+    0.00 :   47db60: movups %xmm0,0x10(%rbx)
+    0.00 :   47db64: mov    0x10(%rax),%rax
+    0.00 :   47db68: mov    %rax,0x20(%rbx)
+    0.00 :   47db6c: mov    0x20(%rsp),%rax
+    0.00 :   47db71: mov    %rax,0x28(%rbx)
+    0.00 :   47db75: mov    0xd8(%rsp),%rax
+    0.00 :   47db7d: mov    %rax,0x30(%rbx)
+    0.00 :   47db81: movq   $0x1,0x38(%rbx)
+    0.00 :   47db89: xor    %r13d,%r13d
+    0.00 :   47db8c: xor    %r14d,%r14d
+    0.00 :   47db8f: jmp    47dba9 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0xfa9>
+    0.00 :   47db91: mov    0x138(%rsp),%r14
+    0.05 :   47db99: movups 0x148(%rsp),%xmm0
+    0.01 :   47dba1: movaps %xmm0,0x470(%rsp)
+    0.12 :   47dba9: movaps 0x470(%rsp),%xmm0
+    0.55 :   47dbb1: movups %xmm0,0x210(%rsp)
+    0.03 :   47dbb9: mov    %r13,0x1f8(%rsp)
+    0.34 :   47dbc1: mov    %r14,0x200(%rsp)
+    0.00 :   47dbc9: mov    %rbx,0x208(%rsp)
+    0.00 :   47dbd1: test   %bpl,%bpl
+    0.00 :   47dbd4: je     47dcf1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x10f1>
+    0.00 :   47dbda: mov    0x160(%rsp),%rax
+    0.00 :   47dbe2: cmpl   $0x2,0x150(%rax)
+    0.00 :   47dbe9: jne    47dd78 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1178>
+    0.00 :   47dbef: cmpq   $0x0,0x1b0(%rsp)
+    0.06 :   47dbf8: jne    47df1c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x131c>
+    0.00 :   47dbfe: mov    0x168(%rsp),%rax
+    0.00 :   47dc06: testb  $0x1,0x8(%rax)
+    0.00 :   47dc0a: je     47df1c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x131c>
+    0.00 :   47dc10: xorps  %xmm0,%xmm0
+    0.00 :   47dc13: movaps %xmm0,0x110(%rsp)
+    0.00 :   47dc1b: movq   $0x2,0x100(%rsp)
+    0.00 :   47dc27: movw   $0x0,0x120(%rsp)
+    0.00 :   47dc31: mov    $0x1,%al
+    0.00 :   47dc33: mov    0x51e2be(%rip),%rdx        # 99bef8 <_DYNAMIC+0x1520>
+    0.00 :   47dc3a: mov    %rdx,%rcx
+    0.00 :   47dc3d: test   $0x1,%al
+    0.00 :   47dc3f: je     47dc4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x104d>
+    0.00 :   47dc41: mov    0x168(%rsp),%rax
+    0.00 :   47dc49: mov    0x10(%rax),%rcx
+    0.00 :   47dc4d: cmpq   $0x0,0x1b0(%rsp)
+    0.00 :   47dc56: cmove  %rcx,%rdx
+    0.00 :   47dc5a: cmpl   $0x2,(%rdx)
+    0.00 :   47dc5d: mov    %rdx,%rsi
+    0.00 :   47dc60: jne    47dfcf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x13cf>
+    0.00 :   47dc66: cmpq   $0x2,0x100(%rsp)
+    0.00 :   47dc6f: jne    47dfc7 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x13c7>
+    0.00 :   47dc75: mov    0x18(%rdx),%rcx
+    0.00 :   47dc79: mov    0x118(%rsp),%rsi
+    0.00 :   47dc81: xor    %eax,%eax
+    0.00 :   47dc83: cmp    %rsi,%rcx
+    0.00 :   47dc86: cmove  %rcx,%rax
+    0.00 :   47dc8a: test   %rsi,%rsi
+    0.00 :   47dc8d: cmove  %rcx,%rax
+    0.00 :   47dc91: test   %rcx,%rcx
+    0.00 :   47dc94: cmove  %rsi,%rax
+    0.00 :   47dc98: cmpb   $0x0,0x20(%rdx)
+    0.00 :   47dc9c: mov    $0x1,%esi
+    0.00 :   47dca1: mov    $0x1,%ecx
+    0.00 :   47dca6: jne    47dcaf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x10af>
+    0.00 :   47dca8: mov    0x120(%rsp),%ecx
+    0.00 :   47dcaf: cmpb   $0x0,0x21(%rdx)
+    0.00 :   47dcb3: movzbl 0x121(%rsp),%edx
+    0.00 :   47dcbb: cmovne %esi,%edx
+    0.00 :   47dcbe: movq   $0x2,0x2a8(%rsp)
+    0.00 :   47dcca: movq   $0x0,0x2b8(%rsp)
+    0.00 :   47dcd6: mov    %rax,0x2c0(%rsp)
+    0.00 :   47dcde: mov    %cl,0x2c8(%rsp)
+    0.00 :   47dce5: mov    %dl,0x2c9(%rsp)
+    0.00 :   47dcec: jmp    47e0d7 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x14d7>
+    0.00 :   47dcf1: mov    0x40(%rsp),%rax
+    0.00 :   47dcf6: movq   $0x0,0x8(%rax)
+    0.00 :   47dcfe: movq   $0xffffffffffffffff,(%rax)
+    0.00 :   47dd05: jmp    47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47dd0a: cmp    $0x6,%r13
+    0.00 :   47dd0e: jb     47dd19 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1119>
+    0.00 :   47dd10: mov    %r14,%rdi
+    0.00 :   47dd13: call   *0x51cec7(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47dd19: mov    0x20(%rsp),%rbx
+    0.00 :   47dd1e: test   %rbx,%rbx
+    0.00 :   47dd21: movabs $0x800000000000000a,%r14
+    0.00 :   47dd2b: mov    0xd8(%rsp),%r15
+    0.00 :   47dd33: je     47dd52 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1152>
+    0.00 :   47dd35: mov    (%r15),%rax
+    0.00 :   47dd38: test   %rax,%rax
+    0.00 :   47dd3b: je     47dd42 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1142>
+    0.00 :   47dd3d: mov    %rbx,%rdi
+    0.00 :   47dd40: call   *%rax
+    0.00 :   47dd42: cmpq   $0x0,0x8(%r15)
+    0.00 :   47dd47: je     47dd52 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1152>
+    0.00 :   47dd49: mov    %rbx,%rdi
+    0.00 :   47dd4c: call   *0x51ce8e(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47dd52: lea    -0x3e537e(%rip),%rdx        # 989db <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x80e>
+    0.00 :   47dd59: mov    %rdx,%rcx
+    0.00 :   47dd5c: shr    $0x8,%rcx
+    0.00 :   47dd60: inc    %r14
+    0.00 :   47dd63: mov    $0x19,%eax
+    0.00 :   47dd68: mov    %rax,0xe0(%rsp)
+    0.00 :   47dd70: mov    %rdx,%rax
+    0.00 :   47dd73: jmp    47cedf <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x2df>
+    0.00 :   47dd78: mov    0x160(%rax),%rsi
+    0.00 :   47dd7f: mov    0x168(%rax),%rax
+    0.00 :   47dd86: lea    0x2a0(%rsp),%rdi
+    0.00 :   47dd8e: mov    0x288(%rsp),%rdx
+    0.00 :   47dd96: call   *0x20(%rax)
+    0.00 :   47dd99: mov    0x2a0(%rsp),%rax
+    0.00 :   47dda1: mov    0x2a8(%rsp),%rdx
+    0.00 :   47dda9: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47ddad: je     47df66 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1366>
+    0.00 :   47ddb3: movaps 0x2f0(%rsp),%xmm0
+    0.00 :   47ddbb: movaps %xmm0,0xc0(%rsp)
+    0.00 :   47ddc3: movaps 0x2b0(%rsp),%xmm0
+    0.00 :   47ddcb: movaps 0x2c0(%rsp),%xmm1
+    0.00 :   47ddd3: movaps 0x2d0(%rsp),%xmm2
+    0.00 :   47dddb: movaps 0x2e0(%rsp),%xmm3
+    0.00 :   47dde3: movaps %xmm3,0xb0(%rsp)
+    0.00 :   47ddeb: movaps %xmm2,0xa0(%rsp)
+    0.00 :   47ddf3: movaps %xmm1,0x90(%rsp)
+    0.00 :   47ddfb: movaps %xmm0,0x80(%rsp)
+    0.00 :   47de03: mov    %rdx,0x78(%rsp)
+    0.00 :   47de08: mov    0x98(%rsp),%rcx
+    0.00 :   47de10: mov    %rcx,0x190(%rsp)
+    0.00 :   47de18: mov    0x78(%rsp),%rcx
+    0.00 :   47de1d: mov    0x80(%rsp),%rdx
+    0.00 :   47de25: movups 0x88(%rsp),%xmm0
+    0.00 :   47de2d: movaps %xmm0,0x180(%rsp)
+    0.00 :   47de35: mov    %rcx,0x170(%rsp)
+    0.00 :   47de3d: mov    %rdx,0x178(%rsp)
+    0.00 :   47de45: movaps 0xc0(%rsp),%xmm0
+    0.00 :   47de4d: mov    0x40(%rsp),%rsi
+    0.00 :   47de52: movaps %xmm0,0x50(%rsi)
+    0.00 :   47de56: movaps 0xb0(%rsp),%xmm0
+    0.00 :   47de5e: movaps %xmm0,0x40(%rsi)
+    0.00 :   47de62: movaps 0xa0(%rsp),%xmm0
+    0.00 :   47de6a: movaps %xmm0,0x30(%rsi)
+    0.00 :   47de6e: mov    0x190(%rsp),%rcx
+    0.00 :   47de76: mov    %rcx,0x28(%rsi)
+    0.00 :   47de7a: mov    0x170(%rsp),%rcx
+    0.00 :   47de82: mov    0x178(%rsp),%rdx
+    0.00 :   47de8a: movaps 0x180(%rsp),%xmm0
+    0.00 :   47de92: movups %xmm0,0x18(%rsi)
+    0.00 :   47de96: mov    %rcx,0x8(%rsi)
+    0.00 :   47de9a: mov    %rdx,0x10(%rsi)
+    0.00 :   47de9e: mov    %rax,(%rsi)
+    0.00 :   47dea1: test   %r13,%r13
+    0.00 :   47dea4: je     47debe <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12be>
+    0.00 :   47dea6: cmp    $0x6,%r13
+    0.00 :   47deaa: jb     47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47deb0: mov    %r14,%rdi
+    0.00 :   47deb3: call   *0x51cd27(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47deb9: jmp    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47debe: test   %r14,%r14
+    0.00 :   47dec1: je     47df59 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1359>
+    0.00 :   47dec7: lock decq 0x40(%rbx)
+    0.00 :   47decc: jne    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47ded2: movups (%rbx),%xmm0
+    0.00 :   47ded5: movups 0x10(%rbx),%xmm1
+    0.00 :   47ded9: movups 0x20(%rbx),%xmm2
+    0.00 :   47dedd: movups 0x30(%rbx),%xmm3
+    0.00 :   47dee1: movaps %xmm3,0x2d0(%rsp)
+    0.00 :   47dee9: movaps %xmm2,0x2c0(%rsp)
+    0.00 :   47def1: movaps %xmm1,0x2b0(%rsp)
+    0.00 :   47def9: movaps %xmm0,0x2a0(%rsp)
+    0.00 :   47df01: mov    %rbx,%rdi
+    0.00 :   47df04: call   *0x51ccd6(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47df0a: lea    0x2a0(%rsp),%rdi
+    0.00 :   47df12: call   3fd170 <core::ptr::drop_glue::<purrdf_sparql_eval::workspace::SharedWorkspacePayload<purrdf_sparql_eval::solution::TrackedRow<purrdf_core::ir::term::TermId>>>>
+    0.00 :   47df17: jmp    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47df1c: mov    0x218(%rsp),%rax
+    1.31 :   47df24: mov    0x40(%rsp),%rcx
+    0.10 :   47df29: mov    %rax,0x30(%rcx)
+    0.01 :   47df2d: movups 0x1f8(%rsp),%xmm0
+   18.26 :   47df35: movups 0x208(%rsp),%xmm1
+    0.90 :   47df3d: movaps %xmm1,0x20(%rcx)
+    0.55 :   47df41: movaps %xmm0,0x10(%rcx)
+    1.62 :   47df45: movq   $0x1,0x8(%rcx)
+    0.17 :   47df4d: movq   $0xffffffffffffffff,(%rcx)
+    1.72 :   47df54: jmp    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47df59: mov    %rbx,%rdi
+    0.00 :   47df5c: call   409fc0 <core::ptr::drop_glue::<purrdf_lex::allocation::shared::Shared<purrdf_sparql_eval::solution::RowPayload<purrdf_core::ir::term::TermId>>>>
+    0.00 :   47df61: jmp    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47df66: test   %rdx,%rdx
+    0.00 :   47df69: je     47e212 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1612>
+    0.00 :   47df6f: mov    0x160(%rsp),%rax
+    0.00 :   47df77: lea    0x150(%rax),%rsi
+    0.00 :   47df7e: lea    0x70(%rsp),%rdi
+    0.00 :   47df83: mov    0xf0(%rsp),%rcx
+    0.00 :   47df8b: call   662f50 <<purrdf_sparql_eval::evidence_exec::EvidenceInput<purrdf_core::ir::term::TermId>>::retain_declaration>
+    0.00 :   47df90: mov    0x70(%rsp),%rax
+    0.00 :   47df95: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47df99: jne    47de08 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1208>
+    0.00 :   47df9f: jmp    47e230 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1630>
+    0.00 :   47dfa4: lea    -0x3e44c6(%rip),%rdi        # 99ae5 <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x1918>
+    0.00 :   47dfab: lea    0x510fae(%rip),%rdx        # 98ef60 <anon.44049c1f6db1c90388586f067021d866.455.llvm.15447233937092479704+0xa80>
+    0.00 :   47dfb2: mov    $0x16,%esi
+    0.00 :   47dfb7: mov    0x38(%rsp),%r15
+    0.00 :   47dfbc: call   *0x51cec6(%rip)        # 99ae88 <_DYNAMIC+0x4b0>
+    0.00 :   47dfc2: jmp    47e47d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x187d>
+    0.00 :   47dfc7: lea    0x100(%rsp),%rsi
+    0.00 :   47dfcf: mov    $0x1,%bpl
+    0.00 :   47dfd2: lea    0x2a0(%rsp),%rdi
+    0.00 :   47dfda: lea    0x100(%rsp),%rcx
+    0.00 :   47dfe2: xor    %r8d,%r8d
+    0.00 :   47dfe5: call   *0x51df15(%rip)        # 99bf00 <_DYNAMIC+0x1528>
+    0.00 :   47dfeb: mov    0x2a0(%rsp),%rax
+    0.00 :   47dff3: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47dff7: je     47e0d7 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x14d7>
+    0.00 :   47dffd: mov    0x2c8(%rsp),%rcx
+    0.00 :   47e005: mov    %rcx,0x90(%rsp)
+    0.00 :   47e00d: movups 0x2a8(%rsp),%xmm0
+    0.00 :   47e015: movups 0x2b8(%rsp),%xmm1
+    0.00 :   47e01d: movaps %xmm1,0x80(%rsp)
+    0.00 :   47e025: movaps %xmm0,0x70(%rsp)
+    0.00 :   47e02a: movaps 0x2f0(%rsp),%xmm0
+    0.00 :   47e032: mov    0x40(%rsp),%rdx
+    0.00 :   47e037: movaps %xmm0,0x50(%rdx)
+    0.00 :   47e03b: movaps 0x2e0(%rsp),%xmm0
+    0.00 :   47e043: movaps %xmm0,0x40(%rdx)
+    0.00 :   47e047: movaps 0x2d0(%rsp),%xmm0
+    0.00 :   47e04f: movaps %xmm0,0x30(%rdx)
+    0.00 :   47e053: mov    0x90(%rsp),%rcx
+    0.00 :   47e05b: mov    %rcx,0x28(%rdx)
+    0.00 :   47e05f: movaps 0x70(%rsp),%xmm0
+    0.00 :   47e064: movaps 0x80(%rsp),%xmm1
+    0.00 :   47e06c: movups %xmm1,0x18(%rdx)
+    0.00 :   47e070: movups %xmm0,0x8(%rdx)
+    0.00 :   47e074: mov    %rax,(%rdx)
+    0.00 :   47e077: mov    0x100(%rsp),%rax
+    0.00 :   47e07f: cmp    $0x2,%rax
+    0.00 :   47e083: je     47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47e089: test   %rax,%rax
+    0.00 :   47e08c: je     47e3ee <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x17ee>
+    0.00 :   47e092: mov    0x108(%rsp),%r15
+    0.00 :   47e09a: lock decq 0x158(%r15)
+    0.00 :   47e0a2: jne    47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47e0a8: lea    0x2a0(%rsp),%r12
+    0.00 :   47e0b0: mov    $0x158,%edx
+    0.00 :   47e0b5: mov    %r12,%rdi
+    0.00 :   47e0b8: mov    %r15,%rsi
+    0.00 :   47e0bb: call   *0x51cb2f(%rip)        # 99abf0 <memcpy@GLIBC_2.14>
+    0.00 :   47e0c1: mov    %r15,%rdi
+    0.00 :   47e0c4: call   *0x51cb16(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e0ca: mov    %r12,%rdi
+    0.00 :   47e0cd: call   3fd500 <core::ptr::drop_glue::<purrdf_sparql_eval::workspace::SharedWorkspacePayload<purrdf_sparql_eval::evidence_exec::QueryEvidenceState>>>
+    0.00 :   47e0d2: jmp    47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47e0d7: mov    0x2c8(%rsp),%rax
+    0.00 :   47e0df: mov    0x2a8(%rsp),%rcx
+    0.00 :   47e0e7: mov    0x2b0(%rsp),%rdx
+    0.00 :   47e0ef: mov    0x2b8(%rsp),%rsi
+    0.00 :   47e0f7: mov    0x2c0(%rsp),%rdi
+    0.00 :   47e0ff: mov    %rcx,0x430(%rsp)
+    0.00 :   47e107: mov    %rdx,0x438(%rsp)
+    0.00 :   47e10f: mov    %rsi,0x440(%rsp)
+    0.00 :   47e117: mov    %rdi,0x448(%rsp)
+    0.00 :   47e11f: mov    %rax,0x450(%rsp)
+    0.00 :   47e127: mov    0x218(%rsp),%rax
+    0.00 :   47e12f: mov    %rax,0x90(%rsp)
+    0.00 :   47e137: movups 0x1f8(%rsp),%xmm0
+    0.00 :   47e13f: movups 0x208(%rsp),%xmm1
+    0.00 :   47e147: movaps %xmm1,0x80(%rsp)
+    0.00 :   47e14f: movaps %xmm0,0x70(%rsp)
+    0.00 :   47e154: mov    0xf0(%rsp),%rax
+    0.00 :   47e15c: mov    (%rax),%rcx
+    0.00 :   47e15f: xor    %ebp,%ebp
+    0.00 :   47e161: lea    0x2a0(%rsp),%rdi
+    0.00 :   47e169: lea    0x70(%rsp),%rsi
+    0.00 :   47e16e: lea    0x430(%rsp),%rdx
+    0.00 :   47e176: call   6d66c0 <<purrdf_sparql_eval::solution::RetainedRow>::with_evidence>
+    0.00 :   47e17b: mov    0x2a0(%rsp),%rax
+    0.00 :   47e183: movups 0x2a8(%rsp),%xmm0
+    0.00 :   47e18b: movaps %xmm0,0x220(%rsp)
+    0.00 :   47e193: movups 0x2b8(%rsp),%xmm0
+    0.00 :   47e19b: movaps %xmm0,0x230(%rsp)
+    0.00 :   47e1a3: mov    0x2c8(%rsp),%rcx
+    0.00 :   47e1ab: mov    %rcx,0x240(%rsp)
+    0.00 :   47e1b3: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47e1b7: je     47e344 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1744>
+    0.00 :   47e1bd: movaps 0x2d0(%rsp),%xmm0
+    0.00 :   47e1c5: movaps 0x2e0(%rsp),%xmm1
+    0.00 :   47e1cd: movaps 0x2f0(%rsp),%xmm2
+    0.00 :   47e1d5: mov    0x40(%rsp),%rdx
+    0.00 :   47e1da: movaps %xmm2,0x50(%rdx)
+    0.00 :   47e1de: movaps %xmm1,0x40(%rdx)
+    0.00 :   47e1e2: movaps %xmm0,0x30(%rdx)
+    0.00 :   47e1e6: mov    0x240(%rsp),%rcx
+    0.00 :   47e1ee: mov    %rcx,0x28(%rdx)
+    0.00 :   47e1f2: movaps 0x220(%rsp),%xmm0
+    0.00 :   47e1fa: movaps 0x230(%rsp),%xmm1
+    0.00 :   47e202: movups %xmm1,0x18(%rdx)
+    0.00 :   47e206: movups %xmm0,0x8(%rdx)
+    0.00 :   47e20a: mov    %rax,(%rdx)
+    0.00 :   47e20d: jmp    47e37c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x177c>
+    0.00 :   47e212: movq   $0x2,0x78(%rsp)
+    0.00 :   47e21b: xorps  %xmm0,%xmm0
+    0.00 :   47e21e: movups %xmm0,0x88(%rsp)
+    0.00 :   47e226: movw   $0x0,0x98(%rsp)
+    0.00 :   47e230: mov    0x98(%rsp),%rax
+    0.00 :   47e238: mov    %rax,0x190(%rsp)
+    0.00 :   47e240: mov    0x78(%rsp),%rax
+    0.00 :   47e245: mov    0x80(%rsp),%rcx
+    0.00 :   47e24d: movups 0x88(%rsp),%xmm0
+    0.00 :   47e255: movaps %xmm0,0x180(%rsp)
+    0.00 :   47e25d: mov    %rax,0x170(%rsp)
+    0.00 :   47e265: mov    %rcx,0x178(%rsp)
+    0.00 :   47e26d: mov    0x160(%rsp),%rax
+    0.00 :   47e275: mov    0x150(%rax),%rsi
+    0.00 :   47e27c: mov    0x158(%rax),%rdx
+    0.00 :   47e283: lea    0x220(%rsp),%rdi
+    0.00 :   47e28b: lea    0x170(%rsp),%rcx
+    0.00 :   47e293: mov    0xf0(%rsp),%r8
+    0.00 :   47e29b: call   661960 <<purrdf_sparql_eval::evidence_exec::EvidenceInput<purrdf_core::ir::term::TermId>>::found_witness>
+    0.00 :   47e2a0: mov    0x220(%rsp),%rax
+    0.00 :   47e2a8: movups 0x228(%rsp),%xmm0
+    0.00 :   47e2b0: movaps %xmm0,0x1c0(%rsp)
+    0.00 :   47e2b8: movups 0x238(%rsp),%xmm0
+    0.00 :   47e2c0: movaps %xmm0,0x1d0(%rsp)
+    0.00 :   47e2c8: mov    0x248(%rsp),%rcx
+    0.00 :   47e2d0: mov    %rcx,0x1e0(%rsp)
+    0.00 :   47e2d8: cmp    $0xffffffffffffffff,%rax
+    0.00 :   47e2dc: je     47e38e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x178e>
+    0.00 :   47e2e2: movaps 0x250(%rsp),%xmm0
+    0.00 :   47e2ea: movaps 0x260(%rsp),%xmm1
+    0.00 :   47e2f2: movaps 0x270(%rsp),%xmm2
+    0.00 :   47e2fa: mov    0x40(%rsp),%rdx
+    0.00 :   47e2ff: movaps %xmm2,0x50(%rdx)
+    0.00 :   47e303: movaps %xmm1,0x40(%rdx)
+    0.00 :   47e307: movaps %xmm0,0x30(%rdx)
+    0.00 :   47e30b: mov    0x1e0(%rsp),%rcx
+    0.00 :   47e313: mov    %rcx,0x28(%rdx)
+    0.00 :   47e317: movaps 0x1c0(%rsp),%xmm0
+    0.00 :   47e31f: movaps 0x1d0(%rsp),%xmm1
+    0.00 :   47e327: movups %xmm1,0x18(%rdx)
+    0.00 :   47e32b: movups %xmm0,0x8(%rdx)
+    0.00 :   47e32f: mov    %rax,(%rdx)
+    0.00 :   47e332: lea    0x170(%rsp),%rdi
+    0.00 :   47e33a: call   416e70 <core::ptr::drop_glue::<purrdf_sparql_eval::evidence_exec::RowEvidence>>
+    0.00 :   47e33f: jmp    47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47e344: mov    0x240(%rsp),%rax
+    0.00 :   47e34c: mov    0x40(%rsp),%rcx
+    0.00 :   47e351: mov    %rax,0x30(%rcx)
+    0.00 :   47e355: movaps 0x220(%rsp),%xmm0
+    0.00 :   47e35d: movaps 0x230(%rsp),%xmm1
+    0.00 :   47e365: movaps %xmm1,0x20(%rcx)
+    0.00 :   47e369: movaps %xmm0,0x10(%rcx)
+    0.00 :   47e36d: movq   $0x1,0x8(%rcx)
+    0.00 :   47e375: movq   $0xffffffffffffffff,(%rcx)
+    0.00 :   47e37c: lea    0x100(%rsp),%rdi
+    0.00 :   47e384: call   416e70 <core::ptr::drop_glue::<purrdf_sparql_eval::evidence_exec::RowEvidence>>
+    0.00 :   47e389: jmp    47cf4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x34d>
+    0.00 :   47e38e: movaps 0x1c0(%rsp),%xmm0
+    0.00 :   47e396: movaps 0x1d0(%rsp),%xmm1
+    0.00 :   47e39e: movaps %xmm0,0x100(%rsp)
+    0.00 :   47e3a6: movaps %xmm1,0x110(%rsp)
+    0.00 :   47e3ae: mov    0x1e0(%rsp),%rax
+    0.00 :   47e3b6: mov    %rax,0x120(%rsp)
+    0.00 :   47e3be: lea    0x170(%rsp),%rdi
+    0.00 :   47e3c6: call   416e70 <core::ptr::drop_glue::<purrdf_sparql_eval::evidence_exec::RowEvidence>>
+    0.00 :   47e3cb: mov    0x168(%rsp),%rax
+    0.00 :   47e3d3: movzbl 0x8(%rax),%eax
+    0.00 :   47e3d7: mov    0x51db1a(%rip),%rdx        # 99bef8 <_DYNAMIC+0x1520>
+    0.00 :   47e3de: mov    %rdx,%rcx
+    0.00 :   47e3e1: test   $0x1,%al
+    0.00 :   47e3e3: jne    47dc41 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1041>
+    0.00 :   47e3e9: jmp    47dc4d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x104d>
+    0.00 :   47e3ee: mov    0x108(%rsp),%rax
+    0.00 :   47e3f6: lock decq (%rax)
+    0.00 :   47e3fa: jne    47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47e400: lea    0x108(%rsp),%rdi
+    0.00 :   47e408: call   *0x51db9a(%rip)        # 99bfa8 <_DYNAMIC+0x15d0>
+    0.00 :   47e40e: jmp    47dea1 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x12a1>
+    0.00 :   47e413: lea    0x512a06(%rip),%rdx        # 990e20 <anon.44049c1f6db1c90388586f067021d866.455.llvm.15447233937092479704+0x2940>
+    0.00 :   47e41a: mov    0xe8(%rsp),%rsi
+    0.00 :   47e422: call   *0x51cb10(%rip)        # 99af38 <_DYNAMIC+0x560>
+    0.00 :   47e428: jmp    47e47d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x187d>
+    0.00 :   47e42a: lea    -0x3e5a86(%rip),%rcx        # 989ab <anon.44049c1f6db1c90388586f067021d866.358.llvm.15447233937092479704+0x7de>
+    0.00 :   47e431: lea    0x510090(%rip),%r9        # 98e4c8 <anon.44049c1f6db1c90388586f067021d866.172.llvm.15447233937092479704+0x858>
+    0.00 :   47e438: lea    0x2a0(%rsp),%rsi
+    0.00 :   47e440: lea    0x298(%rsp),%rdx
+    0.00 :   47e448: mov    $0x61,%r8d
+    0.00 :   47e44e: xor    %edi,%edi
+    0.00 :   47e450: call   *0x51c8e2(%rip)        # 99ad38 <_DYNAMIC+0x360>
+    0.00 :   47e456: jmp    47e47d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x187d>
+    0.00 :   47e458: mov    %rcx,%rsi
+    0.00 :   47e45b: lea    0x510ae6(%rip),%rax        # 98ef48 <anon.44049c1f6db1c90388586f067021d866.455.llvm.15447233937092479704+0xa68>
+    0.00 :   47e462: mov    %rax,0x1a0(%rsp)
+    0.00 :   47e46a: mov    0x1a0(%rsp),%rdx
+    0.00 :   47e472: mov    0x38(%rsp),%r15
+    0.00 :   47e477: call   *0x51c7ab(%rip)        # 99ac28 <_DYNAMIC+0x250>
+    0.00 :   47e47d: ud2
+    0.00 :   47e47f: mov    %r9,%rsi
+    0.00 :   47e482: lea    0x510e4f(%rip),%rdx        # 98f2d8 <anon.44049c1f6db1c90388586f067021d866.455.llvm.15447233937092479704+0xdf8>
+    0.00 :   47e489: call   *0x51c799(%rip)        # 99ac28 <_DYNAMIC+0x250>
+    0.00 :   47e48f: mov    %rax,%rbx
+    0.00 :   47e492: lea    0x170(%rsp),%rdi
+    0.00 :   47e49a: call   416e70 <core::ptr::drop_glue::<purrdf_sparql_eval::evidence_exec::RowEvidence>>
+    0.00 :   47e49f: jmp    47e512 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1912>
+    0.00 :   47e4a1: mov    %rax,%rbx
+    0.00 :   47e4a4: mov    0x38(%rsp),%r15
+    0.00 :   47e4a9: jmp    47e5fa <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19fa>
+    0.00 :   47e4ae: mov    %rax,%rbx
+    0.00 :   47e4b1: cmpq   $0x0,0x8(%r15)
+    0.00 :   47e4b6: jne    47e540 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1940>
+    0.00 :   47e4bc: jmp    47e66e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a6e>
+    0.00 :   47e4c1: mov    %rax,%rbx
+    0.00 :   47e4c4: lea    0x100(%rsp),%rdi
+    0.00 :   47e4cc: call   416e70 <core::ptr::drop_glue::<purrdf_sparql_eval::evidence_exec::RowEvidence>>
+    0.00 :   47e4d1: test   %bpl,%bpl
+    0.00 :   47e4d4: jne    47e512 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1912>
+    0.00 :   47e4d6: jmp    47e66e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a6e>
+    0.00 :   47e4db: mov    %rax,%rbx
+    0.00 :   47e4de: cmpq   $0x0,0x8(%r12)
+    0.00 :   47e4e4: jne    47e4f5 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x18f5>
+    0.00 :   47e4e6: mov    0x8(%rsp),%r14
+    0.00 :   47e4eb: mov    0x38(%rsp),%r15
+    0.00 :   47e4f0: jmp    47e5fa <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19fa>
+    0.00 :   47e4f5: mov    0x10(%rsp),%rdi
+    0.00 :   47e4fa: call   *0x51c6e0(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e500: mov    0x8(%rsp),%r14
+    0.00 :   47e505: mov    0x38(%rsp),%r15
+    0.00 :   47e50a: jmp    47e5fa <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19fa>
+    0.00 :   47e50f: mov    %rax,%rbx
+    0.00 :   47e512: lea    0x1f8(%rsp),%rdi
+    0.00 :   47e51a: call   41e0d0 <core::ptr::drop_glue::<purrdf_sparql_eval::solution::RetainedRow>>
+    0.00 :   47e51f: jmp    47e66e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a6e>
+    0.00 :   47e524: call   *0x51c77e(%rip)        # 99aca8 <_DYNAMIC+0x2d0>
+    0.00 :   47e52a: mov    %rax,%rbx
+    0.00 :   47e52d: mov    0xd8(%rsp),%rax
+    0.00 :   47e535: cmpq   $0x0,0x8(%rax)
+    0.00 :   47e53a: je     47e66e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a6e>
+    0.00 :   47e540: mov    0x20(%rsp),%rdi
+    0.00 :   47e545: call   *0x51c695(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e54b: mov    %rbx,%rdi
+    0.00 :   47e54e: call   95a720 <_Unwind_Resume@plt>
+    0.00 :   47e553: mov    %rax,%rbx
+    0.00 :   47e556: mov    0x8(%rsp),%r14
+    0.00 :   47e55b: mov    0x38(%rsp),%r15
+    0.00 :   47e560: jmp    47e5fa <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19fa>
+    0.00 :   47e565: mov    %rax,%rbx
+    0.00 :   47e568: mov    0x18(%rsp),%rax
+    0.00 :   47e56d: cmpq   $0x0,0x8(%rax)
+    0.00 :   47e572: je     47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e578: mov    (%rsp),%rdi
+    0.00 :   47e57c: jmp    47e63d <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a3d>
+    0.00 :   47e581: mov    %rax,%rbx
+    0.00 :   47e584: mov    0x18(%rsp),%rax
+    0.00 :   47e589: cmpq   $0x0,0x8(%rax)
+    0.00 :   47e58e: jne    47e59a <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x199a>
+    0.00 :   47e590: mov    0x8(%rsp),%r14
+    0.00 :   47e595: jmp    47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e59a: mov    (%rsp),%rdi
+    0.00 :   47e59e: call   *0x51c63c(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e5a4: mov    0x8(%rsp),%r14
+    0.00 :   47e5a9: jmp    47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e5ae: mov    %rax,%rbx
+    0.00 :   47e5b1: mov    0x18(%rsp),%rax
+    0.00 :   47e5b6: cmpq   $0x0,0x8(%rax)
+    0.00 :   47e5bb: je     47e5c7 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19c7>
+    0.00 :   47e5bd: mov    (%rsp),%rdi
+    0.00 :   47e5c1: call   *0x51c619(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e5c7: mov    0x10(%rsp),%r15
+    0.00 :   47e5cc: mov    0x68(%rsp),%rax
+    0.00 :   47e5d1: mov    %rax,0x58(%rsp)
+    0.00 :   47e5d6: mov    0x8(%rsp),%r14
+    0.00 :   47e5db: mov    $0x1,%r12d
+    0.00 :   47e5e1: jmp    47e5ff <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19ff>
+    0.00 :   47e5e3: mov    %rax,%rbx
+    0.00 :   47e5e6: mov    0x8(%rsp),%r14
+    0.00 :   47e5eb: mov    0x38(%rsp),%r15
+    0.00 :   47e5f0: jmp    47e5fa <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x19fa>
+    0.00 :   47e5f2: mov    %rax,%rbx
+    0.00 :   47e5f5: jmp    47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e5f7: mov    %rax,%rbx
+    0.00 :   47e5fa: mov    0x60(%rsp),%r12
+    0.00 :   47e5ff: cmpq   $0x6,0x70(%rsp)
+    0.00 :   47e605: jb     47e612 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a12>
+    0.00 :   47e607: mov    0x78(%rsp),%rdi
+    0.00 :   47e60c: call   *0x51c5ce(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e612: test   %r12,%r12
+    0.00 :   47e615: je     47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e617: test   %r15,%r15
+    0.00 :   47e61a: je     47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e61c: mov    0x58(%rsp),%rax
+    0.00 :   47e621: mov    (%rax),%rax
+    0.00 :   47e624: test   %rax,%rax
+    0.00 :   47e627: je     47e62e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a2e>
+    0.00 :   47e629: mov    %r15,%rdi
+    0.00 :   47e62c: call   *%rax
+    0.00 :   47e62e: mov    0x58(%rsp),%rax
+    0.00 :   47e633: cmpq   $0x0,0x8(%rax)
+    0.00 :   47e638: je     47e643 <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a43>
+    0.00 :   47e63a: mov    %r15,%rdi
+    0.00 :   47e63d: call   *0x51c59d(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e643: cmpq   $0x6,0x130(%rsp)
+    0.00 :   47e64c: jb     47e65c <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a5c>
+    0.00 :   47e64e: mov    0x138(%rsp),%rdi
+    0.00 :   47e656: call   *0x51c584(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e65c: test   %r14,%r14
+    0.00 :   47e65f: je     47e66e <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a6e>
+    0.00 :   47e661: lea    0x420(%rsp),%rdi
+    0.00 :   47e669: call   41eb30 <core::ptr::drop_glue::<purrdf_sparql_eval::workspace::WorkspaceAllocation>>
+    0.00 :   47e66e: mov    %rbx,%rdi
+    0.00 :   47e671: call   95a720 <_Unwind_Resume@plt>
+    0.00 :   47e676: mov    0x58(%rsp),%rax
+    0.00 :   47e67b: cmpq   $0x0,0x8(%rax)
+    0.00 :   47e680: je     47e68b <purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>+0x1a8b>
+    0.00 :   47e682: mov    %r15,%rdi
+    0.00 :   47e685: call   *0x51c555(%rip)        # 99abe0 <free@GLIBC_2.2.5>
+    0.00 :   47e68b: call   *0x51c617(%rip)        # 99aca8 <_DYNAMIC+0x2d0>
+    0.00 :   47e691: call   *0x51c611(%rip)        # 99aca8 <_DYNAMIC+0x2d0>

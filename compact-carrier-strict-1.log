@@ -1,0 +1,83 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0425]: cannot find value `ctx` in this scope
+    --> crates/sparql-eval/src/bgp.rs:3669:83
+     |
+3669 |                 projected.push_row(visible.with_evidence(row.evidence().clone(), &ctx.growth)?)?;
+     |                                                                                   ^^^ not found in this scope
+
+error[E0425]: cannot find value `ctx` in this scope
+   --> crates/sparql-eval/src/modifier.rs:243:62
+    |
+243 |             rows.push_row(projected.with_evidence(evidence, &ctx.growth)?)?;
+    |                                                              ^^^ not found in this scope
+...
+278 |         eval_project_sequence!(&seq, layout()?, &workspace, ctx.evidence_input.is_some());
+    |         --------------------------------------------------------------------------------- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/sparql-eval/src/modifier.rs:260:5
+    |
+260 |     ctx: &mut EvalCtx<'_, D>,
+    |     ^^^
+    = note: this error originates in the macro `eval_project_sequence` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find value `ctx` in this scope
+   --> crates/sparql-eval/src/modifier.rs:243:62
+    |
+243 |             rows.push_row(projected.with_evidence(evidence, &ctx.growth)?)?;
+    |                                                              ^^^ not found in this scope
+...
+306 |                     eval_project_sequence!(&seq, out, &ctx.growth, ctx.evidence_input.is_some());
+    |                     ---------------------------------------------------------------------------- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/sparql-eval/src/modifier.rs:297:19
+    |
+297 |             |seq, ctx| {
+    |                   ^^^
+    = note: this error originates in the macro `eval_project_sequence` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find value `ctx` in this scope
+    --> crates/sparql-eval/src/modifier.rs:1289:80
+     |
+1289 |                     rows.push_row(bound.with_evidence(row.evidence().clone(), &ctx.growth)?)?;
+     |                                                                                ^^^ not found in this scope
+
+error[E0425]: cannot find value `ctx` in this scope
+    --> crates/sparql-eval/src/modifier.rs:1308:76
+     |
+1308 |                 rows.push_row(bound.with_evidence(row.evidence().clone(), &ctx.growth)?)?;
+     |                                                                            ^^^ not found in this scope
+
+error[E0061]: this method takes 3 arguments but 2 arguments were supplied
+    --> crates/sparql-eval/src/modifier.rs:2812:21
+     |
+2812 |                   key.combine_evidence(
+     |  _____________________^^^^^^^^^^^^^^^^-
+2813 | |                     row.evidence(),
+2814 | |                     purrdf_core::evidence::EvidenceCombination::Conjunction,
+2815 | |                 )?;
+     | |_________________- argument #3 of type `&workspace::WorkspaceCapability` is missing
+     |
+note: method defined here
+    --> crates/sparql-eval/src/solution.rs:633:19
+     |
+ 633 |     pub(crate) fn combine_evidence(
+     |                   ^^^^^^^^^^^^^^^^
+...
+ 637 |         workspace: &crate::WorkspaceCapability,
+     |         --------------------------------------
+help: provide the argument
+     |
+2812 |                 key.combine_evidence(
+2813 |                     row.evidence(),
+2814 |                     purrdf_core::evidence::EvidenceCombination::Conjunction,
+2815 ~                     /* &WorkspaceCapability */,
+2816 ~                 )?;
+     |
+
+Some errors have detailed explanations: E0061, E0425.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 6 previous errors

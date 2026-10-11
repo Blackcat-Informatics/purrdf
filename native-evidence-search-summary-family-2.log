@@ -1,0 +1,105 @@
+Running as unit: run-p320919-i8701987.scope; invocation ID: 0158c7f8101244478635dca00a9ebf87
++ cargo clippy --locked -p purrdf-core -p purrdf-datalog -p purrdf-sparql-eval --lib --tests -- -D warnings
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 28.00s
++ cargo test --locked -p purrdf-core --lib evidence
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 03s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 47 tests
+test distance::reassociated_tests::evidence_text_pinned ... ok
+test evidence::answer::tests::exact_witness_questions_stop_without_any_metadata_capacity_or_false_classification ... ok
+test evidence::accepted::tests::unaccepted_rows_remain_excluded_and_order_errors_stay_typed ... ok
+test evidence::answer::tests::empty_search_retains_reason_without_fabricating_a_row_or_witness ... ok
+test evidence::answer::tests::reason_count_admission_failure_aborts_instead_of_publishing_an_unknown_summary ... ok
+test evidence::answer::tests::undecided_filter_rows_never_settle_positive_support_and_keep_original_reasons ... ok
+test evidence::answer::tests::higher_tiers_count_shared_reasons_and_require_complete_partition_enumeration ... ok
+test evidence::accepted::tests::accepted_rows_keep_original_order_payload_evidence_and_visible_override ... ok
+test evidence::column::tests::nondefault_publication_is_refused_before_mutating_rows ... ok
+test evidence::column::tests::default_rows_and_reordered_bags_need_no_capacity ... ok
+test evidence::column::tests::original_ids_follow_duplicate_selection_and_release ... ok
+test evidence::conversion::tests::missing_ambiguous_and_invalid_causes_remain_hard_failures ... ok
+test evidence::conversion::tests::canonical_spelling_refusal_remains_physical ... ok
+test evidence::frame::tests::actual_is_conjunction_identity_but_alternative_actual_is_decisive ... ok
+test evidence::frame::tests::conjunction_distributes_over_alternatives_without_actual_promotion ... ok
+test evidence::frame::tests::sorted_content_and_absorption_determine_identity ... ok
+test evidence::information::tests::canonical_witness_coalescing_is_order_independent ... ok
+test evidence::information::tests::context_polarities_combine_without_unscoped_inheritance ... ok
+test evidence::information::tests::inherited_diamond_matches_reachability_without_propagating_uniform_fallback ... ok
+test evidence::information::tests::uniform_laws_work_with_zero_admission ... ok
+test evidence::ledger::row::tests::malformed_ledger_declarations_refuse_before_any_prefix_is_published ... ok
+test evidence::ledger::row::tests::lazy_row_annotations_keep_incompleteness_reasons_acceptance_and_original_terms ... ok
+test evidence::ledger::frame::tests::original_frame_alternatives_render_without_promoting_scenarios_to_actual ... ok
+test evidence::ledger::source::tests::shared_scenario_branches_are_described_once_without_actualizing_rows ... ok
+test evidence::conversion::tests::original_loss_codes_share_reasons_without_changing_the_json_ledger ... ok
+test evidence::ledger::terms::tests::borrowed_payloads_structural_lookup_and_blank_scope ... ok
+test evidence::ledger::terms::tests::composite_blanks_resolve_in_the_original_scope_while_guards_remain_borrowed ... ok
+test evidence::ledger::terms::tests::refused_scratch_is_destroyed_and_original_dictionary_survives ... ok
+test evidence::ledger::terms::tests::every_composite_dictionary_growth_refusal_destroys_its_partial_source ... ok
+test evidence::reason::tests::invalid_reification_or_cause_is_a_hard_declaration_error ... ok
+test evidence::reason::tests::streamed_identity_matches_independent_materialized_framing_and_preserves_blank_scope ... ok
+test evidence::record::tests::per_column_bounds_are_canonical_and_do_not_collapse ... ok
+test evidence::tests::missing_inputs_do_not_turn_partial_totals_into_exact_values ... ok
+test evidence::standpoint::tests::inheritance_and_direct_membership_keep_their_declared_directions ... ok
+test evidence::ledger::terms::tests::deep_original_triples_have_acyclic_ids_without_resident_ingress_limit ... ok
+test evidence::dictionary::tests::repeated_content_has_one_owner_and_default_has_no_table ... ok
+test evidence::standpoint::tests::malformed_and_cyclic_orders_fail_without_publishing_or_retaining_capacity ... ok
+test evidence::record::tests::factorized_bounds_match_expanded_proofs_including_absent_columns ... ok
+test governor::tests::evidence_echoes_its_limits_and_starts_complete ... ok
+test evidence::tests::truth_conjunction_and_alternative_information_have_distinct_tables ... ok
+test evidence::workspace::tests::default_join_identity_is_not_duplicate_information_identity ... ok
+test evidence::tests::support_cannot_prematurely_settle_contradiction_or_classification ... ok
+test evidence::workspace::tests::failed_native_factory_aborts_without_publishing_a_semantic_gap ... ok
+test evidence::standpoint::tests::deep_inheritance_walks_iteratively_and_destroys_all_scratch ... ok
+test evidence::reason::tests::repeated_missing_constraint_has_one_content_identity_without_retained_scratch ... ok
+test evidence::ledger::tests::lazy_reason_projection_keeps_original_owners_and_separates_cause_from_concern ... ok
+test evidence::ledger::source::tests::actual_source_renders_shared_dictionaries_once_and_preserves_acceptance_order ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 1242 filtered out; finished in 0.01s
+
++ cargo test --locked -p purrdf-datalog --lib evidence
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 42.14s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 5 tests
+test evidence::tests::contradictory_derivations_change_existing_fact_without_losing_witnesses ... ok
+test evidence::tests::ordinary_facts_need_no_evidence_capacity_and_foreign_rows_are_refused ... ok
+test seminaive::tests::default_evidenced_execution_needs_no_metadata_admission ... ok
+test seminaive::tests::factorized_evidence_retains_unselected_aggregate_witnesses ... ok
+test seminaive::tests::evidence_changes_reach_dependents_of_preexisting_facts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 338 filtered out; finished in 0.00s
+
++ cargo test --locked -p purrdf-sparql-eval --test evidence_ingress
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 14s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/428ba0641e6fc943/out/evidence_ingress-428ba0641e6fc943)
+
+running 16 tests
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

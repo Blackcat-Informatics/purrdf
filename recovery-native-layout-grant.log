@@ -1,0 +1,6 @@
+
+running 1 test
+test workspace::owned_row_regressions::consuming_iterator_drop_keeps_extracted_spilled_row_admitted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1509 filtered out; finished in 0.00s
+

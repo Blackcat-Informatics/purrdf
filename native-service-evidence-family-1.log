@@ -1,0 +1,27 @@
+Running as unit: run-p486382-i8874658.scope; invocation ID: 9095fec9c1b842b7b1fc54d24c79de28
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0609]: no field `row` on type `&purrdf_sparql_eval::RetainedRow`
+   --> crates/sparql-eval/tests/evidence_ingress.rs:561:26
+    |
+561 |                         .row
+    |                          ^^^ unknown field
+
+error[E0609]: no field `row` on type `&purrdf_sparql_eval::RetainedRow`
+   --> crates/sparql-eval/tests/evidence_ingress.rs:570:26
+    |
+570 |                         .row
+    |                          ^^^ unknown field
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,125 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 28s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test solution::tests::unit_sequence_has_one_empty_solution ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1509 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1510 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.05s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test evidence_exec::tests::retained_row_clone_keeps_the_original_dictionary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1509 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 21s
+     Running tests/evidence_ingress.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/933c5385acd98653/out/evidence_ingress-933c5385acd98653)
+
+running 20 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.85s
+
+     Running tests/join_output_alloc.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/b08adabbf86bce09/out/join_output_alloc-b08adabbf86bce09)
+
+running 1 test
+test explaining_sparse_materializing_joins_allocates_for_real_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/prepared_execution.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/solution_row_alloc.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/960bdf067bb36d55/out/solution_row_alloc-960bdf067bb36d55)
+
+running 3 tests
+test clone_has_inline_zero_and_spilled_one_allocation ... ok
+test clone_then_push_allocation_count_is_explicit ... ok
+test copy_from_slice_has_exact_allocation_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 34.44s
+     Running tests/real_producers.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-retrieval/b7133c5e20a920c8/out/real_producers-b7133c5e20a920c8)
+
+running 21 tests
+test scoped_native_owner_refusal_precedes_original_producer_open ... ok
+test scoped_native_admission_refusal_invalidates_before_any_ranked_row ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test scoped_fused_acceptance_retains_original_two_stratum_scores_and_order ... ok
+test native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.47s

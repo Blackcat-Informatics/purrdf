@@ -1,0 +1,197 @@
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-capi)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/purrdf)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/shapes)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/geo)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/json)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/validate)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/markdown)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/shex)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/bench)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/conformance-kit)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/slice)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/mime)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/text_exclusion_lookup.rs:938:33
+    |
+938 |         control.evidence_bytes, attestation_only,
+    |                                 ^^^^^^^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<u8>>`, found `Vec<u8>`
+    |
+    = note: expected struct `SharedWorkspace<AdmittedVec<u8>>`
+               found struct `Vec<u8>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (test "text_exclusion_lookup") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/boundary.rs:1034:9
+     |
+1034 | /         BTreeMap::from([
+1035 | |             (stratum("s1"), PfAttestation::UNDECLARED),
+1036 | |             (stratum("s2"), PfAttestation::UNDECLARED),
+1037 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, PfAttestation>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, PfAttestation>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, PfAttestation>`
+
+error[E0599]: no method named `next` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/boundary.rs:1516:33
+     |
+1516 |     let first = block_on(fusion.next())
+     |                                 ^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `next` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2672:5
+     |
+2672 |     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `FusionStream<'_, ScriptedStream>` value, panicking if the value is a `Result::Err`
+     |
+1516 |     let first = block_on(fusion.expect("REASON").next())
+     |                                +++++++++++++++++
+
+error[E0599]: no method named `next` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/boundary.rs:1543:27
+     |
+1543 |     while block_on(fusion.next()).expect("fusion pulls").is_some() {}
+     |                           ^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `next` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2672:5
+     |
+2672 |     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `FusionStream<'_, ScriptedStream>` value, panicking if the value is a `Result::Err`
+     |
+1543 |     while block_on(fusion.expect("REASON").next()).expect("fusion pulls").is_some() {}
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `trailer` found for enum `Result<T, E>` in the current scope
+    --> crates/retrieval/tests/boundary.rs:1544:35
+     |
+1544 |     let trailer = block_on(fusion.trailer()).expect("the trailer is produced");
+     |                                   ^^^^^^^ method not found in `Result<FusionStream<'_, ScriptedStream>, purrdf_retrieval::FusionError>`
+     |
+note: the method `trailer` exists on the type `FusionStream<'_, ScriptedStream>`
+    --> crates/retrieval/src/fusion_stream.rs:2822:5
+     |
+2822 |     pub async fn trailer(&mut self) -> Result<FusionTrailer, FusionError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `FusionStream<'_, ScriptedStream>` value, panicking if the value is a `Result::Err`
+     |
+1544 |     let trailer = block_on(fusion.expect("REASON").trailer()).expect("the trailer is produced");
+     |                                  +++++++++++++++++
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (test "boundary") due to 4 previous errors
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1534:9
+     |
+1534 |         whole.rows[..2].to_vec(),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<FusedRow>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<FusedRow>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1641:9
+     |
+1641 | /         BTreeMap::from([
+1642 | |             (stratum("text"), stopped_at(2)),
+1643 | |             (stratum("geo"), failed.clone()),
+1644 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, ProducerStatus>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, ProducerStatus>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1664:9
+     |
+1664 | /         BTreeMap::from([
+1665 | |             (stratum("text"), stopped_at(1)),
+1666 | |             (stratum("geo"), failed.clone()),
+1667 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, ProducerStatus>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, ProducerStatus>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1679:9
+     |
+1679 | /         BTreeMap::from([
+1680 | |             (
+1681 | |                 stratum("text"),
+1682 | |                 ProducerStatus::Exhausted { rows_emitted: 3 }
+1683 | |             ),
+1684 | |             (stratum("geo"), failed),
+1685 | |         ])
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, ProducerStatus>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, ProducerStatus>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:1849:9
+     |
+1849 |         Vec::new(),
+     |         ^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<_>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<_>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:4856:9
+     |
+4856 |         Vec::new(),
+     |         ^^^^^^^^^^ expected `SharedWorkspace<AdmittedVec<FusedRow>>`, found `Vec<_>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedVec<FusedRow>>`
+                found struct `Vec<_>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:5169:9
+     |
+5169 | /         BTreeMap::from([
+5170 | |             (stratum("text"), attests("a")),
+5171 | |             (
+5172 | |                 stratum("vector"),
+...    |
+5175 | |             (stratum("geo"), PfAttestation::UNDECLARED),
+5176 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, PfAttestation>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, PfAttestation>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, PfAttestation>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:7139:9
+     |
+7139 | /         BTreeMap::from([
+7140 | |             (stratum("docs"), within(&[DOMAIN_DOCS])),
+7141 | |             (stratum("people"), within(&[DOMAIN_PEOPLE])),
+7142 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, CandidateDomains>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, CandidateDomains>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, CandidateDomains>`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/fusion.rs:7150:9
+     |
+7150 | /         BTreeMap::from([
+7151 | |             (stratum("docs"), CandidateDomains::Unrestricted),
+7152 | |             (stratum("people"), CandidateDomains::Unrestricted),
+7153 | |         ]),
+     | |__________^ expected `SharedWorkspace<_>`, found `BTreeMap<Iri, CandidateDomains>`
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, CandidateDomains>>`
+                found struct `BTreeMap<purrdf_retrieval::Iri, CandidateDomains>`
+
+error: could not compile `purrdf-retrieval` (test "fusion") due to 9 previous errors

@@ -1,0 +1,91 @@
+Running as unit: purrdf-ledger-composite-conversion-strict-1.service
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+error: function call inside of `ok_or`
+  --> crates/rdf-core/src/evidence/conversion.rs:85:14
+   |
+85 |             .ok_or(LossCauseError::MissingCode(loss.code.as_ref()))
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `ok_or_else(|| LossCauseError::MissingCode(loss.code.as_ref()))`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+   = note: `-D clippy::or-fun-call` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/rdf-core/src/evidence/ledger/terms.rs:169:17
+    |
+166 |       pub fn lookup(&self, value: &TermValue) -> Result<Option<LedgerTermId>, StorageError> {
+    |  ___________________________________________________________________________________________-
+167 | |         let terms = &self.terms;
+168 | |         let order = &self.order;
+169 | |         let mut account = lock_read_state(&self.account);
+    | |                 ^^^^^^^
+...   |
+188 | |         result
+189 | |     }
+    | |_____- temporary `account` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+173 ~         } = &mut *account;
+174 +         drop(account);
+    |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/rdf-core/src/evidence/ledger/terms.rs:203:17
+    |
+202 |       pub(super) fn resize_workspace(&self, old: usize, new: usize) -> Result<(), StorageError> {
+    |  _______________________________________________________________________________________________-
+203 | |         let mut account = lock_read_state(&self.account);
+    | |                 ^^^^^^^
+204 | |         let total = account
+205 | |             .admitted
+...   |
+211 | |         Ok(())
+212 | |     }
+    | |_____- temporary `account` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+210 ~         account.admitted = total;
+211 +         drop(account);
+    |
+
+error: the following explicit lifetimes could be elided: 'a
+   --> crates/rdf-core/src/evidence/ledger/terms.rs:258:23
+    |
+258 | fn register_composite<'a, S: Admission + ?Sized>(
+    |                       ^^
+...
+261 |     terms: &mut Vec<LedgerTerm<'a>>,
+    |                                ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+    = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+    |
+258 ~ fn register_composite<S: Admission + ?Sized>(
+259 |     lexical: &str,
+260 |     datatype: &str,
+261 ~     terms: &mut Vec<LedgerTerm<'_>>,
+    |
+
+error: could not compile `purrdf-core` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 4 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 1min 22.640s
+             CPU time consumed: 197ms
+                   Memory peak: 28.3M (swap: 0B)

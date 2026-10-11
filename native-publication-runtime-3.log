@@ -1,0 +1,89 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error: overflow evaluating the requirement `Vec<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>: Unpin`
+  |
+  = note: which requires `alloc::raw_vec::RawVec<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>: Unpin`
+  = note: which requires `PhantomData<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>: Unpin`
+  = note: which requires `purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>: Unpin`
+  = note: which requires `SharedWorkspace<NativeSparqlEngine>: Unpin`
+  = note: which requires `purrdf_sparql_eval::workspace::SharedWorkspaceStorage<NativeSparqlEngine>: Unpin`
+  = note: which requires `purrdf_core::small::Shared<purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>>: Unpin`
+  = note: which requires `PhantomData<shared::Header<purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>>>: Unpin`
+  = note: which requires `shared::Header<purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>>: Unpin`
+  = note: which requires `purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>: Unpin`
+  = note: which requires `NativeSparqlEngine: Unpin`
+  = note: which requires `RefCell<PlanCache>: Unpin`
+  = note: which requires `UnsafeCell<PlanCache>: Unpin`
+  = note: which requires `PlanCache: Unpin`
+  = note: which requires `purrdf_sparql_eval::plan_cache::BoundedCache<engine::PreparedCacheKey, SharedWorkspace<PreparedQuery>>: Unpin`
+  = note: which requires `AdmittedMap<engine::PreparedCacheKey, purrdf_sparql_eval::plan_cache::Entry<engine::PreparedCacheKey, SharedWorkspace<PreparedQuery>>>: Unpin`
+  = note: and so on...
+  = help: consider adding a manual `impl` of auto traits like `Send` for intermediate types, if auto traits are involved
+  = help: or consider increasing the recursion limit by adding a `#![recursion_limit = "256"]` attribute to your crate (`depth_free_membership`)
+  = note: this lint is attached to the whole crate and can't be disabled on a per-function basis
+  = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+  = note: for more information, see issue #159228 <https://github.com/rust-lang/rust/issues/159228>
+  = note: `-D recursion-depth-exceeding-limit` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(recursion_depth_exceeding_limit)]`
+
+note: the above error was encountered while instantiating `fn Vec::<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>::push_mut`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:1000:17
+     |
+1000 |         let _ = self.push_mut(value);
+     |                 ^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn try_boxed_one::<DatasetExclusion<'_, RdfDataset>>::{closure#0}`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:1619:23
+     |
+1619 |             Err(e) => op(e),
+     |                       ^^^^^
+     |
+     = note: the full name for the type has been written to '/opt/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-retrieval/7a17bbac9f8ce27a/out/depth_free_membership-7a17bbac9f8ce27a.long-type-10287200447476524985.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error: could not compile `purrdf-retrieval` (test "depth_free_membership") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: overflow evaluating the requirement `Vec<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>: Unpin`
+  |
+  = note: which requires `alloc::raw_vec::RawVec<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>: Unpin`
+  = note: which requires `PhantomData<purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>>: Unpin`
+  = note: which requires `purrdf_retrieval::execute::DatasetExclusion<'_, purrdf_core::RdfDataset>: Unpin`
+  = note: which requires `SharedWorkspace<NativeSparqlEngine>: Unpin`
+  = note: which requires `purrdf_sparql_eval::workspace::SharedWorkspaceStorage<NativeSparqlEngine>: Unpin`
+  = note: which requires `purrdf_core::small::Shared<purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>>: Unpin`
+  = note: which requires `PhantomData<shared::Header<purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>>>: Unpin`
+  = note: which requires `shared::Header<purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>>: Unpin`
+  = note: which requires `purrdf_sparql_eval::workspace::SharedWorkspacePayload<NativeSparqlEngine>: Unpin`
+  = note: which requires `NativeSparqlEngine: Unpin`
+  = note: which requires `RefCell<PlanCache>: Unpin`
+  = note: which requires `UnsafeCell<PlanCache>: Unpin`
+  = note: which requires `PlanCache: Unpin`
+  = note: which requires `purrdf_sparql_eval::plan_cache::BoundedCache<engine::PreparedCacheKey, SharedWorkspace<purrdf_sparql_eval::PreparedQuery>>: Unpin`
+  = note: which requires `AdmittedMap<engine::PreparedCacheKey, purrdf_sparql_eval::plan_cache::Entry<engine::PreparedCacheKey, SharedWorkspace<purrdf_sparql_eval::PreparedQuery>>>: Unpin`
+  = note: and so on...
+  = help: consider adding a manual `impl` of auto traits like `Send` for intermediate types, if auto traits are involved
+  = help: or consider increasing the recursion limit by adding a `#![recursion_limit = "256"]` attribute to your crate (`text_exclusion_lookup`)
+  = note: this lint is attached to the whole crate and can't be disabled on a per-function basis
+  = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+  = note: for more information, see issue #159228 <https://github.com/rust-lang/rust/issues/159228>
+  = note: `-D recursion-depth-exceeding-limit` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(recursion_depth_exceeding_limit)]`
+
+note: the above error was encountered while instantiating `fn try_boxed_one::<DatasetExclusion<'_, RdfDataset>>::{closure#0}`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:1619:23
+     |
+1619 |             Err(e) => op(e),
+     |                       ^^^^^
+     |
+     = note: the full name for the type has been written to '/opt/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-retrieval/eaf6779a767b2f8b/out/text_exclusion_lookup-eaf6779a767b2f8b.long-type-15328497514372173920.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error: could not compile `purrdf-retrieval` (test "text_exclusion_lookup") due to 1 previous error

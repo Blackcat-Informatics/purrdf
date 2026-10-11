@@ -1,0 +1,27 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0596]: cannot borrow data in dereference of `workspace::AdmittedVec<std::option::Option<workspace::WorkspaceTerm>>` as mutable
+    --> crates/sparql-eval/src/property_fn_eval.rs:3812:13
+     |
+3812 |             self.values.fill_with(|| None);
+     |             ^^^^^^^^^^^ cannot borrow as mutable
+     |
+     = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `workspace::AdmittedVec<std::option::Option<workspace::WorkspaceTerm>>`
+
+error[E0596]: cannot borrow data in dereference of `workspace::AdmittedVec<std::option::Option<workspace::WorkspaceTerm>>` as mutable
+    --> crates/sparql-eval/src/property_fn_eval.rs:3813:63
+     |
+3813 |             if !unify_row_admitted(&self.plan.args, &emitted, &mut self.values, &self.workspace)? {
+     |                                                               ^^^^^^^^^^^^^^^^ cannot borrow as mutable
+     |
+     = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `workspace::AdmittedVec<std::option::Option<workspace::WorkspaceTerm>>`
+
+error[E0596]: cannot borrow data in dereference of `workspace::AdmittedVec<std::option::Option<vm::Linked<'_, <D as purrdf_core::DatasetView>::Id>>>` as mutable
+    --> crates/sparql-eval/src/property_fn_eval.rs:3817:61
+     |
+3817 |             for (stage, link) in self.stages.iter_mut().zip(links.iter_mut()) {
+     |                                                             ^^^^^ cannot borrow as mutable
+     |
+     = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `workspace::AdmittedVec<std::option::Option<vm::Linked<'_, <D as purrdf_core::DatasetView>::Id>>>`
+
+For more information about this error, try `rustc --explain E0596`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 3 previous errors

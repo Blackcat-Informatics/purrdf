@@ -1,0 +1,58 @@
+diff --git crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
+index 0f72698e1..d5ab6bb7e 100644
+--- crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
++++ crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
+@@ -1450,11 +1450,11 @@ fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=5 digest=7c576
+ fuel 6..=64 x59 complete rows=5 digest=7c576a8fd4caf94c | fuel=6
+ == purrdf-property-functions <http://purrdf.test/property-functions#bbMemberFalse> a fully bound call that matches nothing yields no row, beside one that does
+ boolean true
+-metered complete fuel=11 scratch-bytes=153
+-explain fuel=11 scratch-bytes=153
++metered complete fuel=10 scratch-bytes=153
++explain fuel=10 scratch-bytes=153
+ node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1 exists-definition-answered=1
+ node 1 depth=1 PropertyFunction rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 property-function-invocation=1 property-function-row=1
+-node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=2 property-function-invocation=1
++node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=1 property-function-invocation=1
+ fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
+ fuel 1 tripped fuel-exhausted consumed=2 unknown barrier=ask-unsettled | fuel=2
+ fuel 2 tripped fuel-exhausted consumed=3 unknown barrier=ask-unsettled | fuel=3
+@@ -1464,9 +1464,8 @@ fuel 5 tripped fuel-exhausted consumed=6 unknown barrier=ask-unsettled | fuel=6
+ fuel 6 tripped fuel-exhausted consumed=7 unknown barrier=Filter | fuel=7
+ fuel 7 tripped fuel-exhausted consumed=8 unknown barrier=Filter | fuel=8
+ fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
+-fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
+-fuel 10 tripped fuel-exhausted consumed=11 certain prefix=true rows=1 digest=27229339670298e5 | fuel=11
+-fuel 11..=64 x54 complete rows=1 digest=27229339670298e5 | fuel=11
++fuel 9 tripped fuel-exhausted consumed=10 certain prefix=true rows=1 digest=27229339670298e5 | fuel=10
++fuel 10..=64 x55 complete rows=1 digest=27229339670298e5 | fuel=10
+ == purrdf-property-functions <http://purrdf.test/property-functions#bbMemberTrue> a fully bound call is a membership test that holds
+ boolean true
+ metered complete fuel=4
+@@ -1652,11 +1651,11 @@ fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=2 digest=e17
+ fuel 16..=64 x49 complete rows=2 digest=e17595df32eae0f5 | fuel=16
+ == purrdf-property-functions <http://purrdf.test/property-functions#modeRestrictedSubsumption> a bf-only relation serves a fully bound call, and the engine filters the bound position
+ boolean true
+-metered complete fuel=11 scratch-bytes=153
+-explain fuel=11 scratch-bytes=153
++metered complete fuel=10 scratch-bytes=153
++explain fuel=10 scratch-bytes=153
+ node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1 exists-definition-answered=1
+ node 1 depth=1 PropertyFunction rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 property-function-invocation=1 property-function-row=1
+-node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=2 property-function-invocation=1
++node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=1 property-function-invocation=1
+ fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
+ fuel 1 tripped fuel-exhausted consumed=2 unknown barrier=ask-unsettled | fuel=2
+ fuel 2 tripped fuel-exhausted consumed=3 unknown barrier=ask-unsettled | fuel=3
+@@ -1666,9 +1665,8 @@ fuel 5 tripped fuel-exhausted consumed=6 unknown barrier=ask-unsettled | fuel=6
+ fuel 6 tripped fuel-exhausted consumed=7 unknown barrier=Filter | fuel=7
+ fuel 7 tripped fuel-exhausted consumed=8 unknown barrier=Filter | fuel=8
+ fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
+-fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
+-fuel 10 tripped fuel-exhausted consumed=11 certain prefix=true rows=1 digest=27229339670298e5 | fuel=11
+-fuel 11..=64 x54 complete rows=1 digest=27229339670298e5 | fuel=11
++fuel 9 tripped fuel-exhausted consumed=10 certain prefix=true rows=1 digest=27229339670298e5 | fuel=10
++fuel 10..=64 x55 complete rows=1 digest=27229339670298e5 | fuel=10
+ == purrdf-property-functions <http://purrdf.test/property-functions#multiCallChain> one call's output is the next call's input
+ solutions vars=["person", "city"] rows=3 ordered=false
+ | _:c14n0 <urn:purrdf:conformance:var:city> "Zurich" .

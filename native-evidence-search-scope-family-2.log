@@ -1,0 +1,15 @@
+Running as unit: run-p306685-i8707447.scope; invocation ID: 8ba0b5c4619944f298a8dda2e4025225
++ cargo clippy --locked -p purrdf-sparql-eval --lib --tests -- -D warnings
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: matching over `()` is more explicit
+    --> crates/sparql-eval/src/expr.rs:2811:30
+     |
+2811 |             .unwrap_or_else(|_| unreachable!("a non-truncated result is complete by construction"));
+     |                              ^ help: use `()` instead of `_`: `()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+     = note: `-D clippy::ignored-unit-patterns` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::ignored_unit_patterns)]`
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,238 @@
+Skipped patch 'crates/sparql-eval/src/expr.rs'.
+Checking patch Makefile...
+Hunk #1 succeeded at 759 (offset 3 lines).
+Checking patch crates/rdf-core/src/dataset_view.rs...
+Checking patch crates/rdf-core/src/ir/dataset.rs...
+Checking patch crates/sparql-eval/src/bgp.rs...
+Hunk #6 succeeded at 612 (offset 3 lines).
+Hunk #7 succeeded at 655 (offset 3 lines).
+Hunk #8 succeeded at 870 (offset 3 lines).
+Hunk #9 succeeded at 1287 (offset 3 lines).
+Hunk #10 succeeded at 1300 (offset 3 lines).
+Hunk #11 succeeded at 1314 (offset 3 lines).
+Checking patch crates/sparql-eval/src/engine.rs...
+Hunk #1 succeeded at 3552 (offset 57 lines).
+Hunk #2 succeeded at 3560 (offset 57 lines).
+Hunk #3 succeeded at 3573 (offset 57 lines).
+Hunk #4 succeeded at 6480 (offset 285 lines).
+Checking patch crates/sparql-eval/src/eval.rs...
+Hunk #3 succeeded at 776 (offset 17 lines).
+Hunk #4 succeeded at 1297 (offset 30 lines).
+Hunk #5 succeeded at 1354 (offset 37 lines).
+Hunk #6 succeeded at 2886 (offset 71 lines).
+Hunk #7 succeeded at 3081 (offset 71 lines).
+Hunk #8 succeeded at 3224 (offset 78 lines).
+Hunk #9 succeeded at 4064 (offset 179 lines).
+Hunk #10 succeeded at 4098 (offset 179 lines).
+Checking patch crates/sparql-eval/src/extension_env.rs...
+Checking patch crates/sparql-eval/src/governor/ledger.rs...
+Checking patch crates/sparql-eval/src/interned.rs...
+error: while searching for:
+        &self.seq.rows
+    }
+
+    /// The number of solutions.
+    #[must_use]
+    pub fn len(&self) -> usize {
+
+error: patch failed: crates/sparql-eval/src/interned.rs:141
+Checking patch crates/sparql-eval/src/lib.rs...
+Hunk #1 succeeded at 167 (offset 4 lines).
+Checking patch crates/sparql-eval/src/modifier.rs...
+Hunk #1 succeeded at 2150 (offset 100 lines).
+Hunk #2 succeeded at 2181 (offset 100 lines).
+Hunk #3 succeeded at 2722 (offset 117 lines).
+error: while searching for:
+                    }
+                    Ok(())
+                })?;
+                let ordinal = if let Some(&ordinal) = group_index.get(&key) {
+                    ordinal
+                } else {
+                    let ordinal = states.len();
+                    let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    };
+                    let _ = group_index.insert_admitted(
+                        key.clone_admitted(&ctx.growth)?,
+                        ordinal,
+                        &ctx.growth,
+                    )?;
+                    states.push((key, lanes))?;
+                    ordinal
+                };
+
+error: patch failed: crates/sparql-eval/src/modifier.rs:2618
+Hunk #5 succeeded at 2903 (offset 115 lines).
+Checking patch crates/sparql-eval/src/property_fn.rs...
+Hunk #1 succeeded at 1887 (offset 94 lines).
+error: while searching for:
+/// the engine's side: it withholds the ceiling entirely for such a call rather than ask
+/// a relation to account for something it was never told.
+pub trait PropertyFunction: Send + Sync {
+    /// Allocation-free declaration for an opaque producer's complete open/pull
+    /// working set and each returned row. The producer must respect both bounds.
+    /// Native producers can instead implement `open_admitted` with local owners.
+
+error: patch failed: crates/sparql-eval/src/property_fn.rs:1838
+Checking patch crates/sparql-eval/src/property_fn_eval.rs...
+Hunk #1 succeeded at 207 (offset -1 lines).
+error: while searching for:
+    )??;
+
+    let width = plan.schema.len();
+    let left_len = input.schema.len();
+    // A call's own per-row point. It rides the shared governed ingest core exactly as
+    // `SERVICE`'s does, because a relation's output is the other bag in this evaluator
+    // whose size an outside party picks: the generic per-node accounting every algebra
+
+error: patch failed: crates/sparql-eval/src/property_fn_eval.rs:802
+error: while searching for:
+        args.push(None)?;
+    }
+
+    'input: for mu in &input.rows {
+        // The invocation's inputs, read straight off this row: a slot seeded from the
+        // input schema is BOUND whatever term kind it carries.
+        for (slot, column) in plan.slot_seed.iter().enumerate() {
+            seed.as_mut_slice()[slot] = column
+                .and_then(|column| mu.get(column).copied().flatten())
+                .map(|term| {
+                    ctx.scratch
+                        .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
+                            ctx.workspace.source_error(error)
+                        })
+                })
+                .transpose()?;
+        }
+        for (dst, arg) in args.as_mut_slice().iter_mut().zip(&plan.args) {
+            *dst = arg_value_admitted(arg, &seed, &ctx.growth)?;
+        }
+
+error: patch failed: crates/sparql-eval/src/property_fn_eval.rs:827
+Hunk #6 succeeded at 992 (offset 49 lines).
+error: while searching for:
+        let invocation_ceiling = ceiling
+            .filter(|_| plan.ceiling_is_offerable)
+            .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
+        let mut cursor = open_with_workspace_contained(
+            relation.as_ref(),
+            &call.iri,
+            &pf_args,
+            invocation_ceiling,
+            &ctx.growth,
+        )?;
+        // The generation, read HERE and once: an index-backed relation pins its snapshot
+        // when it opens, so this is the instant at which "which version is answering" is
+        // true of every row this cursor will go on to emit. See `PfCursor::generation`.
+
+error: patch failed: crates/sparql-eval/src/property_fn_eval.rs:891
+error: while searching for:
+                }
+                IngestVerdict::Admitted => {}
+            }
+            let growth = ctx.growth.clone();
+            let row = crate::solution::RetainedRow::try_build(width, &growth, |row| {
+                row[..left_len].copy_from_slice(mu);
+                for &(slot, column) in &plan.bound_cols {
+                    let value = values[slot]
+                        .as_ref()
+                        .ok_or_else(|| unbound_slot_admitted(&call.iri, &growth))?;
+                    let copied = growth.clone_term(value)?;
+                    // THE property-function seam: `PropertyFunction::eval` is a
+                    // third-party trait whose emitted rows carry arbitrary
+                    // `TermValue`s. A cell the interner refuses stays unbound rather
+                    // than becoming a term no results writer can spell — the same
+                    // answer `unify_row` above gives a row that disagrees, and the
+                    // same one `RowIngest::intern_row` documents for a producer that
+                    // miscounts its own columns.
+                    row[column] = ctx.intern_workspace_term(copied)?;
+                }
+                Ok(())
+            })?;
+            rows.push_row(row)?;
+        }
+
+
+error: patch failed: crates/sparql-eval/src/property_fn_eval.rs:1001
+Hunk #9 succeeded at 1434 (offset 84 lines).
+Checking patch crates/sparql-eval/src/solution.rs...
+Checking patch crates/text/Cargo.toml...
+Checking patch crates/text/src/index.rs...
+Hunk #3 succeeded at 1367 (offset 37 lines).
+Hunk #4 succeeded at 1406 (offset 37 lines).
+Hunk #5 succeeded at 1603 (offset 37 lines).
+Hunk #6 succeeded at 2007 (offset 37 lines).
+Hunk #7 succeeded at 2015 (offset 37 lines).
+Hunk #8 succeeded at 2082 (offset 37 lines).
+Checking patch crates/text/src/lib.rs...
+Checking patch crates/text/src/relation.rs...
+Hunk #1 succeeded at 450 (offset 5 lines).
+Hunk #2 succeeded at 2052 (offset 293 lines).
+Hunk #3 succeeded at 2073 (offset 293 lines).
+Hunk #4 succeeded at 2167 (offset 293 lines).
+Checking patch crates/sparql-eval/src/bgp/window.rs...
+Checking patch crates/sparql-eval/src/shapes/barrier.rs...
+Checking patch crates/sparql-eval/src/shapes/bucket.rs...
+Checking patch crates/sparql-eval/src/shapes/dictionary.rs...
+Checking patch crates/sparql-eval/src/shapes/mod.rs...
+Checking patch crates/sparql-eval/src/shapes/runtime.rs...
+Checking patch crates/sparql-eval/src/shapes/spans.rs...
+Checking patch crates/sparql-eval/src/shapes/window.rs...
+Checking patch crates/text/benches/physical_shapes.rs...
+Checking patch crates/text/src/dictionary.rs...
+Checking patch crates/text/src/dictionary_relation.rs...
+Checking patch crates/text/src/occurrence_dictionary.rs...
+Checking patch crates/text/tests/physical_shapes.rs...
+Checking patch crates/text/tests/support/shape_cases.rs...
+Checking patch docs/design/purrdf-physical-shapes.md...
+Applied patch Makefile cleanly.
+Applied patch crates/rdf-core/src/dataset_view.rs cleanly.
+Applied patch crates/rdf-core/src/ir/dataset.rs cleanly.
+Applied patch crates/sparql-eval/src/bgp.rs cleanly.
+Applied patch crates/sparql-eval/src/engine.rs cleanly.
+Applied patch crates/sparql-eval/src/eval.rs cleanly.
+Applied patch crates/sparql-eval/src/extension_env.rs cleanly.
+Applied patch crates/sparql-eval/src/governor/ledger.rs cleanly.
+Applying patch crates/sparql-eval/src/interned.rs with 1 reject...
+Rejected hunk #1.
+Applied patch crates/sparql-eval/src/lib.rs cleanly.
+Applying patch crates/sparql-eval/src/modifier.rs with 1 reject...
+Hunk #1 applied cleanly.
+Hunk #2 applied cleanly.
+Hunk #3 applied cleanly.
+Rejected hunk #4.
+Hunk #5 applied cleanly.
+Applying patch crates/sparql-eval/src/property_fn.rs with 1 reject...
+Hunk #1 applied cleanly.
+Rejected hunk #2.
+Applying patch crates/sparql-eval/src/property_fn_eval.rs with 4 rejects...
+Hunk #1 applied cleanly.
+Hunk #2 applied cleanly.
+Hunk #3 applied cleanly.
+Rejected hunk #4.
+Rejected hunk #5.
+Hunk #6 applied cleanly.
+Rejected hunk #7.
+Rejected hunk #8.
+Hunk #9 applied cleanly.
+Applied patch crates/sparql-eval/src/solution.rs cleanly.
+Applied patch crates/text/Cargo.toml cleanly.
+Applied patch crates/text/src/index.rs cleanly.
+Applied patch crates/text/src/lib.rs cleanly.
+Applied patch crates/text/src/relation.rs cleanly.
+Applied patch crates/sparql-eval/src/bgp/window.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/barrier.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/bucket.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/dictionary.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/mod.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/runtime.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/spans.rs cleanly.
+Applied patch crates/sparql-eval/src/shapes/window.rs cleanly.
+Applied patch crates/text/benches/physical_shapes.rs cleanly.
+Applied patch crates/text/src/dictionary.rs cleanly.
+Applied patch crates/text/src/dictionary_relation.rs cleanly.
+Applied patch crates/text/src/occurrence_dictionary.rs cleanly.
+Applied patch crates/text/tests/physical_shapes.rs cleanly.
+Applied patch crates/text/tests/support/shape_cases.rs cleanly.
+Applied patch docs/design/purrdf-physical-shapes.md cleanly.

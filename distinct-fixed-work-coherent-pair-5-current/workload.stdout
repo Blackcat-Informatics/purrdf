@@ -1,0 +1,2 @@
+layout row_size=48 row_align=8 cells_size=40 cells_align=8 bag_size=72 bag_align=8
+queries=1000 rows=200000 fixture=original_people_30000 query=original_Q_H retention=original_run_drop_inside_each_call

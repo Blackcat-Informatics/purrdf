@@ -1,0 +1,91 @@
+Running as unit: run-p265915-i8692638.scope; invocation ID: cd965a8962cb4235a9c49fde7811e1f9
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 4.28s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 3m 06s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/96ff3be4e197661d/out/evidence_ingress-96ff3be4e197661d)
+
+running 16 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 6m 41s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/9f8a28817b3f52dd/out/purrdf_sparql_eval-9f8a28817b3f52dd)
+
+running 56 tests
+test user_fn::content_fingerprint_tests::content_fingerprint_counts_expression_bodied_as_declared ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_partitions_declared_from_injected ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_is_stable_across_registry_instances ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_empty_registry_is_pinned ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_separates_iri ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_separates_arity ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_separates_parameter_constraints ... ok
+test user_fn::content_fingerprint_tests::content_fingerprint_separates_volatility ... ok
+test user_fn::content_fingerprint_tests::the_declared_digest_is_stable_across_two_identical_builds ... ok
+test user_fn::content_fingerprint_tests::the_declared_digest_separates_two_identical_declarations_with_different_bodies ... ok
+test user_fn::content_fingerprint_tests::binding_does_not_move_the_declared_digest ... ok
+test user_fn::tests::expr_function_collides_with_a_sparql_bodied_iri - should panic ... ok
+test user_fn::tests::a_user_function_bnode_allocation_preserves_parent_concrete_inputs ... ok
+test user_fn::tests::a_user_function_repeating_a_parameter_name_incompatibly_has_no_value ... ok
+test user_fn::tests::expr_function_depth_is_seeded_and_bounded ... ok
+test user_fn::tests::expr_function_without_a_focus_graph_is_a_hard_error ... ok
+test user_fn::tests::expr_function_receives_the_query_s_focus_graph ... ok
+test user_fn::tests::a_user_function_repeating_a_parameter_name_compatibly_still_answers ... ok
+test user_fn::tests::a_user_function_argument_reaches_an_optional_right_arm ... ok
+test user_fn::tests::a_user_function_argument_reaches_a_minus_right_arm ... ok
+test user_fn::tests::fuel_exhaustion_at_the_invocation_boundary_is_an_expression_trip ... ok
+test user_fn::tests::a_user_function_argument_that_is_a_blank_node_is_never_pushed ... ok
+test user_fn::tests::ask_body_returns_boolean ... ok
+test user_fn::tests::insert_collision_with_native_panics - should panic ... ok
+test user_fn::tests::function_body_state_is_merged_back ... ok
+test user_fn::tests::invocation_admission::invocation_refusal_retains_exact_source_and_clone_identity ... ok
+test user_fn::tests::invocation_admission::invocation_law_is_inherited_by_nested_function_children ... ok
+test user_fn::tests::invocation_admission::invocation_law_observes_actual_calls_and_all_optional_parameters ... ok
+test user_fn::tests::native_and_expression_bodies_preserve_returned_failure_identity ... ok
+test user_fn::tests::invocation_admission::invocation_observation_waits_for_final_source_checkpoint ... ok
+test user_fn::tests::native_function_panic_is_a_clean_error ... ok
+test user_fn::tests::native_function_unbound_argument_yields_no_value ... ok
+test user_fn::tests::native_function_wrong_arity_is_a_hard_error ... ok
+test user_fn::tests::governed_recursion_depth_is_typed_exhaustion_not_a_function_error ... ok
+test user_fn::tests::register_native_collision_with_sparql_bodied_panics - should panic ... ok
+test user_fn::tests::native_function_returns_value ... ok
+test user_fn::tests::parameter_datatype_violation_is_a_hard_error ... ok
+test user_fn::tests::native_score_in_filter_pushes_down ... ok
+test user_fn::tests::native_function_error_is_a_hard_error ... ok
+test user_fn::tests::native_score_in_order_by_is_deterministic ... ok
+test user_fn::tests::native_expression_error_in_a_filter_drops_only_that_solution ... ok
+test user_fn::tests::return_type_is_informational_not_enforced ... ok
+test user_fn::tests::unbound_mandatory_parameter_yields_no_value ... ok
+test user_fn::tests::native_score_order_by_is_total_over_nan ... ok
+test user_fn::tests::select_body_returns_projected_value ... ok
+test user_fn::tests::native_and_sparql_bodied_coexist ... ok
+test user_fn::tests::multi_projection_select_body_is_a_hard_error ... ok
+test user_fn::tests::undefined_function_call_is_a_hard_error ... ok
+test user_fn::tests::native_expression_error_in_a_bind_leaves_the_variable_unbound ... ok
+test user_fn::tests::wrong_arity_is_a_hard_error ... ok
+test user_fn::tests::invocation_admission::ordinary_group_routing_keeps_sparql_functions_serial_and_observes_actual_error ... ok
+test user_fn::tests::a_user_function_argument_keeps_its_binding_for_an_inner_filter ... ok
+test user_fn::tests::user_function_reservation_copies_and_later_parent_growth_each_charge_scratch ... ok
+test user_fn::tests::invocation_admission::invocation_worker_errors_select_exact_canonical_cause_before_observation ... ok
+test user_fn::tests::unbounded_recursion_fails_closed ... ok
+test user_fn::tests::native_score_filter_over_parallel_threshold ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 1440 filtered out; finished in 0.01s
+

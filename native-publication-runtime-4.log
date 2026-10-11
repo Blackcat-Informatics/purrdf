@@ -1,0 +1,17 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+error: unnecessary qualification
+   --> crates/lex/src/allocation/shared.rs:471:25
+    |
+471 |         let mut owner = super::Shared::try_new(core::marker::PhantomPinned).unwrap();
+    |                         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+471 -         let mut owner = super::Shared::try_new(core::marker::PhantomPinned).unwrap();
+471 +         let mut owner = Shared::try_new(core::marker::PhantomPinned).unwrap();
+    |
+
+error: could not compile `purrdf-lex` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

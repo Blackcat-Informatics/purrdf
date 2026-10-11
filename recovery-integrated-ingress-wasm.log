@@ -1,0 +1,36 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 09s
+     Running tests/evidence_ingress.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/cac74e2e939c887a/out/evidence_ingress-cac74e2e939c887a.wasm)
+
+running 20 tests
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.80s
+

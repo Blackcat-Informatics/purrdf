@@ -1,0 +1,546 @@
+Running as unit: purrdf-evidence-status-minus-2.service
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: unnecessary qualification
+  --> crates/sparql-eval/src/engine.rs:74:21
+   |
+74 |     ) -> Result<(), crate::EvalError> {
+   |                     ^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-qualifications` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+   |
+74 -     ) -> Result<(), crate::EvalError> {
+74 +     ) -> Result<(), EvalError> {
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-eval/src/engine.rs:88:23
+   |
+88 |     ) -> Result<Self, crate::EvalError> {
+   |                       ^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+88 -     ) -> Result<Self, crate::EvalError> {
+88 +     ) -> Result<Self, EvalError> {
+   |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/engine.rs:379:29
+    |
+379 |     ) -> Result<Outcome<I>, crate::EvalError> {
+    |                             ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+379 -     ) -> Result<Outcome<I>, crate::EvalError> {
+379 +     ) -> Result<Outcome<I>, EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/engine.rs:392:38
+    |
+392 |     ) -> Result<EvaluatedOutcome<I>, crate::EvalError> {
+    |                                      ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+392 -     ) -> Result<EvaluatedOutcome<I>, crate::EvalError> {
+392 +     ) -> Result<EvaluatedOutcome<I>, EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/engine.rs:592:24
+    |
+592 |         .ok_or_else(|| crate::EvalError::WorkspaceBoundOverflow.into())
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+592 -         .ok_or_else(|| crate::EvalError::WorkspaceBoundOverflow.into())
+592 +         .ok_or_else(|| EvalError::WorkspaceBoundOverflow.into())
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/engine.rs:623:52
+    |
+623 | ) -> Result<Option<crate::solution::SharedSchema>, crate::EvalError> {
+    |                                                    ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+623 - ) -> Result<Option<crate::solution::SharedSchema>, crate::EvalError> {
+623 + ) -> Result<Option<crate::solution::SharedSchema>, EvalError> {
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1084:20
+     |
+1084 |             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1084 -             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1084 +             .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1128:17
+     |
+1128 |                 crate::EvalError::AllocationFailed {
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1128 -                 crate::EvalError::AllocationFailed {
+1128 +                 EvalError::AllocationFailed {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1139:20
+     |
+1139 |             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1139 -             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1139 +             .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1162:24
+     |
+1162 |                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1162 -                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1162 +                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1223:20
+     |
+1223 |             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1223 -             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1223 +             .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1272:21
+     |
+1272 |     ) -> Result<(), crate::EvalError> {
+     |                     ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1272 -     ) -> Result<(), crate::EvalError> {
+1272 +     ) -> Result<(), EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1295:20
+     |
+1295 |             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1295 -             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1295 +             .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1299:24
+     |
+1299 |                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1299 -                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1299 +                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1306:28
+     |
+1306 |                     .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1306 -                     .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1306 +                     .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1313:24
+     |
+1313 |                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1313 -                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+1313 +                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:3102:33
+     |
+3102 |     ) -> Result<EvalCtx<'d, D>, crate::EvalError> {
+     |                                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3102 -     ) -> Result<EvalCtx<'d, D>, crate::EvalError> {
+3102 +     ) -> Result<EvalCtx<'d, D>, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:3522:41
+     |
+3522 |     ) -> Result<crate::bgp::PlanSurvey, crate::EvalError> {
+     |                                         ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3522 -     ) -> Result<crate::bgp::PlanSurvey, crate::EvalError> {
+3522 +     ) -> Result<crate::bgp::PlanSurvey, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4564:9
+     |
+4564 |         crate::EvalError::source_read(error).to_string(),
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4564 -         crate::EvalError::source_read(error).to_string(),
+4564 +         EvalError::source_read(error).to_string(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4574:16
+     |
+4574 |     Evaluation(crate::EvalError),
+     |                ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4574 -     Evaluation(crate::EvalError),
+4574 +     Evaluation(EvalError),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4582:11
+     |
+4582 | impl From<crate::EvalError> for EvaluationFailure {
+     |           ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4582 - impl From<crate::EvalError> for EvaluationFailure {
+4582 + impl From<EvalError> for EvaluationFailure {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4583:20
+     |
+4583 |     fn from(error: crate::EvalError) -> Self {
+     |                    ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4583 -     fn from(error: crate::EvalError) -> Self {
+4583 +     fn from(error: EvalError) -> Self {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4585:13
+     |
+4585 |             crate::EvalError::RetainedDiagnostic(diagnostic) => {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4585 -             crate::EvalError::RetainedDiagnostic(diagnostic) => {
+4585 +             EvalError::RetainedDiagnostic(diagnostic) => {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4704:51
+     |
+4704 |                 Err(EvaluationFailure::Evaluation(crate::EvalError::RetainedDiagnostic(
+     |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4704 -                 Err(EvaluationFailure::Evaluation(crate::EvalError::RetainedDiagnostic(
+4704 +                 Err(EvaluationFailure::Evaluation(EvalError::RetainedDiagnostic(
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4710:24
+     |
+4710 |                 if let crate::EvalError::AllocationFailed { construct } = error {
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4710 -                 if let crate::EvalError::AllocationFailed { construct } = error {
+4710 +                 if let EvalError::AllocationFailed { construct } = error {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4727:57
+     |
+4727 |                 EvaluationFailure::Diagnostic(_) => Err(crate::EvalError::WorkspaceUnpriced(
+     |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4727 -                 EvaluationFailure::Diagnostic(_) => Err(crate::EvalError::WorkspaceUnpriced(
+4727 +                 EvaluationFailure::Diagnostic(_) => Err(EvalError::WorkspaceUnpriced(
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4743:33
+     |
+4743 |                     None => Err(crate::EvalError::WorkspaceUnpriced(
+     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4743 -                     None => Err(crate::EvalError::WorkspaceUnpriced(
+4743 +                     None => Err(EvalError::WorkspaceUnpriced(
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4766:25
+     |
+4766 |                     Err(crate::EvalError::AllocationFailed { construct }) => {
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4766 -                     Err(crate::EvalError::AllocationFailed { construct }) => {
+4766 +                     Err(EvalError::AllocationFailed { construct }) => {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4913:17
+     |
+4913 |                 crate::EvalError::WorkspaceUnpriced("publication without its owned account").into(),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4913 -                 crate::EvalError::WorkspaceUnpriced("publication without its owned account").into(),
+4913 +                 EvalError::WorkspaceUnpriced("publication without its owned account").into(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4917:33
+     |
+4917 |     let publication: Result<(), crate::EvalError> = (|| {
+     |                                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4917 -     let publication: Result<(), crate::EvalError> = (|| {
+4917 +     let publication: Result<(), EvalError> = (|| {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4929:22
+     |
+4929 |         .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4929 -         .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+4929 +         .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:4933:24
+     |
+4933 |                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?,
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4933 -                 .ok_or(crate::EvalError::WorkspaceBoundOverflow)?,
+4933 +                 .ok_or(EvalError::WorkspaceBoundOverflow)?,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5134:12
+     |
+5134 |     e: &'e crate::error::EvalError,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5134 -     e: &'e crate::error::EvalError,
+5134 +     e: &'e EvalError,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5137:12
+     |
+5137 |     if let crate::error::EvalError::FunctionAdmission(refusal) = e {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5137 -     if let crate::error::EvalError::FunctionAdmission(refusal) = e {
+5137 +     if let EvalError::FunctionAdmission(refusal) = e {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5707:23
+     |
+5707 |     ) -> Result<Self, crate::EvalError> {
+     |                       ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5707 -     ) -> Result<Self, crate::EvalError> {
+5707 +     ) -> Result<Self, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5718:28
+     |
+5718 |                     .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5718 -                     .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+5718 +                     .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5720:54
+     |
+5720 |                     u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+     |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5720 -                     u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+5720 +                     u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5725:13
+     |
+5725 |             crate::EvalError::AllocationFailed {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5725 -             crate::EvalError::AllocationFailed {
+5725 +             EvalError::AllocationFailed {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5730:13
+     |
+5730 |             crate::EvalError::AllocationFailed {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5730 -             crate::EvalError::AllocationFailed {
+5730 +             EvalError::AllocationFailed {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5790:23
+     |
+5790 |     ) -> Result<Self, crate::EvalError> {
+     |                       ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5790 -     ) -> Result<Self, crate::EvalError> {
+5790 +     ) -> Result<Self, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:6054:16
+     |
+6054 |         .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6054 -         .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+6054 +         .ok_or(EvalError::WorkspaceBoundOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:6299:34
+     |
+6299 | ...   if !matches!(&error, crate::EvalError::NativeDiagnostic(value) if value.kind() == crate::error::NativeDiagnosticKind::Config...
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6299 -             if !matches!(&error, crate::EvalError::NativeDiagnostic(value) if value.kind() == crate::error::NativeDiagnosticKind::Config) { error.into() } else {
+6299 +             if !matches!(&error, EvalError::NativeDiagnostic(value) if value.kind() == crate::error::NativeDiagnosticKind::Config) { error.into() } else {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:6400:27
+     |
+6400 | ) -> Result<SparqlResult, crate::EvalError> {
+     |                           ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6400 - ) -> Result<SparqlResult, crate::EvalError> {
+6400 + ) -> Result<SparqlResult, EvalError> {
+     |
+
+error[E0597]: `publication` does not live long enough
+    --> crates/sparql-eval/src/engine.rs:4373:27
+     |
+4363 |     fn query_interned_input<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync, R>(
+     |                             -- lifetime `'d` defined here
+...
+4371 |         let publication = crate::user_fn::RefusalPublication::default();
+     |             ----------- binding `publication` declared here
+4372 |         checked_query_read(dataset, &publication, || {
+     |                                                   -- value captured here
+4373 |             let options = publication.options(dataset, options)?;
+     |                           ^^^^^^^^^^^ borrowed value does not live long enough
+...
+4398 |             visit(&outcome, &ctx).map_err(EvaluationFailure::Evaluation)
+     |             --------------------- argument requires that `publication` is borrowed for `'d`
+4399 |         })
+4400 |     }
+     |     - `publication` dropped here while still borrowed
+
+For more information about this error, try `rustc --explain E0597`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 44 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 8.831s
+             CPU time consumed: 120ms
+                   Memory peak: 29.1M (swap: 0B)

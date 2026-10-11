@@ -1,0 +1,85 @@
+ M Makefile
+M  crates/datalog/src/lib.rs
+M  crates/datalog/src/seminaive.rs
+M  crates/datalog/src/seminaive/factors.rs
+M  crates/hash/src/frame.rs
+ M crates/hnsw/src/relation.rs
+M  crates/lex/src/allocation.rs
+M  crates/lex/src/lib.rs
+M  crates/rdf-core/src/graph.rs
+M  crates/rdf-core/src/ir/term_walk.rs
+M  crates/rdf-core/src/lib.rs
+ M crates/retrieval/src/admission.rs
+ M crates/retrieval/src/compile.rs
+ M crates/retrieval/src/document.rs
+ M crates/retrieval/src/execute.rs
+MM crates/retrieval/src/lib.rs
+M  crates/retrieval/src/matching.rs
+ M crates/retrieval/src/plan.rs
+ M crates/retrieval/src/planner.rs
+ M crates/retrieval/src/request.rs
+ M crates/retrieval/src/search.rs
+M  crates/retrieval/tests/admission_tests.rs
+ M crates/retrieval/tests/boundary.rs
+M  crates/retrieval/tests/compile_request.rs
+M  crates/retrieval/tests/depth_free_membership.rs
+M  crates/retrieval/tests/fixtures/planner/lexical_request.json
+M  crates/retrieval/tests/fixtures/planner/mixed_request.json
+M  crates/retrieval/tests/multimodal_read_bound.rs
+M  crates/retrieval/tests/on_demand_receipt.rs
+M  crates/retrieval/tests/per_mode_row_bound.rs
+ M crates/retrieval/tests/plan.rs
+M  crates/retrieval/tests/planner_golden.rs
+MM crates/retrieval/tests/real_producers.rs
+M  crates/retrieval/tests/rendered_lookup_mode.rs
+M  crates/retrieval/tests/supplied_exclusion_lookup.rs
+M  crates/retrieval/tests/support/registry.rs
+M  crates/sparql-eval/src/bgp.rs
+M  crates/sparql-eval/src/binop.rs
+M  crates/sparql-eval/src/blank_scope.rs
+M  crates/sparql-eval/src/construct.rs
+M  crates/sparql-eval/src/deferred_exists.rs
+M  crates/sparql-eval/src/describe_query.rs
+MM crates/sparql-eval/src/engine.rs
+MM crates/sparql-eval/src/eval.rs
+M  crates/sparql-eval/src/expr.rs
+M  crates/sparql-eval/src/governor/lift.rs
+MM crates/sparql-eval/src/interned.rs
+ M crates/sparql-eval/src/knn/invocation.rs
+ M crates/sparql-eval/src/knn/mod.rs
+MM crates/sparql-eval/src/lib.rs
+MM crates/sparql-eval/src/modifier.rs
+M  crates/sparql-eval/src/modifier/owners.rs
+M  crates/sparql-eval/src/parallel.rs
+M  crates/sparql-eval/src/path.rs
+MM crates/sparql-eval/src/property_fn.rs
+MM crates/sparql-eval/src/property_fn_eval.rs
+ M crates/sparql-eval/src/remote.rs
+M  crates/sparql-eval/src/row_checkpoint.rs
+ M crates/sparql-eval/src/scratch.rs
+M  crates/sparql-eval/src/solution.rs
+M  crates/sparql-eval/src/update.rs
+M  crates/sparql-eval/src/user_fn.rs
+M  crates/sparql-eval/src/vm/compile.rs
+M  crates/sparql-eval/src/vm/mod.rs
+ M crates/sparql-eval/src/workspace.rs
+MM crates/text/src/index.rs
+M  crates/text/src/lib.rs
+MM crates/text/src/relation.rs
+MM crates/text/src/score.rs
+M  crates/text/tests/scoring.rs
+M  crates/text/tests/unrestricted_ranking.rs
+ M crates/text/tests/wasm_determinism.rs
+?? crates/datalog/src/evidence.rs
+?? crates/datalog/src/seminaive/evidence.rs
+?? crates/rdf-core/src/evidence.rs
+?? crates/rdf-core/src/evidence/
+?? crates/rdf-core/src/query_scope.rs
+?? crates/rdf-core/src/query_scope/
+?? crates/retrieval/src/scope.rs
+?? crates/sparql-eval/src/candidate_scope.rs
+?? crates/sparql-eval/src/evidence_exec.rs
+?? crates/sparql-eval/src/vm/evidence.rs
+?? crates/sparql-eval/tests/evidence_ingress.rs
+?? crates/sparql-eval/tests/evidence_ledger_query.rs
+?? crates/text/tests/support/scoped_candidates.rs

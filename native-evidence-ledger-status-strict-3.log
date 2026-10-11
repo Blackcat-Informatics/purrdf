@@ -1,0 +1,17 @@
+Running as unit: purrdf-evidence-native-ledger-strict-3.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/evidence_ingress.rs:685:25
+    |
+685 |                     let SparqlResult::Solutions { rows: result, .. } = result.result else { panic!("ledger SELECT result"); };
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ------------- this expression has type `purrdf_sparql_eval::RetainedSparqlResult`
+    |                         |
+    |                         expected `RetainedSparqlResult`, found `SparqlResult`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 1 previous error
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 824ms
+             CPU time consumed: 85ms
+                   Memory peak: 19.3M (swap: 0B)

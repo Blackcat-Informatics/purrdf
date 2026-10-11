@@ -1,0 +1,28 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Finished `test` profile [optimized] target(s) in 2m 05s
+     Running tests/physical_shapes.rs (/opt/purrdf-evidence-default-current/build/debug/build/purrdf-text/fcf071b21c1fe68c/out/physical_shapes-fcf071b21c1fe68c)
+
+running 19 tests
+test registered_host_and_decline ... ok
+test host_refusal_and_governor_boundary ... ok
+test bucket_custom_and_parallel_order ... ok
+test prepared_and_query_forms ... ok
+test dictionary_analyzer_identity ... ok
+test dictionary_projection_and_aliases ... ok
+test scoped_streams_and_update_where ... ok
+test expanded_dictionary_and_union ... ok
+test longest_first_reference ... ok
+test false_expression_gaps_keep_original_traversal ... ok
+test bounded_shapes_keep_original_owners ... ok
+test dictionary_long_phrase_and_determinism ... ok
+test typed_series_property ... ok
+test cache_refusal_keeps_previous_owner ... ok
+test dictionary_property ... ok
+test original_evidence_and_empty_barriers ... ok
+test window_barrier_property ... ok
+test window_property ... ok
+test dictionary_cache_and_size ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+

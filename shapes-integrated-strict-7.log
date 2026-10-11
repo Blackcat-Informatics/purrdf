@@ -1,0 +1,367 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error[E0425]: cannot find type `WorkspaceAccumulator` in crate `purrdf_sparql_eval`
+   --> crates/text/benches/../tests/support/shape_cases.rs:931:37
+    |
+931 |     ) -> Result<purrdf_sparql_eval::WorkspaceAccumulator, EvalError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_sparql_eval::agg_fn::WorkspaceAccumulator;
+    |
+help: if you import `WorkspaceAccumulator`, refer to it directly
+    |
+931 -     ) -> Result<purrdf_sparql_eval::WorkspaceAccumulator, EvalError> {
+931 +     ) -> Result<WorkspaceAccumulator, EvalError> {
+    |
+
+error[E0433]: cannot find `WorkspaceAccumulator` in `purrdf_sparql_eval`
+   --> crates/text/benches/../tests/support/shape_cases.rs:932:29
+    |
+932 |         purrdf_sparql_eval::WorkspaceAccumulator::new(
+    |                             ^^^^^^^^^^^^^^^^^^^^ could not find `WorkspaceAccumulator` in `purrdf_sparql_eval`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_sparql_eval::agg_fn::WorkspaceAccumulator;
+    |
+help: if you import `WorkspaceAccumulator`, refer to it directly
+    |
+932 -         purrdf_sparql_eval::WorkspaceAccumulator::new(
+932 +         WorkspaceAccumulator::new(
+    |
+
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+    --> crates/text/benches/../tests/support/shape_cases.rs:2150:38
+     |
+2150 |     let reifies = builder.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
+     |                                      ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+     |
+help: there is a crate or module with a similar name
+     |
+2150 -     let reifies = builder.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
+2150 +     let reifies = builder.intern_iri(purrdf_core::vocab::rdf::REIFIES);
+     |
+help: consider importing this module
+     |
+   6 + use purrdf_core::vocab::rdf;
+     |
+help: if you import `rdf`, refer to it directly
+     |
+2150 -     let reifies = builder.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
+2150 +     let reifies = builder.intern_iri(rdf::REIFIES);
+     |
+
+error: this sequence of operators looks suspiciously like a bug
+   --> crates/text/benches/../tests/support/shape_cases.rs:513:24
+    |
+513 |                     && prior.start < span.end
+    |                        ^^^^^^^^^^^^^^^^^^^^^^ help: did you mean: `prior.start < prior.end`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#suspicious_operation_groupings
+    = note: `-D clippy::suspicious-operation-groupings` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::suspicious_operation_groupings)]`
+
+error[E0283]: type annotations needed
+    --> crates/text/benches/../tests/support/shape_cases.rs:424:30
+     |
+ 424 |     registry.register(PHRASE.into(), Arc::new(relation));
+     |              --------        ^^^^
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = note: the type must implement `std::convert::Into<std::string::String>`
+note: required by a bound in `purrdf_sparql_eval::PropertyFunctionRegistry::register`
+    --> crates/sparql-eval/src/property_fn.rs:2744:42
+     |
+2744 |     pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
+     |                                          ^^^^^^^^^^^^ required by this bound in `PropertyFunctionRegistry::register`
+help: try using a fully qualified path to specify the expected types
+     |
+ 424 -     registry.register(PHRASE.into(), Arc::new(relation));
+ 424 +     registry.register(<&str as std::convert::Into<T>>::into(PHRASE), Arc::new(relation));
+     |
+help: consider removing this method call, as the receiver has type `&'static str` and `&'static str: std::convert::Into<std::string::String>` trivially holds
+     |
+ 424 -     registry.register(PHRASE.into(), Arc::new(relation));
+ 424 +     registry.register(PHRASE, Arc::new(relation));
+     |
+
+error[E0283]: type annotations needed
+    --> crates/text/benches/../tests/support/shape_cases.rs:1197:35
+     |
+1197 |         relations.register(PHRASE.into(), Arc::new(phrase));
+     |                   --------        ^^^^
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+     = note: the type must implement `std::convert::Into<std::string::String>`
+note: required by a bound in `purrdf_sparql_eval::PropertyFunctionRegistry::register`
+    --> crates/sparql-eval/src/property_fn.rs:2744:42
+     |
+2744 |     pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
+     |                                          ^^^^^^^^^^^^ required by this bound in `PropertyFunctionRegistry::register`
+help: try using a fully qualified path to specify the expected types
+     |
+1197 -         relations.register(PHRASE.into(), Arc::new(phrase));
+1197 +         relations.register(<&str as std::convert::Into<T>>::into(PHRASE), Arc::new(phrase));
+     |
+help: consider removing this method call, as the receiver has type `&'static str` and `&'static str: std::convert::Into<std::string::String>` trivially holds
+     |
+1197 -         relations.register(PHRASE.into(), Arc::new(phrase));
+1197 +         relations.register(PHRASE, Arc::new(phrase));
+     |
+
+error[E0599]: no method named `failed` found for struct `purrdf_core::SegmentedEvidence` in the current scope
+    --> crates/text/benches/../tests/support/shape_cases.rs:1418:31
+     |
+1418 |     assert!(source.evidence().failed());
+     |                               ^^^^^^ method not found in `purrdf_core::SegmentedEvidence`
+
+error[E0507]: cannot move out of a shared reference
+    --> crates/text/benches/../tests/support/shape_cases.rs:1048:19
+     |
+1048 |         let env = ExtensionEnv::empty().with_shapes(registry);
+     |                   ^^^^^^^^^^^^^^^^^^^^^ --------------------- value moved due to this method call
+     |                   |
+     |                   move occurs because value has type `purrdf_sparql_eval::ExtensionEnv`, which does not implement the `Copy` trait
+     |
+note: `purrdf_sparql_eval::ExtensionEnv::with_shapes` takes ownership of the receiver `self`, which moves value
+    --> crates/sparql-eval/src/extension_env.rs:300:28
+     |
+ 300 |     pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+     |                            ^^^^
+
+error[E0507]: cannot move out of a shared reference
+    --> crates/text/benches/../tests/support/shape_cases.rs:1526:19
+     |
+1526 |         let env = ExtensionEnv::empty().with_shapes(shapes);
+     |                   ^^^^^^^^^^^^^^^^^^^^^ ------------------- value moved due to this method call
+     |                   |
+     |                   move occurs because value has type `purrdf_sparql_eval::ExtensionEnv`, which does not implement the `Copy` trait
+     |
+note: `purrdf_sparql_eval::ExtensionEnv::with_shapes` takes ownership of the receiver `self`, which moves value
+    --> crates/sparql-eval/src/extension_env.rs:300:28
+     |
+ 300 |     pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+     |                            ^^^^
+
+error[E0507]: cannot move out of a shared reference
+    --> crates/text/benches/../tests/support/shape_cases.rs:2082:15
+     |
+2082 |     let env = ExtensionEnv::empty().with_shapes(registry);
+     |               ^^^^^^^^^^^^^^^^^^^^^ --------------------- value moved due to this method call
+     |               |
+     |               move occurs because value has type `purrdf_sparql_eval::ExtensionEnv`, which does not implement the `Copy` trait
+     |
+note: `purrdf_sparql_eval::ExtensionEnv::with_shapes` takes ownership of the receiver `self`, which moves value
+    --> crates/sparql-eval/src/extension_env.rs:300:28
+     |
+ 300 |     pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+     |                            ^^^^
+
+Some errors have detailed explanations: E0283, E0425, E0433, E0507, E0599.
+For more information about an error, try `rustc --explain E0283`.
+error: could not compile `purrdf-text` (bench "physical_shapes") due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0425]: cannot find type `WorkspaceAccumulator` in crate `purrdf_sparql_eval`
+   --> crates/text/tests/support/shape_cases.rs:931:37
+    |
+931 |     ) -> Result<purrdf_sparql_eval::WorkspaceAccumulator, EvalError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_sparql_eval::agg_fn::WorkspaceAccumulator;
+    |
+help: if you import `WorkspaceAccumulator`, refer to it directly
+    |
+931 -     ) -> Result<purrdf_sparql_eval::WorkspaceAccumulator, EvalError> {
+931 +     ) -> Result<WorkspaceAccumulator, EvalError> {
+    |
+
+error[E0433]: cannot find `WorkspaceAccumulator` in `purrdf_sparql_eval`
+   --> crates/text/tests/support/shape_cases.rs:932:29
+    |
+932 |         purrdf_sparql_eval::WorkspaceAccumulator::new(
+    |                             ^^^^^^^^^^^^^^^^^^^^ could not find `WorkspaceAccumulator` in `purrdf_sparql_eval`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_sparql_eval::agg_fn::WorkspaceAccumulator;
+    |
+help: if you import `WorkspaceAccumulator`, refer to it directly
+    |
+932 -         purrdf_sparql_eval::WorkspaceAccumulator::new(
+932 +         WorkspaceAccumulator::new(
+    |
+
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+    --> crates/text/tests/support/shape_cases.rs:2150:38
+     |
+2150 |     let reifies = builder.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
+     |                                      ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+     |
+help: there is a crate or module with a similar name
+     |
+2150 -     let reifies = builder.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
+2150 +     let reifies = builder.intern_iri(purrdf_core::vocab::rdf::REIFIES);
+     |
+help: consider importing this module
+     |
+   6 + use purrdf_core::vocab::rdf;
+     |
+help: if you import `rdf`, refer to it directly
+     |
+2150 -     let reifies = builder.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
+2150 +     let reifies = builder.intern_iri(rdf::REIFIES);
+     |
+
+error: this sequence of operators looks suspiciously like a bug
+   --> crates/text/tests/support/shape_cases.rs:513:24
+    |
+513 |                     && prior.start < span.end
+    |                        ^^^^^^^^^^^^^^^^^^^^^^ help: did you mean: `prior.start < prior.end`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#suspicious_operation_groupings
+    = note: `-D clippy::suspicious-operation-groupings` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::suspicious_operation_groupings)]`
+
+error[E0283]: type annotations needed
+    --> crates/text/tests/support/shape_cases.rs:424:30
+     |
+ 424 |     registry.register(PHRASE.into(), Arc::new(relation));
+     |              --------        ^^^^
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = note: the type must implement `std::convert::Into<std::string::String>`
+note: required by a bound in `purrdf_sparql_eval::PropertyFunctionRegistry::register`
+    --> crates/sparql-eval/src/property_fn.rs:2744:42
+     |
+2744 |     pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
+     |                                          ^^^^^^^^^^^^ required by this bound in `PropertyFunctionRegistry::register`
+help: try using a fully qualified path to specify the expected types
+     |
+ 424 -     registry.register(PHRASE.into(), Arc::new(relation));
+ 424 +     registry.register(<&str as std::convert::Into<T>>::into(PHRASE), Arc::new(relation));
+     |
+help: consider removing this method call, as the receiver has type `&'static str` and `&'static str: std::convert::Into<std::string::String>` trivially holds
+     |
+ 424 -     registry.register(PHRASE.into(), Arc::new(relation));
+ 424 +     registry.register(PHRASE, Arc::new(relation));
+     |
+
+error[E0283]: type annotations needed
+    --> crates/text/tests/support/shape_cases.rs:1197:35
+     |
+1197 |         relations.register(PHRASE.into(), Arc::new(phrase));
+     |                   --------        ^^^^
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+     = note: the type must implement `std::convert::Into<std::string::String>`
+note: required by a bound in `purrdf_sparql_eval::PropertyFunctionRegistry::register`
+    --> crates/sparql-eval/src/property_fn.rs:2744:42
+     |
+2744 |     pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
+     |                                          ^^^^^^^^^^^^ required by this bound in `PropertyFunctionRegistry::register`
+help: try using a fully qualified path to specify the expected types
+     |
+1197 -         relations.register(PHRASE.into(), Arc::new(phrase));
+1197 +         relations.register(<&str as std::convert::Into<T>>::into(PHRASE), Arc::new(phrase));
+     |
+help: consider removing this method call, as the receiver has type `&'static str` and `&'static str: std::convert::Into<std::string::String>` trivially holds
+     |
+1197 -         relations.register(PHRASE.into(), Arc::new(phrase));
+1197 +         relations.register(PHRASE, Arc::new(phrase));
+     |
+
+error[E0599]: no method named `failed` found for struct `purrdf_core::SegmentedEvidence` in the current scope
+    --> crates/text/tests/support/shape_cases.rs:1418:31
+     |
+1418 |     assert!(source.evidence().failed());
+     |                               ^^^^^^ method not found in `purrdf_core::SegmentedEvidence`
+
+error[E0507]: cannot move out of a shared reference
+    --> crates/text/tests/support/shape_cases.rs:1048:19
+     |
+1048 |         let env = ExtensionEnv::empty().with_shapes(registry);
+     |                   ^^^^^^^^^^^^^^^^^^^^^ --------------------- value moved due to this method call
+     |                   |
+     |                   move occurs because value has type `purrdf_sparql_eval::ExtensionEnv`, which does not implement the `Copy` trait
+     |
+note: `purrdf_sparql_eval::ExtensionEnv::with_shapes` takes ownership of the receiver `self`, which moves value
+    --> crates/sparql-eval/src/extension_env.rs:300:28
+     |
+ 300 |     pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+     |                            ^^^^
+
+error[E0507]: cannot move out of a shared reference
+    --> crates/text/tests/support/shape_cases.rs:1526:19
+     |
+1526 |         let env = ExtensionEnv::empty().with_shapes(shapes);
+     |                   ^^^^^^^^^^^^^^^^^^^^^ ------------------- value moved due to this method call
+     |                   |
+     |                   move occurs because value has type `purrdf_sparql_eval::ExtensionEnv`, which does not implement the `Copy` trait
+     |
+note: `purrdf_sparql_eval::ExtensionEnv::with_shapes` takes ownership of the receiver `self`, which moves value
+    --> crates/sparql-eval/src/extension_env.rs:300:28
+     |
+ 300 |     pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+     |                            ^^^^
+
+error[E0507]: cannot move out of a shared reference
+    --> crates/text/tests/support/shape_cases.rs:2082:15
+     |
+2082 |     let env = ExtensionEnv::empty().with_shapes(registry);
+     |               ^^^^^^^^^^^^^^^^^^^^^ --------------------- value moved due to this method call
+     |               |
+     |               move occurs because value has type `purrdf_sparql_eval::ExtensionEnv`, which does not implement the `Copy` trait
+     |
+note: `purrdf_sparql_eval::ExtensionEnv::with_shapes` takes ownership of the receiver `self`, which moves value
+    --> crates/sparql-eval/src/extension_env.rs:300:28
+     |
+ 300 |     pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+     |                            ^^^^
+
+error: could not compile `purrdf-text` (test "physical_shapes") due to 10 previous errors
+error[E0277]: `OriginalAdmissionRefusal` doesn't implement `std::fmt::Debug`
+   --> crates/retrieval/tests/real_producers.rs:134:50
+    |
+134 | impl purrdf_sparql_eval::CandidateConstraint for OriginalAdmissionRefusal {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `OriginalAdmissionRefusal`
+    |
+note: required by a bound in `purrdf_sparql_eval::CandidateConstraint`
+   --> crates/sparql-eval/src/candidate_scope.rs:24:32
+    |
+ 24 | pub trait CandidateConstraint: core::fmt::Debug + Sync {
+    |                                ^^^^^^^^^^^^^^^^ required by this bound in `CandidateConstraint`
+help: consider annotating `OriginalAdmissionRefusal` with `#[derive(Debug)]`
+    |
+133 + #[derive(Debug)]
+134 | struct OriginalAdmissionRefusal(AtomicU64);
+    |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-retrieval` (test "real_producers") due to 1 previous error
+error: the borrowed expression implements the required traits
+   --> crates/text/tests/support/scoped_candidates.rs:131:34
+    |
+131 |         let key = TermValue::iri(&format!("https://example.org/{name}"));
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `format!("https://example.org/{name}")`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+    = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: the borrowed expression implements the required traits
+   --> crates/text/tests/support/scoped_candidates.rs:207:44
+    |
+207 |             let candidate = TermValue::iri(&format!("https://example.org/{name}"));
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `format!("https://example.org/{name}")`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: could not compile `purrdf-text` (test "wasm_determinism") due to 2 previous errors

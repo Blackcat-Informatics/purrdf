@@ -1,0 +1,71 @@
+Running as unit: purrdf-evidence-native-ledger-strict-1.service
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking cpufeatures v0.3.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-events)
+   Compiling libc v0.2.186
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking crossbeam-epoch v0.9.18
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking digest v0.11.3
+    Checking regex v1.12.4
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking sha2 v0.11.0
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Checking crossbeam-deque v0.8.6
+    Checking hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Checking rayon v1.12.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/alloc-probe)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: unused import: `purrdf_core::evidence::LedgerSource`
+  --> crates/sparql-eval/src/evidence_exec.rs:48:13
+   |
+48 |         use purrdf_core::evidence::LedgerSource;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: the borrowed expression implements the required traits
+   --> crates/sparql-eval/src/evidence_exec.rs:313:73
+    |
+313 |                 NativeDiagnostic::error(NativeDiagnosticKind::Internal, &error, workspace)
+    |                                                                         ^^^^^^ help: change this to: `error`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+    = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: this argument (288 byte) is passed by value, but might be more efficient if passed by reference (limit: 256 byte)
+   --> crates/sparql-eval/src/evidence_exec.rs:323:21
+    |
+323 |         vocabulary: purrdf_core::evidence::LedgerVocabulary<'_>,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider passing by reference instead: `&purrdf_core::evidence::LedgerVocabulary<'_>`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_types_passed_by_value
+    = note: `-D clippy::large-types-passed-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_types_passed_by_value)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 3 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 32.048s
+             CPU time consumed: 96ms
+                   Memory peak: 27.6M (swap: 0B)

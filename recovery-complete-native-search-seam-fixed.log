@@ -1,0 +1,32 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error: unnecessary qualification
+    --> crates/sparql-eval/tests/evidence_ingress.rs:2899:25
+     |
+2899 |         let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+2899 -         let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+2899 +         let workspace = WorkspaceCapability::resident();
+     |
+
+error[E0599]: no method named `clone` found for struct `EvidenceRecord` in the current scope
+    --> crates/sparql-eval/tests/evidence_ingress.rs:2683:52
+     |
+2683 |                         search: Some(search_record.clone()),
+     |                                                    ^^^^^ method not found in `EvidenceRecord`
+
+error[E0599]: no method named `clone` found for struct `EvidenceRecord` in the current scope
+    --> crates/sparql-eval/tests/evidence_ingress.rs:2889:44
+     |
+2889 |                 search: Some(search_record.clone()),
+     |                                            ^^^^^ method not found in `EvidenceRecord`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

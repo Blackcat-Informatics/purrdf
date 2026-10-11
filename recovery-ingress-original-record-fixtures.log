@@ -1,0 +1,15 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0382]: borrow of moved value: `search_record`
+    --> crates/sparql-eval/tests/evidence_ingress.rs:2724:39
+     |
+2644 |                 let search_record = EvidenceRecord::from_parts(
+     |                     ------------- move occurs because `search_record` has type `EvidenceRecord`, which does not implement the `Copy` trait
+...
+2674 |                         search: Some(search_record),
+     |                                      ------------- value moved here
+...
+2724 |                         &owner.retain(&search_record).unwrap(),
+     |                                       ^^^^^^^^^^^^^^ value borrowed here after move
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 1 previous error

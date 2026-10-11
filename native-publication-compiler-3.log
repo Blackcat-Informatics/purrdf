@@ -1,0 +1,81 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/columnar)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/ed25519)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+error: function `check_plan_matches_relations` is never used
+    --> crates/sparql-eval/src/engine.rs:6234:4
+     |
+6234 | fn check_plan_matches_relations(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `check_plan_soundness` is never used
+    --> crates/sparql-eval/src/engine.rs:6333:4
+     |
+6333 | fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
+     |    ^^^^^^^^^^^^^^^^^^^^
+
+error: function `admit_structure` is never used
+    --> crates/sparql-eval/src/engine.rs:6464:4
+     |
+6464 | fn admit_structure(query: &Query) -> Result<(), RdfDiagnostic> {
+     |    ^^^^^^^^^^^^^^^
+
+error: function `check_plan_matches_registries` is never used
+    --> crates/sparql-eval/src/engine.rs:6495:4
+     |
+6495 | fn check_plan_matches_registries(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `parameter_set` is never used
+   --> crates/sparql-eval/src/property_fn_plan.rs:237:15
+    |
+237 | pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
+    |               ^^^^^^^^^^^^^
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+    --> crates/sparql-eval/src/engine.rs:6525:1
+     |
+6525 | / pub struct AdmittedInternedGoverned<R> {
+6526 | |     outcome: InternedGoverned<R>,
+6527 | |     _identity: crate::workspace::LexicalFrame,
+6528 | | }
+     | |_^
+     |
+     = note: `-D missing-debug-implementations` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no associated function or constant named `default` found for struct `purrdf_core::RdfDataset` in the current scope
+    --> crates/sparql-eval/src/workspace.rs:2428:48
+     |
+2428 |         let dataset = purrdf_core::RdfDataset::default();
+     |                                                ^^^^^^^ associated function or constant not found in `purrdf_core::RdfDataset`
+     |
+note: if you're trying to build a new `purrdf_core::RdfDataset`, consider using `purrdf_core::RdfDataset::union` which returns `purrdf_core::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2025:5
+     |
+2025 |     pub fn union(datasets: &[&Self]) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/workspace.rs:2759:61
+     |
+2759 |         let mut erased: super::WorkspaceBox<dyn ReadByte> = concrete.coerce(|value| value);
+     |                         ---------------------------------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `WorkspaceBox<dyn ReadByte>`, found `WorkspaceBox<Payload>`
+     |                         |
+     |                         expected due to this
+     |
+     = note: expected struct `WorkspaceBox<dyn ReadByte>`
+                found struct `WorkspaceBox<owned_row_regressions::mutable_native_trait_box_retains_concrete_allocation_and_first_refusal::Payload>`
+     = help: `owned_row_regressions::mutable_native_trait_box_retains_concrete_allocation_and_first_refusal::Payload` implements `ReadByte` so you could box the found value and coerce it to the trait object `Box<dyn ReadByte>`, you will have to change the expected type as well
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 2 previous errors

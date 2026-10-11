@@ -1,0 +1,58 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error[E0277]: expected an `FnOnce(purrdf_sparql_eval::InternedOutcome<'_, '_, D>)` closure, found `{closure@crates/retrieval/src/execute.rs:1070:21: 1070:74}`
+    --> crates/retrieval/src/execute.rs:1097:17
+     |
+1092 |             self.engine.execute_witnessed_evidence(
+     |                         -------------------------- required by a bound introduced by this call
+...
+1097 |                 visit,
+     |                 ^^^^^ expected an `FnOnce(purrdf_sparql_eval::InternedOutcome<'_, '_, D>)` closure, found `{closure@crates/retrieval/src/execute.rs:1070:21: 1070:74}`
+     |
+     = help: the trait `for<'a, 'b> FnOnce(purrdf_sparql_eval::InternedOutcome<'a, 'b, D>)` is not implemented for closure `{closure@crates/retrieval/src/execute.rs:1070:21: 1070:74}`
+     = note: expected a closure with signature `for<'a, 'b> fn(InternedOutcome<'a, 'b, _>)`
+                found a closure with signature `fn(InternedOutcome<'_, '_, _>)`
+note: required by a bound in `purrdf_sparql_eval::NativeSparqlEngine::execute_witnessed_evidence`
+    --> crates/sparql-eval/src/engine.rs:4104:21
+     |
+4094 |     pub fn execute_witnessed_evidence<
+     |            -------------------------- required by a bound in this associated function
+...
+4104 |         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `NativeSparqlEngine::execute_witnessed_evidence`
+
+error[E0277]: expected an `FnOnce(purrdf_sparql_eval::InternedOutcome<'_, '_, D>)` closure, found `{closure@crates/retrieval/src/execute.rs:1070:21: 1070:74}`
+    --> crates/retrieval/src/execute.rs:1101:70
+     |
+1101 |                 .execute_witnessed(execution, self.dataset, options, visit)
+     |                  -----------------                                   ^^^^^ expected an `FnOnce(purrdf_sparql_eval::InternedOutcome<'_, '_, D>)` closure, found `{closure@crates/retrieval/src/execute.rs:1070:21: 1070:74}`
+     |                  |
+     |                  required by a bound introduced by this call
+     |
+     = help: the trait `for<'a, 'b> FnOnce(purrdf_sparql_eval::InternedOutcome<'a, 'b, D>)` is not implemented for closure `{closure@crates/retrieval/src/execute.rs:1070:21: 1070:74}`
+     = note: expected a closure with signature `for<'a, 'b> fn(InternedOutcome<'a, 'b, _>)`
+                found a closure with signature `fn(InternedOutcome<'_, '_, _>)`
+note: required by a bound in `purrdf_sparql_eval::NativeSparqlEngine::execute_witnessed`
+    --> crates/sparql-eval/src/engine.rs:4074:21
+     |
+4069 |     pub fn execute_witnessed<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync, R>(
+     |            ----------------- required by a bound in this associated function
+...
+4074 |         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `NativeSparqlEngine::execute_witnessed`
+
+error[E0624]: associated function `source_read` is private
+    --> crates/retrieval/src/execute.rs:1122:56
+     |
+1122 |                         purrdf_sparql_eval::EvalError::source_read,
+     |                                                        ^^^^^^^^^^^ private associated function
+     |
+    ::: crates/sparql-eval/src/error.rs:593:5
+     |
+ 593 |     pub(crate) fn source_read(error: impl core::fmt::Display) -> Self {
+     |     ----------------------------------------------------------------- private associated function defined here
+
+Some errors have detailed explanations: E0277, E0624.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-retrieval` (lib) due to 3 previous errors

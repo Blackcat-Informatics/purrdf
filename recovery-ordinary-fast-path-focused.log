@@ -1,0 +1,175 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 56.35s
+     Running tests/evidence_ingress.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/933c5385acd98653/out/evidence_ingress-933c5385acd98653)
+
+running 20 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.10s
+
+     Running tests/prepared_execution.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 39s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 39 tests
+test path::recursion_free_tests::the_machine_answers_the_reference_set_and_bag_on_generated_shapes ... ok
+test path::recursion_free_tests::the_program_folds_reflexivity_and_repetition_as_the_reference_does ... ok
+test path::tests::absent_ground_endpoint_is_empty ... ok
+test path::tests::alternative_unions_both ... ok
+test path::tests::both_ground_is_ask_shaped ... ok
+test path::tests::both_variable_enumerates_pairs_with_zero_length_self_pairs ... ok
+test path::tests::composite_step_cycle_terminates_and_reports ... ok
+test path::tests::cyclic_graph_p_n_m_terminates_without_a_budget ... ok
+test path::tests::determinism_rows_are_termid_ordered ... ok
+test path::tests::large_exact_range_uses_polynomial_powers_on_coprime_cycles ... ok
+test path::tests::list_walk_members_rest_star_first ... ok
+test path::tests::named_predicate_forward_and_reverse ... ok
+test path::tests::negated_property_set_direct_and_inverse ... ok
+test path::tests::negated_property_set_excludes_named ... ok
+test path::tests::negated_property_set_pure_inverse ... ok
+test path::tests::negated_under_one_or_more ... ok
+test path::tests::nested_alternative_inverse_plus ... ok
+test path::tests::non_reflexive_ground_endpoint_absent_from_dataset_is_empty ... ok
+test path::tests::one_or_more_includes_start_only_via_cycle ... ok
+test path::tests::range_exact_and_bounded_on_chain ... ok
+test path::tests::range_on_cycle_reports_nodes_at_multiple_counts ... ok
+test path::tests::range_path_answers_are_unchanged_by_the_early_exit ... ok
+test path::tests::same_var_nonreflexive_no_cycle_is_empty ... ok
+test path::tests::same_var_reflexive_optional ... ok
+test path::tests::same_var_reflexive_range_zero_min ... ok
+test path::tests::same_var_reflexive_star ... ok
+test path::tests::same_variable_keeps_only_reflexive_pairs ... ok
+test path::tests::sequence_backward_from_object ... ok
+test path::tests::sequence_chains_two_predicates ... ok
+test path::tests::star_fanout_charges_each_candidate_edge ... ok
+test path::tests::star_terminates_on_a_cycle ... ok
+test path::tests::variable_inside_quoted_triple_endpoint_names_the_path_not_a_bgp ... ok
+test path::tests::wildcard_any_and_namespace_scoped ... ok
+test path::tests::zero_or_more_includes_self_and_transitive ... ok
+test path::tests::zero_or_more_reflexive_ground_endpoint_absent_from_empty_dataset ... ok
+test path::tests::zero_or_one_reflexive_ground_endpoint_absent_from_empty_dataset ... ok
+test path::recursion_free_tests::the_machine_charges_in_the_reference_order_under_every_budget ... ok
+test path::recursion_free_tests::a_hundred_thousand_reverses_evaluate_on_a_128_kib_thread ... ok
+test path::recursion_free_tests::a_hundred_thousand_zero_or_ones_evaluate_on_a_128_kib_thread ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 1471 filtered out; finished in 0.09s
+
+    Checking typenum v1.20.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking crossbeam-utils v0.8.21
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking libc v0.2.186
+    Checking hashbrown v0.17.1
+    Checking either v1.16.0
+    Checking hybrid-array v0.4.15
+    Checking crossbeam-epoch v0.9.18
+    Checking getrandom v0.3.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/stack)
+    Checking regex-automata v0.4.14
+    Checking crossbeam-deque v0.8.6
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking rayon-core v1.13.0
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking rayon v1.12.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Checking regex v1.12.4
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: redundant clone
+    --> crates/sparql-eval/src/property_fn_eval.rs:1263:41
+     |
+1263 |                 None => driving_evidence.clone(),
+     |                                         ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/sparql-eval/src/property_fn_eval.rs:1263:25
+     |
+1263 |                 None => driving_evidence.clone(),
+     |                         ^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+     = note: `-D clippy::redundant-clone` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: redundant clone
+    --> crates/sparql-eval/src/modifier.rs:5647:33
+     |
+5647 |                 pattern: pattern.clone(),
+     |                                 ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/sparql-eval/src/modifier.rs:5647:26
+     |
+5647 |                 pattern: pattern.clone(),
+     |                          ^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+     = note: `-D clippy::redundant-clone` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: redundant clone
+    --> crates/sparql-eval/src/property_fn_eval.rs:1263:41
+     |
+1263 |                 None => driving_evidence.clone(),
+     |                                         ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/sparql-eval/src/property_fn_eval.rs:1263:25
+     |
+1263 |                 None => driving_evidence.clone(),
+     |                         ^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 2 previous errors

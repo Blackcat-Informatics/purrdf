@@ -1,0 +1,26 @@
+Running as unit: run-p610584-i9052668.scope; invocation ID: 7c1eb2e9e1ad474da3cf96c9fbd1afd9
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: this `let...else` may be rewritten with the `?` operator
+    --> crates/text/src/index.rs:1233:9
+     |
+1233 | /         let Some(document) = self.documents.get(id as usize) else {
+1234 | |             return None;
+1235 | |         };
+     | |__________^ help: replace it with: `let document = self.documents.get(id as usize)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#question_mark
+     = note: `-D clippy::question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::question_mark)]`
+
+error: this `let...else` may be rewritten with the `?` operator
+    --> crates/text/src/index.rs:1236:9
+     |
+1236 | /         let Some(entry) = self.term_entry(term) else {
+1237 | |             return None;
+1238 | |         };
+     | |__________^ help: replace it with: `let entry = self.term_entry(term)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#question_mark
+
+error: could not compile `purrdf-text` (lib) due to 2 previous errors

@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against e89e288ef476 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/rdf-core/src/graph.rs'.
+Recorded resolution for 'docs/WASM_TESTING.md'.
+[paudley/515-sparql-eval-datalog-per-row-evidence 9556f2579] Merge remote-tracking branch 'origin/main' into paudley/515-sparql-eval-datalog-per-row-evidence

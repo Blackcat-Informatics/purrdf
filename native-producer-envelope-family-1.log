@@ -1,0 +1,185 @@
+Running as unit: run-p594819-i8976612.scope; invocation ID: f294bdbaf2394ab1b7eea7cd8efd6c81
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0425]: cannot find type `RowEvidence` in the crate root
+   --> crates/sparql-eval/src/property_fn.rs:167:24
+    |
+167 |     Established(crate::RowEvidence),
+    |                        ^^^^^^^^^^^ not found in the crate root
+    |
+help: consider importing this struct
+    |
+ 57 + use crate::evidence_exec::RowEvidence;
+    |
+help: if you import `RowEvidence`, refer to it directly
+    |
+167 -     Established(crate::RowEvidence),
+167 +     Established(RowEvidence),
+    |
+
+error[E0425]: cannot find type `RowEvidence` in the crate root
+   --> crates/sparql-eval/src/property_fn.rs:171:22
+    |
+171 |     Undecided(crate::RowEvidence),
+    |                      ^^^^^^^^^^^ not found in the crate root
+    |
+help: consider importing this struct
+    |
+ 57 + use crate::evidence_exec::RowEvidence;
+    |
+help: if you import `RowEvidence`, refer to it directly
+    |
+171 -     Undecided(crate::RowEvidence),
+171 +     Undecided(RowEvidence),
+    |
+
+error[E0425]: cannot find type `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2025:22
+     |
+2025 |     evidence: crate::RowEvidence,
+     |                      ^^^^^^^^^^^ not found in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2025 -     evidence: crate::RowEvidence,
+2025 +     evidence: RowEvidence,
+     |
+
+error[E0433]: cannot find `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2054:30
+     |
+2054 |             evidence: crate::RowEvidence::default(),
+     |                              ^^^^^^^^^^^ could not find `RowEvidence` in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2054 -             evidence: crate::RowEvidence::default(),
+2054 +             evidence: RowEvidence::default(),
+     |
+
+error[E0433]: cannot find `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2085:30
+     |
+2085 |             evidence: crate::RowEvidence::default(),
+     |                              ^^^^^^^^^^^ could not find `RowEvidence` in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2085 -             evidence: crate::RowEvidence::default(),
+2085 +             evidence: RowEvidence::default(),
+     |
+
+error[E0425]: cannot find type `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2101:53
+     |
+2101 |     pub fn with_evidence(mut self, evidence: crate::RowEvidence) -> Self {
+     |                                                     ^^^^^^^^^^^ not found in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2101 -     pub fn with_evidence(mut self, evidence: crate::RowEvidence) -> Self {
+2101 +     pub fn with_evidence(mut self, evidence: RowEvidence) -> Self {
+     |
+
+error[E0425]: cannot find type `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2108:45
+     |
+2108 |     pub const fn evidence(&self) -> &crate::RowEvidence {
+     |                                             ^^^^^^^^^^^ not found in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2108 -     pub const fn evidence(&self) -> &crate::RowEvidence {
+2108 +     pub const fn evidence(&self) -> &RowEvidence {
+     |
+
+error[E0425]: cannot find type `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2169:45
+     |
+2169 |     pub(crate) fn evidence(&self) -> crate::RowEvidence {
+     |                                             ^^^^^^^^^^^ not found in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2169 -     pub(crate) fn evidence(&self) -> crate::RowEvidence {
+2169 +     pub(crate) fn evidence(&self) -> RowEvidence {
+     |
+
+error[E0433]: cannot find `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn.rs:2171:41
+     |
+2171 |             Self::Resident(_) => crate::RowEvidence::default(),
+     |                                         ^^^^^^^^^^^ could not find `RowEvidence` in the crate root
+     |
+help: consider importing this struct
+     |
+  57 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+2171 -             Self::Resident(_) => crate::RowEvidence::default(),
+2171 +             Self::Resident(_) => RowEvidence::default(),
+     |
+
+error[E0425]: cannot find type `RowEvidence` in the crate root
+    --> crates/sparql-eval/src/property_fn_eval.rs:3602:56
+     |
+3602 |     ) -> Result<Option<(Vec<Option<TermValue>>, crate::RowEvidence)>, EvalError> {
+     |                                                        ^^^^^^^^^^^ not found in the crate root
+     |
+help: consider importing this struct
+     |
+  84 + use crate::evidence_exec::RowEvidence;
+     |
+help: if you import `RowEvidence`, refer to it directly
+     |
+3602 -     ) -> Result<Option<(Vec<Option<TermValue>>, crate::RowEvidence)>, EvalError> {
+3602 +     ) -> Result<Option<(Vec<Option<TermValue>>, RowEvidence)>, EvalError> {
+     |
+
+error: used `assert!` to check that a value is empty
+   --> crates/rdf-core/src/query_scope/counters.rs:141:21
+    |
+141 |                     assert!(decisions.is_empty());
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+141 -                     assert!(decisions.is_empty());
+141 +                     assert_eq!(decisions, []);
+    |
+
+error: could not compile `purrdf-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 10 previous errors
+error: could not compile `purrdf-sparql-eval` (lib test) due to 10 previous errors

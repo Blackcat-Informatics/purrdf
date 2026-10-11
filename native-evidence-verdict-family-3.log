@@ -1,0 +1,133 @@
+Running as unit: run-p470703-i8869239.scope; invocation ID: b41d8e689b9947ba9615ca5bb3117f70
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 23.79s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 28s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/428ba0641e6fc943/out/evidence_ingress-428ba0641e6fc943)
+
+running 17 tests
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 10s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/eecad5c7c72edc96/out/purrdf_sparql_eval-eecad5c7c72edc96)
+
+running 22 tests
+test binop::tests::join_output_reservation_capacity_overflow_is_typed ... ok
+test binop::tests::cell_bounded_cross_product_refuses_before_constructing_limit_plus_one ... ok
+test binop::tests::probe_has_match_hits_index_then_scans_wild ... ok
+test binop::tests::minus_with_disjoint_domains_removes_nothing ... ok
+test binop::tests::join_with_no_shared_vars_is_cross_product ... ok
+test binop::tests::minus_removes_compatible_overlapping_rows ... ok
+test binop::tests::join_on_shared_variable ... ok
+test binop::tests::a_truncated_left_arm_reports_the_evaluated_arms_schema ... ok
+test binop::tests::join_with_no_overlap_is_empty ... ok
+test binop::tests::fuel_trip_mid_optional_probe_never_emits_an_unbound_extension ... ok
+test binop::tests::empty_optional_padding_observes_cells_before_a_zero_limit ... ok
+test binop::tests::optional_keeps_unmatched_left_with_unbound_right ... ok
+test binop::tests::lateral_over_graph_variable_keeps_column_order ... ok
+test binop::tests::optional_inline_filter_excludes_failing_pairings ... ok
+test binop::tests::union_concatenates_preserving_multiset ... ok
+test binop::tests::union_filter_unbound_branch_yields_zero_but_query_not_empty ... ok
+test binop::tests::union_filter_true_branch_contributes_unit_solution ... ok
+test binop::tests::union_three_branches_with_overlapping_and_disjoint_binds_agree ... ok
+test binop::tests::union_of_disjoint_schemas_widens_and_pads ... ok
+test binop::tests::ungoverned_evaluation_is_unchanged_and_always_complete ... ok
+test binop::tests::union_truncation_is_identical_under_forced_parallel_and_forced_sequential ... ok
+test binop::tests::sparse_join_capacity_tracks_actual_matches_under_every_cell_allowance ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1474 filtered out; finished in 0.04s
+
+    Finished `test` profile [optimized] target(s) in 0.34s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/eecad5c7c72edc96/out/purrdf_sparql_eval-eecad5c7c72edc96)
+
+running 68 tests
+test modifier::tests::compare_values_agrees_with_order_values ... ok
+test modifier::tests::fold_values_over_the_empty_bag ... ok
+test modifier::tests::fold_values_matches_the_group_by_accumulators ... ok
+test modifier::tests::fold_values_ranks_blank_nodes_and_triple_terms ... ok
+test modifier::tests::distinct_drops_duplicate_rows ... ok
+test modifier::tests::avg_empty_group_is_zero ... ok
+test modifier::tests::avg_overflow_cancelling_values_is_exact ... ok
+test modifier::tests::count_star_over_empty_is_one_group_zero ... ok
+test modifier::tests::avg_double_nan_propagates ... ok
+test modifier::tests::avg_integers ... ok
+test modifier::tests::avg_overflow_exceeding_i128_answers_exact_total ... ok
+test modifier::tests::aggregates_skip_unbound_argument_rows_but_count_star_does_not ... ok
+test modifier::tests::group_by_with_count_distinct ... ok
+test modifier::tests::avg_over_durations_rounds_months ... ok
+test modifier::tests::group_concat_without_separator_uses_default_space ... ok
+test modifier::tests::max_empty_group_is_unbound ... ok
+test modifier::tests::group_concat_empty_group_is_empty_string ... ok
+test modifier::tests::avg_double_overflow_is_ieee_infinity_not_poisoned_or_exact ... ok
+test modifier::tests::group_by_with_count ... ok
+test modifier::tests::group_concat_poisons_on_a_blank_node_value ... ok
+test modifier::tests::max_integers ... ok
+test modifier::tests::order_by_ascending_value_space ... ok
+test modifier::tests::group_min ... ok
+test modifier::tests::order_by_has_no_value_versus_syntactic_cycle ... ok
+test modifier::tests::order_values_ranks_every_rdf12_term_kind ... ok
+test modifier::tests::order_by_descending ... ok
+test modifier::tests::order_values_compares_triple_terms_componentwise ... ok
+test modifier::tests::order_values_orders_literals_by_value ... ok
+test modifier::tests::order_values_is_stable_and_keeps_duplicates ... ok
+test modifier::tests::sum_double_nan_propagates ... ok
+test modifier::tests::sample_returns_first_row_order_value ... ok
+test modifier::tests::slice_offset_and_limit ... ok
+test modifier::tests::project_keeps_only_listed_vars_in_order ... ok
+test modifier::tests::sum_empty_group_is_zero ... ok
+test modifier::tests::sum_double_overflow_is_ieee_infinity_not_poisoned_or_exact ... ok
+test modifier::tests::sum_non_numeric_is_unbound ... ok
+test modifier::tests::sum_group_by_integration ... ok
+test modifier::tests::sum_integers ... ok
+test modifier::tests::sum_mixed_integer_and_float_promotes_to_float_as_before ... ok
+test modifier::tests::sum_over_durations_is_the_group_sum ... ok
+test modifier::tests::sum_over_mixed_numeric_and_duration_is_unbound ... ok
+test modifier::tests::sum_over_mixed_subtype_durations_is_the_general_duration ... ok
+test modifier::tests::sum_overflow_exceeding_i128_answers_exact_total ... ok
+test modifier::tests::sum_overflow_then_decimal_stays_exact ... ok
+test modifier::tests::sum_overflow_then_double_promotes_without_poisoning ... ok
+test modifier::tests::sum_with_decimal ... ok
+test modifier::tests::sum_overflow_cancelling_values_answers_exact_total ... ok
+test modifier::tests::values_seeds_solutions ... ok
+test modifier::tests::avg_of_mixed_sign_durations ... ok
+test modifier::tests::sum_over_mixed_sign_durations_is_order_independent ... ok
+test modifier::tests::sum_whose_final_value_is_mixed_sign_is_unbound ... ok
+test modifier::tests::sample_empty_group_is_unbound ... ok
+test modifier::tests::the_sparql_ordering_is_a_total_order_over_every_term_kind ... ok
+test modifier::tests::sum_over_mixed_sign_durations_agrees_across_a_forced_chunk_boundary ... ok
+test modifier::tests::group_aggregate_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::within_group_distinct_dedup_survives_chunking_keeping_input_order_first_occurrence ... ok
+test modifier::tests::every_builtin_agrees_across_thread_pool_sizes ... ok
+test modifier::tests::stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_median_duration_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_last_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::within_group_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::within_group_custom_aggregate_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_median_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::sum_over_durations_agrees_across_thread_pool_sizes ... ok
+test modifier::tests::stat_agg_topk_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::sum_overflow_agrees_across_thread_pool_sizes ... ok
+test modifier::tests::stat_agg_mode_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_moments_chunked_fold_forced_parallel_and_sequential_agree ... ok
+
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 1428 filtered out; finished in 0.03s
+

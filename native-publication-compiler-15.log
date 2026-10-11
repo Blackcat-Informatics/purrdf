@@ -1,0 +1,28 @@
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-capi)
+error: unused `Result` that must be used
+   --> crates/retrieval/tests/candidate_union.rs:477:5
+    |
+477 | /     execution.statuses.insert(
+478 | |         iri("scripted"),
+479 | |         ProducerStatus::ExecutionFailed {
+480 | |             reason: "host denied".into(),
+481 | |         },
+482 | |     );
+    | |_____^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+477 |     let _ = execution.statuses.insert(
+    |     +++++++
+
+error: could not compile `purrdf-retrieval` (test "candidate_union") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/bindings/python)

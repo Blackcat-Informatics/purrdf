@@ -1,0 +1,9 @@
+# Actual publication candidate
+
+PR532 head 5e1f3658a2a7546f81a550ee6a33b725971a0029 targets main e89e288ef476ed06c80c6593094c4d583d1f5214. A fresh fetch and `git merge-tree --write-tree --no-messages origin/main HEAD` returns clean candidate 96e38b2af751b0980afc6be0202b13ec70e1feac. Diffing that tree against HEAD is empty. The branch already contains the actual base; no combined new source/build/consumer delta exists. Existing source, focused and portable evidence therefore applies unchanged, with its explicit final-gate/hosted failures and canceled timing scope. No full suite is repeated merely for publication.
+
+Live Gitee main is 8229d73f97251e1a0502a486eee0f753a6e81d20; ancestry check against HEAD succeeds. The prior reviewed integration retained both original Gitee commits and the current canonical README after evaluating the stale rename conflict, as recorded in source-checkpoint-integration.md. No new mirror merge is needed. Ordinary mirror workflow and remote main readback must follow actual landing.
+
+`main-branch-rules.json` lists deletion/non-fast-forward restrictions, signed and linear history, and pull-request rules with zero approving reviews and no thread-resolution requirement; there is no required_status_checks rule. The classic required-status-check endpoint returns Branch not protected (404). This is not a green CI claim. The explicit user instruction authorizes publication/merge after the completed round despite findings; follow-up531 retains actual failures, and normal hooks/ghprsq enforce remaining prerequisites. No workflow or rule is disabled or bypassed.
+
+Geo has not landed at this assessment. Its separate governor v15 remains root's second-landing v16 reconciliation, with affected integration validation determined on that actual candidate. Before final ghprsq, refresh actual inputs/review state; after landing compare ghprsq's result to this candidate once.

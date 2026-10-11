@@ -1,0 +1,55 @@
+Running as unit: run-p1672940-i22653453.scope; invocation ID: dcd02ae66df64b3a8e9305019b50d6a3
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 00s
+     Running `target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.21s
+     Running `target/debug/examples/gen_loss_matrix transcode`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `target/debug/examples/gen_rule_inventory`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_blocks`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables case-context`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables xpath-compatibility`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/examples/gen_html_entities`
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.65s
+     Running `target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+Documented claims disagree with their generated source:
+
+  - docs/SPARQL-GOVERNOR-PROFILE.md: the §10 recipe prints version 14, but `GOVERNOR_PROFILE_VERSION` in crates/sparql-eval/src/governor/mod.rs is 15 — the recipe's preimage no longer matches the version this document's own '## 10. Profile identity' table declares
+  - docs/SPARQL-GOVERNOR-PROFILE.md: the §10 recipe's pinned digest comment is ff3c6111c41cf43077cdf0937a9657e5cb8b0457d2aca19e40328815b3752e06, but `GOVERNOR_PROFILE_DIGEST` recomputed from the current `CHARGE_SCHEDULE` in crates/sparql-eval/src/governor/mod.rs is 34f3ed243e70e82eb473de8a264af5a712ccab053c48bc4be286f1c7293071a1
+
+Every number above is restated prose. Fix the prose to match the
+generated artifact — do not edit the generated artifact to match
+the prose. Regenerate the sources with `make metadata` (rule
+inventory) and `python3 scripts/conformance-matrix.py --write-doc`
+(conformance matrix).
+make: *** [Makefile:82: metadata] Error 1
+terminal_status=2

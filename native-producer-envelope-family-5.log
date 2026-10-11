@@ -1,0 +1,13 @@
+Running as unit: run-p615362-i9021105.scope; invocation ID: 271b4f012df14e80a99362ac7d20ce13
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error[E0063]: missing field `constraints` in initializer of `request::RetrievalRequest`
+   --> crates/retrieval/src/document.rs:433:12
+    |
+433 |         Ok(Self {
+    |            ^^^^ missing `constraints`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `purrdf-retrieval` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-retrieval` (lib test) due to 1 previous error

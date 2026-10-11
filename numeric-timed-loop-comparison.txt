@@ -1,0 +1,10 @@
+Current bag-summary artifact versus original baseline: actual bench_sort_order FnMut timed loops; read-only disassembly, not timing acceptance.
+baseline sha256=7bb8ab6e42fbe8cf1a842d47bae2f1f34877921eeebd7c87c52d1758f6089d72
+current sha256=279eb2021f7629d3118d029b30a347dfea42baa8addd8cbed3cecf77156484bb
+query_eval::bench_sort_order::{closure#0} {'baseline': 'start=0x7e9a70,size=346,start_mod64=48', 'current': 'start=0x8fd320,size=346,start_mod64=32'}; normalized instruction bodies identical=True
+query_eval::bench_sort_order::{closure#1} {'baseline': 'start=0x7e9bd0,size=321,start_mod64=16', 'current': 'start=0x8fd480,size=321,start_mod64=0'}; normalized instruction bodies identical=True
+FnMut vtable entries: total baseline0x880920->0x7e9a70,current0x9a3200->0x8fd320; promoted baseline0x880948->0x7e9bd0,current0x9a3228->0x8fd480. Harness sample/time_iterations invokes FnMut, not call_once shim.
+Total closure0 inlines the value_total_cmp discriminant routing (does not call its standalone symbol), then calls original GOT value_cmp or numeric_total_cmp. Promoted closure1 hoists original value_cmp GOT pointer and calls it each iteration.
+ELF relative relocations resolve total/promoted shared value_cmp slots baseline0x886248->0x7722f0,current0x9a9470->0x869c50. numeric_total_cmp slots baseline0x886250->0x7769f0,current0x9a9478->0x86e350.
+Relevant unchanged-computation layout: total hot loop +0x78 starts mod64=40 baseline,24 current; its numeric call +0x9e starts mod64=14 baseline,62 current (current six-byte call crosses a64-byte boundary). Promoted hot loop +0x60 starts mod64=48 baseline,32 current.
+All numeric pairs share these two loops. The dispatch itself is partially inlined, but no extra inlined computation or different symbolic numeric callee appears. Absolute layout differs; source cause/timing acceptance remains unresolved. No benchmark-only alignment or numeric source change is proposed.

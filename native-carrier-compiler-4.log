@@ -1,0 +1,36 @@
+Running as unit: ledger-native-carrier-compiler-4.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+error[E0277]: expected an `Fn(&PartitionKey)` closure, found `{closure@crates/text/src/score.rs:514:25: 514:30}`
+   --> crates/text/src/score.rs:513:9
+    |
+510 |       let rows = select_counted_membership_owned(
+    |                  ------------------------------- required by a bound introduced by this call
+...
+513 | /         CandidateSelection {
+514 | |             partitions: |key| filter.matches(key),
+515 | |             candidates: membership,
+516 | |         },
+    | |_________^ the trait `for<'a> Fn(&'a PartitionKey)` is not implemented for `{closure@crates/text/src/score.rs:514:25: 514:30}`
+    |
+    = note: the trait bound `for<'a> {closure@crates/text/src/score.rs:514:25: 514:30}: Fn(&'a PartitionKey)` is not satisfied
+note: required by a bound in `select_counted_membership_owned`
+   --> crates/text/src/score.rs:581:14
+    |
+577 | pub(crate) fn select_counted_membership_owned<'a>(
+    |               ------------------------------- required by a bound in this function
+...
+581 |         impl Fn(&PartitionKey) -> bool,
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `select_counted_membership_owned`
+help: consider borrowing here
+    |
+513 |         &CandidateSelection {
+    |         +
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-text` (lib) due to 1 previous error
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 13.886s
+             CPU time consumed: 131ms
+                   Memory peak: 32.5M (swap: 0B)

@@ -1,0 +1,321 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/ed25519)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/helper-census)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/shex)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/entail)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/conformance-kit)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/geo)
+error[E0425]: cannot find type `ExecutionError` in this scope
+   --> crates/retrieval/src/candidate.rs:521:35
+    |
+521 |     ) -> Result<Self::Output<'d>, ExecutionError> {
+    |                                   ^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::ExecutionError;
+    |
+
+error[E0433]: cannot find type `ExecutionError` in this scope
+   --> crates/retrieval/src/candidate.rs:530:26
+    |
+530 |                 .map_err(ExecutionError::NativeFailure)?,
+    |                          ^^^^^^^^^^^^^^ use of undeclared type `ExecutionError`
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::ExecutionError;
+    |
+
+error[E0433]: cannot find type `ExecutionError` in this scope
+   --> crates/retrieval/src/candidate.rs:541:26
+    |
+541 |                 .map_err(ExecutionError::NativeFailure)?,
+    |                          ^^^^^^^^^^^^^^ use of undeclared type `ExecutionError`
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::ExecutionError;
+    |
+
+error[E0433]: cannot find type `ExecutionError` in this scope
+   --> crates/retrieval/src/candidate.rs:544:22
+    |
+544 |             .map_err(ExecutionError::NativeFailure)?,
+    |                      ^^^^^^^^^^^^^^ use of undeclared type `ExecutionError`
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::ExecutionError;
+    |
+
+error[E0433]: cannot find type `ExecutionError` in this scope
+   --> crates/retrieval/src/candidate.rs:550:26
+    |
+550 |                 .map_err(ExecutionError::NativeFailure)?,
+    |                          ^^^^^^^^^^^^^^ use of undeclared type `ExecutionError`
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::ExecutionError;
+    |
+
+error[E0433]: cannot find type `ExecutionError` in this scope
+   --> crates/retrieval/src/candidate.rs:553:22
+    |
+553 |             .map_err(ExecutionError::NativeFailure)?,
+    |                      ^^^^^^^^^^^^^^ use of undeclared type `ExecutionError`
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::ExecutionError;
+    |
+
+error: unnecessary qualification
+   --> crates/retrieval/src/union.rs:109:9
+    |
+109 |         purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<UnservedTerm>>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+109 -         purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<UnservedTerm>>,
+109 +         SharedWorkspace<purrdf_sparql_eval::AdmittedVec<UnservedTerm>>,
+    |
+
+error: unnecessary qualification
+   --> crates/retrieval/src/union.rs:109:45
+    |
+109 |         purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<UnservedTerm>>,
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+109 -         purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<UnservedTerm>>,
+109 +         purrdf_sparql_eval::SharedWorkspace<AdmittedVec<UnservedTerm>>,
+    |
+
+error: unnecessary qualification
+   --> crates/retrieval/src/union.rs:111:28
+    |
+111 |     pub producer_bindings: purrdf_sparql_eval::SharedWorkspace<Vec<ProducerBinding>>,
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+111 -     pub producer_bindings: purrdf_sparql_eval::SharedWorkspace<Vec<ProducerBinding>>,
+111 +     pub producer_bindings: SharedWorkspace<Vec<ProducerBinding>>,
+    |
+
+error: unnecessary qualification
+   --> crates/retrieval/src/union.rs:113:29
+    |
+113 |     pub producer_decisions: purrdf_sparql_eval::SharedWorkspace<Vec<ProducerDecision>>,
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+113 -     pub producer_decisions: purrdf_sparql_eval::SharedWorkspace<Vec<ProducerDecision>>,
+113 +     pub producer_decisions: SharedWorkspace<Vec<ProducerDecision>>,
+    |
+
+error[E0277]: `AdmittedVec<ReadStratum<'_>>` is not an iterator
+   --> crates/retrieval/src/union.rs:283:29
+    |
+283 |         'reads: for read in &mut execution.streams {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^ `AdmittedVec<ReadStratum<'_>>` is not an iterator
+    |
+    = help: the trait `Iterator` is not implemented for `AdmittedVec<ReadStratum<'_>>`
+    = note: required for `&mut AdmittedVec<ReadStratum<'_>>` to implement `Iterator`
+    = note: required for `&mut AdmittedVec<ReadStratum<'_>>` to implement `IntoIterator`
+help: consider removing the leading `&`-reference
+    |
+283 -         'reads: for read in &mut execution.streams {
+283 +         'reads: for read in execution.streams {
+    |
+
+error[E0308]: mismatched types
+   --> crates/retrieval/src/union.rs:445:67
+    |
+445 | ...                   match ProducerStatus::failed_admitted(reason, &workspace) {
+    |                             ------------------------------- ^^^^^^ expected `&_`, found `String`
+    |                             |
+    |                             arguments to this function are incorrect
+    |
+    = note: expected reference `&_`
+                  found struct `std::string::String`
+note: associated function defined here
+   --> crates/retrieval/src/fusion_stream.rs:390:19
+    |
+390 |     pub(crate) fn failed_admitted(
+    |                   ^^^^^^^^^^^^^^^
+391 |         reason: &(impl fmt::Display + ?Sized),
+    |         -------------------------------------
+help: consider borrowing here
+    |
+445 |                             match ProducerStatus::failed_admitted(&reason, &workspace) {
+    |                                                                   +
+
+error[E0599]: no method named `len` found for reference `&RankedRowsStorage` in the current scope
+    --> crates/retrieval/src/execute.rs:816:43
+     |
+ 816 |                 .field("rows_left", &rows.len())
+     |                                           ^^^
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `len`, perhaps you need to implement one of them:
+             candidate #1: `ExactSizeIterator`
+             candidate #2: `rayon::iter::IndexedParallelIterator`
+             candidate #3: `rayon::range::private::IndexedRangeInteger`
+             candidate #4: `rayon::range_inclusive::private::IndexedRangeInteger`
+             candidate #5: `typenum::type_operators::Len`
+help: there is a method `le` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:3971:5
+     |
+3971 | /     fn le<I>(self, other: I) -> bool
+3972 | |     where
+3973 | |         I: IntoIterator,
+3974 | |         Self::Item: PartialOrd<I::Item>,
+3975 | |         Self: Sized,
+     | |____________________^
+
+error[E0277]: the trait bound `[Option<SolutionTerm<<D as DatasetView>::Id>>]: Ord` is not satisfied
+    --> crates/retrieval/src/execute.rs:1125:63
+     |
+1125 |                         if let Some(count) = answered.get_mut(row.as_slice()) {
+     |                                                       ------- ^^^^^^^^^^^^^^ the trait `Ord` is not implemented for `[Option<SolutionTerm<<D as DatasetView>::Id>>]`
+     |                                                       |
+     |                                                       required by a bound introduced by this call
+     |
+help: the following other types implement trait `Ord`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/array/mod.rs:453:1
+     |
+ 453 | const impl<T: [const] Ord, const N: usize> Ord for [T; N] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[T; N]`
+     |
+    ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/cmp.rs:38:1
+     |
+  38 | const impl<T: [const] Ord> Ord for [T] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[T]`
+note: required by a bound in `AdmittedOrderedMap::<K, V>::get_mut`
+    --> crates/sparql-eval/src/workspace/ordered.rs:216:32
+     |
+ 216 |     pub fn get_mut<Q: ?Sized + Ord>(&mut self, key: &Q) -> Option<&mut V>
+     |                                ^^^ required by this bound in `AdmittedOrderedMap::<K, V>::get_mut`
+
+error[E0277]: the trait bound `&[Option<SolutionTerm<<D as DatasetView>::Id>>]: Ord` is not satisfied
+    --> crates/retrieval/src/execute.rs:1125:55
+     |
+1125 |                         if let Some(count) = answered.get_mut(row.as_slice()) {
+     |                                                       ^^^^^^^ the trait `Ord` is not implemented for `&[Option<SolutionTerm<<D as DatasetView>::Id>>]`
+     |
+help: the following other types implement trait `Ord`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/array/mod.rs:453:1
+     |
+ 453 | const impl<T: [const] Ord, const N: usize> Ord for [T; N] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[T; N]`
+     |
+    ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/cmp.rs:38:1
+     |
+  38 | const impl<T: [const] Ord> Ord for [T] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[T]`
+note: required by a bound in `AdmittedOrderedMap::<K, V>::get_mut`
+    --> crates/sparql-eval/src/workspace/ordered.rs:183:9
+     |
+ 183 | impl<K: Ord, V> AdmittedOrderedMap<K, V> {
+     |         ^^^ required by this bound in `AdmittedOrderedMap::<K, V>::get_mut`
+...
+ 216 |     pub fn get_mut<Q: ?Sized + Ord>(&mut self, key: &Q) -> Option<&mut V>
+     |            ------- required by a bound in this associated function
+
+error[E0277]: the trait bound `&[Option<SolutionTerm<<D as DatasetView>::Id>>]: Ord` is not satisfied
+    --> crates/retrieval/src/execute.rs:1128:38
+     |
+1128 | ...                   answered.insert(row.as_slice(), 1_u64)?;
+     |                                ^^^^^^ -------------- `&[Option<SolutionTerm<<D as DatasetView>::Id>>]` doesn't satisfy the trait bound
+     |                                |
+     |                                the trait `Ord` is not implemented for `&[Option<SolutionTerm<<D as DatasetView>::Id>>]`
+     |
+help: the following other types implement trait `Ord`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/array/mod.rs:453:1
+     |
+ 453 | const impl<T: [const] Ord, const N: usize> Ord for [T; N] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[T; N]`
+     |
+    ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/cmp.rs:38:1
+     |
+  38 | const impl<T: [const] Ord> Ord for [T] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[T]`
+note: required by a bound in `AdmittedOrderedMap::<K, V>::insert`
+    --> crates/sparql-eval/src/workspace/ordered.rs:183:9
+     |
+ 183 | impl<K: Ord, V> AdmittedOrderedMap<K, V> {
+     |         ^^^ required by this bound in `AdmittedOrderedMap::<K, V>::insert`
+...
+ 237 |     pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, EvalError> {
+     |            ------ required by a bound in this associated function
+
+error[E0277]: expected an `FnOnce(RdfDiagnostic)` closure, found `fn(EvalError) -> ExecutionError {ExecutionError::NativeFailure}`
+    --> crates/retrieval/src/execute.rs:1880:22
+     |
+1880 |             .map_err(ExecutionError::NativeFailure)?,
+     |              ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(RdfDiagnostic)` closure, found `fn(EvalError) -> ExecutionError {ExecutionError::NativeFailure}`
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(RdfDiagnostic)` is not implemented for fn item `fn(EvalError) -> ExecutionError {ExecutionError::NativeFailure}`
+     = note: expected a closure with signature `fn(RdfDiagnostic)`
+                found a closure with signature `fn(EvalError)`
+note: required by a bound in `Result::<T, E>::map_err`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+     |
+ 961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+     |                  ------- required by a bound in this associated function
+ 962 |     where
+ 963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0658]: use of unstable library feature `str_as_str`
+    --> crates/retrieval/src/execute.rs:2457:67
+     |
+2457 | ...                   cells.rows.iter().map(|row| row.cells.as_slice()),
+     |                                                             ^^^^^^^^
+     |
+     = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+     = help: add `#![feature(str_as_str)]` to the crate attributes to enable
+     = note: this compiler was built on 2026-09-13; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `str_as_str`
+    --> crates/retrieval/src/execute.rs:2466:71
+     |
+2466 | ...                   cells.rows.iter().map(|row| row.cells.as_slice()),
+     |                                                             ^^^^^^^^
+     |
+     = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+     = help: add `#![feature(str_as_str)]` to the crate attributes to enable
+     = note: this compiler was built on 2026-09-13; consider upgrading it if it is out of date
+
+Some errors have detailed explanations: E0277, E0308, E0425, E0433, E0599, E0658.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-retrieval` (lib) due to 19 previous errors
+warning: build failed, waiting for other jobs to finish...

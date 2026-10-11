@@ -1,0 +1,93 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 15.82s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 12s
+     Running unittests src/lib.rs (target/native-build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test enf::tests::preserved_exists_maps_optional_nodes_and_the_synthetic_witness_wrapper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1511 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.08s
+     Running unittests src/lib.rs (target/native-build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test eval::tests::native_evidence_owner_is_lazy_and_shared_before_workers_create_records ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1511 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/geo)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 1m 31s
+     Running tests/cost_planner_corpus.rs (target/native-build/debug/build/purrdf-sparql-conformance/8bb7ff6b97318cb0/out/cost_planner_corpus-8bb7ff6b97318cb0)
+
+running 1 test
+test cost_and_structural_planner_produce_identical_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests/evaluator_trace.rs (target/native-build/debug/build/purrdf-sparql-conformance/bcf1f7724338317e/out/evaluator_trace-bcf1f7724338317e)
+
+running 4 tests
+test regenerate_evaluator_trace ... ignored, regeneration path: writes the committed golden
+test regenerate_update_trace ... ignored, regeneration path: writes the committed golden
+test the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden ... ok
+test the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden ... FAILED
+
+failures:
+
+---- the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden stdout ----
+
+thread 'the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden' (1109819) panicked at crates/sparql-conformance/tests/evaluator_trace.rs:727:5:
+the evaluator's trace moved on 15 case(s) (first ten shown):
+  purrdf-extend <http://purrdf.test/extend#existsGraphVariableCorrelated> SEP-0007: GRAPH ?g inside FILTER EXISTS is the definition-path Graph-substitution shape, ?g bound from the row being filtered — a second :p row bound to a graph holding NOTHING must be excluded, not wrongly admitted by an unresolved ?g enumerating every named graph
+    golden: metered complete fuel=34 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=31 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+  purrdf-extend <http://purrdf.test/extend#existsMinusDomain> SEP-0007 Issue 4: the correlated variable occurs only in MINUS's subtracted (right) operand, contributing nothing to MINUS's own output schema
+    golden: metered complete fuel=39 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=36 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+  purrdf-extend <http://purrdf.test/extend#existsNestedCorrelation> SEP-0007: FILTER EXISTS { FILTER NOT EXISTS { ?s :q ?y } } — the nested NOT EXISTS is correlated on the OUTER ?s through a triple-leaf position only, so :s1 (no :q of its own) and :s2 (has one) must answer differently, not agree as if ?s were an uncorrelated fresh variable
+    golden: metered complete fuel=45 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=39 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+  purrdf-extend <http://purrdf.test/extend#existsOptionalPadding> SEP-0007: FILTER EXISTS { OPTIONAL { P } } is always true — OPTIONAL never empties the unit row it pads, regardless of whether P matches
+    golden: metered complete fuel=16 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+    actual: metered complete fuel=19 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+  purrdf-extend <http://purrdf.test/extend#existsSubselectLimit> SEP-0007: a correlated { SELECT ?s WHERE { … } LIMIT 1 } inner — only the per-row definition path answers LIMIT correctly above a substitution site
+    golden: metered complete fuel=22 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+    actual: metered complete fuel=43 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+  purrdf-extend <http://purrdf.test/extend#notExistsOptionalPadding> the NOT EXISTS twin of :existsOptionalPadding: FILTER NOT EXISTS { OPTIONAL { P } } is always false
+    golden: metered complete fuel=12 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=15 intermediate-cells=4 scratch-bytes=153
+  purrdf-property-functions <http://purrdf.test/property-functions#bbMemberFalse> a fully bound call that matches nothing yields no row, beside one that does
+    golden: metered complete fuel=11 scratch-bytes=153
+    actual: metered complete fuel=10 scratch-bytes=153
+  purrdf-property-functions <http://purrdf.test/property-functions#modeRestrictedSubsumption> a bf-only relation serves a fully bound call, and the engine filters the bound position
+    golden: metered complete fuel=11 scratch-bytes=153
+    actual: metered complete fuel=10 scratch-bytes=153
+  w3c-sparql11/exists <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/exists/manifest#exists04> Nested positive exists
+    golden: metered complete fuel=37 answer-rows=1 intermediate-cells=4 scratch-bytes=76
+    actual: metered complete fuel=33 answer-rows=1 intermediate-cells=4 scratch-bytes=76
+  w3c-sparql11/exists <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/exists/manifest#exists05> Nested negative exists in positive exists
+    golden: metered complete fuel=32 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=29 intermediate-cells=4 scratch-bytes=153
+
+if the change is intended, regenerate with `cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored regenerate_evaluator_trace` and review the diff
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden
+
+test result: FAILED. 1 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 5.85s
+
+error: test failed, to rerun pass `-p purrdf-sparql-conformance --test evaluator_trace`

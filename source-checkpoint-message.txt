@@ -1,0 +1,32 @@
+Carry query evidence and scoped ranked retrieval through physical shapes
+
+Retain original per-row SPARQL and Datalog evidence through actual query
+operators, queryable ledgers, declared candidate scope, ranked production and
+ordered accepted fusion. Preserve original ranks, scores, owners and typed
+terminal failures.
+
+Retain native whole-search declarations from opening through completion,
+including empty, changing and cleared declarations. Keep found witnesses
+supported while incomplete or unclosed search constrains absence and totals.
+Carry the original query owner through materialized and on-demand production,
+and serialize live search updates without holding the search value lock while
+combining query records. Preserve original whole-search declarations through
+GROUP and BIND resident-buffer reuse and contextual aggregation.
+
+Implement registered dictionary, positional-window and calendar shapes through
+their original consumers. Keep literal reference bags and admission behavior;
+restrict early windows only for certified unique source ordinals. Keep ordinary
+rows free of unused evidence attachments while tracked default-supported owners
+and ranks retain the complete fallible path.
+
+This local source checkpoint is not whole-issue qualification or publication.
+Validation: strict native evidence_ingress, 20 passed, 0 failed, 0 ignored and
+0 filtered. This includes native empty/emitted search, transient declarations,
+COUNT/EXISTS/ASK ownership, typed original faults and the actual 1025-row BIND
+worker transfer. The receipt is recovery-ingress-search-transfer.log.
+
+Actual base/Gitee synchronization precedes remaining complete native-family,
+portable and all-target lint qualification. Default throughput, physical scaling,
+projections, mandatory final gates and hosted checks remain required.
+
+Refs: #515, #516, #511, #518, #512

@@ -1,0 +1,21 @@
+    PID  NI CLS RTPRIO COMMAND
+ 986171  -4   B      0 query_eval-8e4f
+2987062
+    PID  NI CLS RTPRIO COMMAND
+ 986171  -4   B      0 query_eval-8e4f
+2979420
+value_dispatch/int_plus_int_numeric_add_control time:   [18.83 ns 18.84 ns 18.85 ns]  mad: 21.52 ps  (100 samples × 2647115 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 1 high mild, 2 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS RTPRIO COMMAND
+ 986879  -4   B      0 query_eval-8e4f
+2988241
+    PID  NI CLS RTPRIO COMMAND
+ 986879  -4   B      0 query_eval-8e4f
+2991005
+value_dispatch/int_plus_int_numeric_add_control time:   [16.56 ns 16.57 ns 16.58 ns]  mad: 35.83 ps  (100 samples × 3022988 iterations)
+                         change: [-12.1052% -12.0225% -11.9398%] against `same-binary`: Performance has improved.
+                         outliers: 14 of 100 (0 low severe, 0 low mild, 1 high mild, 13 high severe)
+
+1 benchmark measured; 0 failed

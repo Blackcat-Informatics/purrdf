@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [optimized] target(s) in 0.26s
+     Running tests/evidence_ingress.rs (/opt/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/933c5385acd98653/out/evidence_ingress-933c5385acd98653)
+
+running 1 test
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 22.41s
+

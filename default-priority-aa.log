@@ -1,0 +1,80 @@
+1116861 (process ID) old priority 16, new priority -4
+00040000
+SAMPLE 1
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+2987043
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+2991693
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+2990730
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4637921
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4746462
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4731591
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4682711
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4569236
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4668314
+    PID  NI CLS PSR COMMAND
+1116866  -4   B  11 query_eval-8e4f
+4645407
+value_dispatch/int_plus_int_numeric_add_control time:   [10.56 ns 10.58 ns 10.59 ns]  mad: 39.27 ps  (100 samples × 4401524 iterations)
+                         outliers: 10 of 100 (0 low severe, 4 low mild, 1 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+SAMPLE 2
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4643683
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4679351
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4644205
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4651530
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4635352
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4621726
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4645267
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4637754
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4609331
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4635542
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4732269
+    PID  NI CLS PSR COMMAND
+1133360  -4   B  11 query_eval-8e4f
+4636471
+value_dispatch/int_plus_int_numeric_add_control time:   [10.51 ns 10.53 ns 10.55 ns]  mad: 55.37 ps  (100 samples × 4683385 iterations)
+                         outliers: 7 of 100 (0 low severe, 2 low mild, 0 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND

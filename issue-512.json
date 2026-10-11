@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Summary\n\nAn executor shape: **a dictionary match**. A `VALUES` block of N phrases joined to text occurrence on one predicate should run as **one compiled automaton** over each document's analyzed token stream, not as N lookups. It should also support **longest-first, non-overlapping** selection over the matched position spans. The results must be identical to the literal evaluation.\n\n## Why\n\nTwo workloads ask exactly this, over every record, often as a standing query at intake:\n- `lillith_memetics` matches a 534-name canon lexicon and per-story alias tables (`docs/design/sprint-procedures-as-sparql.md`);\n- Katamari's mail package runs SIEVE `:contains`/`:matches` rules (ADR-0017).\n\nContext: Katamari ADR-0045 45.16 (Proposed). Both workloads can be written today: `TermOccurrenceRelation` (`text/src/relation.rs:1662`, at `3b6ec4d9f`) gives token positions, and a multi-token phrase is calls joined on `?doc` with consecutive positions. Longest-first is `FILTER NOT EXISTS` over overlapping spans. Literally evaluated, though, that is one relation call per phrase per token, which is the wrong cost shape at a 534-entry dictionary.\n\n## What it needs\n\n- The planner recognizes the shape: `VALUES ?phrase { ... }` decomposed into tokens through the index's own analyzer (so normalization, e.g. \"s\u00ecth\" matching \"sith\", is the analyzer's), joined to occurrences on one predicate.\n- One automaton (Aho-Corasick over analyzed tokens) per dictionary and analyzer identity, built once and reused.\n- Output rows carry the matched phrase (or its entry identity), `?doc` and the start and end positions, so a longest-first, non-overlapping selection is expressible and fast.\n- **Exactness:** a recognized shape never changes an answer. Rows equal the literal evaluation, byte for byte.\n\n## Acceptance criteria\n\n- On random dictionaries and documents, the shaped evaluation equals the literal one.\n- Cost is one pass per document for the whole dictionary.\n- Longest-first, non-overlapping selection matches a reference implementation.\n- No compiled-in cap on dictionary size.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-09T08:16:16Z",
+  "labels": [],
+  "milestone": null,
+  "number": 512,
+  "state": "OPEN",
+  "title": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+  "updatedAt": "2026-10-09T08:16:16Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/512"
+}

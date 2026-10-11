@@ -1,0 +1,41 @@
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/envelope-probe)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/bench)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/json)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/markdown)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-capi)
+error[E0599]: no method named `entry` found for struct `AdmittedOrderedMap<K, V>` in the current scope
+    --> crates/retrieval/tests/real_producers.rs:1399:18
+     |
+1398 | /             statuses
+1399 | |                 .entry(stream.stratum.clone())
+     | |                 -^^^^^ method not found in `AdmittedOrderedMap<purrdf_retrieval::Iri, ProducerStatus>`
+     | |_________________|
+     |
+
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/real_producers.rs:595:28
+    |
+595 |         assert_eq!(actual, expected);
+    |                            ^^^^^^^^ expected `BTreeMap<Term, SharedWorkspace<_>>`, found `BTreeMap<Term, BTreeMap<Iri, Vec<u64>>>`
+    |
+    = note: expected struct `BTreeMap<_, SharedWorkspace<AdmittedOrderedMap<purrdf_retrieval::Iri, AdmittedVec<u64>>>>`
+               found struct `BTreeMap<_, BTreeMap<purrdf_retrieval::Iri, Vec<u64>>>`
+
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/real_producers.rs:694:55
+    |
+694 |             assert_eq!(admitted.ranks[&iri(stratum)], vec![1]);
+    |                                                       ^^^^^^^ expected `AdmittedVec<u64>`, found `Vec<{integer}>`
+    |
+    = note: expected struct `AdmittedVec<u64>`
+               found struct `Vec<{integer}>`
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (test "real_producers") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

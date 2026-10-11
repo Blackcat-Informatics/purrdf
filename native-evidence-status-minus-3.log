@@ -1,0 +1,18 @@
+Running as unit: purrdf-evidence-status-minus-3.service; invocation ID: cee1ac36b4bf45d0a0c4ba87292a22e5
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/evidence_ingress.rs:387:6
+    |
+387 |     (dataset, source)
+    |      ^^^^^^^ expected `RdfDataset`, found `Arc<RdfDataset>`
+    |
+    = note: expected struct `RdfDataset`
+               found struct `Arc<RdfDataset>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 1 previous error
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 1min 54.986s
+             CPU time consumed: 107ms
+                   Memory peak: 36.4M (swap: 0B)

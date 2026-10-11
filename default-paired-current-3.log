@@ -1,0 +1,94 @@
+query_eval/a_selective_join time:   [754.3 µs 754.7 µs 756.4 µs]  mad: 617.9 ns  (10 samples × 133 iterations)
+                         change: [-38.0758% -36.1551% -35.4165%] against `paired-main`: Performance has improved.
+warning: query_eval/b_scan_filter: 10 samples cannot finish in 1.0 s; they will take about 1.5 s
+query_eval/b_scan_filter time:   [77.08 ms 77.20 ms 77.25 ms]  mad: 81.18 µs  (10 samples × 2 iterations)
+                         change: [-38.4285% -37.3052% -36.6230%] against `paired-main`: Performance has improved.
+warning: query_eval/c_optional_heavy: 10 samples cannot finish in 1.0 s; they will take about 1.9 s
+query_eval/c_optional_heavy time:   [94.12 ms 94.23 ms 94.53 ms]  mad: 147.5 µs  (10 samples × 2 iterations)
+                         change: [+10.1668% +11.1823% +11.9430%] against `paired-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+query_eval/d_union_4     time:   [29.20 ms 29.23 ms 29.26 ms]  mad: 34.01 µs  (10 samples × 4 iterations)
+                         change: [+9.8548% +10.2803% +11.6938%] against `paired-main`: Performance has regressed.
+query_eval/e_group_aggregate time:   [35.14 ms 35.45 ms 35.67 ms]  mad: 235.4 µs  (10 samples × 3 iterations)
+                         change: [-29.1394% -16.5581% +4.9985%] against `paired-main`: No change in performance detected.
+query_eval/f_path_transitive time:   [25.45 ms 25.60 ms 25.90 ms]  mad: 187.6 µs  (10 samples × 4 iterations)
+                         change: [-9.5846% +0.0773% +3.8778%] against `paired-main`: No change in performance detected.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+query_eval/g_order_by_limit time:   [19.65 ms 19.74 ms 19.93 ms]  mad: 98.71 µs  (10 samples × 6 iterations)
+                         change: [+5.6701% +7.9497% +10.5389%] against `paired-main`: Performance has regressed.
+query_eval/h_distinct_dept time:   [2.290 ms 2.291 ms 2.293 ms]  mad: 761.1 ns  (10 samples × 44 iterations)
+                         change: [+53.1325% +53.2385% +53.4628%] against `paired-main`: Performance has regressed.
+query_eval/i_construct_blank_free time:   [20.13 ms 20.13 ms 20.14 ms]  mad: 6.029 µs  (10 samples × 5 iterations)
+                         change: [-7.1060% -3.7655% -2.7191%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+query_eval/j_construct_blank_bearing time:   [28.90 ms 28.92 ms 28.99 ms]  mad: 32.54 µs  (10 samples × 4 iterations)
+                         change: [-41.9523% -39.6266% -39.2979%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+query_eval/l_single_group_aggregate time:   [18.38 ms 18.39 ms 18.41 ms]  mad: 7.062 µs  (10 samples × 6 iterations)
+                         change: [-34.8122% -34.7366% -34.6578%] against `paired-main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+query_eval/m_arithmetic_dense_filter time:   [70.69 ms 70.74 ms 70.80 ms]  mad: 35.79 µs  (10 samples × 2 iterations)
+                         change: [-37.1958% -36.9828% -36.8271%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+query_eval/n_optional_filter time:   [8.448 ms 8.450 ms 8.453 ms]  mad: 2.974 µs  (10 samples × 12 iterations)
+                         change: [-32.7116% -32.6000% -32.4185%] against `paired-main`: Performance has improved.
+query_eval/o_minus_disjoint time:   [6.981 ms 6.994 ms 7.030 ms]  mad: 13.33 µs  (10 samples × 15 iterations)
+                         change: [-29.8671% -29.5692% -29.0226%] against `paired-main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+query_eval/p_langmatches_filter time:   [12.34 ms 12.36 ms 12.37 ms]  mad: 11.14 µs  (10 samples × 9 iterations)
+                         change: [-27.2100% -27.0690% -26.9885%] against `paired-main`: Performance has improved.
+query_eval/q_construct_blank_coref time:   [50.52 ms 50.57 ms 50.65 ms]  mad: 55.80 µs  (10 samples × 2 iterations)
+                         change: [-37.8833% -37.2871% -36.4091%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+query_eval/r_path_reverse_star time:   [25.63 ms 26.39 ms 28.66 ms]  mad: 815.9 µs  (10 samples × 4 iterations)
+                         change: [-27.6505% -25.4690% -18.9284%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: query_eval/s_guarded_recursion: 10 samples cannot finish in 1.0 s; they will take about 4.1 s
+query_eval/s_guarded_recursion time:   [402.0 ms 402.6 ms 403.8 ms]  mad: 941.1 µs  (10 samples × 1 iterations)
+                         change: [-36.5254% -36.4265% -36.1730%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+query_eval/k_property_function_join time:   [35.08 ms 35.14 ms 35.40 ms]  mad: 85.12 µs  (10 samples × 3 iterations)
+                         change: [-32.0913% -31.8621% -31.3293%] against `paired-main`: Performance has improved.
+value_dispatch/int_plus_int_value_add time:   [10.73 ns 10.73 ns 10.73 ns]  mad: 1.219 ps  (10 samples × 9309294 iterations)
+                         change: [-38.6878% -38.6534% -38.6267%] against `paired-main`: Performance has improved.
+value_dispatch/int_plus_int_numeric_add_control time:   [10.10 ns 10.10 ns 10.12 ns]  mad: 10.15 ps  (10 samples × 9890985 iterations)
+                         change: [-38.8311% -38.7861% -38.6491%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+value_dispatch/dec_plus_dec_value_add time:   [12.33 ns 12.34 ns 12.35 ns]  mad: 8.970 ps  (10 samples × 8105866 iterations)
+                         change: [-38.5058% -38.4480% -38.3993%] against `paired-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+value_dispatch/int_plus_dec_value_add time:   [12.29 ns 12.30 ns 12.30 ns]  mad: 4.448 ps  (10 samples × 8135247 iterations)
+                         change: [-38.6198% -38.5520% -38.5124%] against `paired-main`: Performance has improved.
+value_dispatch/datetime_minus_datetime_value_sub time:   [35.60 ns 35.61 ns 35.63 ns]  mad: 14.04 ps  (10 samples × 2809542 iterations)
+                         change: [-38.8668% -38.8223% -38.7646%] against `paired-main`: Performance has improved.
+sort_order/int_vs_int_total time:   [1.941 ns 1.947 ns 1.948 ns]  mad: 2.418 ps  (10 samples × 51487939 iterations)
+                         change: [-37.6235% -37.2799% -37.0957%] against `paired-main`: Performance has improved.
+                         outliers: 3 of 10 (0 low severe, 2 low mild, 1 high mild, 0 high severe)
+sort_order/int_vs_int_promoted_control time:   [1.856 ns 1.863 ns 1.876 ns]  mad: 5.032 ps  (10 samples × 53494721 iterations)
+                         change: [-31.4369% -31.1192% -30.6658%] against `paired-main`: Performance has improved.
+                         outliers: 3 of 10 (0 low severe, 1 low mild, 2 high mild, 0 high severe)
+sort_order/dec_vs_dec_total time:   [12.28 ns 12.29 ns 12.31 ns]  mad: 12.76 ps  (10 samples × 8124729 iterations)
+                         change: [-37.6039% -37.5261% -37.4006%] against `paired-main`: Performance has improved.
+sort_order/dec_vs_dec_promoted_control time:   [11.59 ns 11.62 ns 11.63 ns]  mad: 11.16 ps  (10 samples × 8605784 iterations)
+                         change: [-21.7067% +2.0531% +2.2761%] against `paired-main`: No change in performance detected.
+sort_order/double_vs_double_total time:   [1.714 ns 1.715 ns 1.716 ns]  mad: 0.683 ps  (10 samples × 58300692 iterations)
+                         change: [-0.1913% -0.1433% -0.0276%] against `paired-main`: Change within noise threshold.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+sort_order/double_vs_double_promoted_control time:   [4.387 ns 4.392 ns 4.396 ns]  mad: 4.605 ps  (10 samples × 22782139 iterations)
+                         change: [-3.6900% -2.7480% -2.4940%] against `paired-main`: Performance has improved.
+sort_order/int_vs_double_window_total time:   [5.146 ns 5.168 ns 5.185 ns]  mad: 19.00 ps  (10 samples × 19245026 iterations)
+                         change: [-0.7744% -0.1919% +0.5335%] against `paired-main`: No change in performance detected.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+sort_order/int_vs_double_window_promoted_control time:   [6.758 ns 6.768 ns 6.794 ns]  mad: 11.04 ps  (10 samples × 14767642 iterations)
+                         change: [-0.8963% -0.5656% -0.1653%] against `paired-main`: Change within noise threshold.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+sort_order/dec_vs_double_u128_total time:   [8.131 ns 8.212 ns 8.219 ns]  mad: 13.33 ps  (10 samples × 12265266 iterations)
+                         change: [+1.5844% +2.5954% +2.7057%] against `paired-main`: Performance has regressed.
+sort_order/dec_vs_double_u128_promoted_control time:   [13.78 ns 13.79 ns 13.80 ns]  mad: 11.43 ps  (10 samples × 7256996 iterations)
+                         change: [-0.1006% +0.0105% +0.1224%] against `paired-main`: No change in performance detected.
+sort_order/dec_vs_double_bigint_total time:   [79.68 ns 79.75 ns 79.81 ns]  mad: 60.70 ps  (10 samples × 1251921 iterations)
+                         change: [-0.9884% -0.8591% -0.7518%] against `paired-main`: Change within noise threshold.
+sort_order/dec_vs_double_bigint_promoted_control time:   [8.062 ns 8.084 ns 8.103 ns]  mad: 19.11 ps  (10 samples × 12413003 iterations)
+                         change: [-0.2274% +0.0380% +0.3327%] against `paired-main`: No change in performance detected.
+
+36 benchmarks measured; 0 failed

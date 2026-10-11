@@ -1,0 +1,37 @@
+1169875 (process ID) old priority 16, new priority -4
+PROFILE e_group_aggregate baseline
+query_eval/e_group_aggregate time:   [56.02 ms 58.41 ms 62.15 ms]  mad: 2.583 ms  (10 samples × 9 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 726 times to write data ]
+[ perf record: Captured and wrote 181.455 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-e_group_aggregate-baseline.data ]
+PROFILE e_group_aggregate current
+query_eval/e_group_aggregate time:   [54.77 ms 55.25 ms 56.74 ms]  mad: 543.4 µs  (10 samples × 9 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 741 times to write data ]
+[ perf record: Captured and wrote 185.181 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-e_group_aggregate-current.data ]
+PROFILE f_path_transitive baseline
+query_eval/f_path_transitive time:   [28.36 ms 30.90 ms 36.61 ms]  mad: 3.165 ms  (10 samples × 13 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 731 times to write data ]
+[ perf record: Captured and wrote 182.452 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-f_path_transitive-baseline.data ]
+PROFILE f_path_transitive current
+query_eval/f_path_transitive time:   [26.87 ms 27.00 ms 27.65 ms]  mad: 263.4 µs  (10 samples × 19 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 923 times to write data ]
+[ perf record: Captured and wrote 230.356 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-f_path_transitive-current.data ]
+PROFILE h_distinct_dept baseline
+query_eval/h_distinct_dept time:   [1.470 ms 1.680 ms 2.075 ms]  mad: 214.7 µs  (10 samples × 338 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 1560 times to write data ]
+[ perf record: Captured and wrote 389.696 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-h_distinct_dept-baseline.data ]
+PROFILE h_distinct_dept current
+query_eval/h_distinct_dept time:   [4.110 ms 4.192 ms 4.321 ms]  mad: 105.6 µs  (10 samples × 128 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 808 times to write data ]
+[ perf record: Captured and wrote 201.549 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-h_distinct_dept-current.data ]

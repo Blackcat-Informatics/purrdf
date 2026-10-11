@@ -1,0 +1,20 @@
+    PID  NI CLS RTPRIO COMMAND
+ 972455   - IDL      0 query_eval-8e4f
+2966155
+    PID  NI CLS RTPRIO COMMAND
+ 972455   - IDL      0 query_eval-8e4f
+2983690
+value_dispatch/int_plus_int_numeric_add_control time:   [11.06 ns 11.24 ns 11.52 ns]  mad: 577.5 ps  (100 samples × 2906849 iterations)
+                         outliers: 12 of 100 (0 low severe, 0 low mild, 1 high mild, 11 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS RTPRIO COMMAND
+ 973477   - IDL      0 query_eval-8e4f
+4201119
+    PID  NI CLS RTPRIO COMMAND
+ 973477   - IDL      0 query_eval-8e4f
+4169982
+value_dispatch/int_plus_int_numeric_add_control time:   [12.65 ns 12.81 ns 12.98 ns]  mad: 644.2 ps  (100 samples × 3998234 iterations)
+                         change: [+10.9236% +13.9895% +16.4752%] against `same-binary`: Performance has regressed.
+
+1 benchmark measured; 0 failed

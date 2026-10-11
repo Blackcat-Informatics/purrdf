@@ -1,0 +1,15 @@
+Running as unit: run-p3988605-i8193741.scope; invocation ID: ba154ed607f342e983fbb154252de013
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: redundant closure
+   --> crates/sparql-eval/src/evidence_exec.rs:372:34
+    |
+372 |             .transform(&guarded, |record, memory| record.negated(memory))
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::evidence::EvidenceRecord::negated`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error

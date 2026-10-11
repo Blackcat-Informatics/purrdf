@@ -1,0 +1,90 @@
+Running as unit: run-p17915-i8451171.scope; invocation ID: 7dad144ea0f64330a11e9747d41b6cd9
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0277]: the trait bound `I: purrdf_core::ViewTermId` is not satisfied
+   --> crates/sparql-eval/src/vm/mod.rs:502:15
+    |
+502 |         row: &crate::solution::RetainedRow<I>,
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `purrdf_core::ViewTermId` is not implemented for `I`
+    |
+note: required by a bound in `solution::RetainedRow`
+   --> crates/sparql-eval/src/solution.rs:459:27
+    |
+459 | pub struct RetainedRow<I: ViewTermId = TermId> {
+    |                           ^^^^^^^^^^ required by this bound in `RetainedRow`
+help: consider further restricting type parameter `I` with trait `ViewTermId`
+    |
+296 | impl<'e, I: Copy + PartialEq + purrdf_core::ViewTermId> Linked<'e, I> {
+    |                              +++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/vm/mod.rs:506:30
+    |
+506 |         let value = self.ebv(row, schema, ctx)?;
+    |                          --- ^^^ expected `&[Option<SolutionTerm<I>>]`, found `&RetainedRow<I>`
+    |                          |
+    |                          arguments to this method are incorrect
+    |
+    = note: expected reference `&[std::option::Option<scratch::SolutionTerm<I>>]`
+               found reference `&solution::RetainedRow<I>`
+note: method defined here
+   --> crates/sparql-eval/src/vm/mod.rs:486:19
+    |
+486 |     pub(crate) fn ebv<D: DatasetView<Id = I> + Sync>(
+    |                   ^^^
+487 |         &mut self,
+488 |         row: &[Option<SolutionTerm<I>>],
+    |         -------------------------------
+
+error[E0277]: the trait bound `I: purrdf_core::ViewTermId` is not satisfied
+   --> crates/sparql-eval/src/vm/mod.rs:507:78
+    |
+507 |         helpers::filter_evidence(value, self.result_evidence()?, expression, row, schema, ctx)
+    |                                                                              ^^^ the trait `purrdf_core::ViewTermId` is not implemented for `I`
+    |
+note: required by a bound in `solution::RetainedRow`
+   --> crates/sparql-eval/src/solution.rs:459:27
+    |
+459 | pub struct RetainedRow<I: ViewTermId = TermId> {
+    |                           ^^^^^^^^^^ required by this bound in `RetainedRow`
+help: consider further restricting type parameter `I` with trait `ViewTermId`
+    |
+296 | impl<'e, I: Copy + PartialEq + purrdf_core::ViewTermId> Linked<'e, I> {
+    |                              +++++++++++++++++++++++++
+
+error[E0277]: the trait bound `I: purrdf_core::ViewTermId` is not satisfied
+   --> crates/sparql-eval/src/vm/mod.rs:519:12
+    |
+519 |         if ctx.evidence_input.is_some() && self.program.has_exists() && self.evidence.is_none() {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `purrdf_core::ViewTermId` is not implemented for `I`
+    |
+note: required by a bound in `evidence_exec::EvidenceInput`
+   --> crates/sparql-eval/src/evidence_exec.rs:186:40
+    |
+186 | pub(crate) struct EvidenceInput<'d, I: purrdf_core::ViewTermId> {
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EvidenceInput`
+help: consider further restricting type parameter `I` with trait `ViewTermId`
+    |
+296 | impl<'e, I: Copy + PartialEq + purrdf_core::ViewTermId> Linked<'e, I> {
+    |                              +++++++++++++++++++++++++
+
+error[E0277]: the trait bound `I: purrdf_core::ViewTermId` is not satisfied
+   --> crates/sparql-eval/src/vm/mod.rs:519:31
+    |
+519 |         if ctx.evidence_input.is_some() && self.program.has_exists() && self.evidence.is_none() {
+    |                               ^^^^^^^ the trait `purrdf_core::ViewTermId` is not implemented for `I`
+    |
+note: required by a bound in `evidence_exec::EvidenceInput`
+   --> crates/sparql-eval/src/evidence_exec.rs:186:40
+    |
+186 | pub(crate) struct EvidenceInput<'d, I: purrdf_core::ViewTermId> {
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EvidenceInput`
+help: consider further restricting type parameter `I` with trait `ViewTermId`
+    |
+296 | impl<'e, I: Copy + PartialEq + purrdf_core::ViewTermId> Linked<'e, I> {
+    |                              +++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 5 previous errors

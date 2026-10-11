@@ -1,0 +1,35 @@
+Running as unit: purrdf-evidence-group-20261010-1.service
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 8m 31s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/428ba0641e6fc943/out/evidence_ingress-428ba0641e6fc943)
+
+running 4 tests
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... FAILED
+
+failures:
+
+---- group_bounds_follow_whole_scope_and_declared_sum_domain stdout ----
+
+thread 'group_bounds_follow_whole_scope_and_declared_sum_domain' (3162524) panicked at crates/sparql-eval/tests/evidence_ingress.rs:248:33:
+assertion `left == right` failed: count
+  left: None
+ right: Some(Exact)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    group_bounds_follow_whole_scope_and_declared_sum_domain
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test evidence_ingress`
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 8min 33.093s
+             CPU time consumed: 149ms
+                   Memory peak: 52.7M (swap: 0B)

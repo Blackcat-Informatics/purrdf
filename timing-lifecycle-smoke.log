@@ -1,0 +1,3 @@
+TERM preserves exit143 and leaves no live owned benchmark/monitor descendants
+INT preserves exit130 and leaves no live owned benchmark/monitor descendants
+rejected preserves exit42 and leaves no live owned benchmark/monitor descendants

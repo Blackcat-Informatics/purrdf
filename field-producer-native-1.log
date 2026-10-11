@@ -1,0 +1,10 @@
+Running as unit: purrdf-field-producer-native-1.service
+error: could not execute process `kache rustc -vV` (never executed)
+
+Caused by:
+  No such file or directory (os error 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 242ms
+             CPU time consumed: 62ms
+                   Memory peak: 41.6M (swap: 0B)

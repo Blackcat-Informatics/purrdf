@@ -1,0 +1,61 @@
+Running as unit: purrdf-evidence-native-ledger-strict-4.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/evidence_ingress.rs:503:29
+    |
+503 | ...                   assert!(status.reasons.is_empty());
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+503 -                             assert!(status.reasons.is_empty());
+503 +                             assert_eq!(status.reasons, []);
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/evidence_ingress.rs:514:33
+    |
+514 | ...                   assert_eq!(rows.undecided_rows().count(), 1)
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert_eq!(rows.undecided_rows().count(), 1);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/evidence_ingress.rs:517:33
+    |
+517 | ...                   assert!(!value, "unknown is no established ASK witness")
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert!(!value, "unknown is no established ASK witness");`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/evidence_ingress.rs:573:33
+    |
+573 | / ...                   assert_eq!(
+574 | | ...                       record.completeness(),
+575 | | ...                       if unknown {
+576 | | ...                           SearchCompleteness::Undetermined
+...   |
+580 | | ...                   )
+    | |_______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+573 |                                 assert_eq!(
+...
+579 |                                     }
+580 ~                                 );
+    |
+
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 4 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 991ms
+             CPU time consumed: 93ms
+                   Memory peak: 34.5M (swap: 0B)

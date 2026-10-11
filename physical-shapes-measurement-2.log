@@ -1,0 +1,240 @@
+dictionary entries=1 tokens=256 work=DictionaryWork { source_visits: 256, transitions: 383, output_rows: 128 } allocations=Measurement { allocations: 5963, requested_bytes: 474279, retained_bytes: 104739, peak_working_bytes: 155828 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 383, output_rows: 128 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/256/1 time:   [28.76 µs 28.83 µs 29.00 µs]  mad: 50.59 ns  (10 samples × 1038 iterations)
+                         thrpt:  [8.827 Melem/s 8.879 Melem/s 8.901 Melem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+physical_dictionary/cache_hit/256/1 time:   [1.908 µs 1.915 µs 1.916 µs]  mad: 2.365 ns  (10 samples × 15659 iterations)
+                         thrpt:  [133.6 Melem/s 133.7 Melem/s 134.2 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+physical_dictionary/cache_miss/256/1 time:   [4.295 µs 4.352 µs 4.378 µs]  mad: 30.79 ns  (10 samples × 6823 iterations)
+                         thrpt:  [58.48 Melem/s 58.82 Melem/s 59.60 Melem/s]
+physical_dictionary/public_query/256/1 time:   [759.2 µs 784.3 µs 792.1 µs]  mad: 15.95 µs  (10 samples × 38 iterations)
+                         thrpt:  [323.2 Kelem/s 326.4 Kelem/s 337.2 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+dictionary entries=64 tokens=256 work=DictionaryWork { source_visits: 256, transitions: 383, output_rows: 128 } allocations=Measurement { allocations: 8787, requested_bytes: 1047183, retained_bytes: 104739, peak_working_bytes: 232626 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 383, output_rows: 128 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/256/64 time:   [22.62 µs 25.12 µs 27.87 µs]  mad: 2.536 µs  (10 samples × 1221 iterations)
+                         thrpt:  [9.186 Melem/s 10.19 Melem/s 11.32 Melem/s]
+physical_dictionary/cache_hit/256/64 time:   [5.788 µs 6.046 µs 6.140 µs]  mad: 145.1 ns  (10 samples × 4519 iterations)
+                         thrpt:  [41.70 Melem/s 42.34 Melem/s 44.23 Melem/s]
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+physical_dictionary/cache_miss/256/64 time:   [169.6 µs 191.2 µs 251.0 µs]  mad: 22.42 µs  (10 samples × 178 iterations)
+                         thrpt:  [1.020 Melem/s 1.339 Melem/s 1.509 Melem/s]
+physical_dictionary/public_query/256/64 time:   [1.266 ms 1.460 ms 1.674 ms]  mad: 203.8 µs  (10 samples × 20 iterations)
+                         thrpt:  [152.9 Kelem/s 175.4 Kelem/s 202.2 Kelem/s]
+dictionary entries=534 tokens=256 work=DictionaryWork { source_visits: 256, transitions: 383, output_rows: 128 } allocations=Measurement { allocations: 29506, requested_bytes: 6334751, retained_bytes: 104739, peak_working_bytes: 1518084 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 383, output_rows: 128 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/256/534 time:   [34.74 µs 38.49 µs 42.98 µs]  mad: 4.097 µs  (10 samples × 889 iterations)
+                         thrpt:  [5.956 Melem/s 6.651 Melem/s 7.369 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+physical_dictionary/cache_hit/256/534 time:   [34.05 µs 35.33 µs 36.06 µs]  mad: 857.0 ns  (10 samples × 874 iterations)
+                         thrpt:  [7.099 Melem/s 7.247 Melem/s 7.518 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+physical_dictionary/cache_miss/256/534 time:   [1.293 ms 1.421 ms 1.627 ms]  mad: 139.7 µs  (10 samples × 24 iterations)
+                         thrpt:  [157.3 Kelem/s 180.2 Kelem/s 198.0 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+physical_dictionary/public_query/256/534 time:   [8.813 ms 9.378 ms 10.74 ms]  mad: 937.1 µs  (10 samples × 4 iterations)
+                         thrpt:  [23.84 Kelem/s 27.30 Kelem/s 29.05 Kelem/s]
+dictionary entries=4097 tokens=256 work=DictionaryWork { source_visits: 256, transitions: 383, output_rows: 128 } allocations=Measurement { allocations: 186306, requested_bytes: 39719223, retained_bytes: 104739, peak_working_bytes: 11436943 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 383, output_rows: 128 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/256/4097 time:   [27.98 µs 32.14 µs 33.37 µs]  mad: 1.397 µs  (10 samples × 899 iterations)
+                         thrpt:  [7.672 Melem/s 7.964 Melem/s 9.148 Melem/s]
+physical_dictionary/cache_hit/256/4097 time:   [274.8 µs 301.1 µs 324.8 µs]  mad: 21.00 µs  (10 samples × 91 iterations)
+                         thrpt:  [788.1 Kelem/s 850.2 Kelem/s 931.7 Kelem/s]
+physical_dictionary/cache_miss/256/4097 time:   [10.23 ms 12.52 ms 17.76 ms]  mad: 2.888 ms  (10 samples × 2 iterations)
+                         thrpt:  [14.42 Kelem/s 20.45 Kelem/s 25.03 Kelem/s]
+warning: physical_dictionary/public_query/256/4097: 10 samples cannot finish in 0.3 s; they will take about 1.8 s
+physical_dictionary/public_query/256/4097 time:   [194.0 ms 217.6 ms 239.5 ms]  mad: 22.29 ms  (10 samples × 1 iterations)
+                         thrpt:  [1.069 Kelem/s 1.177 Kelem/s 1.319 Kelem/s]
+dictionary entries=1 tokens=2048 work=DictionaryWork { source_visits: 2048, transitions: 3071, output_rows: 1024 } allocations=Measurement { allocations: 45405, requested_bytes: 3391419, retained_bytes: 835132, peak_working_bytes: 1192282 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 2048, transitions: 3071, output_rows: 1024 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/2048/1 time:   [244.1 µs 280.5 µs 413.6 µs]  mad: 53.08 µs  (10 samples × 66 iterations)
+                         thrpt:  [4.951 Melem/s 7.301 Melem/s 8.390 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+physical_dictionary/cache_hit/2048/1 time:   [3.246 µs 3.709 µs 4.261 µs]  mad: 492.3 ns  (10 samples × 8546 iterations)
+                         thrpt:  [480.6 Melem/s 552.2 Melem/s 630.9 Melem/s]
+physical_dictionary/cache_miss/2048/1 time:   [6.733 µs 7.617 µs 7.836 µs]  mad: 292.0 ns  (10 samples × 4025 iterations)
+                         thrpt:  [261.4 Melem/s 268.9 Melem/s 304.2 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+physical_dictionary/public_query/2048/1 time:   [5.520 ms 6.842 ms 8.490 ms]  mad: 1.237 ms  (10 samples × 3 iterations)
+                         thrpt:  [241.2 Kelem/s 299.3 Kelem/s 371.0 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+dictionary entries=64 tokens=2048 work=DictionaryWork { source_visits: 2048, transitions: 3071, output_rows: 1024 } allocations=Measurement { allocations: 48227, requested_bytes: 3914643, retained_bytes: 835132, peak_working_bytes: 1244248 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 2048, transitions: 3071, output_rows: 1024 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/2048/64 time:   [224.6 µs 290.5 µs 335.6 µs]  mad: 48.73 µs  (10 samples × 115 iterations)
+                         thrpt:  [6.103 Melem/s 7.050 Melem/s 9.120 Melem/s]
+physical_dictionary/cache_hit/2048/64 time:   [8.030 µs 8.451 µs 9.727 µs]  mad: 471.9 ns  (10 samples × 3745 iterations)
+                         thrpt:  [210.5 Melem/s 242.3 Melem/s 255.0 Melem/s]
+                         outliers: 3 of 10 (0 low severe, 1 low mild, 2 high mild, 0 high severe)
+physical_dictionary/cache_miss/2048/64 time:   [165.3 µs 206.0 µs 314.2 µs]  mad: 42.20 µs  (10 samples × 100 iterations)
+                         thrpt:  [6.517 Melem/s 9.943 Melem/s 12.39 Melem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+physical_dictionary/public_query/2048/64 time:   [7.272 ms 9.873 ms 12.29 ms]  mad: 2.204 ms  (10 samples × 3 iterations)
+                         thrpt:  [166.7 Kelem/s 207.4 Kelem/s 281.6 Kelem/s]
+dictionary entries=534 tokens=2048 work=DictionaryWork { source_visits: 2048, transitions: 3071, output_rows: 1024 } allocations=Measurement { allocations: 68944, requested_bytes: 9301523, retained_bytes: 835132, peak_working_bytes: 1900856 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 2048, transitions: 3071, output_rows: 1024 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/2048/534 time:   [351.3 µs 454.8 µs 621.9 µs]  mad: 103.6 µs  (10 samples × 60 iterations)
+                         thrpt:  [3.293 Melem/s 4.503 Melem/s 5.829 Melem/s]
+physical_dictionary/cache_hit/2048/534 time:   [48.98 µs 53.35 µs 60.42 µs]  mad: 6.768 µs  (10 samples × 559 iterations)
+                         thrpt:  [33.90 Melem/s 38.39 Melem/s 41.82 Melem/s]
+physical_dictionary/cache_miss/2048/534 time:   [2.110 ms 2.313 ms 2.785 ms]  mad: 264.8 µs  (10 samples × 15 iterations)
+                         thrpt:  [735.3 Kelem/s 885.5 Kelem/s 970.6 Kelem/s]
+physical_dictionary/public_query/2048/534 time:   [20.60 ms 22.42 ms 24.60 ms]  mad: 1.226 ms  (10 samples × 2 iterations)
+                         thrpt:  [83.24 Kelem/s 91.33 Kelem/s 99.43 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+dictionary entries=4097 tokens=2048 work=DictionaryWork { source_visits: 2048, transitions: 3071, output_rows: 1024 } allocations=Measurement { allocations: 225742, requested_bytes: 42288667, retained_bytes: 835132, peak_working_bytes: 11619727 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 2048, transitions: 3071, output_rows: 1024 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/2048/4097 time:   [393.0 µs 443.7 µs 460.4 µs]  mad: 26.30 µs  (10 samples × 69 iterations)
+                         thrpt:  [4.449 Melem/s 4.616 Melem/s 5.212 Melem/s]
+physical_dictionary/cache_hit/2048/4097 time:   [342.9 µs 436.1 µs 548.3 µs]  mad: 90.90 µs  (10 samples × 38 iterations)
+                         thrpt:  [3.736 Melem/s 4.696 Melem/s 5.972 Melem/s]
+warning: physical_dictionary/cache_miss/2048/4097: 10 samples cannot finish in 0.3 s; they will take about 0.5 s
+physical_dictionary/cache_miss/2048/4097 time:   [23.62 ms 26.55 ms 33.25 ms]  mad: 3.300 ms  (10 samples × 2 iterations)
+                         thrpt:  [61.59 Kelem/s 77.13 Kelem/s 86.70 Kelem/s]
+warning: physical_dictionary/public_query/2048/4097: 10 samples cannot finish in 0.3 s; they will take about 2.0 s
+physical_dictionary/public_query/2048/4097 time:   [202.9 ms 225.7 ms 251.0 ms]  mad: 24.02 ms  (10 samples × 1 iterations)
+                         thrpt:  [8.160 Kelem/s 9.073 Kelem/s 10.09 Kelem/s]
+dictionary entries=1 tokens=16384 work=DictionaryWork { source_visits: 16384, transitions: 24575, output_rows: 8192 } allocations=Measurement { allocations: 360815, requested_bytes: 26777519, retained_bytes: 6690605, peak_working_bytes: 9502404 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 16384, transitions: 24575, output_rows: 8192 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/16384/1 time:   [1.722 ms 1.836 ms 1.884 ms]  mad: 72.34 µs  (10 samples × 18 iterations)
+                         thrpt:  [8.697 Melem/s 8.923 Melem/s 9.514 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+physical_dictionary/cache_hit/16384/1 time:   [2.188 µs 2.382 µs 2.554 µs]  mad: 108.5 ns  (10 samples × 12133 iterations)
+                         thrpt:  [6.415 Gelem/s 6.879 Gelem/s 7.489 Gelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+physical_dictionary/cache_miss/16384/1 time:   [4.620 µs 4.828 µs 5.481 µs]  mad: 222.1 ns  (10 samples × 6069 iterations)
+                         thrpt:  [2.989 Gelem/s 3.394 Gelem/s 3.546 Gelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: physical_dictionary/public_query/16384/1: 10 samples cannot finish in 0.3 s; they will take about 0.5 s
+physical_dictionary/public_query/16384/1 time:   [47.82 ms 52.09 ms 54.90 ms]  mad: 3.194 ms  (10 samples × 1 iterations)
+                         thrpt:  [298.4 Kelem/s 314.5 Kelem/s 342.6 Kelem/s]
+dictionary entries=64 tokens=16384 work=DictionaryWork { source_visits: 16384, transitions: 24575, output_rows: 8192 } allocations=Measurement { allocations: 363637, requested_bytes: 27300743, retained_bytes: 6690605, peak_working_bytes: 9554370 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 16384, transitions: 24575, output_rows: 8192 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/16384/64 time:   [814.9 µs 1.100 ms 1.148 ms]  mad: 72.42 µs  (10 samples × 33 iterations)
+                         thrpt:  [14.27 Melem/s 14.90 Melem/s 20.11 Melem/s]
+physical_dictionary/cache_hit/16384/64 time:   [3.818 µs 3.887 µs 3.945 µs]  mad: 55.32 ns  (10 samples × 7565 iterations)
+                         thrpt:  [4.153 Gelem/s 4.215 Gelem/s 4.292 Gelem/s]
+physical_dictionary/cache_miss/16384/64 time:   [105.3 µs 108.6 µs 110.2 µs]  mad: 1.677 µs  (10 samples × 276 iterations)
+                         thrpt:  [148.7 Melem/s 150.8 Melem/s 155.6 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+physical_dictionary/public_query/16384/64 time:   [17.37 ms 18.01 ms 19.10 ms]  mad: 857.6 µs  (10 samples × 2 iterations)
+                         thrpt:  [857.9 Kelem/s 909.5 Kelem/s 943.0 Kelem/s]
+dictionary entries=534 tokens=16384 work=DictionaryWork { source_visits: 16384, transitions: 24575, output_rows: 8192 } allocations=Measurement { allocations: 384352, requested_bytes: 32290295, retained_bytes: 6690605, peak_working_bytes: 9946062 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 16384, transitions: 24575, output_rows: 8192 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/16384/534 time:   [719.9 µs 746.9 µs 791.3 µs]  mad: 30.15 µs  (10 samples × 42 iterations)
+                         thrpt:  [20.71 Melem/s 21.94 Melem/s 22.76 Melem/s]
+physical_dictionary/cache_hit/16384/534 time:   [13.04 µs 13.42 µs 15.49 µs]  mad: 518.9 ns  (10 samples × 2316 iterations)
+                         thrpt:  [1.057 Gelem/s 1.221 Gelem/s 1.257 Gelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+physical_dictionary/cache_miss/16384/534 time:   [494.6 µs 508.9 µs 551.5 µs]  mad: 16.17 µs  (10 samples × 51 iterations)
+                         thrpt:  [29.71 Melem/s 32.20 Melem/s 33.13 Melem/s]
+warning: physical_dictionary/public_query/16384/534: 10 samples cannot finish in 0.3 s; they will take about 0.5 s
+physical_dictionary/public_query/16384/534 time:   [22.00 ms 22.50 ms 23.34 ms]  mad: 520.1 µs  (10 samples × 2 iterations)
+                         thrpt:  [702.0 Kelem/s 728.2 Kelem/s 744.6 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+dictionary entries=4097 tokens=16384 work=DictionaryWork { source_visits: 16384, transitions: 24575, output_rows: 8192 } allocations=Measurement { allocations: 541148, requested_bytes: 66072047, retained_bytes: 6690605, peak_working_bytes: 14839392 } plan=[ShapeReport { node: Some(1), operator: Some("dictionary-match"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 16384, transitions: 24575, output_rows: 8192 }, estimate: ShapeEstimate { access: None } }]
+physical_dictionary/scan/16384/4097 time:   [984.8 µs 1.158 ms 1.170 ms]  mad: 9.136 µs  (10 samples × 30 iterations)
+                         thrpt:  [14.00 Melem/s 14.15 Melem/s 16.64 Melem/s]
+                         outliers: 2 of 10 (2 low severe, 0 low mild, 0 high mild, 0 high severe)
+physical_dictionary/cache_hit/16384/4097 time:   [118.4 µs 119.0 µs 120.1 µs]  mad: 735.2 ns  (10 samples × 246 iterations)
+                         thrpt:  [136.4 Melem/s 137.7 Melem/s 138.4 Melem/s]
+physical_dictionary/cache_miss/16384/4097 time:   [3.954 ms 3.973 ms 4.026 ms]  mad: 23.84 µs  (10 samples × 7 iterations)
+                         thrpt:  [4.069 Melem/s 4.124 Melem/s 4.144 Melem/s]
+warning: physical_dictionary/public_query/16384/4097: 10 samples cannot finish in 0.3 s; they will take about 1.0 s
+physical_dictionary/public_query/16384/4097 time:   [106.5 ms 136.3 ms 162.1 ms]  mad: 28.94 ms  (10 samples × 1 iterations)
+                         thrpt:  [101.0 Kelem/s 120.2 Kelem/s 153.9 Kelem/s]
+window rows=64 width=0 allocations=Measurement { allocations: 8498, requested_bytes: 1726015, retained_bytes: 31492, peak_working_bytes: 849145 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 12032, output_rows: 64 }, estimate: ShapeEstimate { access: None } }]
+physical_window/ordered/64/0 time:   [1.937 ms 1.942 ms 1.972 ms]  mad: 7.429 µs  (10 samples × 16 iterations)
+                         thrpt:  [32.45 Kelem/s 32.96 Kelem/s 33.05 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+physical_window/literal/64/0 time:   [3.907 ms 3.919 ms 4.003 ms]  mad: 14.32 µs  (10 samples × 8 iterations)
+                         thrpt:  [15.99 Kelem/s 16.33 Kelem/s 16.38 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+window rows=64 width=2 allocations=Measurement { allocations: 10612, requested_bytes: 1878455, retained_bytes: 91436, peak_working_bytes: 849145 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 12030, output_rows: 188 }, estimate: ShapeEstimate { access: None } }]
+physical_window/ordered/64/2 time:   [2.282 ms 2.340 ms 2.387 ms]  mad: 45.54 µs  (10 samples × 13 iterations)
+                         thrpt:  [26.81 Kelem/s 27.35 Kelem/s 28.05 Kelem/s]
+physical_window/literal/64/2 time:   [3.978 ms 4.003 ms 4.137 ms]  mad: 28.18 µs  (10 samples × 8 iterations)
+                         thrpt:  [15.47 Kelem/s 15.99 Kelem/s 16.09 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+window rows=64 width=16 allocations=Measurement { allocations: 23474, requested_bytes: 2695603, retained_bytes: 457012, peak_working_bytes: 849148 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 256, transitions: 12016, output_rows: 944 }, estimate: ShapeEstimate { access: None } }]
+physical_window/ordered/64/16 time:   [3.885 ms 3.892 ms 3.956 ms]  mad: 5.305 µs  (10 samples × 8 iterations)
+                         thrpt:  [16.18 Kelem/s 16.45 Kelem/s 16.47 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+physical_window/literal/64/16 time:   [4.375 ms 4.388 ms 5.986 ms]  mad: 26.96 µs  (10 samples × 7 iterations)
+                         thrpt:  [10.69 Kelem/s 14.59 Kelem/s 14.63 Kelem/s]
+window rows=256 width=0 allocations=Measurement { allocations: 107368, requested_bytes: 23569479, retained_bytes: 125044, peak_working_bytes: 12333049 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 1024, transitions: 277369, output_rows: 256 }, estimate: ShapeEstimate { access: None } }]
+physical_window/ordered/256/0 time:   [32.47 ms 32.83 ms 33.83 ms]  mad: 466.0 µs  (10 samples × 1 iterations)
+                         thrpt:  [7.568 Kelem/s 7.798 Kelem/s 7.885 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: physical_window/literal/256/0: 10 samples cannot finish in 0.3 s; they will take about 0.6 s
+physical_window/literal/256/0 time:   [65.27 ms 90.50 ms 98.95 ms]  mad: 9.590 ms  (10 samples × 1 iterations)
+                         thrpt:  [2.587 Kelem/s 2.829 Kelem/s 3.922 Kelem/s]
+window rows=256 width=2 allocations=Measurement { allocations: 116010, requested_bytes: 24190103, retained_bytes: 372084, peak_working_bytes: 12333049 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 1024, transitions: 277367, output_rows: 764 }, estimate: ShapeEstimate { access: None } }]
+physical_window/ordered/256/2 time:   [34.62 ms 36.49 ms 44.34 ms]  mad: 2.093 ms  (10 samples × 1 iterations)
+                         thrpt:  [5.774 Kelem/s 7.016 Kelem/s 7.394 Kelem/s]
+warning: physical_window/literal/256/2: 10 samples cannot finish in 0.3 s; they will take about 0.7 s
+physical_window/literal/256/2 time:   [63.04 ms 63.89 ms 65.16 ms]  mad: 856.6 µs  (10 samples × 1 iterations)
+                         thrpt:  [3.929 Kelem/s 4.007 Kelem/s 4.061 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+window rows=256 width=16 allocations=Measurement { allocations: 174571, requested_bytes: 28970907, retained_bytes: 2047108, peak_working_bytes: 12333052 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 1024, transitions: 277353, output_rows: 4208 }, estimate: ShapeEstimate { access: None } }]
+physical_window/ordered/256/16 time:   [42.19 ms 42.59 ms 49.01 ms]  mad: 586.2 µs  (10 samples × 1 iterations)
+                         thrpt:  [5.223 Kelem/s 6.011 Kelem/s 6.068 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: physical_window/literal/256/16: 10 samples cannot finish in 0.3 s; they will take about 0.6 s
+physical_window/literal/256/16 time:   [64.09 ms 64.50 ms 65.55 ms]  mad: 625.4 µs  (10 samples × 1 iterations)
+                         thrpt:  [3.905 Kelem/s 3.969 Kelem/s 3.994 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+window rows=1024 width=0 allocations=Measurement { allocations: 1610142, requested_bytes: 362741687, retained_bytes: 499924, peak_working_bytes: 192822265 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 4096, transitions: 5631594, output_rows: 1024 }, estimate: ShapeEstimate { access: None } }]
+warning: physical_window/ordered/1024/0: 10 samples cannot finish in 0.3 s; they will take about 8.0 s
+physical_window/ordered/1024/0 time:   [770.0 ms 781.6 ms 804.3 ms]  mad: 13.89 ms  (10 samples × 1 iterations)
+                         thrpt:  [1.273 Kelem/s 1.310 Kelem/s 1.330 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+warning: physical_window/literal/1024/0: 10 samples cannot finish in 0.3 s; they will take about 11.4 s
+physical_window/literal/1024/0 time:   [1.180 s 1.425 s 1.570 s]  mad: 180.6 ms  (10 samples × 1 iterations)
+                         thrpt:  [652.4 elem/s 718.5 elem/s 868.0 elem/s]
+window rows=1024 width=2 allocations=Measurement { allocations: 1644896, requested_bytes: 365236415, retained_bytes: 1496716, peak_working_bytes: 192822265 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 4096, transitions: 5631592, output_rows: 3068 }, estimate: ShapeEstimate { access: None } }]
+warning: physical_window/ordered/1024/2: 10 samples cannot finish in 0.3 s; they will take about 8.7 s
+physical_window/ordered/1024/2 time:   [833.0 ms 859.9 ms 911.5 ms]  mad: 37.04 ms  (10 samples × 1 iterations)
+                         thrpt:  [1.123 Kelem/s 1.191 Kelem/s 1.229 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: physical_window/literal/1024/2: 10 samples cannot finish in 0.3 s; they will take about 14.4 s
+physical_window/literal/1024/2 time:   [1.664 s 1.854 s 2.478 s]  mad: 263.4 ms  (10 samples × 1 iterations)
+                         thrpt:  [413.2 elem/s 552.3 elem/s 615.4 elem/s]
+window rows=1024 width=16 allocations=Measurement { allocations: 1886241, requested_bytes: 384702443, retained_bytes: 8419780, peak_working_bytes: 192822268 } work=[ShapeReport { node: Some(1), operator: Some("ordered-window"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 4096, transitions: 5631578, output_rows: 17264 }, estimate: ShapeEstimate { access: None } }]
+warning: physical_window/ordered/1024/16: 10 samples cannot finish in 0.3 s; they will take about 11.7 s
+physical_window/ordered/1024/16 time:   [959.7 ms 1.064 s 1.189 s]  mad: 106.4 ms  (10 samples × 1 iterations)
+                         thrpt:  [861.2 elem/s 962.3 elem/s 1.067 Kelem/s]
+warning: physical_window/literal/1024/16: 10 samples cannot finish in 0.3 s; they will take about 15.7 s
+physical_window/literal/1024/16 time:   [979.2 ms 1.113 s 1.375 s]  mad: 151.3 ms  (10 samples × 1 iterations)
+                         thrpt:  [744.5 elem/s 920.4 elem/s 1.046 Kelem/s]
+bucket rows=128 datatype=http://www.w3.org/2001/XMLSchema#date allocations=Measurement { allocations: 7629, requested_bytes: 976490, retained_bytes: 56654, peak_working_bytes: 305135 } work=[ShapeReport { node: Some(5), operator: Some("typed-bucketed-series"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 128, transitions: 128, output_rows: 84 }, estimate: ShapeEstimate { access: None } }]
+physical_bucket/ordered/128/day time:   [681.4 µs 751.8 µs 922.4 µs]  mad: 122.2 µs  (10 samples × 38 iterations)
+                         thrpt:  [138.8 Kelem/s 170.3 Kelem/s 187.8 Kelem/s]
+physical_bucket/literal/128/day time:   [640.1 µs 647.3 µs 730.2 µs]  mad: 7.370 µs  (10 samples × 35 iterations)
+                         thrpt:  [175.3 Kelem/s 197.7 Kelem/s 200.0 Kelem/s]
+bucket rows=128 datatype=http://www.w3.org/2001/XMLSchema#gYearMonth allocations=Measurement { allocations: 4768, requested_bytes: 702413, retained_bytes: 8741, peak_working_bytes: 216841 } work=[ShapeReport { node: Some(5), operator: Some("typed-bucketed-series"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 128, transitions: 128, output_rows: 12 }, estimate: ShapeEstimate { access: None } }]
+physical_bucket/ordered/128/month time:   [410.9 µs 433.0 µs 491.2 µs]  mad: 23.43 µs  (10 samples × 64 iterations)
+                         thrpt:  [260.6 Kelem/s 295.6 Kelem/s 311.5 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+physical_bucket/literal/128/month time:   [387.6 µs 391.9 µs 501.2 µs]  mad: 4.322 µs  (10 samples × 51 iterations)
+                         thrpt:  [255.4 Kelem/s 326.6 Kelem/s 330.2 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+bucket rows=1024 datatype=http://www.w3.org/2001/XMLSchema#date allocations=Measurement { allocations: 34080, requested_bytes: 4689280, retained_bytes: 57358, peak_working_bytes: 1379029 } work=[ShapeReport { node: Some(5), operator: Some("typed-bucketed-series"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 1024, transitions: 1024, output_rows: 84 }, estimate: ShapeEstimate { access: None } }]
+physical_bucket/ordered/1024/day time:   [4.723 ms 5.713 ms 8.606 ms]  mad: 996.3 µs  (10 samples × 8 iterations)
+                         thrpt:  [119.0 Kelem/s 179.2 Kelem/s 216.8 Kelem/s]
+physical_bucket/literal/1024/day time:   [7.892 ms 9.335 ms 10.68 ms]  mad: 1.417 ms  (10 samples × 4 iterations)
+                         thrpt:  [95.87 Kelem/s 109.7 Kelem/s 129.8 Kelem/s]
+bucket rows=1024 datatype=http://www.w3.org/2001/XMLSchema#gYearMonth allocations=Measurement { allocations: 30135, requested_bytes: 4623232, retained_bytes: 8760, peak_working_bytes: 1379047 } work=[ShapeReport { node: Some(5), operator: Some("typed-bucketed-series"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 1024, transitions: 1024, output_rows: 12 }, estimate: ShapeEstimate { access: None } }]
+physical_bucket/ordered/1024/month time:   [8.035 ms 8.686 ms 15.07 ms]  mad: 960.3 µs  (10 samples × 4 iterations)
+                         thrpt:  [67.97 Kelem/s 117.9 Kelem/s 127.4 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+physical_bucket/literal/1024/month time:   [7.416 ms 8.410 ms 10.59 ms]  mad: 1.023 ms  (10 samples × 3 iterations)
+                         thrpt:  [96.73 Kelem/s 121.8 Kelem/s 138.1 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+bucket rows=8192 datatype=http://www.w3.org/2001/XMLSchema#date allocations=Measurement { allocations: 236566, requested_bytes: 35073425, retained_bytes: 57444, peak_working_bytes: 10878582 } work=[ShapeReport { node: Some(5), operator: Some("typed-bucketed-series"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 8192, transitions: 8192, output_rows: 84 }, estimate: ShapeEstimate { access: None } }]
+warning: physical_bucket/ordered/8192/day: 10 samples cannot finish in 0.3 s; they will take about 11.8 s
+physical_bucket/ordered/8192/day time:   [84.95 ms 93.96 ms 101.1 ms]  mad: 6.877 ms  (10 samples × 1 iterations)
+                         thrpt:  [81.03 Kelem/s 87.19 Kelem/s 96.44 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+warning: physical_bucket/literal/8192/day: 10 samples cannot finish in 0.3 s; they will take about 8.6 s
+physical_bucket/literal/8192/day time:   [66.71 ms 74.73 ms 81.80 ms]  mad: 7.547 ms  (10 samples × 1 iterations)
+                         thrpt:  [100.1 Kelem/s 109.6 Kelem/s 122.8 Kelem/s]
+bucket rows=8192 datatype=http://www.w3.org/2001/XMLSchema#gYearMonth allocations=Measurement { allocations: 231108, requested_bytes: 35803845, retained_bytes: 8778, peak_working_bytes: 10878600 } work=[ShapeReport { node: Some(5), operator: Some("typed-bucketed-series"), provider: Some("native"), registry: Some(RegistryId(0)), work: ShapeWork { source_visits: 8192, transitions: 8192, output_rows: 12 }, estimate: ShapeEstimate { access: None } }]
+warning: physical_bucket/ordered/8192/month: 10 samples cannot finish in 0.3 s; they will take about 6.5 s
+physical_bucket/ordered/8192/month time:   [33.72 ms 33.79 ms 34.57 ms]  mad: 116.2 µs  (10 samples × 1 iterations)
+                         thrpt:  [237.0 Kelem/s 242.5 Kelem/s 243.0 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+warning: physical_bucket/literal/8192/month: 10 samples cannot finish in 0.3 s; they will take about 6.0 s
+physical_bucket/literal/8192/month time:   [34.06 ms 34.85 ms 34.96 ms]  mad: 169.7 µs  (10 samples × 1 iterations)
+                         thrpt:  [234.3 Kelem/s 235.1 Kelem/s 240.5 Kelem/s]
+
+78 benchmarks measured; 0 failed

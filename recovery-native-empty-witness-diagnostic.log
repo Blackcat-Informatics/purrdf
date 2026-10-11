@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'evidence_exec::tests::native_empty_witness_preserves_search_owner_and_aggregate_closure' (3567242) panicked at crates/sparql-eval/src/evidence_exec.rs:1772:13:
+assertion failed: query.owns(&witness)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test evidence_exec::tests::native_empty_witness_preserves_search_owner_and_aggregate_closure ... FAILED
+
+failures:
+
+failures:
+    evidence_exec::tests::native_empty_witness_preserves_search_owner_and_aggregate_closure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1509 filtered out; finished in 0.00s
+

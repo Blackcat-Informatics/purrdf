@@ -1,0 +1,96 @@
+Running as unit: purrdf-evidence-path-family-20261010-3.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 9.80s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 3m 18s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/96ff3be4e197661d/out/evidence_ingress-96ff3be4e197661d)
+
+running 11 tests
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0063]: missing field `evidence_input` in initializer of `path::PathCtx<'a, D>`
+   --> crates/sparql-eval/src/path.rs:853:9
+    |
+853 |         Self {
+    |         ^^^^ missing `evidence_input`
+
+error[E0599]: no associated function or constant named `Direct` found for struct `MintedRow<I>` in the current scope
+    --> crates/sparql-eval/src/row_checkpoint.rs:1607:50
+     |
+1607 |                 .map(crate::parallel::MintedRow::Direct)
+     |                                                  ^^^^^^ associated function or constant not found in `MintedRow<_>`
+     |
+    ::: crates/sparql-eval/src/parallel.rs:1548:1
+     |
+1548 | pub(crate) struct MintedRow<I = TermId> {
+     | --------------------------------------- associated function or constant `Direct` not found for this struct
+
+error[E0271]: expected `{closure@row_checkpoint.rs:1611:29}` to return `Result<SmallVec<[Option<SolutionTerm>; 4]>, EvalError>`, but it returns `Result<RetainedRow<_>, EvalError>`
+    --> crates/sparql-eval/src/row_checkpoint.rs:1612:17
+     |
+1611 |             let admit_row = |ctx: &mut EvalCtx<'_, _>, row| {
+     |                             ------------------------------- this closure
+1612 |                 crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<SmallVec<[Option<_>; 4]>, _>`, found `Result<RetainedRow<_>, EvalError>`
+...
+1615 |                 ledger.commit_into(&mut ctx, minted, [], input, admit_row)
+     |                        -----------                              --------- closure used here
+     |                        |
+     |                        required by a bound introduced by this call
+     |
+     = note: expected enum `Result<SmallVec<[Option<scratch::SolutionTerm>; 4]>, _>`
+                found enum `Result<RetainedRow<_>, _>`
+note: required by a bound in `ItemLedger::commit_into`
+    --> crates/sparql-eval/src/row_checkpoint.rs:1446:58
+     |
+1440 |     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
+     |                   ----------- required by a bound in this associated function
+...
+1446 |         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+     |                                                          ^^^^^^^^^^^^^^^^^^^^ required by this bound in `ItemLedger::commit_into`
+
+error[E0271]: expected `{closure@row_checkpoint.rs:1611:29}` to return `Result<SmallVec<[Option<SolutionTerm>; 4]>, EvalError>`, but it returns `Result<RetainedRow<_>, EvalError>`
+    --> crates/sparql-eval/src/row_checkpoint.rs:1612:17
+     |
+1611 |             let admit_row = |ctx: &mut EvalCtx<'_, _>, row| {
+     |                             ------------------------------- this closure
+1612 |                 crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<SmallVec<[Option<_>; 4]>, _>`, found `Result<RetainedRow<_>, EvalError>`
+...
+1617 |                 checkpoint.commit_into(&mut ctx, minted, [], input, admit_row)
+     |                            -----------                              --------- closure used here
+     |                            |
+     |                            required by a bound introduced by this call
+     |
+     = note: expected enum `Result<SmallVec<[Option<scratch::SolutionTerm>; 4]>, _>`
+                found enum `Result<RetainedRow<_>, _>`
+note: required by a bound in `RowCheckpoint::commit_into`
+    --> crates/sparql-eval/src/row_checkpoint.rs:1287:58
+     |
+1281 |     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
+     |                   ----------- required by a bound in this associated function
+...
+1287 |         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+     |                                                          ^^^^^^^^^^^^^^^^^^^^ required by this bound in `RowCheckpoint::commit_into`
+
+Some errors have detailed explanations: E0063, E0271, E0599.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 4 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 3min 55.028s
+             CPU time consumed: 336ms
+                   Memory peak: 55M (swap: 0B)

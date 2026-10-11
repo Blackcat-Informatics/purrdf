@@ -1,0 +1,6 @@
+error: expected expression, found `.`
+  --> /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text/benches/physical_shapes.rs:42:17
+   |
+42 |                 .collect();
+   |                 ^ expected expression
+

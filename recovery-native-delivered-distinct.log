@@ -1,0 +1,121 @@
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling cfg-if v1.0.4
+   Compiling digest v0.11.3
+   Compiling libc v0.2.186
+   Compiling cpufeatures v0.3.0
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling regex-automata v0.4.14
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling regex v1.12.4
+   Compiling getrandom v0.3.4
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:5499:32
+     |
+5499 |                 let mut rows = crate::AdmittedVec::new(&workspace);
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+5499 -                 let mut rows = crate::AdmittedVec::new(&workspace);
+5499 +                 let mut rows = AdmittedVec::new(&workspace);
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:5504:37
+     |
+5504 |                     let mut terms = crate::AdmittedVec::with_capacity(source.len(), &workspace)?;
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5504 -                     let mut terms = crate::AdmittedVec::with_capacity(source.len(), &workspace)?;
+5504 +                     let mut terms = AdmittedVec::with_capacity(source.len(), &workspace)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:5528:23
+     |
+5528 |         let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5528 -         let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+5528 +         let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:5563:40
+     |
+5563 |                     subject_args: vec![purrdf_sparql_algebra::TermPattern::Variable(
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5563 -                     subject_args: vec![purrdf_sparql_algebra::TermPattern::Variable(
+5563 +                     subject_args: vec![TermPattern::Variable(
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:5566:39
+     |
+5566 |                     object_args: vec![purrdf_sparql_algebra::TermPattern::Literal(
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5566 -                     object_args: vec![purrdf_sparql_algebra::TermPattern::Literal(
+5566 +                     object_args: vec![TermPattern::Literal(
+     |
+
+error[E0277]: the trait bound `AdmittedVecIntoIter<WorkspaceTerm>: ExactSizeIterator` is not satisfied
+    --> crates/sparql-eval/src/modifier.rs:5508:57
+     |
+5508 |                     rows.push(AdmittedPfRow::from_terms(terms.into_iter(), &workspace)?)?;
+     |                               ------------------------- ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+     |                               |
+     |                               required by a bound introduced by this call
+     |
+help: the trait `ExactSizeIterator` is not implemented for `AdmittedVecIntoIter<WorkspaceTerm>`
+    --> crates/sparql-eval/src/workspace.rs:1163:1
+     |
+1163 | pub struct AdmittedVecIntoIter<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: the following other types implement trait `ExactSizeIterator`:
+               &mut I
+               AnnotationStatements<'_>
+               ArgsOs
+               ArrayChunks<I, N>
+               Box<I, A>
+               BoxedArrayIntoIter<T, N, A>
+               CommandArgs<'a>
+               CommandEnvs<'a>
+             and 174 others
+note: required by a bound in `AdmittedPfRow::from_terms`
+    --> crates/sparql-eval/src/property_fn.rs:2282:21
+     |
+2281 |     pub fn from_terms(
+     |            ---------- required by a bound in this associated function
+2282 |         terms: impl ExactSizeIterator<Item = crate::WorkspaceTerm>,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `AdmittedPfRow::from_terms`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 6 previous errors

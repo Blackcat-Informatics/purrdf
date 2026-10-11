@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0599]: no method named `search_evidence` found for reference `&'a solution::SolutionSeq<<D as purrdf_core::DatasetView>::Id>` in the current scope
+   --> crates/sparql-eval/src/interned.rs:149:18
+    |
+149 |         self.seq.search_evidence()
+    |                  ^^^^^^^^^^^^^^^ method not found in `&'a solution::SolutionSeq<<D as purrdf_core::DatasetView>::Id>`
+    |
+help: one of the expressions' fields has a method of the same name
+    |
+149 |         self.seq.rows.search_evidence()
+    |                  +++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

@@ -1,0 +1,3721 @@
+2528668 (process ID) old priority 16, new priority -4
+MEASUREMENT normal original36 cpu=11 class=B nice=-4 fixed-layout fresh-state equal-argv
+7bb8ab6e42fbe8cf1a842d47bae2f1f34877921eeebd7c87c52d1758f6089d72  /home/paudley/Active/purrdf/.worktrees/purrdf-evidence-default-baseline/build/release/build/purrdf-sparql-eval/8e4ffe4ed9e13b7f/out/query_eval-8e4ffe4ed9e13b7f
+358034e0a06f581d708c1917d49b32fbb1f142f9e3f887db6a9270c597c3f99c  /home/paudley/Active/purrdf/.worktrees/purrdf-evidence-default-current/build/release/build/purrdf-sparql-eval/8e4ffe4ed9e13b7f/out/query_eval-8e4ffe4ed9e13b7f
+40c2c2213f29e13f39ef6a19fee9cc160eefc43ff40da26684c117787d6a17bf  crates/sparql-eval/benches/query_eval.rs
+
+BEGIN pair query_eval/a_selective_join order=original,current
+2026-10-11T14:07:02Z
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4635662
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4649343
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4663872
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4713360
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4753569
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4795781
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4698654
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4643310
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4775392
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4627947
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4635510
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528676  -4   B  11 query_eval-8e4f
+4647362
+policy_max_khz=5187500
+query_eval/a_selective_join time:   [700.0 µs 704.1 µs 709.0 µs]  mad: 2.247 µs  (10 samples × 709 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:07:14Z
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4646643
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4644915
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4650945
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4648848
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4651054
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4653449
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4691022
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4646768
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4763430
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4641039
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4810682
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2528797  -4   B  11 query_eval-8e4f
+4675245
+policy_max_khz=5187500
+query_eval/a_selective_join time:   [730.0 µs 735.2 µs 741.5 µs]  mad: 5.207 µs  (10 samples × 689 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/a_selective_join
+
+BEGIN pair query_eval/b_scan_filter order=current,original
+2026-10-11T14:07:26Z
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4601717
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4714460
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4757953
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4770558
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4747064
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4766217
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4740175
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4645095
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4722662
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4645806
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4633739
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529191  -4   B  11 query_eval-8e4f
+4653362
+policy_max_khz=5187500
+query_eval/b_scan_filter time:   [81.05 ms 81.35 ms 81.92 ms]  mad: 335.4 µs  (10 samples × 7 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:07:38Z
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4594449
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4794669
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4652999
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4665508
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4731305
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4743250
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4648709
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4636361
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4770510
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4636997
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4774133
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529356  -4   B  11 query_eval-8e4f
+4643930
+policy_max_khz=5187500
+query_eval/b_scan_filter time:   [76.45 ms 76.99 ms 77.17 ms]  mad: 256.8 µs  (10 samples × 7 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/b_scan_filter
+
+BEGIN pair query_eval/c_optional_heavy order=original,current
+2026-10-11T14:07:50Z
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4805286
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4643820
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4686088
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4698826
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4749822
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4637901
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4751202
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4635549
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4624246
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4645222
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4687655
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529608  -4   B  11 query_eval-8e4f
+4630965
+policy_max_khz=5187500
+query_eval/c_optional_heavy time:   [85.06 ms 85.55 ms 85.83 ms]  mad: 359.6 µs  (10 samples × 6 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:08:02Z
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4630574
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4646368
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4635525
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4651127
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4635059
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4786822
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4620897
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4633563
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4633548
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4636844
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4649380
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529779  -4   B  11 query_eval-8e4f
+4637599
+policy_max_khz=5187500
+query_eval/c_optional_heavy time:   [87.63 ms 88.12 ms 88.59 ms]  mad: 393.8 µs  (10 samples × 6 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/c_optional_heavy
+
+BEGIN pair query_eval/d_union_4 order=current,original
+2026-10-11T14:08:15Z
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4623954
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4716285
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4642725
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4716831
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4684974
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4613914
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4670730
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4602543
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4743321
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2529961  -4   B  11 query_eval-8e4f
+4638110
+policy_max_khz=5187500
+query_eval/d_union_4     time:   [28.76 ms 29.02 ms 29.18 ms]  mad: 190.0 µs  (10 samples × 18 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:08:25Z
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4605033
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4618264
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4633511
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4630337
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4627842
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4643976
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4642617
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4647679
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4644808
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530328  -4   B  11 query_eval-8e4f
+4641737
+policy_max_khz=5187500
+query_eval/d_union_4     time:   [26.45 ms 26.59 ms 26.80 ms]  mad: 166.6 µs  (10 samples × 19 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/d_union_4
+
+BEGIN pair query_eval/e_group_aggregate order=original,current
+2026-10-11T14:08:35Z
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4645769
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4643613
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4635731
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4639876
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4751222
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4644565
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4644126
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4676889
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4634726
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4631327
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530505  -4   B  11 query_eval-8e4f
+4754822
+policy_max_khz=5187500
+query_eval/e_group_aggregate time:   [33.48 ms 33.73 ms 34.02 ms]  mad: 251.2 µs  (10 samples × 15 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:08:46Z
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4797467
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4650112
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4616440
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4800745
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4773824
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4804816
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4803233
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4784949
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4643606
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4807377
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530635  -4   B  11 query_eval-8e4f
+4785784
+policy_max_khz=5187500
+query_eval/e_group_aggregate time:   [32.25 ms 32.48 ms 32.86 ms]  mad: 276.6 µs  (10 samples × 16 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/e_group_aggregate
+
+BEGIN pair query_eval/f_path_transitive order=current,original
+2026-10-11T14:08:57Z
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4886015
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4832121
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4835328
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4818981
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4786923
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4821932
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4838451
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4820975
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4771831
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530929  -4   B  11 query_eval-8e4f
+4825141
+policy_max_khz=5187500
+query_eval/f_path_transitive time:   [25.35 ms 25.61 ms 25.80 ms]  mad: 137.3 µs  (10 samples × 20 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:09:07Z
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4824277
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4801359
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4819950
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4807472
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4812243
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4817880
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4826947
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4800979
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4610756
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4637275
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4807154
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4823072
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2530978  -4   B  11 query_eval-8e4f
+4802163
+policy_max_khz=5187500
+query_eval/f_path_transitive time:   [23.90 ms 24.86 ms 28.68 ms]  mad: 1.508 ms  (10 samples × 21 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/f_path_transitive
+
+BEGIN pair query_eval/g_order_by_limit order=original,current
+2026-10-11T14:09:20Z
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4651813
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4614200
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4730052
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4792227
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4770415
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4814572
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4671976
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4784367
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4814965
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4807095
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531573  -4   B  11 query_eval-8e4f
+4815465
+policy_max_khz=5187500
+query_eval/g_order_by_limit time:   [17.68 ms 17.82 ms 17.91 ms]  mad: 102.8 µs  (10 samples × 28 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:09:32Z
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 bash
+4917454
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4820838
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4799668
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4799751
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4805915
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4754693
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4802574
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4606345
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4664446
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4764144
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4652933
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2531910  -4   B  11 query_eval-8e4f
+4611237
+policy_max_khz=5187500
+query_eval/g_order_by_limit time:   [18.64 ms 20.15 ms 20.94 ms]  mad: 849.2 µs  (10 samples × 28 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/g_order_by_limit
+
+BEGIN pair query_eval/h_distinct_dept order=current,original
+2026-10-11T14:09:44Z
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 bash
+4625786
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4570544
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4533837
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4295034
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4521826
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4508385
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4422464
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4435995
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4491044
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+4369309
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+2953745
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+2966250
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2532692  -4   B  11 query_eval-8e4f
+2960122
+policy_max_khz=3000000
+query_eval/h_distinct_dept time:   [2.618 ms 2.747 ms 3.965 ms]  mad: 192.0 µs  (10 samples × 197 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:09:57Z
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 bash
+4567422
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4302356
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4445481
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4518223
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4344279
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4523263
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4553718
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4326797
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4543983
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+4514240
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+2982539
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2535326  -4   B  11 query_eval-8e4f
+2987133
+policy_max_khz=3000000
+query_eval/h_distinct_dept time:   [2.202 ms 2.335 ms 2.526 ms]  mad: 120.0 µs  (10 samples × 218 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/h_distinct_dept
+
+BEGIN pair query_eval/i_construct_blank_free order=original,current
+2026-10-11T14:10:10Z
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4615840
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4730318
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4630280
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4641306
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4638085
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4746107
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4781272
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4792256
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4791777
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4803279
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4638860
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2536518  -4   B  11 query_eval-8e4f
+4794250
+policy_max_khz=5187500
+query_eval/i_construct_blank_free time:   [20.00 ms 20.10 ms 20.30 ms]  mad: 142.5 µs  (10 samples × 25 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:10:22Z
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 bash
+4743286
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4696495
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4645056
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4771268
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4755116
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4773463
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4760050
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4638299
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4770329
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4649389
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4625192
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2537608  -4   B  11 query_eval-8e4f
+4783072
+policy_max_khz=5187500
+query_eval/i_construct_blank_free time:   [21.04 ms 21.22 ms 21.75 ms]  mad: 242.5 µs  (10 samples × 24 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/i_construct_blank_free
+
+BEGIN pair query_eval/j_construct_blank_bearing order=current,original
+2026-10-11T14:10:34Z
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4765474
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4798212
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4730339
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4633469
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4760088
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4787575
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4709074
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4608146
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4739451
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4635954
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2540366  -4   B  11 query_eval-8e4f
+4646665
+policy_max_khz=5187500
+query_eval/j_construct_blank_bearing time:   [29.82 ms 30.50 ms 33.98 ms]  mad: 1.226 ms  (10 samples × 17 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:10:45Z
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 bash
+4771836
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4780506
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4769962
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4750485
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4586291
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4638220
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4663074
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4789716
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4784866
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2547388  -4   B  11 query_eval-8e4f
+4771858
+policy_max_khz=5187500
+query_eval/j_construct_blank_bearing time:   [28.84 ms 29.06 ms 29.47 ms]  mad: 237.1 µs  (10 samples × 17 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/j_construct_blank_bearing
+
+BEGIN pair query_eval/l_single_group_aggregate order=original,current
+2026-10-11T14:10:55Z
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4846746
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4751783
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4772633
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4786890
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4767632
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4766452
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4782199
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4757643
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4781310
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4766191
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548186  -4   B  11 query_eval-8e4f
+4772322
+policy_max_khz=5187500
+query_eval/l_single_group_aggregate time:   [17.67 ms 17.73 ms 17.80 ms]  mad: 59.06 µs  (10 samples × 29 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:11:06Z
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4913950
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4817547
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4786230
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4752595
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4773580
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4749930
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4787410
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4787852
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4774309
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4776885
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2548302  -4   B  11 query_eval-8e4f
+4667687
+policy_max_khz=5187500
+query_eval/l_single_group_aggregate time:   [17.52 ms 17.58 ms 17.67 ms]  mad: 79.65 µs  (10 samples × 29 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/l_single_group_aggregate
+
+BEGIN pair query_eval/m_arithmetic_dense_filter order=current,original
+2026-10-11T14:11:17Z
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4807457
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4803518
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4725015
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4777305
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4787827
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4809556
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4778850
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4785545
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4762303
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4781886
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4760251
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564475  -4   B  11 query_eval-8e4f
+4778999
+policy_max_khz=5187500
+query_eval/m_arithmetic_dense_filter time:   [70.04 ms 70.39 ms 70.61 ms]  mad: 224.8 µs  (10 samples × 8 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:11:29Z
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4941331
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4781917
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4788962
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4778271
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4778833
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4765932
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4787880
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4788851
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4788092
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4780294
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564616  -4   B  11 query_eval-8e4f
+4804280
+policy_max_khz=5187500
+query_eval/m_arithmetic_dense_filter time:   [69.67 ms 69.88 ms 70.12 ms]  mad: 200.5 µs  (10 samples × 8 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/m_arithmetic_dense_filter
+
+BEGIN pair query_eval/n_optional_filter order=original,current
+2026-10-11T14:11:40Z
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4926026
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4835540
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4782344
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4781400
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4787923
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4778345
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4785776
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4780189
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4791164
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4770467
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564791  -4   B  11 query_eval-8e4f
+4781944
+policy_max_khz=5187500
+query_eval/n_optional_filter time:   [7.908 ms 7.937 ms 7.971 ms]  mad: 20.89 µs  (10 samples × 64 iterations)
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:11:51Z
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4935075
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4789152
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4802939
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4799862
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4791273
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4785704
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4804415
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4803919
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4789713
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4792396
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2564916  -4   B  11 query_eval-8e4f
+4800175
+policy_max_khz=5187500
+query_eval/n_optional_filter time:   [8.156 ms 8.203 ms 8.225 ms]  mad: 31.60 µs  (10 samples × 62 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/n_optional_filter
+
+BEGIN pair query_eval/o_minus_disjoint order=current,original
+2026-10-11T14:12:03Z
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4929072
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4810026
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4833561
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4810456
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4804115
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4810335
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4818420
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4818568
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4818830
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565136  -4   B  11 query_eval-8e4f
+4847306
+policy_max_khz=5187500
+query_eval/o_minus_disjoint time:   [6.317 ms 6.338 ms 6.364 ms]  mad: 21.56 µs  (10 samples × 79 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:12:13Z
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4946280
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4824552
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4821048
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4806229
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4829915
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4832192
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4817933
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4835144
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4820244
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565194  -4   B  11 query_eval-8e4f
+4839301
+policy_max_khz=5187500
+query_eval/o_minus_disjoint time:   [6.024 ms 6.045 ms 6.069 ms]  mad: 22.13 µs  (10 samples × 83 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/o_minus_disjoint
+
+BEGIN pair query_eval/p_langmatches_filter order=original,current
+2026-10-11T14:12:23Z
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4938941
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4815123
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4812959
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4784028
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4781723
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4787791
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4783080
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4805515
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4670082
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4627501
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4768575
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565265  -4   B  11 query_eval-8e4f
+4800089
+policy_max_khz=5187500
+query_eval/p_langmatches_filter time:   [11.35 ms 11.40 ms 11.49 ms]  mad: 58.50 µs  (10 samples × 45 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:12:35Z
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4639681
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4772220
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4810953
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4812818
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4699452
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4784030
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4636976
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4809723
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4791631
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4781010
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4827793
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4647654
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2565938  -4   B  11 query_eval-8e4f
+4723966
+policy_max_khz=5187500
+query_eval/p_langmatches_filter time:   [11.57 ms 11.60 ms 11.74 ms]  mad: 57.14 µs  (10 samples × 44 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/p_langmatches_filter
+
+BEGIN pair query_eval/q_construct_blank_coref order=current,original
+2026-10-11T14:12:48Z
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4819109
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4786617
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4807152
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4624956
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4829327
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4768257
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4643713
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4792054
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4814517
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2568045  -4   B  11 query_eval-8e4f
+4798590
+policy_max_khz=5187500
+query_eval/q_construct_blank_coref time:   [52.27 ms 52.59 ms 53.26 ms]  mad: 414.4 µs  (10 samples × 10 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:12:58Z
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4646653
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4736829
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4810807
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4779430
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4819187
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4652284
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4555902
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4708596
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4752177
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2569968  -4   B  11 query_eval-8e4f
+4810961
+policy_max_khz=5187500
+query_eval/q_construct_blank_coref time:   [51.73 ms 53.43 ms 56.90 ms]  mad: 1.890 ms  (10 samples × 10 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/q_construct_blank_coref
+
+BEGIN pair query_eval/r_path_reverse_star order=original,current
+2026-10-11T14:13:08Z
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4891328
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4782385
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4787624
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4810217
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4805598
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4799893
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4816923
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4791100
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4790301
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4800210
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4800128
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2576703  -4   B  11 query_eval-8e4f
+4783582
+policy_max_khz=5187500
+query_eval/r_path_reverse_star time:   [22.11 ms 22.24 ms 22.42 ms]  mad: 150.9 µs  (10 samples × 23 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:13:20Z
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4941716
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4796822
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4826486
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4811963
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4812657
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4821237
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4812713
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4820393
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4831916
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2577503  -4   B  11 query_eval-8e4f
+4646388
+policy_max_khz=5187500
+query_eval/r_path_reverse_star time:   [25.60 ms 27.05 ms 29.33 ms]  mad: 1.649 ms  (10 samples × 21 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/r_path_reverse_star
+
+BEGIN pair query_eval/s_guarded_recursion order=current,original
+2026-10-11T14:13:30Z
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4769087
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4755534
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4652327
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4776755
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4647004
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4639614
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4809951
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4804532
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4809368
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4808511
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4809928
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4771982
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4814279
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4809914
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2593799  -4   B  11 query_eval-8e4f
+4809037
+policy_max_khz=5187500
+warning: query_eval/s_guarded_recursion: 10 samples cannot finish in 5.0 s; they will take about 8.0 s
+query_eval/s_guarded_recursion time:   [392.9 ms 393.5 ms 393.8 ms]  mad: 321.2 µs  (10 samples × 2 iterations)
+                         outliers: 2 of 10 (1 low severe, 0 low mild, 0 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:13:45Z
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4933053
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4810913
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4805519
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4799205
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4819623
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4808412
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4799543
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4818023
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4801838
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4818736
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4820967
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4800763
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4797663
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4817835
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594023  -4   B  11 query_eval-8e4f
+4816122
+policy_max_khz=5187500
+warning: query_eval/s_guarded_recursion: 10 samples cannot finish in 5.0 s; they will take about 7.6 s
+query_eval/s_guarded_recursion time:   [378.6 ms 379.8 ms 380.3 ms]  mad: 511.4 µs  (10 samples × 2 iterations)
+                         outliers: 2 of 10 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/s_guarded_recursion
+
+BEGIN pair query_eval/k_property_function_join order=original,current
+2026-10-11T14:14:01Z
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4936784
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4813274
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4767957
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4756028
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4786134
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4777734
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4740451
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4737655
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4733845
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4746520
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594164  -4   B  11 query_eval-8e4f
+4771393
+policy_max_khz=5187500
+query_eval/k_property_function_join time:   [31.87 ms 32.04 ms 32.22 ms]  mad: 172.2 µs  (10 samples × 16 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:14:12Z
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4941409
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4803079
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4737074
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4777071
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4712714
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4771132
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4718153
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4764760
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4752843
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4756687
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2594368  -4   B  11 query_eval-8e4f
+4636286
+policy_max_khz=5187500
+query_eval/k_property_function_join time:   [34.26 ms 34.44 ms 34.53 ms]  mad: 113.1 µs  (10 samples × 15 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair query_eval/k_property_function_join
+
+BEGIN pair value_dispatch/int_plus_int_value_add order=current,original
+2026-10-11T14:14:23Z
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4768450
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4840654
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4860257
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4846603
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4794026
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4848094
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4778814
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4847204
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4618084
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4798579
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4807906
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2595031  -4   B  11 query_eval-8e4f
+4643030
+policy_max_khz=5187500
+value_dispatch/int_plus_int_value_add time:   [10.87 ns 10.89 ns 10.91 ns]  mad: 41.28 ps  (100 samples × 4585130 iterations)
+                         outliers: 4 of 100 (0 low severe, 0 low mild, 3 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:14:35Z
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4779539
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4644075
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4638288
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4780454
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4632263
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4860507
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4845565
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4718503
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4652862
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4669934
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4833731
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2598061  -4   B  11 query_eval-8e4f
+4855051
+policy_max_khz=5187500
+value_dispatch/int_plus_int_value_add time:   [10.95 ns 11.11 ns 11.17 ns]  mad: 158.5 ps  (100 samples × 4553601 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 3 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair value_dispatch/int_plus_int_value_add
+
+BEGIN pair value_dispatch/int_plus_int_numeric_add_control order=original,current
+2026-10-11T14:14:47Z
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4840548
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4640315
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4634104
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4854568
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4866838
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4850608
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4809765
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4760608
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4856897
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4850894
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4857978
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2601092  -4   B  11 query_eval-8e4f
+4862177
+policy_max_khz=5187500
+value_dispatch/int_plus_int_numeric_add_control time:   [10.14 ns 10.14 ns 10.14 ns]  mad: 5.614 ps  (100 samples × 4841481 iterations)
+                         outliers: 16 of 100 (0 low severe, 0 low mild, 1 high mild, 15 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:14:59Z
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4936648
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4815584
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4857917
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4851542
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4857129
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4866748
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4864134
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4860463
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4875429
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4860504
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4856722
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2606492  -4   B  11 query_eval-8e4f
+4844231
+policy_max_khz=5187500
+value_dispatch/int_plus_int_numeric_add_control time:   [10.13 ns 10.14 ns 10.15 ns]  mad: 23.89 ps  (100 samples × 4932236 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 0 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair value_dispatch/int_plus_int_numeric_add_control
+
+BEGIN pair value_dispatch/dec_plus_dec_value_add order=current,original
+2026-10-11T14:15:11Z
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4864113
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4821016
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4792359
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4838305
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4822917
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4661213
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4845594
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4847739
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4814990
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2615539  -4   B  11 query_eval-8e4f
+4727446
+policy_max_khz=5187500
+value_dispatch/dec_plus_dec_value_add time:   [12.46 ns 12.50 ns 12.53 ns]  mad: 82.97 ps  (100 samples × 4012466 iterations)
+                         outliers: 12 of 100 (0 low severe, 0 low mild, 9 high mild, 3 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:15:21Z
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4906380
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4837836
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4848184
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4846937
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4849908
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4851364
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4848238
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4850164
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4858342
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622877  -4   B  11 query_eval-8e4f
+4851882
+policy_max_khz=5187500
+value_dispatch/dec_plus_dec_value_add time:   [13.78 ns 13.78 ns 13.78 ns]  mad: 9.997 ps  (100 samples × 3615921 iterations)
+                         outliers: 9 of 100 (0 low severe, 0 low mild, 2 high mild, 7 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair value_dispatch/dec_plus_dec_value_add
+
+BEGIN pair value_dispatch/int_plus_dec_value_add order=original,current
+2026-10-11T14:15:31Z
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4937058
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4854333
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4849265
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4854451
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4855379
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4855950
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4858462
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4869135
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4640634
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2622954  -4   B  11 query_eval-8e4f
+4830271
+policy_max_khz=5187500
+value_dispatch/int_plus_dec_value_add time:   [13.73 ns 13.74 ns 13.76 ns]  mad: 35.64 ps  (100 samples × 3634552 iterations)
+                         outliers: 19 of 100 (0 low severe, 0 low mild, 3 high mild, 16 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:15:41Z
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4780110
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4807614
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4857371
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4836380
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4849581
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4655485
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4612148
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4829314
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4787693
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2623647  -4   B  11 query_eval-8e4f
+4838358
+policy_max_khz=5187500
+value_dispatch/int_plus_dec_value_add time:   [12.42 ns 12.44 ns 12.50 ns]  mad: 88.49 ps  (100 samples × 4039616 iterations)
+                         outliers: 9 of 100 (0 low severe, 0 low mild, 4 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair value_dispatch/int_plus_dec_value_add
+
+BEGIN pair value_dispatch/datetime_minus_datetime_value_sub order=current,original
+2026-10-11T14:15:51Z
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4729080
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4618123
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4632044
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4632051
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4558206
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4794711
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4606255
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4817219
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4829531
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4810924
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2629026  -4   B  11 query_eval-8e4f
+4812212
+policy_max_khz=5187500
+value_dispatch/datetime_minus_datetime_value_sub time:   [35.82 ns 35.84 ns 35.87 ns]  mad: 68.22 ps  (100 samples × 1317460 iterations)
+                         outliers: 15 of 100 (0 low severe, 0 low mild, 3 high mild, 12 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:16:03Z
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4817946
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4804068
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4644119
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4766124
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4633079
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4759389
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4778781
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4822839
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4827430
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4817092
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2630135  -4   B  11 query_eval-8e4f
+4806034
+policy_max_khz=5187500
+value_dispatch/datetime_minus_datetime_value_sub time:   [36.08 ns 36.11 ns 36.15 ns]  mad: 65.89 ps  (100 samples × 1358458 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair value_dispatch/datetime_minus_datetime_value_sub
+
+BEGIN pair sort_order/int_vs_int_total order=original,current
+2026-10-11T14:16:14Z
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4773750
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4815760
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4731714
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4738143
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4665518
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4731446
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4766166
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4618435
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4740545
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4699199
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2631200  -4   B  11 query_eval-8e4f
+4647723
+policy_max_khz=5187500
+sort_order/int_vs_int_total time:   [1.982 ns 1.987 ns 1.989 ns]  mad: 11.68 ps  (100 samples × 25227464 iterations)
+                         outliers: 6 of 100 (0 low severe, 0 low mild, 2 high mild, 4 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:16:25Z
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4634149
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4828583
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4643024
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4729477
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4743914
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4757645
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4724572
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4721568
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4709420
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4697327
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2634097  -4   B  11 query_eval-8e4f
+4679780
+policy_max_khz=5187500
+sort_order/int_vs_int_total time:   [2.134 ns 2.136 ns 2.140 ns]  mad: 7.917 ps  (100 samples × 23365589 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 0 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/int_vs_int_total
+
+BEGIN pair sort_order/int_vs_int_promoted_control order=current,original
+2026-10-11T14:16:36Z
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4666990
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4651138
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4614390
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4645562
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4639310
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4684082
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4635054
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4738176
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4718936
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4691424
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2636596  -4   B  11 query_eval-8e4f
+4715904
+policy_max_khz=5187500
+sort_order/int_vs_int_promoted_control time:   [1.517 ns 1.924 ns 1.926 ns]  mad: 25.60 ps  (100 samples × 34120444 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:16:47Z
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4909493
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4752919
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4686278
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4677844
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4689876
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4725283
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4694774
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4692812
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4699463
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2641966  -4   B  11 query_eval-8e4f
+4691206
+policy_max_khz=5187500
+sort_order/int_vs_int_promoted_control time:   [1.714 ns 1.718 ns 1.722 ns]  mad: 4.284 ps  (100 samples × 28932484 iterations)
+                         outliers: 8 of 100 (0 low severe, 0 low mild, 3 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/int_vs_int_promoted_control
+
+BEGIN pair sort_order/dec_vs_dec_total order=original,current
+2026-10-11T14:16:57Z
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4939713
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4811469
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4795367
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4783953
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4772742
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4772284
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4800231
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4694601
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4765543
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2642126  -4   B  11 query_eval-8e4f
+4765549
+policy_max_khz=5187500
+sort_order/dec_vs_dec_total time:   [12.35 ns 12.36 ns 12.37 ns]  mad: 35.70 ps  (100 samples × 4029725 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 0 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:17:07Z
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4798809
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4786725
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4725873
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4765087
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4649529
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4763369
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4759297
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4646542
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4720534
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2658319  -4   B  11 query_eval-8e4f
+4755733
+policy_max_khz=5187500
+sort_order/dec_vs_dec_total time:   [12.24 ns 12.27 ns 12.30 ns]  mad: 65.52 ps  (100 samples × 4064481 iterations)
+                         outliers: 15 of 100 (0 low severe, 0 low mild, 1 high mild, 14 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/dec_vs_dec_total
+
+BEGIN pair sort_order/dec_vs_dec_promoted_control order=current,original
+2026-10-11T14:17:17Z
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4824476
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4813259
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4732004
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4730272
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4795107
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4743433
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4744364
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4727490
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4744677
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2662126  -4   B  11 query_eval-8e4f
+4754464
+policy_max_khz=5187500
+sort_order/dec_vs_dec_promoted_control time:   [11.32 ns 11.34 ns 11.36 ns]  mad: 62.81 ps  (100 samples × 4352104 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 3 high mild, 2 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:17:27Z
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4644805
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4803389
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4706346
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4759520
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4645614
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4757579
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4747932
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4778323
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4655643
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2664455  -4   B  11 query_eval-8e4f
+4722310
+policy_max_khz=5187500
+sort_order/dec_vs_dec_promoted_control time:   [11.52 ns 11.55 ns 11.58 ns]  mad: 69.67 ps  (100 samples × 4316127 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 4 high mild, 1 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/dec_vs_dec_promoted_control
+
+BEGIN pair sort_order/double_vs_double_total order=original,current
+2026-10-11T14:17:37Z
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4864417
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4702563
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4663177
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4657731
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4652643
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4625338
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4627027
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4665661
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4698545
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2666305  -4   B  11 query_eval-8e4f
+4652158
+policy_max_khz=5187500
+sort_order/double_vs_double_total time:   [1.735 ns 1.736 ns 1.739 ns]  mad: 4.549 ps  (100 samples × 28727863 iterations)
+                         outliers: 7 of 100 (0 low severe, 0 low mild, 2 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:17:47Z
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4637641
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4670482
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4677949
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4696099
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4698229
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4672486
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4593500
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4620671
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4688676
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2668475  -4   B  11 query_eval-8e4f
+4693703
+policy_max_khz=5187500
+sort_order/double_vs_double_total time:   [1.744 ns 1.748 ns 1.752 ns]  mad: 10.15 ps  (100 samples × 28641668 iterations)
+                         outliers: 10 of 100 (0 low severe, 0 low mild, 3 high mild, 7 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/double_vs_double_total
+
+BEGIN pair sort_order/double_vs_double_promoted_control order=current,original
+2026-10-11T14:17:57Z
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4636883
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4833415
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4732326
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4668063
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4672732
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4675044
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4674057
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4677569
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4680211
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4678810
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4679907
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675404  -4   B  11 query_eval-8e4f
+4680775
+policy_max_khz=5187500
+sort_order/double_vs_double_promoted_control time:   [5.183 ns 5.187 ns 5.191 ns]  mad: 9.181 ps  (100 samples × 9381154 iterations)
+                         outliers: 10 of 100 (0 low severe, 0 low mild, 5 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:18:10Z
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4944249
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4719879
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4643150
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4646471
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4677688
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4668276
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4654849
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4657940
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4682673
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4631923
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2675990  -4   B  11 query_eval-8e4f
+4631971
+policy_max_khz=5187500
+sort_order/double_vs_double_promoted_control time:   [4.427 ns 4.428 ns 4.436 ns]  mad: 4.232 ps  (100 samples × 11242168 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 0 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/double_vs_double_promoted_control
+
+BEGIN pair sort_order/int_vs_double_window_total order=original,current
+2026-10-11T14:18:21Z
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4658388
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4691513
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4707390
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4644502
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4740954
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4769931
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4762435
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4679054
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4781687
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4719463
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4720002
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2692305  -4   B  11 query_eval-8e4f
+4551310
+policy_max_khz=5187500
+sort_order/int_vs_double_window_total time:   [5.299 ns 5.342 ns 5.366 ns]  mad: 101.3 ps  (100 samples × 9094979 iterations)
+                         outliers: 10 of 100 (0 low severe, 0 low mild, 1 high mild, 9 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:18:33Z
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4711670
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4547382
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4415711
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4516017
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4485234
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4528395
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4393980
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4492166
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4511653
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+4292415
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+2973428
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2697491  -4   B  11 query_eval-8e4f
+2968239
+policy_max_khz=3000000
+sort_order/int_vs_double_window_total time:   [8.958 ns 9.850 ns 10.16 ns]  mad: 1.708 ns  (100 samples × 5812955 iterations)
+                         outliers: 6 of 100 (0 low severe, 0 low mild, 6 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/int_vs_double_window_total
+
+BEGIN pair sort_order/int_vs_double_window_promoted_control order=current,original
+2026-10-11T14:18:45Z
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2961403
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2974002
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2965822
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2971285
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2958543
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2971496
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2963930
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2956048
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2960051
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2988936
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2699795  -4   B  11 query_eval-8e4f
+2968005
+policy_max_khz=3000000
+sort_order/int_vs_double_window_promoted_control time:   [11.27 ns 11.44 ns 13.15 ns]  mad: 278.1 ps  (100 samples × 3482973 iterations)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:18:56Z
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 bash
+2957805
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2975306
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2970795
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2976585
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2988617
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2987673
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2987693
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2984929
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2987388
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2700872  -4   B  11 query_eval-8e4f
+2986600
+policy_max_khz=3000000
+sort_order/int_vs_double_window_promoted_control time:   [10.77 ns 10.77 ns 10.78 ns]  mad: 21.92 ps  (100 samples × 3808730 iterations)
+                         outliers: 7 of 100 (0 low severe, 0 low mild, 3 high mild, 4 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/int_vs_double_window_promoted_control
+
+BEGIN pair sort_order/dec_vs_double_u128_total order=original,current
+2026-10-11T14:19:07Z
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2988107
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2986606
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2985129
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2984191
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2987673
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2985827
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2986640
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2974941
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2984661
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2701395  -4   B  11 query_eval-8e4f
+2978473
+policy_max_khz=3000000
+sort_order/dec_vs_double_u128_total time:   [12.83 ns 12.84 ns 12.84 ns]  mad: 15.26 ps  (100 samples × 3871523 iterations)
+                         outliers: 4 of 100 (0 low severe, 0 low mild, 0 high mild, 4 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:19:17Z
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+2988813
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+2961512
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+2968631
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+2987560
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+2987055
+policy_max_khz=3000000
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+4660116
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+4646349
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+4649504
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2702210  -4   B  11 query_eval-8e4f
+4686152
+policy_max_khz=5187500
+sort_order/dec_vs_double_u128_total time:   [8.058 ns 8.066 ns 8.099 ns]  mad: 28.93 ps  (100 samples × 4303942 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 1 high mild, 4 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/dec_vs_double_u128_total
+
+BEGIN pair sort_order/dec_vs_double_u128_promoted_control order=current,original
+2026-10-11T14:19:26Z
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4804242
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4630606
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4762750
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4654369
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4646371
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4630921
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4644128
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4762152
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4731946
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2703657  -4   B  11 query_eval-8e4f
+4793975
+policy_max_khz=5187500
+sort_order/dec_vs_double_u128_promoted_control time:   [14.13 ns 14.14 ns 14.24 ns]  mad: 43.50 ps  (100 samples × 3497602 iterations)
+                         outliers: 5 of 100 (0 low severe, 0 low mild, 1 high mild, 4 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:19:36Z
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4681011
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4791250
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4776037
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4758522
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4634867
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4730768
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4686199
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4702582
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4684752
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2705504  -4   B  11 query_eval-8e4f
+4744067
+policy_max_khz=5187500
+sort_order/dec_vs_double_u128_promoted_control time:   [14.04 ns 14.10 ns 14.14 ns]  mad: 145.7 ps  (100 samples × 3574455 iterations)
+                         outliers: 10 of 100 (0 low severe, 0 low mild, 0 high mild, 10 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/dec_vs_double_u128_promoted_control
+
+BEGIN pair sort_order/dec_vs_double_bigint_total order=original,current
+2026-10-11T14:19:46Z
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4798754
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4701297
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4806992
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4787275
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4782647
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4794544
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4789665
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4787271
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4689995
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4806637
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4786450
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2712563  -4   B  11 query_eval-8e4f
+4789975
+policy_max_khz=5187500
+sort_order/dec_vs_double_bigint_total time:   [78.11 ns 78.13 ns 78.18 ns]  mad: 62.07 ps  (100 samples × 637036 iterations)
+                         outliers: 9 of 100 (0 low severe, 0 low mild, 4 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:19:58Z
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4944301
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4786568
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4800955
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4804618
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4783818
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4811764
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4783998
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4767669
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4797278
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4796638
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4655273
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2713007  -4   B  11 query_eval-8e4f
+4794594
+policy_max_khz=5187500
+sort_order/dec_vs_double_bigint_total time:   [79.47 ns 79.54 ns 79.67 ns]  mad: 277.1 ps  (100 samples × 629939 iterations)
+                         outliers: 10 of 100 (0 low severe, 0 low mild, 5 high mild, 5 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/dec_vs_double_bigint_total
+
+BEGIN pair sort_order/dec_vs_double_bigint_promoted_control order=current,original
+2026-10-11T14:20:10Z
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4870456
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4761245
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4723332
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4609318
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4706495
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4716123
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4673773
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4694378
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4688725
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4634379
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2729288  -4   B  11 query_eval-8e4f
+4684880
+policy_max_khz=5187500
+sort_order/dec_vs_double_bigint_promoted_control time:   [8.426 ns 8.445 ns 8.472 ns]  mad: 94.85 ps  (100 samples × 5985613 iterations)
+                         outliers: 21 of 100 (0 low severe, 0 low mild, 6 high mild, 15 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+2026-10-11T14:20:21Z
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4558906
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4549024
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4607066
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4521903
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4605136
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4695023
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4708205
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4679724
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4682415
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4681127
+policy_max_khz=5187500
+    PID  NI CLS PSR COMMAND
+2734805  -4   B  11 query_eval-8e4f
+4727131
+policy_max_khz=5187500
+sort_order/dec_vs_double_bigint_promoted_control time:   [8.158 ns 8.170 ns 8.181 ns]  mad: 29.87 ps  (100 samples × 5411621 iterations)
+                         outliers: 6 of 100 (0 low severe, 0 low mild, 0 high mild, 6 high severe)
+
+1 benchmark measured; 0 failed
+    PID  NI CLS PSR COMMAND
+END pair sort_order/dec_vs_double_bigint_promoted_control

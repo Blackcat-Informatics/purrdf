@@ -1,0 +1,167 @@
+Running as unit: run-p1354369-i22357115.scope; invocation ID: bbe437c75e5e4220a1f5d788fc9681c1
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 19s
+     Running unittests src/lib.rs (target/native-build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test governor::tests::profile_digest_changes_when_the_charge_schedule_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1512 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/geo)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/purrdf)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 1m 47s
+     Running tests/native_profile.rs (target/native-build/debug/build/purrdf-capi/7a0132bd7f858782/out/native_profile-7a0132bd7f858782)
+
+running 36 tests
+test hosted::tests::cargo_c_identity_refuses_successful_generic_help_and_wrong_release ... ok
+test hosted::tests::hosted_inventory_and_exact_counterfactual_are_closed ... ok
+test hosted::tests::physical_runner_identity_ignores_frequency_but_refuses_missing_observations ... ok
+test hosted::tests::execution_windows_refuse_missing_and_reversed_clocks ... ok
+test hosted::tests::private_cache_boundaries_and_upload_outputs_are_mandatory ... ok
+test hosted::tests::restoration_never_follows_an_alias_to_prior_evidence ... ok
+test hosted::tests::restored_destinations_are_never_overwritten ... ok
+test hosted::tests::shared_setup_requires_ordered_endpoints_and_all_owned_source_records ... ok
+test hosted::tests::restores_only_complete_current_attempt_and_preserves_prior_evidence ... ok
+test hosted::tests::symlinked_case_or_cache_never_reclaims_foreign_bytes ... ok
+test hosted::tests::stale_wrong_prefix_wrong_case_and_partial_attempt_refuse_before_any_move ... ok
+test hosted::tests::incomplete_or_changed_case_refuses_before_reclaiming_any_cache ... ok
+test phases::tests::mixed_harness_frames_preserve_strict_artifact_selection ... ok
+test phases::tests::nul_inventory_preserves_literal_paths_and_refuses_lossy_decoding ... ok
+test phases::tests::rejects_malformed_missing_unrelated_and_ambiguous_artifacts ... ok
+test phases::tests::selects_exact_package_and_retains_freshness_metadata ... ok
+test hosted::tests::uploaded_case_reclamation_preserves_proof_and_all_siblings ... ok
+test profile::tests::admits_exact_nested_profile_delta_and_refuses_extra_source_changes ... ok
+test profile::tests::cargo_configuration_absence_is_bound_and_private_values_are_excluded ... ok
+test profile::tests::cargo_configuration_malformed_responses_never_become_absence ... ok
+test profile::tests::cold_build_and_target_are_independent_and_warm_admission_is_explicit ... ok
+test profile::tests::complete_comparison_records_aggregate_cost_but_never_invents_runner_wall_time ... ok
+test profile::tests::libtest_frames_preserve_inventory_without_inventing_c_libraries ... ok
+test profile::tests::lost_or_changed_compiler_receipts_cannot_qualify_observed_reduction ... ok
+cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+test profile::tests::missing_malformed_ambiguous_and_tampered_child_bindings_refuse ... ok
+test profile::tests::actual_delegate_failures_and_missing_requests_are_hard_and_retained ... ok
+test profile::tests::partition_coverage_keeps_workspace_and_every_baseline_dependency_variant ... ok
+test profile::tests::physical_roots_normalize_without_losing_package_or_target_identity ... ok
+test profile::tests::mixed_children_bind_libraries_before_cleanup_and_match_actual_c_smoke ... ok
+test phases::tests::child_and_validation_failures_are_recorded_and_receipt_failures_are_hard ... ok
+test profile::tests::rejects_missing_failed_mismatched_tools_config_concurrency_cache_and_coverage ... ok
+test profile::tests::telemetry_preserves_selection_and_harness_arguments_and_nonbuild_commands ... ok
+test profile::tests::warm_arm_retains_old_reports_but_attributes_only_new_or_changed_reports ... ok
+test hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads ... ok
+test profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors ... ok
+test profile::tests::real_sdk_metadata_uses_admitted_arm_directories_and_preserves_inventory ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 8.03s
+     Running tests/evaluator_trace.rs (target/native-build/debug/build/purrdf-sparql-conformance/bcf1f7724338317e/out/evaluator_trace-bcf1f7724338317e)
+
+running 1 test
+test regenerate_evaluator_trace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 5.26s
+
+diff --git crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
+index 0f72698e1..d5ab6bb7e 100644
+--- crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
++++ crates/sparql-conformance/tests/goldens/evaluator-trace/suite.trace
+@@ -1450,11 +1450,11 @@ fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=5 digest=7c576
+ fuel 6..=64 x59 complete rows=5 digest=7c576a8fd4caf94c | fuel=6
+ == purrdf-property-functions <http://purrdf.test/property-functions#bbMemberFalse> a fully bound call that matches nothing yields no row, beside one that does
+ boolean true
+-metered complete fuel=11 scratch-bytes=153
+-explain fuel=11 scratch-bytes=153
++metered complete fuel=10 scratch-bytes=153
++explain fuel=10 scratch-bytes=153
+ node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1 exists-definition-answered=1
+ node 1 depth=1 PropertyFunction rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 property-function-invocation=1 property-function-row=1
+-node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=2 property-function-invocation=1
++node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=1 property-function-invocation=1
+ fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
+ fuel 1 tripped fuel-exhausted consumed=2 unknown barrier=ask-unsettled | fuel=2
+ fuel 2 tripped fuel-exhausted consumed=3 unknown barrier=ask-unsettled | fuel=3
+@@ -1464,9 +1464,8 @@ fuel 5 tripped fuel-exhausted consumed=6 unknown barrier=ask-unsettled | fuel=6
+ fuel 6 tripped fuel-exhausted consumed=7 unknown barrier=Filter | fuel=7
+ fuel 7 tripped fuel-exhausted consumed=8 unknown barrier=Filter | fuel=8
+ fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
+-fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
+-fuel 10 tripped fuel-exhausted consumed=11 certain prefix=true rows=1 digest=27229339670298e5 | fuel=11
+-fuel 11..=64 x54 complete rows=1 digest=27229339670298e5 | fuel=11
++fuel 9 tripped fuel-exhausted consumed=10 certain prefix=true rows=1 digest=27229339670298e5 | fuel=10
++fuel 10..=64 x55 complete rows=1 digest=27229339670298e5 | fuel=10
+ == purrdf-property-functions <http://purrdf.test/property-functions#bbMemberTrue> a fully bound call is a membership test that holds
+ boolean true
+ metered complete fuel=4
+@@ -1652,11 +1651,11 @@ fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=2 digest=e17
+ fuel 16..=64 x49 complete rows=2 digest=e17595df32eae0f5 | fuel=16
+ == purrdf-property-functions <http://purrdf.test/property-functions#modeRestrictedSubsumption> a bf-only relation serves a fully bound call, and the engine filters the bound position
+ boolean true
+-metered complete fuel=11 scratch-bytes=153
+-explain fuel=11 scratch-bytes=153
++metered complete fuel=10 scratch-bytes=153
++explain fuel=10 scratch-bytes=153
+ node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1 exists-definition-answered=1
+ node 1 depth=1 PropertyFunction rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 property-function-invocation=1 property-function-row=1
+-node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=2 property-function-invocation=1
++node 2 depth=1 PropertyFunction rows=0 cells=0 algebra-node-entry=1 property-function-invocation=1
+ fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
+ fuel 1 tripped fuel-exhausted consumed=2 unknown barrier=ask-unsettled | fuel=2
+ fuel 2 tripped fuel-exhausted consumed=3 unknown barrier=ask-unsettled | fuel=3
+@@ -1666,9 +1665,8 @@ fuel 5 tripped fuel-exhausted consumed=6 unknown barrier=ask-unsettled | fuel=6
+ fuel 6 tripped fuel-exhausted consumed=7 unknown barrier=Filter | fuel=7
+ fuel 7 tripped fuel-exhausted consumed=8 unknown barrier=Filter | fuel=8
+ fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
+-fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
+-fuel 10 tripped fuel-exhausted consumed=11 certain prefix=true rows=1 digest=27229339670298e5 | fuel=11
+-fuel 11..=64 x54 complete rows=1 digest=27229339670298e5 | fuel=11
++fuel 9 tripped fuel-exhausted consumed=10 certain prefix=true rows=1 digest=27229339670298e5 | fuel=10
++fuel 10..=64 x55 complete rows=1 digest=27229339670298e5 | fuel=10
+ == purrdf-property-functions <http://purrdf.test/property-functions#multiCallChain> one call's output is the next call's input
+ solutions vars=["person", "city"] rows=3 ordered=false
+ | _:c14n0 <urn:purrdf:conformance:var:city> "Zurich" .
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 2.45s
+     Running tests/evaluator_trace.rs (target/native-build/debug/build/purrdf-sparql-conformance/bcf1f7724338317e/out/evaluator_trace-bcf1f7724338317e)
+
+running 4 tests
+test regenerate_evaluator_trace ... ignored, regeneration path: writes the committed golden
+test regenerate_update_trace ... ignored, regeneration path: writes the committed golden
+test the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden ... ok
+test the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden ... ok
+
+test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 5.31s
+
+     Running tests/governor_corpus.rs (target/native-build/debug/build/purrdf-sparql-conformance/cf6ba75b54588350/out/governor_corpus-cf6ba75b54588350)
+
+running 16 tests
+test a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape ... ok
+test a_transport_that_ignores_the_stop_signal_is_bounded_per_request ... ok
+test every_governor_carries_a_zero_a_boundary_and_an_over_bound_case ... ok
+test regenerate_fuel_sweep_trace ... ignored, regeneration path: writes the committed golden
+test a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation ... ok
+test a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically ... ok
+test the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+test the_parallel_drive_is_actually_above_the_fork_threshold ... ok
+test the_parallel_drive_spends_what_the_sequential_measurement_spent ... ok
+test the_rdf12_statement_layer_is_governed ... ok
+test the_two_aggregate_charge_points_are_banded_separately ... ok
+test the_two_property_function_charge_points_are_banded_separately ... ok
+test the_corpus_is_reproducible_within_a_run ... ok
+test every_boundary_is_derived_from_a_metered_run ... ok
+test the_fuel_sweep_over_the_corpus_matches_its_trace ... ok
+
+test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 9.94s
+
+terminal_status=0

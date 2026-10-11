@@ -1,0 +1,39 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 17.87s
+     Running tests/evidence_ingress.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/933c5385acd98653/out/evidence_ingress-933c5385acd98653)
+
+running 20 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... FAILED
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+failures:
+
+---- native_property_rows_retain_original_declarations_through_normal_ingestion stdout ----
+thread 'native_property_rows_retain_original_declarations_through_normal_ingestion' panicked at crates/sparql-eval/tests/evidence_ingress.rs:2833:22:
+native whole search needs no external EvidenceInput, on native and WASM: RdfDiagnostic { severity: Error, code: "native-sparql-workspace-unpriced", message: "bounded query workspace has no certified price for worker row buffer requires resident ownership", detail: None, location: None, presentation: None }
+
+
+failures:
+    native_property_rows_retain_original_declarations_through_normal_ingestion
+
+test result: FAILED. 19 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.24s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test evidence_ingress`

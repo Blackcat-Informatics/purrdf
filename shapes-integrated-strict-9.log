@@ -1,0 +1,17 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+error[E0282]: type annotations needed
+   --> crates/text/benches/../tests/support/shape_cases.rs:457:5
+    |
+457 |     assert_ne!(rows.solutions().unwrap().1, []);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `purrdf-text` (bench "physical_shapes") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0282]: type annotations needed
+   --> crates/text/tests/support/shape_cases.rs:457:5
+    |
+457 |     assert_ne!(rows.solutions().unwrap().1, []);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+error: could not compile `purrdf-text` (test "physical_shapes") due to 1 previous error

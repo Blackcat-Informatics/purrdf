@@ -1,0 +1,43 @@
+Running as unit: run-p4004986-i8253779.scope; invocation ID: 8b094376307b4572b93485daf6703845
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 4.04s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 3m 33s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/96ff3be4e197661d/out/evidence_ingress-96ff3be4e197661d)
+
+running 12 tests
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 6m 19s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/9f8a28817b3f52dd/out/purrdf_sparql_eval-9f8a28817b3f52dd)
+
+running 12 tests
+test governor::soundness::tests::minus_right_arm_truncation_yields_an_upper_bound_not_unknown ... ok
+test governor::lift::tests::truncated_right_arm_of_minus_yields_an_upper_bound ... ok
+test expr::tests::unary_minus_on_a_duration_round_trips ... ok
+test expr::tests::datetime_minus_duration_is_not_commutative ... ok
+test binop::tests::minus_with_disjoint_domains_removes_nothing ... ok
+test binop::tests::minus_removes_compatible_overlapping_rows ... ok
+test expr::tests::minus_under_substitution_keeps_its_domain ... ok
+test engine::tests::prebinding_reaches_a_minus_right_arm ... ok
+test service_endpoints::tests::under_minus_a_failing_endpoint_keeps_its_rows_while_answering_ones_remove_theirs ... ok
+test service_endpoints::tests::a_silenced_endpoint_under_minus_removes_none_of_its_rows ... ok
+test service_endpoints::tests::minus_removes_the_rows_whose_endpoint_has_a_compatible_answer ... ok
+test user_fn::tests::a_user_function_argument_reaches_a_minus_right_arm ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1484 filtered out; finished in 0.00s
+

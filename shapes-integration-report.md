@@ -1,0 +1,44 @@
+# Complete shapes/evidence source integration
+
+Root transferred sole source-writer ownership of the515 worktree for the complete518+512 integration and coherent findings. The original518 source/worktree/Stage remains preserved. Existing staged/unstaged layers were captured separately in shapes-integration-existing-index.patch and shapes-integration-existing-unstaged.patch; no blanket staging, index mutation or source/branch replacement occurred.
+
+The full34-file source packet was applied with git apply -p0 --exclude=crates/sparql-eval/src/expr.rs --reject. Its initial apply exited1, with ONLY four expected overlaps: interned.rs,modifier.rs,property_fn.rs,property_fn_eval.rs. Those overlaps were reconciled in the existing bodies: preserve public existential/search/partition visitors; group original row-evidence conjunction and first-row lanes; scoped producer declaration; AdmittedPropertyRow cursor/evidence, candidate-scope depth and driving/reached-only producer loss. The original paired barrier inner_result patch was applied with -p1, leaving original515 ledger push/pop/governor/absence/VM/memo publication intact. Temporary rejects were removed after their exact source units were reconciled.
+
+Source now contains original literal and complete dictionary/window/calendar/host/span paths with actual515 owning carriers; false FILTER gap/refusal controls remain in the one shared native/portable corpus. Expanded uniform occurrence binding also conjoins original emitted evidence at the same publication home. Candidate-scoped calls keep the existing scoped original producer path when the dictionary capability does not certify that scope.
+
+The additional actual CallRead::pull correction marks scoped native failures and original typed source/workspace/allocation refusals as whole-run faults, so they cannot become an isolated zero-row stratum before the first ranked row. Original unscoped request/producer-stratum classification remains separate. Admitted scoped receipt storage failure is also whole-run. A real shipped text/kNN/public OnDemand fixture requires the original native constraint refusal before any rank and proves no partial receipt was completed.
+
+Qualification state: source integrated, UNQUALIFIED. No mandatory make check, commit, push, PR or merge is authorized at this stage. The combined group remains incomplete until actual strict/native/portable/probes/final acceptance, including root's remaining result/fusion owner, is proven. Original515 strict/exclusion/runtime evidence remains historical, not proof of the new full source.
+
+Runner: shapes-qualification-run uses the original pinned real rustup toolchain, private target/build/tmp,4 compiler/test jobs and16GiB/no-swap systemd scope. Commands and terminal receipts below will be appended as they occur.
+
+## Actual command receipts
+
+1. `git apply -p0 --exclude=crates/sparql-eval/src/expr.rs --check .../shapes-dictionary-complete-source.patch`: exit1, only the four expected overlaps. Actual apply/reject log is shapes-integration-apply-1.log; the reconciled units were written before any compiler.
+2. `git apply -p1 .../barrier-existential-publication-caller.patch`: exit0, original inner_result hunk only.
+3. `bash .../shapes-qualification-run cargo fmt --all`: exit0; shapes-integrated-format-1.log. No staging or hook bypass.
+4. Metadata1 with `--offline --no-deps` exited0 but did not resolve the changed dev edge. First locked strict launcher exited101 before rustc because Cargo.lock needed that edge; shapes-integrated-strict-1.log preserves the failure. Full original `cargo metadata --offline --format-version 1` then exited0, generated ONLY the existing first-party purrdf-sparql-algebra dependency in the text lock entry; shapes-integrated-metadata-2.json/log preserve it. No external version/dependency changed.
+5. `bash .../shapes-qualification-run cargo clippy --locked -p purrdf-core -p purrdf-datalog -p purrdf-sparql-eval -p purrdf-text -p purrdf-retrieval --all-targets --keep-going -- -D warnings`: terminal101, shapes-integrated-strict-2.log. The full17 initial evaluator diagnostics were collected with source frozen: original lock helper path; boolean factory visibility; current shared-schema return type; context-aware BGP bind; admitted emitted cells and source IRI owner; borrowed position types and local type annotations; current atomic API and one unnecessary qualification. They were corrected together in the original source homes. The source IRI is retained in Workspace authored SharedText before copying, not a raw String clone. No type/lint allow, allocation weakening or original evidence body was substituted. This is not a full mandatory gate or runtime proof.
+6. Strict3 terminated101 with21 evaluator lint/dead-wrapper findings. All were corrected together without suppressions: borrowed request is Copy with the original non-exhaustive Debug home; concrete same-home type aliases; borrowed dictionary input; unused resident CallPlan wrapper removed; and scalar/loop formatting. Barrier preparation state moved into its actual BarrierState owner, with the original worker-fork preparation bit preserved while worker caches remain empty. No grant or original evidence/search publication was moved.
+7. Strict4 terminated101 because one early dictionary-install caller still passed its input by value after the borrowed-input correction. That caller now borrows the same live original input; no algorithm or output law changed. Strict5 terminated101 with the complete four text producer type findings: Volatility's actual root export, slice comparison using the actual retained path, and native Occurrence type inference. They were corrected in their original homes with no new feature, raw ownership or fallback. Logs shapes-integrated-strict-3.log through -5.log retain every failure.
+8. Strict6 terminated101 with two text-library lints: release the cache mutex after its actual last mutation, and a private field name. Their correction preserves construction before cache replacement and the original outstanding match owner. Strict7 reached the acceptance/benchmark targets and terminated101 on the complete fixture interface set plus two existing scoped-candidate borrow lints. Actual public homes now supply WorkspaceAccumulator, vocab and owned ExtensionEnv; source failure is asserted through original FallibleDatasetView::operation_status. The real CandidateConstraint refusal witness derives its required Debug. No public API was widened to accommodate a test.
+9. Strict8 terminated101 with fixture/bench lints, collected together across every affected target. Test-only corpus visibility is now crate-private; redundant handles/closures, borrowed pointer spelling and bench statement punctuation are corrected. Empty/nonempty assertions retain their meanings and show values on failure. The independent quadratic span oracle uses the same nonempty half-open intersection law, distinct from the production Fenwick selector. Formatter6 exited1 after three insufficiently contextual punctuation edits hit iterator closures; those exact lines were repaired, and formatter7 exited0. Neither was a runtime test or passing gate claim.
+10. Strict9 terminated101 on one ambiguous empty-slice assertion type. Its original solution-row type is now explicit, preserving the same nonempty control. Strict10 then TERMINATED0/PASS for the entire command in receipt5, including all affected libraries, tests, benches and examples. Log: shapes-integrated-strict-10.log. Source was frozen for each complete pass; no warnings were suppressed, dependencies added externally, assertions removed, limits softened, or physical-account/evidence laws bypassed.
+
+## Ownership handoff after strict PASS
+
+515 source ownership returned to root immediately after strict10 terminal PASS.
+No native runtime, portable runtime, scaling benchmark, helper/generated/layer
+gate, mandatory make check, staging, commit, push, PR or merge was performed in
+this integration phase. Root will first finish the original result/candidate/
+ranked-term/fusion ownership unit, then qualify the complete five-contract source.
+The19-case shared physical_shapes target and benchmark compile, but their runtime
+acceptance remains NOT MET. Compilation is not behavior or performance evidence.
+The new real_producers scoped native fault fixture also remains runtime NOT MET.
+No assigned behavior was cut or moved into a follow-up issue.
+
+The original518 worktree/Stage/34-file packet and all donor branches remain intact.
+Earlier515 staged/unstaged/untracked source and its original publication/evidence
+homes are preserved. Only the intended overlapping source units were reconciled;
+the index has not been altered. Durable detailed handoff is
+shapes-integrated-source-handoff.md in this selected Stage.

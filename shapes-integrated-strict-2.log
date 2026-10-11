@@ -1,0 +1,311 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking typenum v1.20.1
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking cpufeatures v0.3.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-events)
+    Checking hybrid-array v0.4.15
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking regex-automata v0.4.14
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking hashbrown v0.17.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+   Compiling libc v0.2.186
+    Checking regex v1.12.4
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking either v1.16.0
+   Compiling getrandom v0.3.4
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/stack)
+    Checking crossbeam-deque v0.8.6
+    Checking rayon v1.12.0
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0425]: cannot find function `lock_read_state` in crate `purrdf_core`
+  --> crates/sparql-eval/src/shapes/runtime.rs:65:22
+   |
+65 |         purrdf_core::lock_read_state(self.reports.as_ref().expect("report home installed"))
+   |                      ^^^^^^^^^^^^^^^ not found in `purrdf_core`
+   |
+help: consider importing this function
+   |
+ 4 + use purrdf_core::dataset_view::lock_read_state;
+   |
+help: if you import `lock_read_state`, refer to it directly
+   |
+65 -         purrdf_core::lock_read_state(self.reports.as_ref().expect("report home installed"))
+65 +         lock_read_state(self.reports.as_ref().expect("report home installed"))
+   |
+
+error[E0425]: cannot find function `lock_read_state` in crate `purrdf_core`
+  --> crates/sparql-eval/src/shapes/runtime.rs:76:32
+   |
+76 |             &mut *purrdf_core::lock_read_state(reports),
+   |                                ^^^^^^^^^^^^^^^ not found in `purrdf_core`
+   |
+help: consider importing this function
+   |
+ 4 + use purrdf_core::dataset_view::lock_read_state;
+   |
+help: if you import `lock_read_state`, refer to it directly
+   |
+76 -             &mut *purrdf_core::lock_read_state(reports),
+76 +             &mut *lock_read_state(reports),
+   |
+
+error[E0603]: function `correlated_boolean` is private
+    --> crates/sparql-eval/src/shapes/barrier.rs:252:34
+     |
+ 252 |         let truth = crate::expr::correlated_boolean(true, workspace)?;
+     |                                  ^^^^^^^^^^^^^^^^^^ private function
+     |
+note: the function `correlated_boolean` is defined here
+    --> crates/sparql-eval/src/expr.rs:3287:1
+     |
+3287 | / fn correlated_boolean(
+3288 | |     value: bool,
+3289 | |     workspace: &crate::WorkspaceCapability,
+3290 | | ) -> Result<purrdf_sparql_algebra::Literal, EvalError> {
+...    |
+3296 | |     ))
+3297 | | }
+     | |_^
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/interned.rs:191:21
+    |
+191 |                 let purrdf_core::TermValue::Literal {
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+191 -                 let purrdf_core::TermValue::Literal {
+191 +                 let TermValue::Literal {
+    |
+
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> crates/sparql-eval/src/bgp/window.rs:414:14
+    |
+414 |             .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |n| {
+    |              ^^^^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+help: replace the use of the deprecated method
+    |
+414 -             .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |n| {
+414 +             .try_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |n| {
+    |
+
+error[E0061]: this function takes 4 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/bgp.rs:689:27
+     |
+ 462 | fn eval_compiled_bgp<D: DatasetView + Sync>(
+     |                      - found this type parameter
+...
+ 689 |                     match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+     |                           ^^^^^^^^                              ----------- unexpected argument #5 of type `&workspace::WorkspaceCapability`
+     |
+note: expected `&EvalCtx<'_, _>`, found `&D`
+    --> crates/sparql-eval/src/bgp.rs:689:52
+     |
+ 689 |                     match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+     |                                                    ^^^^^^^^^^^
+     = note: expected reference `&eval::EvalCtx<'_, _>`
+                found reference `&D`
+note: function defined here
+    --> crates/sparql-eval/src/bgp.rs:2441:4
+     |
+2441 | fn bind_row<D: DatasetView + Sync>(
+     |    ^^^^^^^^
+...
+2445 |     ctx: &EvalCtx<'_, D>,
+     |     --------------------
+help: remove the extra argument
+     |
+ 689 -                     match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+ 689 +                     match bind_row(row, cp, &quad, /* ctx */) {
+     |
+
+error[E0282]: type annotations needed
+   --> crates/sparql-eval/src/interned.rs:189:28
+    |
+189 |                 let cell = row[column].ok_or_else(invalid)?;
+    |                            ^^^^^^^^^^^ cannot infer type
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/property_fn_eval.rs:282:18
+    |
+282 |             iri: call.iri.clone(),
+    |                  ^^^^^^^^^^^^^^^^ expected `NamedNode`, found `String`
+
+error[E0599]: no method named `len` found for reference `&property_fn::AdmittedPfRow` in the current scope
+   --> crates/sparql-eval/src/property_fn_eval.rs:832:24
+    |
+832 |             if emitted.len() != plan.args.len() {
+    |                        ^^^ method not found in `&property_fn::AdmittedPfRow`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `len`, perhaps you need to implement one of them:
+            candidate #1: `knn::metric::RankHeap`
+            candidate #2: `rayon::iter::IndexedParallelIterator`
+            candidate #3: `rayon::range::private::IndexedRangeInteger`
+            candidate #4: `rayon::range_inclusive::private::IndexedRangeInteger`
+            candidate #5: `sha2::digest::typenum::Len`
+            candidate #6: `std::iter::ExactSizeIterator`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/property_fn_eval.rs:840:48
+     |
+ 840 |             if !unify_row_admitted(&plan.args, emitted, values.as_mut_slice(), &ctx.growth)? {
+     |                 ------------------             ^^^^^^^ expected `&[TermValue]`, found `&AdmittedPfRow`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected reference `&[purrdf_core::TermValue]`
+                found reference `&property_fn::AdmittedPfRow`
+note: function defined here
+    --> crates/sparql-eval/src/property_fn_eval.rs:1449:4
+     |
+1449 | fn unify_row_admitted(
+     |    ^^^^^^^^^^^^^^^^^^
+1450 |     args: &[Arg],
+1451 |     emitted: &[TermValue],
+     |     ---------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/shapes/dictionary.rs:251:24
+    |
+240 |             || positions.contains(position)
+    |                ---------          -------- this argument has type `&purrdf_sparql_algebra::Variable`...
+    |                |
+    |                ... which causes `positions` to have type `workspace::AdmittedVec<purrdf_sparql_algebra::Variable>`
+...
+251 |         positions.push(position)?;
+    |                   ---- ^^^^^^^^ expected `Variable`, found `&Variable`
+    |                   |
+    |                   arguments to this method are incorrect
+    |
+note: method defined here
+   --> crates/sparql-eval/src/workspace.rs:707:12
+    |
+707 |     pub fn push(&mut self, value: T) -> Result<(), EvalError> {
+    |            ^^^^            --------
+help: consider using clone here
+    |
+251 |         positions.push(position.clone())?;
+    |                                ++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/shapes/dictionary.rs:253:27
+    |
+253 |     if !adjacency(filter, &positions, workspace)? {
+    |         ---------         ^^^^^^^^^^ expected `&[&Variable]`, found `&AdmittedVec<Variable>`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected reference `&[&purrdf_sparql_algebra::Variable]`
+               found reference `&workspace::AdmittedVec<purrdf_sparql_algebra::Variable>`
+note: function defined here
+   --> crates/sparql-eval/src/shapes/dictionary.rs:259:4
+    |
+259 | fn adjacency(
+    |    ^^^^^^^^^
+260 |     filter: Option<&Expression>,
+261 |     positions: &[&Variable],
+    |     -----------------------
+
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> crates/sparql-eval/src/shapes/runtime.rs:129:14
+    |
+129 |             .fetch_update(order, order, |n| n.checked_add(visits))
+    |              ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+129 -             .fetch_update(order, order, |n| n.checked_add(visits))
+129 +             .try_update(order, order, |n| n.checked_add(visits))
+    |
+
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> crates/sparql-eval/src/shapes/runtime.rs:132:14
+    |
+132 |             .fetch_update(order, order, |n| n.checked_add(transitions))
+    |              ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+132 -             .fetch_update(order, order, |n| n.checked_add(transitions))
+132 +             .try_update(order, order, |n| n.checked_add(transitions))
+    |
+
+error[E0282]: type annotations needed for `std::option::Option<_>`
+   --> crates/sparql-eval/src/shapes/runtime.rs:403:13
+    |
+403 |         let mut evidence = None;
+    |             ^^^^^^^^^^^^
+...
+408 |                 Some(previous) => previous.combine(
+    |                                   -------- type must be known at this point
+    |
+help: consider giving `evidence` an explicit type, where the type for type parameter `T` is specified
+    |
+403 |         let mut evidence: std::option::Option<T> = None;
+    |                         ++++++++++++++++++++++++
+
+error[E0507]: cannot move out of dereference of `solution::SharedSchema`
+   --> crates/sparql-eval/src/shapes/dictionary.rs:374:18
+    |
+374 |     let schema = crate::eval::syntactic_schema_admitted(root, &growth)?.shared_admitted(&growth)?;
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ------------------------ value moved due to this method call
+    |                  |
+    |                  move occurs because value has type `solution::VarSchema`, which does not implement the `Copy` trait
+    |
+note: `solution::VarSchema::shared_admitted` takes ownership of the receiver `self`, which moves value
+   --> crates/sparql-eval/src/solution.rs:231:9
+    |
+231 |         self,
+    |         ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+    |
+374 |     let schema = <solution::VarSchema as Clone>::clone(&crate::eval::syntactic_schema_admitted(root, &growth)?).shared_admitted(&growth)?;
+    |                  +++++++++++++++++++++++++++++++++++++++                                                      +
+
+error[E0507]: cannot move out of dereference of `solution::SharedSchema`
+   --> crates/sparql-eval/src/shapes/runtime.rs:296:9
+    |
+296 |         crate::eval::syntactic_schema_admitted(pattern, &growth)?.shared_admitted(&growth)?;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ------------------------ value moved due to this method call
+    |         |
+    |         move occurs because value has type `solution::VarSchema`, which does not implement the `Copy` trait
+    |
+note: `solution::VarSchema::shared_admitted` takes ownership of the receiver `self`, which moves value
+   --> crates/sparql-eval/src/solution.rs:231:9
+    |
+231 |         self,
+    |         ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+    |
+296 |         <solution::VarSchema as Clone>::clone(&crate::eval::syntactic_schema_admitted(pattern, &growth)?).shared_admitted(&growth)?;
+    |         +++++++++++++++++++++++++++++++++++++++                                                         +
+
+Some errors have detailed explanations: E0061, E0282, E0308, E0425, E0507, E0599, E0603.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 17 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 17 previous errors

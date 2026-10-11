@@ -1,0 +1,167 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 39s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 58 tests
+test workspace::owned_row_regressions::bounded_service_and_http_refuse_unpriced_opaque_hosts_before_dispatch ... ok
+test workspace::owned_row_regressions::certainty_refusal_releases_all_native_worklists_and_preserves_first_typed_cause ... ok
+test workspace::owned_row_regressions::certainty_lateral_context_and_filter_requirements_use_original_admitted_home ... ok
+test workspace::owned_row_regressions::borrowed_id_grounding_moves_exact_source_cause_and_releases_partial_triple ... ok
+test workspace::owned_row_regressions::certainty_schema_keeps_original_grant_after_workspace_and_shallow_clone ... ok
+test workspace::owned_row_regressions::compiled_expression_refuses_constant_copy_before_birth_and_releases_scratch ... ok
+test workspace::owned_row_regressions::compiled_expression_retains_original_constant_buffers_after_authored_tree_drop ... ok
+test workspace::owned_row_regressions::constructed_cells_keep_original_payloads_after_context_and_account ... ok
+test workspace::owned_row_regressions::constructed_metadata_refusal_publishes_no_cell_and_preserves_original_cause ... ok
+test workspace::owned_row_regressions::consuming_resident_iterator_moves_spilled_cells ... ok
+test workspace::owned_row_regressions::consuming_iterator_drop_keeps_extracted_spilled_row_admitted ... ok
+test workspace::owned_row_regressions::first_owned_refusal_moves_without_clone_and_account_stays_failed ... ok
+test workspace::owned_row_regressions::declared_domains_retain_native_iris_membership_and_control_after_scope_drop ... ok
+test workspace::owned_row_regressions::ground_and_paired_clone_join_enclosing_original_memory_without_owner_array ... ok
+test workspace::owned_row_regressions::ground_owner_keeps_original_boxes_and_lexical_leaves_after_workspace ... ok
+test workspace::owned_row_regressions::grounding_first_predicate_refusal_precedes_unvisited_bad_object ... ok
+test workspace::owned_row_regressions::mutable_native_trait_box_retains_concrete_allocation_and_first_refusal ... ok
+test workspace::owned_row_regressions::grounding_refusal_destroys_partial_children_and_moves_first_cause_once ... ok
+test workspace::owned_row_regressions::native_blank_reservations_share_fork_snapshot_and_keep_scope_collision_law ... ok
+test workspace::owned_row_regressions::native_assignment_identity_overflow_is_typed_before_name_construction ... ok
+test workspace::owned_row_regressions::native_cap_plan_and_spilled_edges_keep_original_grants_until_payload_drop ... ok
+test workspace::owned_row_regressions::native_correlated_preparation_refusal_moves_first_cause_and_releases_partial_tree ... ok
+test workspace::owned_row_regressions::native_correlated_rows_and_maps_keep_original_grants_until_last_owner ... ok
+test workspace::owned_row_regressions::native_existing_copy_preserves_typed_datatype_read_failure_without_a_view_maximum ... ok
+test workspace::owned_row_regressions::native_failure_spelling_clone_retains_grant_without_factory_reentry ... ok
+test workspace::owned_row_regressions::governed_native_materialization_survives_execution_and_account_scope ... ok
+test workspace::owned_row_regressions::native_prebinding_first_buffer_refusal_keeps_exact_original_cause ... ok
+test workspace::owned_row_regressions::native_in_process_service_and_http_decode_preserve_bags_under_original_grants ... ok
+test workspace::owned_row_regressions::native_preparation_refusal_keeps_the_original_typed_identity ... ok
+test workspace::owned_row_regressions::native_response_first_growth_refusal_releases_every_working_buffer ... ok
+test workspace::owned_row_regressions::native_prebinding_all_four_forms_keep_original_ast_admission_until_drop ... ok
+test workspace::owned_row_regressions::native_scope_preflight_failure_leaves_flags_maps_and_placeholders_unmodified ... ok
+test workspace::owned_row_regressions::native_service_index_clones_keep_original_metadata_until_the_last_owner ... ok
+test workspace::owned_row_regressions::native_service_unsupported_retains_original_code_text_and_grant ... ok
+test workspace::owned_row_regressions::native_service_metadata_refusal_keeps_first_cause_and_destroys_partial_owners ... ok
+test workspace::owned_row_regressions::native_service_literal_render_refusal_is_physical_and_silent_cannot_absorb_it ... ok
+test workspace::owned_row_regressions::native_template_initial_refusal_retains_original_typed_cause_without_minting ... ok
+test workspace::owned_row_regressions::native_soundness_analysis_keeps_original_immutable_owners_after_context_drop ... ok
+test workspace::owned_row_regressions::native_soundness_refusal_is_typed_and_shallow_edges_need_no_heap ... ok
+test workspace::owned_row_regressions::native_text_control_refusal_keeps_original_string_before_extraction ... ok
+test workspace::owned_row_regressions::native_term_debug_refuses_actual_worklist_growth_before_diagnostic_copy ... ok
+test workspace::owned_row_regressions::native_text_publication_shares_original_buffer_and_survives_enclosing_frame ... ok
+test workspace::owned_row_regressions::native_witness_refusal_preserves_original_provider_failure_before_copying_iri ... ok
+test workspace::owned_row_regressions::native_term_debug_matches_original_bytes_and_retains_diagnostic_on_clone ... ok
+test workspace::owned_row_regressions::ordered_membership_refuses_first_arena_before_publication ... ok
+test workspace::owned_row_regressions::prepared_native_probe_reuse_keeps_spelling_and_clears_refused_cells ... ok
+test workspace::owned_row_regressions::published_ordered_membership_keeps_original_arena_until_final_owner_drop ... ok
+test workspace::owned_row_regressions::prepared_native_query_and_slots_retain_the_original_account ... ok
+test workspace::owned_row_regressions::nested_native_service_denial_keeps_inner_type_and_original_error_owner ... ok
+test workspace::owned_row_regressions::resident_prepared_probe_lexical_refusal_preserves_original_buffer_reuse ... ok
+test workspace::owned_row_regressions::resident_reordering_moves_each_original_spill ... ok
+test workspace::owned_row_regressions::native_term_copy_refusal_destroys_partial_strings_boxes_and_work_before_refund ... ok
+test workspace::owned_row_regressions::service_error_clone_keeps_original_text_and_control_without_allocation ... ok
+test workspace::owned_row_regressions::resident_view_native_copy_needs_no_dictionary_certificate_and_keeps_original_payload_grant ... ok
+test workspace::owned_row_regressions::service_metadata_retains_original_grant_through_shallow_attestation_clone ... ok
+test workspace::owned_row_regressions::service_response_retains_original_buffers_and_refuses_detached_extraction ... ok
+test workspace::owned_row_regressions::witness_clone_retains_original_arrays_and_shared_mutation_preserves_receipt ... ok
+test workspace::owned_row_regressions::template_ordinal_and_native_term_keep_original_account_until_last_payload ... ok
+
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 1452 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 05s
+     Running tests/evidence_ingress.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/933c5385acd98653/out/evidence_ingress-933c5385acd98653)
+
+running 20 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.10s
+
+     Running tests/join_output_alloc.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/b08adabbf86bce09/out/join_output_alloc-b08adabbf86bce09)
+
+running 1 test
+test explaining_sparse_materializing_joins_allocates_for_real_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/prepared_execution.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/solution_row_alloc.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/960bdf067bb36d55/out/solution_row_alloc-960bdf067bb36d55)
+
+running 3 tests
+test clone_has_inline_zero_and_spilled_one_allocation ... ok
+test clone_then_push_allocation_count_is_explicit ... ok
+test copy_from_slice_has_exact_allocation_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Finished `test` profile [optimized] target(s) in 24.93s
+     Running tests/physical_shapes.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-text/fcf071b21c1fe68c/out/physical_shapes-fcf071b21c1fe68c)
+
+running 19 tests
+test expanded_dictionary_and_union ... ok
+test dictionary_projection_and_aliases ... ok
+test longest_first_reference ... ok
+test typed_series_property ... ok
+test registered_host_and_decline ... ok
+test prepared_and_query_forms ... ok
+test dictionary_property ... ok
+test dictionary_analyzer_identity ... ok
+test bucket_custom_and_parallel_order ... ok
+test host_refusal_and_governor_boundary ... ok
+test dictionary_long_phrase_and_determinism ... ok
+test bounded_shapes_keep_original_owners ... ok
+test original_evidence_and_empty_barriers ... ok
+test scoped_streams_and_update_where ... ok
+test window_barrier_property ... ok
+test false_expression_gaps_keep_original_traversal ... ok
+test window_property ... ok
+test cache_refusal_keeps_previous_owner ... ok
+test dictionary_cache_and_size ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 27.88s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `bench` profile [optimized] target(s) in 3m 18s
+  Executable benches/query_eval.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-evidence-default-current/build/release/build/purrdf-sparql-eval/8e4ffe4ed9e13b7f/out/query_eval-8e4ffe4ed9e13b7f)

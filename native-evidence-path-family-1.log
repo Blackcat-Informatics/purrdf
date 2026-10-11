@@ -1,0 +1,82 @@
+Running as unit: purrdf-evidence-native-path-family-20261010-1.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: this could be rewritten as `let...else`
+   --> crates/sparql-eval/src/path.rs:211:9
+    |
+211 | /         let index = match self.values.binary_search(&value) {
+212 | |             Ok(_) => {
+213 | |                 if evidence.is_default() && self.evidence.is_empty() {
+214 | |                     return false;
+...   |
+230 | |             Err(index) => index,
+231 | |         };
+    | |__________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+    = note: `-D clippy::manual-let-else` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+help: consider writing
+    |
+211 ~         let Err(index) = self.values.binary_search(&value) else {
+212 +                 if evidence.is_default() && self.evidence.is_empty() {
+213 +                     return false;
+214 +                 }
+215 +                 let original = self.evidence_of(value);
+216 +                 match original.combine(
+217 +                     &evidence,
+218 +                     purrdf_core::evidence::EvidenceCombination::Alternatives,
+219 +                 ) {
+220 +                     Ok(merged) => {
+221 +                         let changed = !original.same_query_record(&merged);
+222 +                         self.retain_evidence(value, merged);
+223 +                         return changed && !self.values.storage.failed.get();
+224 +                     }
+225 +                     Err(error) => self.values.storage.fail(error),
+226 +                 }
+227 +                 return false;
+228 +             };
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/path.rs:1780:25
+     |
+1780 |                         self.frontier.push(next)
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.frontier.push(next);`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: large size difference between variants
+    --> crates/sparql-eval/src/path.rs:2191:1
+     |
+2191 | /  enum PowerPhase<I: ViewTermId> {
+2192 | |      /// Before the first step.
+2193 | |      Start,
+     | |      ----- the second-largest variant carries no data at all
+2194 | |      /// Awaiting `inner`'s own reach (power zero).
+...    |
+2200 | |/     Mids {
+2201 | ||         mids: SetRef<I>,
+2202 | ||         pos: usize,
+2203 | ||         out: PathSet<I>,
+2204 | ||     },
+     | ||_____- the largest variant contains at least 248 bytes
+2205 | |  }
+     | |__^ the entire enum is at least 248 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+     = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+2203 -         out: PathSet<I>,
+2203 +         out: Box<PathSet<I>>,
+     |
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 3 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 14.234s
+             CPU time consumed: 141ms
+                   Memory peak: 52.6M (swap: 0B)

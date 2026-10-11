@@ -1,0 +1,42 @@
+Running as unit: purrdf-evidence-native-path-family-20261010-2.service
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 10.32s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 3m 50s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/96ff3be4e197661d/out/evidence_ingress-96ff3be4e197661d)
+
+running 11 tests
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... FAILED
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+
+failures:
+
+---- native_paths_keep_derivation_polarity_and_complete_found_witnesses stdout ----
+
+thread 'native_paths_keep_derivation_polarity_and_complete_found_witnesses' (3663856) panicked at crates/sparql-eval/tests/evidence_ingress.rs:857:21:
+assertion `left == right` failed: <https://example.org/p>/<https://example.org/q>
+  left: [Supported, Supported]
+ right: [Supported, Opposed]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_paths_keep_derivation_polarity_and_complete_found_witnesses
+
+test result: FAILED. 10 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test evidence_ingress`
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 4min 2.526s
+             CPU time consumed: 279ms
+                   Memory peak: 47.2M (swap: 0B)

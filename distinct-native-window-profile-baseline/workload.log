@@ -1,0 +1,7 @@
+Events disabled
+layout row_size=40 row_align=8 cells_size=40 cells_align=8 bag_size=24 bag_align=8
+Events enabled
+Events disabled
+queries=1000 rows=200000 fixture=original_people_30000 query=original_Q_H retention=original_run_drop_inside_each_call
+[ perf record: Woken up 13 times to write data ]
+[ perf record: Captured and wrote 1.232 MB .stage/sparql-eval-datalog-per-row-evidence/distinct-native-window-profile-baseline/perf.data (32191 samples) ]

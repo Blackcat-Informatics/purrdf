@@ -1,0 +1,101 @@
+diff --git crates/sparql-eval/src/governor/mod.rs crates/sparql-eval/src/governor/mod.rs
+index 39f71e89c..148ccafdd 100644
+--- crates/sparql-eval/src/governor/mod.rs
++++ crates/sparql-eval/src/governor/mod.rs
+@@ -1815,7 +1815,18 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
+ /// decimal base conversion. Constant-time shape bounds are conservative and
+ /// cannot take exact-decimal exponent shortcuts. Machine-word dispatch remains
+ /// unchanged. Consumers must remeasure numeric fuel and scratch ceilings.
+-pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
++///
++/// # v15
++///
++/// The schedule stays unchanged. Evidence-bearing `EXISTS`/`NOT EXISTS` evaluates
++/// the original body and retains every alternative witness instead of entering
++/// the ordinary definition path's synthetic first-witness `Slice`. Its node-entry
++/// and output charges therefore describe the body actually executed; an empty
++/// property-function body charges one fewer node entry. Evidence preservation
++/// also retains algebra nodes whose normalization could discard declarations.
++/// An unused relation registry does not select this execution path. Consumers
++/// must remeasure fuel ceilings and stop cut points for evidence-bearing queries.
++pub const GOVERNOR_PROFILE_VERSION: u32 = 15;
+ 
+ /// The charge schedule, as data rather than as scattered literals.
+ ///
+@@ -2849,7 +2860,7 @@ mod tests {
+             *GOVERNOR_PROFILE_DIGEST, pinned,
+             "the published digest is derived from the shipped table"
+         );
+-        assert_eq!(GOVERNOR_PROFILE_VERSION, 14);
++        assert_eq!(GOVERNOR_PROFILE_VERSION, 15);
+         assert_eq!(
+             schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
+             "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
+@@ -2860,6 +2871,11 @@ mod tests {
+             pinned,
+             "binary-limb charging cannot reuse the v13 receipt identity"
+         );
++        assert_ne!(
++            schedule_digest(GOVERNOR_PROFILE_ID, 14, &CHARGE_SCHEDULE),
++            pinned,
++            "evidence-preserving EXISTS cannot reuse the v14 receipt identity"
++        );
+         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
+         assert!(
+             pinned
+diff --git docs/SPARQL-GOVERNOR-PROFILE.md docs/SPARQL-GOVERNOR-PROFILE.md
+index a922d9e72..85088aebf 100644
+--- docs/SPARQL-GOVERNOR-PROFILE.md
++++ docs/SPARQL-GOVERNOR-PROFILE.md
+@@ -3,7 +3,7 @@
+ 
+ # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
+ 
+-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 14
++**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 15
+ &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
+ 
+ Every value in this document is readable from the library rather than only from
+@@ -524,7 +524,7 @@ next and produce an intermittent, essentially undiscoverable bug.
+ | Constant | Value / how to read it |
+ |---|---|
+ | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
+-| `GOVERNOR_PROFILE_VERSION` | `14` |
++| `GOVERNOR_PROFILE_VERSION` | `15` |
+ | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
+ | `STOP_POLL_FUEL` | `4093` |
+ 
+@@ -690,12 +690,23 @@ increment it. That restraint is what makes the number worth pinning.
+ 
+ | **14** | The schedule is unchanged. Exact arithmetic uses the workspace's shared binary `u64` integer engine. Numeric costs account for eight-byte limbs, multiplication and division working storage, and the decimal parsing/rendering base conversions. Admission reads constant-time binary size bounds; an uncertain decimal digit bound cannot trigger an exact-exponent shortcut. Machine-word dispatch and its inline `i128` operations remain unchanged. Remeasure arbitrary-precision fuel and scratch ceilings against the regenerated corpus. |
+ 
++Version **15** keeps the charge schedule unchanged. Evidence-bearing
++`EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative
++witness and algebra nodes whose normalization could discard declarations. It
++does not enter the ordinary definition path's synthetic first-witness `Slice`;
++node-entry and output charges describe the body actually executed. In the two
++pinned empty property-function cases, the answer, provider invocation, scratch
++and output charges stay unchanged, while fuel falls from 11 to 10 because one
++synthetic node is no longer entered. An installed but unused relation registry
++does not select this execution path. Remeasure evidence-bearing queries' fuel
++ceilings and stop cut points.
++
+ ### 12.1 What a consumer must re-verify when the version moves
+ 
+ A version bump is not a drop-in upgrade, and the list is short because each item is
+ a thing a pinned number can silently stop meaning:
+ 
+-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `14` — the version
++1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `15` — the version
+    this section describes, and the one every other step below re-verifies against —
+    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
+    intend to price against. If the digest moved but the version did not, the build is
+@@ -733,7 +744,7 @@ them at no extra cost.
+ | Field | Source |
+ |---|---|
+ | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
+-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `14` |
++| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `15` |
+ | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
+ | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
+ | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

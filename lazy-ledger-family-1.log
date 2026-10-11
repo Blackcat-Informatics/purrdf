@@ -1,0 +1,47 @@
+Running as unit: purrdf-lazy-ledger-family-1.service
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 3m 17s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 29 tests
+test evidence::column::tests::default_rows_and_reordered_bags_need_no_capacity ... ok
+test evidence::column::tests::nondefault_publication_is_refused_before_mutating_rows ... ok
+test evidence::accepted::tests::unaccepted_rows_remain_excluded_and_order_errors_stay_typed ... ok
+test evidence::accepted::tests::accepted_rows_keep_original_order_payload_evidence_and_visible_override ... ok
+test evidence::column::tests::original_ids_follow_duplicate_selection_and_release ... ok
+test evidence::frame::tests::actual_is_conjunction_identity_but_alternative_actual_is_decisive ... ok
+test evidence::frame::tests::conjunction_distributes_over_alternatives_without_actual_promotion ... ok
+test evidence::frame::tests::sorted_content_and_absorption_determine_identity ... ok
+test evidence::information::tests::canonical_witness_coalescing_is_order_independent ... ok
+test evidence::information::tests::context_polarities_combine_without_unscoped_inheritance ... ok
+test evidence::information::tests::uniform_laws_work_with_zero_admission ... ok
+test evidence::ledger::frame::tests::original_frame_alternatives_render_without_promoting_scenarios_to_actual ... ok
+test evidence::ledger::row::tests::lazy_row_annotations_keep_incompleteness_reasons_acceptance_and_original_terms ... ok
+test evidence::ledger::row::tests::malformed_ledger_declarations_refuse_before_any_prefix_is_published ... ok
+test evidence::reason::tests::invalid_reification_or_cause_is_a_hard_declaration_error ... ok
+test evidence::reason::tests::streamed_identity_matches_independent_materialized_framing_and_preserves_blank_scope ... ok
+test evidence::record::tests::factorized_bounds_match_expanded_proofs_including_absent_columns ... ok
+test evidence::dictionary::tests::repeated_content_has_one_owner_and_default_has_no_table ... ok
+test evidence::record::tests::per_column_bounds_are_canonical_and_do_not_collapse ... ok
+test evidence::standpoint::tests::inheritance_and_direct_membership_keep_their_declared_directions ... ok
+test evidence::standpoint::tests::malformed_and_cyclic_orders_fail_without_publishing_or_retaining_capacity ... ok
+test evidence::tests::missing_inputs_do_not_turn_partial_totals_into_exact_values ... ok
+test evidence::tests::support_cannot_prematurely_settle_contradiction_or_classification ... ok
+test evidence::tests::truth_conjunction_and_alternative_information_have_distinct_tables ... ok
+test evidence::workspace::tests::default_join_identity_is_not_duplicate_information_identity ... ok
+test evidence::workspace::tests::failed_native_factory_aborts_without_publishing_a_semantic_gap ... ok
+test evidence::reason::tests::repeated_missing_constraint_has_one_content_identity_without_retained_scratch ... ok
+test evidence::standpoint::tests::deep_inheritance_walks_iteratively_and_destroys_all_scratch ... ok
+test evidence::ledger::tests::lazy_reason_projection_keeps_original_owners_and_separates_cause_from_concern ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 3min 18.580s
+             CPU time consumed: 238ms
+                   Memory peak: 46.1M (swap: 0B)

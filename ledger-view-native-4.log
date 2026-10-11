@@ -1,0 +1,16 @@
+Running as unit: purrdf-ledger-view-native-4.service
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 14.37s
+     Running tests/evidence_ledger_query.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/03733ca07c303ea9/out/evidence_ledger_query-03733ca07c303ea9)
+
+running 2 tests
+test native_ledger_refusal_is_an_operational_error_without_partial_answers ... ok
+test shared_reason_group_count_and_private_construct_use_the_native_engine ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.70s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 19.273s
+             CPU time consumed: 117ms
+                   Memory peak: 18.1M (swap: 0B)

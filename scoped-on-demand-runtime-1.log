@@ -1,0 +1,21 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error[E0502]: cannot borrow `scoped` as immutable because it is also borrowed as mutable
+    --> crates/retrieval/src/execute.rs:2150:56
+     |
+2008 |           if let (Some(input), Some(scope)) = (scoped.as_mut(), candidate_scope.as_ref()) {
+     |                                                ------ mutable borrow occurs here
+...
+2150 |                       scoped: candidate_scope.take().map(|scope| ScopedLookup {
+     |                                                          ^^^^^^^ immutable borrow occurs here
+2151 |                           scope,
+2152 |                           source: scoped.as_ref().expect("scoped source").source,
+     |                                   ------ second borrow occurs due to use of `scoped` in closure
+...
+2167 | /             input
+2168 | |                 .receipts
+     | |_________________________- mutable borrow later used here
+
+For more information about this error, try `rustc --explain E0502`.
+error: could not compile `purrdf-retrieval` (lib) due to 1 previous error

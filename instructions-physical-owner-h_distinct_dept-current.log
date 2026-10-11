@@ -1,0 +1,5 @@
+query_eval/h_distinct_dept time:   [3.488 ms 3.974 ms 4.028 ms]  mad: 81.17 µs  (10 samples × 133 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 6 times to write data ]
+[ perf record: Captured and wrote 1.447 MB /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/instructions-physical-owner-h_distinct_dept-current.data (47324 samples) ]

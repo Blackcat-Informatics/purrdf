@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 8m 39s
+     Running unittests src/lib.rs (/opt/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 1 test
+test ir::dataset::tests::chunked_scan_filter_matches_per_row_filter ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1291 filtered out; finished in 0.02s
+

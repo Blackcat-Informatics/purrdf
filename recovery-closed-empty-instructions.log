@@ -1,0 +1,15 @@
+Running as unit: run-p1565746-i22578008.scope; invocation ID: d45cb91d171b4bc1b36d0617cc962557
+queries=1000 instructions=32191578035 instructions_per_query=32191578.035 enabled=3191110487 running=3191110487
+queries=1000 instructions=30833872669 instructions_per_query=30833872.669 enabled=2699574337 running=2699574337
+queries=1000 instructions=30833873123 instructions_per_query=30833873.123 enabled=3350483057 running=3350483057
+queries=1000 instructions=32191575742 instructions_per_query=32191575.742 enabled=1921632738 running=1921632738
+queries=1000 instructions=32191574396 instructions_per_query=32191574.396 enabled=1598710778 running=1598710778
+queries=1000 instructions=30833871080 instructions_per_query=30833871.08 enabled=1602626798 running=1602626798
+queries=1000 instructions=30833870093 instructions_per_query=30833870.093 enabled=1712893478 running=1712893478
+queries=1000 instructions=32191574126 instructions_per_query=32191574.126 enabled=2913399668 running=2913399668
+queries=1000 instructions=32191587592 instructions_per_query=32191587.592 enabled=3197959677 running=3197959677
+queries=1000 instructions=30833847177 instructions_per_query=30833847.177 enabled=3363532797 running=3363532797
+/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/distinct-fixed-work-baseline: OK
+/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/distinct-fixed-work-current: OK
+Five paired fixed-work instruction captures complete. No wall-time throughput qualification is inferred.
+terminal_status=0

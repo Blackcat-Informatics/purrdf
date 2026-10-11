@@ -1,0 +1,31 @@
+Running as unit: purrdf-evidence-ingress-20261010-1.service
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: method `scope` is never used
+   --> crates/sparql-eval/src/evidence_exec.rs:101:19
+    |
+ 58 | impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
+    | --------------------------------------------------------- method in this implementation
+...
+101 |     pub(crate) fn scope(
+    |                   ^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `into_resident` is never used
+   --> crates/sparql-eval/src/solution.rs:526:19
+    |
+504 | impl<I: ViewTermId> RetainedRow<I> {
+    | ---------------------------------- method in this implementation
+...
+526 |     pub(crate) fn into_resident(self) -> Result<Solution<I>, Self> {
+    |                   ^^^^^^^^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 2min 33.072s
+             CPU time consumed: 154ms
+                   Memory peak: 12.9M (swap: 0B)

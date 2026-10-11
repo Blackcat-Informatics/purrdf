@@ -1,0 +1,47 @@
+
+BEGIN same-binary value_dispatch/int_plus_int_numeric_add_control
+2026-10-11T11:29:09Z
+2965011
+cpu11 371405 4146034 851892 9147229 707012 75108 37438 0 0 0
+cpu27 313547 4331579 690171 9504708 355259 61880 15681 0 0 0
+value_dispatch/int_plus_int_numeric_add_control time:   [16.97 ns 17.52 ns 17.62 ns]  mad: 662.7 ps  (100 samples × 2788309 iterations)
+                         outliers: 16 of 100 (15 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+1 benchmark measured; 0 failed
+2026-10-11T11:29:20Z
+4172990
+cpu11 371405 4147188 851898 9147229 707013 75112 37439 0 0 0
+cpu27 313550 4332190 690488 9504920 355282 61885 15682 0 0 0
+value_dispatch/int_plus_int_numeric_add_control time:   [11.66 ns 11.77 ns 11.96 ns]  mad: 310.2 ps  (100 samples × 3968661 iterations)
+                         change: [-33.6149% -32.8288% -30.6118%] against `same-binary`: Performance has improved.
+
+1 benchmark measured; 0 failed
+2026-10-11T11:29:30Z
+4340692
+cpu11 372366 4147188 851906 9147229 707014 75115 37441 0 0 0
+cpu27 313551 4332985 690524 9505038 355298 61892 15683 0 0 0
+END same-binary value_dispatch/int_plus_int_numeric_add_control
+
+BEGIN same-binary sort_order/dec_vs_double_bigint_total
+2026-10-11T11:29:30Z
+4303244
+cpu11 372366 4147188 851906 9147229 707014 75115 37441 0 0 0
+cpu27 313551 4332986 690524 9505038 355298 61892 15683 0 0 0
+sort_order/dec_vs_double_bigint_total time:   [129.5 ns 129.6 ns 129.7 ns]  mad: 265.8 ps  (100 samples × 360323 iterations)
+                         outliers: 23 of 100 (0 low severe, 0 low mild, 0 high mild, 23 high severe)
+
+1 benchmark measured; 0 failed
+2026-10-11T11:29:41Z
+2991654
+cpu11 373472 4147189 851912 9147229 707014 75118 37442 0 0 0
+cpu27 313552 4333401 690542 9505707 355311 61900 15684 0 0 0
+sort_order/dec_vs_double_bigint_total time:   [130.5 ns 130.6 ns 130.7 ns]  mad: 197.3 ps  (100 samples × 359065 iterations)
+                         change: [+0.7046% +0.8070% +0.8982%] against `same-binary`: Change within noise threshold.
+                         outliers: 15 of 100 (0 low severe, 1 low mild, 0 high mild, 14 high severe)
+
+1 benchmark measured; 0 failed
+2026-10-11T11:29:53Z
+2990980
+cpu11 374590 4147189 851917 9147229 707014 75121 37443 0 0 0
+cpu27 313553 4333639 690543 9506591 355317 61901 15684 0 0 0
+END same-binary sort_order/dec_vs_double_bigint_total

@@ -1,0 +1,10 @@
+movzbl (%rdi),%eax
+add    $0xfc,%al
+cmp    $0x7,%al
+jbe    <purrdf_xsd::ops::value_total_cmp+0x12>
+movzbl (%rsi),%eax
+add    $0xfc,%al
+cmp    $0x8,%al
+jae    <purrdf_xsd::ops::value_total_cmp+0x18>
+jmp    *RIP(%rip)
+jmp    *RIP(%rip)

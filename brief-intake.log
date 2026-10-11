@@ -1,0 +1,10 @@
+issue      /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/prior-art.md
+machine    /home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/.stage/sparql-eval-datalog-per-row-evidence/brief.json
+
+  - issue #515 + 1 comment(s) via github
+  - link crawl: 1 issue(s) within 2 hop(s) of `#N` references
+  - ADR-0045 cited by the issue but no file in docs/adr/
+  - ADRs: 1 cited; 0 resolved on disk
+  - forge search on ['sparql-eval/datalog:', 'per-row', 'evidence']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits

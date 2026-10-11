@@ -1,0 +1,10 @@
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+error[E0063]: missing field `disable_shapes` in initializer of `EvalOptions`
+  --> crates/sparql-conformance/tests/cost_planner_corpus.rs:33:19
+   |
+33 |     let options = EvalOptions {
+   |                   ^^^^^^^^^^^ missing `disable_shapes`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `purrdf-sparql-conformance` (test "cost_planner_corpus") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

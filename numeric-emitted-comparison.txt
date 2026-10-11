@@ -1,0 +1,4 @@
+Read-only emitted numeric comparison; instruction addresses, RIP relocations and comments normalized; original symbolic targets retained. Not timing acceptance.
+purrdf_xsd::ops::value_total_cmp: sizes={'baseline': 30, 'current': 30}; instruction counts baseline=10 current=10; normalized bodies identical=True
+purrdf_xsd::ops::value_cmp: sizes={'baseline': 1359, 'current': 1359}; instruction counts baseline=349 current=349; normalized bodies identical=True
+purrdf_xsd::numeric::numeric_total_cmp: sizes={'baseline': 1240, 'current': 1240}; instruction counts baseline=317 current=317; normalized bodies identical=True

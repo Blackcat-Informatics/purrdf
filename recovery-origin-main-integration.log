@@ -1,0 +1,10 @@
+Auto-merging Makefile
+Auto-merging crates/lex/src/allocation.rs
+Auto-merging crates/rdf-core/src/graph.rs
+CONFLICT (content): Merge conflict in crates/rdf-core/src/graph.rs
+Auto-merging docs/WASM_TESTING.md
+CONFLICT (content): Merge conflict in docs/WASM_TESTING.md
+Auto-merging docs/design/purrdf-simd.md
+Recorded preimage for 'crates/rdf-core/src/graph.rs'
+Recorded preimage for 'docs/WASM_TESTING.md'
+Automatic merge failed; fix conflicts and then commit the result.

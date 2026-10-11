@@ -1,0 +1,54 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+error: unnecessary qualification
+   --> crates/retrieval/src/candidate.rs:500:49
+    |
+500 |     fn tagged_as_assembled(&self) -> Result<(), crate::ExecutionError> {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+500 -     fn tagged_as_assembled(&self) -> Result<(), crate::ExecutionError> {
+500 +     fn tagged_as_assembled(&self) -> Result<(), ExecutionError> {
+    |
+
+error: unnecessary qualification
+   --> crates/retrieval/src/candidate.rs:504:28
+    |
+504 |                 return Err(crate::ExecutionError::UnitsNotAsAssembled {
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+504 -                 return Err(crate::ExecutionError::UnitsNotAsAssembled {
+504 +                 return Err(ExecutionError::UnitsNotAsAssembled {
+    |
+
+error: function `evidence_canonical_bytes` is never used
+    --> crates/retrieval/src/fusion_stream.rs:1309:15
+     |
+1309 | pub(crate) fn evidence_canonical_bytes(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-retrieval` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: function `row_block` is never used
+    --> crates/retrieval/src/execute.rs:3359:4
+     |
+3359 | fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
+     |    ^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-retrieval` (lib test) due to 3 previous errors

@@ -1,0 +1,104 @@
+{
+  "issue": 515,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0045",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {
+    "516": "Loss ledger as queryable RDF 1.2: content-identified reasons, and merging accepted reasons into the answer"
+  },
+  "related": [
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 344,
+      "title": "SIMD sweep: the stable-channel ceiling, fast variant functions, and a full hot-path audit",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 179,
+      "title": "SPARQL evaluation budgets: fuel/deadline/row-cap governors in EvalOptions with a typed budget-exhausted outcome",
+      "state": "CLOSED"
+    },
+    {
+      "number": 320,
+      "title": "Offer: a deterministic HNSW index for the ANN slot PURREMB declares but PurRDF cannot fill",
+      "state": "CLOSED"
+    },
+    {
+      "number": 400,
+      "title": "Opt-in remembered empty named graphs for the mutable dataset and SPARQL Update",
+      "state": "CLOSED"
+    },
+    {
+      "number": 319,
+      "title": "Design: a composition layer over the ranked property-function producers",
+      "state": "CLOSED"
+    },
+    {
+      "number": 295,
+      "title": "fix(shapes): sh:pattern compiles as a Rust regex, not an XSD one",
+      "state": "CLOSED"
+    },
+    {
+      "number": 185,
+      "title": "Property-function (magic predicate) registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 187,
+      "title": "SEP-0007 variable substitution + defensible EXISTS",
+      "state": "CLOSED"
+    },
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    },
+    {
+      "number": 9,
+      "title": "Full W3C conformance (SPARQL 1.1/1.2 \u00b7 RDFC-1.0 \u00b7 IRI \u00b7 syntax) + rdflib test-suite gate",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 19,
+    "semantic-identity-loss": 1,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #515 + 1 comment(s) via github",
+    "link crawl: 1 issue(s) within 2 hop(s) of `#N` references",
+    "ADR-0045 cited by the issue but no file in docs/adr/",
+    "ADRs: 1 cited; 0 resolved on disk",
+    "forge search on ['sparql-eval/datalog:', 'per-row', 'evidence']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

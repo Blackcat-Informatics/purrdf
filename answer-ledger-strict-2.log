@@ -1,0 +1,119 @@
+Running as unit: purrdf-ledger-answer-strict-2.service
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: used `assert!` to check that a value is empty
+   --> crates/rdf-core/src/evidence/answer.rs:406:13
+    |
+406 |             assert!(status.reasons.is_empty());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+406 -             assert!(status.reasons.is_empty());
+406 +             assert_eq!(status.reasons, []);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/rdf-core/src/evidence/answer.rs:507:9
+    |
+507 |         assert!(answer.counts.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+507 -         assert!(answer.counts.is_empty());
+507 +         assert_eq!(answer.counts, [] as [evidence::answer::ReasonCount; 0]);
+    |
+
+error: implicit borrow as raw pointer
+   --> crates/rdf-core/src/evidence/ledger/row.rs:546:54
+    |
+546 |         assert!(core::ptr::eq(statements[0].subject, &node));
+    |                                                      ^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+546 |         assert!(core::ptr::eq(statements[0].subject, &raw const node));
+    |                                                       +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/rdf-core/src/evidence/ledger/row.rs:547:53
+    |
+547 |         assert!(core::ptr::eq(statements[0].object, &solution));
+    |                                                     ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+547 |         assert!(core::ptr::eq(statements[0].object, &raw const solution));
+    |                                                      +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/rdf-core/src/evidence/ledger/source.rs:508:49
+    |
+508 |         assert!(core::ptr::eq(first[0].subject, &row_nodes[0]));
+    |                                                 ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+508 |         assert!(core::ptr::eq(first[0].subject, &raw const row_nodes[0]));
+    |                                                  +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/rdf-core/src/evidence/ledger/source.rs:509:48
+    |
+509 |         assert!(core::ptr::eq(first[0].object, &solution));
+    |                                                ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+509 |         assert!(core::ptr::eq(first[0].object, &raw const solution));
+    |                                                 +++++++++
+
+error: items after a test module
+   --> crates/rdf-core/src/evidence/accepted.rs:238:1
+    |
+238 |   mod tests {
+    |   ^^^^^^^^^
+...
+397 | / impl<'a, T, A, U, S> Iterator for AcceptedMerge<'a, T, A, U, S>
+398 | | where
+399 | |     A: Iterator<Item = OrderedEvidenceRow<T>>,
+400 | |     U: Iterator<Item = OrderedEvidenceRow<T>>,
+401 | |     S: Admission,
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: implicit borrow as raw pointer
+   --> crates/rdf-core/src/query_scope.rs:116:47
+    |
+116 |         assert!(std::ptr::eq(unscoped.needle, &plain));
+    |                                               ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+116 |         assert!(std::ptr::eq(unscoped.needle, &raw const plain));
+    |                                                +++++++++
+
+error: could not compile `purrdf-core` (lib test) due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 1min 3.247s
+             CPU time consumed: 175ms
+                   Memory peak: 29.4M (swap: 0B)

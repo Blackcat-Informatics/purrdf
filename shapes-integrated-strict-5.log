@@ -1,0 +1,58 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+error[E0603]: enum `Volatility` is private
+   --> crates/text/src/dictionary_relation.rs:14:49
+    |
+ 14 |     PfArity, PfCursor, PfRow, PropertyFunction, Volatility,
+    |                                                 ^^^^^^^^^^ private enum
+    |
+note: the enum `Volatility` is defined here
+   --> crates/sparql-eval/src/property_fn.rs:64:5
+    |
+ 64 | use crate::user_fn::Volatility;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/user_fn.rs:574:1
+    |
+574 | #[non_exhaustive]
+    | ----------------- cannot be constructed because it is `#[non_exhaustive]`
+
+error[E0658]: use of unstable library feature `str_as_str`
+   --> crates/text/src/dictionary.rs:328:38
+    |
+328 |                 .then_with(|| a.path.as_slice().cmp(b.path.as_slice()))
+    |                                      ^^^^^^^^
+    |
+    = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+    = help: add `#![feature(str_as_str)]` to the crate attributes to enable
+    = note: this compiler was built on 2026-09-13; consider upgrading it if it is out of date
+
+error[E0658]: use of unstable library feature `str_as_str`
+   --> crates/text/src/dictionary.rs:328:60
+    |
+328 |                 .then_with(|| a.path.as_slice().cmp(b.path.as_slice()))
+    |                                                            ^^^^^^^^
+    |
+    = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+    = help: add `#![feature(str_as_str)]` to the crate attributes to enable
+    = note: this compiler was built on 2026-09-13; consider upgrading it if it is out of date
+
+error[E0282]: type annotations needed for `purrdf_sparql_eval::AdmittedVec<_>`
+   --> crates/text/src/dictionary_relation.rs:424:13
+    |
+424 |         let mut path = AdmittedVec::new(workspace);
+    |             ^^^^^^^^
+...
+433 |                 let a = index.document(first.document).expect("retained source");
+    |                                        -------------- type must be known at this point
+    |
+help: consider giving `path` an explicit type, where the type for type parameter `T` is specified
+    |
+424 |         let mut path: purrdf_sparql_eval::AdmittedVec<T> = AdmittedVec::new(workspace);
+    |                     ++++++++++++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0282, E0603, E0658.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `purrdf-text` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-text` (lib test) due to 4 previous errors

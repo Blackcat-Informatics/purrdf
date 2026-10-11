@@ -1,0 +1,3 @@
+queries=1000 instructions=32191726358 instructions_per_query=32191726.358 enabled=2785956648 running=2785956648
+[ perf record: Woken up 7 times to write data ]
+[ perf record: Captured and wrote 1.432 MB .stage/sparql-eval-datalog-per-row-evidence/distinct-native-layout-baseline.perf.data (46638 samples) ]

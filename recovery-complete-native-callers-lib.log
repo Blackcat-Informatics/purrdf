@@ -1,0 +1,16 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:5620:21
+     |
+5620 |                     purrdf_sparql_algebra::NamedNode::new("https://example.org/document").unwrap(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+5620 -                     purrdf_sparql_algebra::NamedNode::new("https://example.org/document").unwrap(),
+5620 +                     NamedNode::new("https://example.org/document").unwrap(),
+     |
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error

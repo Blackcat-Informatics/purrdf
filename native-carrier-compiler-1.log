@@ -1,0 +1,43 @@
+Running as unit: ledger-native-carrier-compiler-1.service
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+error[E0592]: duplicate definitions with name `try_push_admitted`
+   --> crates/lex/src/walk.rs:171:5
+    |
+125 | /     pub fn try_push_admitted<S: crate::allocation::Admission + ?Sized>(
+126 | |         &mut self,
+127 | |         value: T,
+128 | |         memory: &mut crate::allocation::Memory<'_, S>,
+129 | |     ) -> Result<(), crate::allocation::StorageError> {
+    | |____________________________________________________- other definition for `try_push_admitted`
+...
+171 | /     pub fn try_push_admitted<S: crate::allocation::Admission + ?Sized>(
+172 | |         &mut self,
+173 | |         value: T,
+174 | |         memory: &mut crate::allocation::Memory<'_, S>,
+175 | |     ) -> Result<(), crate::allocation::StorageError> {
+    | |____________________________________________________^ duplicate definitions for `try_push_admitted`
+
+error[E0592]: duplicate definitions with name `release_admitted`
+   --> crates/lex/src/walk.rs:190:5
+    |
+142 | /     pub fn release_admitted<S: crate::allocation::Admission + ?Sized>(
+143 | |         self,
+144 | |         memory: &mut crate::allocation::Memory<'_, S>,
+145 | |     ) -> Result<(), crate::allocation::StorageError> {
+    | |____________________________________________________- other definition for `release_admitted`
+...
+190 | /     pub fn release_admitted<S: crate::allocation::Admission + ?Sized>(
+191 | |         self,
+192 | |         memory: &mut crate::allocation::Memory<'_, S>,
+193 | |     ) -> Result<(), crate::allocation::StorageError> {
+    | |____________________________________________________^ duplicate definitions for `release_admitted`
+
+For more information about this error, try `rustc --explain E0592`.
+error: could not compile `purrdf-lex` (lib) due to 2 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 6.011s
+             CPU time consumed: 137ms
+                   Memory peak: 34.6M (swap: 0B)

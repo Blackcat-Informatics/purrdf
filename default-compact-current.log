@@ -1,0 +1,95 @@
+query_eval/a_selective_join time:   [1.776 ms 1.853 ms 2.063 ms]  mad: 89.37 µs  (10 samples × 51 iterations)
+                         change: [+36.7820% +46.9293% +64.3186%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: query_eval/b_scan_filter: 10 samples cannot finish in 1.0 s; they will take about 1.9 s
+query_eval/b_scan_filter time:   [197.7 ms 201.9 ms 227.7 ms]  mad: 4.591 ms  (10 samples × 1 iterations)
+                         change: [+29.7336% +39.2803% +56.9092%] against `original-main`: Performance has regressed.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+warning: query_eval/c_optional_heavy: 10 samples cannot finish in 1.0 s; they will take about 2.7 s
+query_eval/c_optional_heavy time:   [226.9 ms 228.4 ms 250.2 ms]  mad: 2.336 ms  (10 samples × 1 iterations)
+                         change: [+14.1449% +22.3510% +40.9123%] against `original-main`: Performance has regressed.
+query_eval/d_union_4     time:   [67.87 ms 69.48 ms 82.21 ms]  mad: 2.376 ms  (10 samples × 2 iterations)
+                         change: [+12.0858% +15.3658% +36.3171%] against `original-main`: Performance has regressed.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+warning: query_eval/e_group_aggregate: 10 samples cannot finish in 1.0 s; they will take about 1.9 s
+query_eval/e_group_aggregate time:   [90.33 ms 92.33 ms 93.36 ms]  mad: 1.084 ms  (10 samples × 2 iterations)
+                         change: [+28.1983% +33.4503% +37.4687%] against `original-main`: Performance has regressed.
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 0 high mild, 1 high severe)
+query_eval/f_path_transitive time:   [75.29 ms 75.93 ms 77.78 ms]  mad: 1.290 ms  (10 samples × 2 iterations)
+                         change: [+56.9926% +66.7335% +78.9527%] against `original-main`: Performance has regressed.
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+query_eval/g_order_by_limit time:   [54.78 ms 57.47 ms 58.21 ms]  mad: 792.5 µs  (10 samples × 2 iterations)
+                         change: [+21.0849% +34.0584% +53.1721%] against `original-main`: Performance has regressed.
+query_eval/h_distinct_dept time:   [4.279 ms 4.535 ms 4.607 ms]  mad: 104.5 µs  (10 samples × 22 iterations)
+                         change: [+6.0307% +18.3936% +44.4727%] against `original-main`: Performance has regressed.
+warning: query_eval/i_construct_blank_free: 10 samples cannot finish in 1.0 s; they will take about 1.5 s
+query_eval/i_construct_blank_free time:   [73.03 ms 77.89 ms 82.44 ms]  mad: 4.706 ms  (10 samples × 2 iterations)
+                         change: [-7.8451% +6.6093% +19.4263%] against `original-main`: No change in performance detected.
+query_eval/j_construct_blank_bearing time:   [105.4 ms 107.9 ms 114.6 ms]  mad: 2.478 ms  (10 samples × 1 iterations)
+                         change: [-17.7152% -12.2117% -3.2906%] against `original-main`: Performance has improved.
+                         outliers: 3 of 10 (0 low severe, 1 low mild, 2 high mild, 0 high severe)
+query_eval/l_single_group_aggregate time:   [35.22 ms 36.65 ms 39.19 ms]  mad: 1.511 ms  (10 samples × 3 iterations)
+                         change: [-46.5967% -18.5718% -5.7829%] against `original-main`: Performance has improved.
+warning: query_eval/m_arithmetic_dense_filter: 10 samples cannot finish in 1.0 s; they will take about 1.6 s
+query_eval/m_arithmetic_dense_filter time:   [143.2 ms 156.3 ms 176.1 ms]  mad: 14.77 ms  (10 samples × 1 iterations)
+                         change: [-26.0622% -16.3617% -3.2688%] against `original-main`: Performance has improved.
+query_eval/n_optional_filter time:   [21.92 ms 23.55 ms 24.58 ms]  mad: 1.050 ms  (10 samples × 5 iterations)
+                         change: [-24.8097% -14.9874% -6.8502%] against `original-main`: Performance has improved.
+query_eval/o_minus_disjoint time:   [15.88 ms 16.33 ms 16.57 ms]  mad: 275.2 µs  (10 samples × 7 iterations)
+                         change: [-17.0812% -8.7426% -1.9179%] against `original-main`: Performance has improved.
+query_eval/p_langmatches_filter time:   [18.09 ms 18.34 ms 18.78 ms]  mad: 342.3 µs  (10 samples × 4 iterations)
+                         change: [-25.3791% -23.4435% -20.9058%] against `original-main`: Performance has improved.
+warning: query_eval/q_construct_blank_coref: 10 samples cannot finish in 1.0 s; they will take about 1.5 s
+query_eval/q_construct_blank_coref time:   [137.3 ms 155.9 ms 162.7 ms]  mad: 7.999 ms  (10 samples × 1 iterations)
+                         change: [-70.3635% -64.9244% -44.1584%] against `original-main`: Performance has improved.
+query_eval/r_path_reverse_star time:   [60.16 ms 62.35 ms 63.81 ms]  mad: 1.705 ms  (10 samples × 2 iterations)
+                         change: [-49.3332% -43.3471% -33.4440%] against `original-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: query_eval/s_guarded_recursion: 10 samples cannot finish in 1.0 s; they will take about 7.3 s
+query_eval/s_guarded_recursion time:   [563.9 ms 649.6 ms 692.3 ms]  mad: 57.25 ms  (10 samples × 1 iterations)
+                         change: [-55.5483% -38.3017% -32.8467%] against `original-main`: Performance has improved.
+query_eval/k_property_function_join time:   [58.23 ms 60.61 ms 67.46 ms]  mad: 2.401 ms  (10 samples × 2 iterations)
+                         change: [-31.0604% -26.8491% -17.0663%] against `original-main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+value_dispatch/int_plus_int_value_add time:   [18.76 ns 19.21 ns 19.79 ns]  mad: 496.6 ps  (10 samples × 5297760 iterations)
+                         change: [-2.7109% -0.1814% +3.0759%] against `original-main`: No change in performance detected.
+value_dispatch/int_plus_int_numeric_add_control time:   [17.32 ns 17.68 ns 17.97 ns]  mad: 283.8 ps  (10 samples × 5620270 iterations)
+                         change: [-3.8296% -1.9653% -0.2073%] against `original-main`: Change within noise threshold.
+value_dispatch/dec_plus_dec_value_add time:   [21.24 ns 21.67 ns 21.92 ns]  mad: 299.1 ps  (10 samples × 4576204 iterations)
+                         change: [-5.4497% -3.4769% +14.8135%] against `original-main`: No change in performance detected.
+value_dispatch/int_plus_dec_value_add time:   [21.99 ns 22.36 ns 22.51 ns]  mad: 200.3 ps  (10 samples × 4573639 iterations)
+                         change: [+33.6938% +35.8859% +38.0967%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+value_dispatch/datetime_minus_datetime_value_sub time:   [61.31 ns 71.00 ns 76.96 ns]  mad: 6.066 ns  (10 samples × 1270503 iterations)
+                         change: [+14.8017% +33.3954% +67.0943%] against `original-main`: Performance has regressed.
+sort_order/int_vs_int_total time:   [5.987 ns 6.021 ns 6.073 ns]  mad: 44.78 ps  (10 samples × 16739475 iterations)
+                         change: [+139.1405% +145.8173% +157.5387%] against `original-main`: Performance has regressed.
+sort_order/int_vs_int_promoted_control time:   [6.193 ns 6.206 ns 6.214 ns]  mad: 10.09 ps  (10 samples × 16117681 iterations)
+                         change: [+36.1654% +37.4741% +40.5019%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+sort_order/dec_vs_dec_total time:   [34.06 ns 34.22 ns 34.38 ns]  mad: 145.6 ps  (10 samples × 2941053 iterations)
+                         change: [+39.9164% +42.0774% +46.4531%] against `original-main`: Performance has regressed.
+sort_order/dec_vs_dec_promoted_control time:   [21.72 ns 26.57 ns 31.86 ns]  mad: 4.445 ns  (10 samples × 3411851 iterations)
+                         change: [+2.4627% +27.6566% +87.0991%] against `original-main`: Performance has regressed.
+sort_order/double_vs_double_total time:   [5.604 ns 5.637 ns 5.706 ns]  mad: 33.64 ps  (10 samples × 18353691 iterations)
+                         change: [+5.8867% +17.6320% +82.2316%] against `original-main`: Performance has regressed.
+sort_order/double_vs_double_promoted_control time:   [13.68 ns 15.12 ns 16.55 ns]  mad: 1.434 ns  (10 samples × 7155777 iterations)
+                         change: [+81.0955% +112.9944% +133.1866%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+sort_order/int_vs_double_window_total time:   [19.45 ns 25.43 ns 31.18 ns]  mad: 5.865 ns  (10 samples × 6124126 iterations)
+                         change: [+30.1209% +70.6955% +109.8068%] against `original-main`: Performance has regressed.
+sort_order/int_vs_double_window_promoted_control time:   [21.72 ns 23.45 ns 26.37 ns]  mad: 1.898 ns  (10 samples × 2983651 iterations)
+                         change: [+15.6226% +32.3247% +53.6853%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+sort_order/dec_vs_double_u128_total time:   [15.20 ns 18.13 ns 21.81 ns]  mad: 3.303 ns  (10 samples × 4478170 iterations)
+                         change: [-35.4581% -20.8102% -4.1999%] against `original-main`: Performance has improved.
+sort_order/dec_vs_double_u128_promoted_control time:   [42.09 ns 42.33 ns 42.48 ns]  mad: 177.7 ps  (10 samples × 2961789 iterations)
+                         change: [-2.7396% +0.0323% +3.2899%] against `original-main`: No change in performance detected.
+sort_order/dec_vs_double_bigint_total time:   [176.9 ns 208.4 ns 238.6 ns]  mad: 29.40 ns  (10 samples × 540353 iterations)
+                         change: [+9.9613% +29.3977% +47.8102%] against `original-main`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+sort_order/dec_vs_double_bigint_promoted_control time:   [25.93 ns 27.84 ns 34.64 ns]  mad: 3.257 ns  (10 samples × 3444501 iterations)
+                         change: [+8.4879% +16.2458% +44.3285%] against `original-main`: Performance has regressed.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+
+36 benchmarks measured; 0 failed

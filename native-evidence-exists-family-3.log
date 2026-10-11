@@ -1,0 +1,11 @@
+Running as unit: run-p48529-i8476453.scope; invocation ID: 50dff8c651f14937b2c38fcecde656d7
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error[E0425]: cannot find value `mixed_negative` in this scope
+  --> crates/sparql-eval/tests/evidence_ingress.rs:76:19
+   |
+76 |         negative: mixed_negative,
+   |                   ^^^^^^^^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

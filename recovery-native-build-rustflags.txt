@@ -1,0 +1,4 @@
+build.rustflags = [
+    "-D", # /home/paudley/.cargo/config.toml
+    "warnings", # /home/paudley/.cargo/config.toml
+]

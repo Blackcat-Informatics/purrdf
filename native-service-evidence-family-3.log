@@ -1,0 +1,21 @@
+Running as unit: run-p504605-i8854250.scope; invocation ID: 2046752515964a39a0a8447e326cba70
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/evidence_ingress.rs:684:25
+    |
+684 |                         assert!(status.reasons.is_empty());
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+684 -                         assert!(status.reasons.is_empty());
+684 +                         assert_eq!(status.reasons, []);
+    |
+
+error: could not compile `purrdf-sparql-eval` (test "evidence_ingress") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

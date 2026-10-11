@@ -1,0 +1,22 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/src/ir/term_walk.rs:481:25
+    |
+481 |                         text(out, piece, memory).map_err(OwnedTermFoldError::Visitor)?
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `text(out, piece, memory).map_err(OwnedTermFoldError::Visitor)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/src/ir/term_walk.rs:497:25
+    |
+497 |                         leaf(out, term, memory).map_err(OwnedTermFoldError::Visitor)?
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `leaf(out, term, memory).map_err(OwnedTermFoldError::Visitor)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

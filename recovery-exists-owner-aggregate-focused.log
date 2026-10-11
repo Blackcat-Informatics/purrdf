@@ -1,0 +1,346 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 15.91s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 07s
+     Running unittests src/lib.rs (target/native-build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test modifier::tests::native_groups_from_ownerless_search_share_the_original_query ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1512 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/native-build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 1 test
+test eval::tests::native_evidence_owner_is_lazy_and_shared_before_workers_create_records ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1512 filtered out; finished in 0.00s
+
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Finished `test` profile [optimized] target(s) in 1.14s
+     Running unittests src/lib.rs (target/native-build/debug/build/purrdf-testkit/b933d2f239ecb368/out/purrdf_testkit-b933d2f239ecb368)
+
+running 32 tests
+test exact::tests::the_naturals_divide_exactly ... ok
+test exact::tests::truncation_discards_the_fraction_toward_zero ... ok
+test exact::tests::rounding_matches_hand_computed_values ... ok
+test paths::tests::a_member_directory_resolves_to_the_same_root ... ok
+test paths::tests::collect_rs_appends_to_what_the_caller_already_holds ... ok
+test paths::tests::a_workspace_key_inside_another_line_is_not_the_table ... ok
+test paths::tests::a_member_manifest_without_the_workspace_table_is_passed_over ... ok
+test paths::tests::the_workspace_root_holds_the_workspace_manifest_and_this_crate ... ok
+test prop::choices::tests::a_recorded_sequence_replays_from_its_bytes ... ok
+test prop::choices::tests::byte_width_is_the_fewest_bytes_holding_the_bound ... ok
+test paths::tests::a_filtered_walk_keeps_nested_sources_and_excludes_whole_directories ... ok
+test prop::choices::tests::hex_round_trips_and_refuses_what_is_not_hex ... ok
+test paths::tests::collect_rs_refuses_an_unreadable_directory - should panic ... ok
+test rng::tests::below_reduces_the_splitmix64_stream_modulo_the_bound ... ok
+test rng::tests::below_zero_has_no_value - should panic ... ok
+test rng::tests::byte_streams_are_the_little_endian_words_truncated_to_the_length ... ok
+test rng::tests::lcg64_matches_the_pinned_reference_outputs ... ok
+test rng::tests::permute_is_a_deterministic_permutation_that_reaches_every_arrangement ... ok
+test rng::tests::signed_unit_stream_matches_the_pinned_reference_outputs ... ok
+test rng::tests::splitmix64_matches_the_reference_outputs ... ok
+test rng::tests::up_to_stays_in_bounds_and_reaches_both_ends ... ok
+test rng::tests::xorshift64_matches_the_pinned_reference_outputs ... ok
+test rng::tests::xoshiro256_starstar_matches_the_reference_output ... ok
+test paths::tests::collect_rs_finds_nested_rust_sources_in_name_order_and_nothing_else ... ok
+test scalars::tests::iriref_content_excludes_exactly_the_controls_space_and_delimiters ... ok
+test temp::tests::an_existing_name_is_a_collision_error_and_a_fresh_one_is_created ... ok
+test text::tests::the_core_sits_inside_every_level ... ok
+test temp::tests::unit_test_directories_live_in_the_target_tmp_directory ... ok
+test ucd::tests::block_escape_names_preserve_hyphens_and_case ... ok
+test ucd::tests::fields_and_ranges_read_as_the_database_spells_them ... ok
+test scalars::tests::every_scalar_is_enumerated_once ... ok
+test scalars::tests::ranges_are_read_off_the_predicate_and_split_at_the_surrogate_gap ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/temp.rs (target/native-build/debug/build/purrdf-testkit/c7eb13752e47c3d7/out/temp-c7eb13752e47c3d7)
+
+running 7 tests
+test a_directory_the_test_removed_itself_is_not_a_drop_failure ... ok
+test a_file_is_writable_and_removed_on_drop ... ok
+test a_prefix_names_the_directory ... ok
+test a_prefix_that_is_not_a_plain_name_is_refused_and_a_plain_one_is_accepted ... ok
+test a_root_that_is_a_file_is_an_error_and_a_directory_root_is_accepted ... ok
+test the_unit_test_root_is_the_directory_cargo_names_for_integration_tests ... ok
+test sixteen_threads_get_sixteen_distinct_directories_all_removed_on_drop ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf)
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/bench)
+    Finished `test` profile [optimized] target(s) in 50.17s
+     Running tests/lubm_check_cli.rs (target/native-build/debug/build/purrdf-bench/f29f703a103f4df2/out/lubm_check_cli-f29f703a103f4df2)
+
+running 5 tests
+test native_config_results_and_cargo_readers_fail_actionably ... ok
+test schema_projection_changes_all_rdf_positions_and_preserves_w3c_and_lexical_content ... ok
+test external_output_admission_uses_source_rules_and_rejects_personal_exclusions ... ok
+test retained_receipts_refuse_inventory_payload_conversion_and_acceptance_tampering ... ok
+test complete_graph_receipts_and_exact_native_oracles_use_real_entrypoints ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.47s
+
+     Running tests/lubm_cli.rs (target/native-build/debug/build/purrdf-bench/bd45cd0069bd4eb6/out/lubm_cli-bd45cd0069bd4eb6)
+
+running 4 tests
+test invalid_arguments_and_existing_outputs_never_succeed_or_overwrite ... ok
+test independent_graph_controls_refuse_removed_relationships_and_invented_membership ... ok
+test processes_paths_locale_ranges_and_configuration_have_declared_identity ... ok
+test named_seed_index_matrix_satisfies_every_published_graph_constraint ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/shapes)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 49.93s
+     Running tests/cost_planner_corpus.rs (target/native-build/debug/build/purrdf-sparql-conformance/8bb7ff6b97318cb0/out/cost_planner_corpus-8bb7ff6b97318cb0)
+
+running 1 test
+test cost_and_structural_planner_produce_identical_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+     Running tests/evaluator_trace.rs (target/native-build/debug/build/purrdf-sparql-conformance/bcf1f7724338317e/out/evaluator_trace-bcf1f7724338317e)
+
+running 4 tests
+test regenerate_evaluator_trace ... ignored, regeneration path: writes the committed golden
+test regenerate_update_trace ... ignored, regeneration path: writes the committed golden
+test the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden ... ok
+test the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden ... FAILED
+
+failures:
+
+---- the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden stdout ----
+
+thread 'the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden' (1117504) panicked at crates/sparql-conformance/tests/evaluator_trace.rs:727:5:
+the evaluator's trace moved on 15 case(s) (first ten shown):
+  purrdf-extend <http://purrdf.test/extend#existsGraphVariableCorrelated> SEP-0007: GRAPH ?g inside FILTER EXISTS is the definition-path Graph-substitution shape, ?g bound from the row being filtered — a second :p row bound to a graph holding NOTHING must be excluded, not wrongly admitted by an unresolved ?g enumerating every named graph
+    golden: metered complete fuel=34 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=31 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+  purrdf-extend <http://purrdf.test/extend#existsMinusDomain> SEP-0007 Issue 4: the correlated variable occurs only in MINUS's subtracted (right) operand, contributing nothing to MINUS's own output schema
+    golden: metered complete fuel=39 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=36 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+  purrdf-extend <http://purrdf.test/extend#existsNestedCorrelation> SEP-0007: FILTER EXISTS { FILTER NOT EXISTS { ?s :q ?y } } — the nested NOT EXISTS is correlated on the OUTER ?s through a triple-leaf position only, so :s1 (no :q of its own) and :s2 (has one) must answer differently, not agree as if ?s were an uncorrelated fresh variable
+    golden: metered complete fuel=45 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=39 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+  purrdf-extend <http://purrdf.test/extend#existsOptionalPadding> SEP-0007: FILTER EXISTS { OPTIONAL { P } } is always true — OPTIONAL never empties the unit row it pads, regardless of whether P matches
+    golden: metered complete fuel=16 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+    actual: metered complete fuel=19 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+  purrdf-extend <http://purrdf.test/extend#existsSubselectLimit> SEP-0007: a correlated { SELECT ?s WHERE { … } LIMIT 1 } inner — only the per-row definition path answers LIMIT correctly above a substitution site
+    golden: metered complete fuel=22 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+    actual: metered complete fuel=43 answer-rows=2 intermediate-cells=4 scratch-bytes=76
+  purrdf-extend <http://purrdf.test/extend#notExistsOptionalPadding> the NOT EXISTS twin of :existsOptionalPadding: FILTER NOT EXISTS { OPTIONAL { P } } is always false
+    golden: metered complete fuel=12 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=15 intermediate-cells=4 scratch-bytes=153
+  purrdf-property-functions <http://purrdf.test/property-functions#bbMemberFalse> a fully bound call that matches nothing yields no row, beside one that does
+    golden: metered complete fuel=11 scratch-bytes=153
+    actual: metered complete fuel=10 scratch-bytes=153
+  purrdf-property-functions <http://purrdf.test/property-functions#modeRestrictedSubsumption> a bf-only relation serves a fully bound call, and the engine filters the bound position
+    golden: metered complete fuel=11 scratch-bytes=153
+    actual: metered complete fuel=10 scratch-bytes=153
+  w3c-sparql11/exists <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/exists/manifest#exists04> Nested positive exists
+    golden: metered complete fuel=37 answer-rows=1 intermediate-cells=4 scratch-bytes=76
+    actual: metered complete fuel=33 answer-rows=1 intermediate-cells=4 scratch-bytes=76
+  w3c-sparql11/exists <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/exists/manifest#exists05> Nested negative exists in positive exists
+    golden: metered complete fuel=32 intermediate-cells=4 scratch-bytes=153
+    actual: metered complete fuel=29 intermediate-cells=4 scratch-bytes=153
+
+if the change is intended, regenerate with `cargo test -p purrdf-sparql-conformance --test evaluator_trace -- --ignored regenerate_evaluator_trace` and review the diff
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden
+
+test result: FAILED. 1 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 5.77s
+
+error: test failed, to rerun pass `-p purrdf-sparql-conformance --test evaluator_trace`
+     Running tests/governor_correctness_corpus.rs (target/native-build/debug/build/purrdf-sparql-conformance/231c9251cb94d1dd/out/governor_correctness_corpus-231c9251cb94d1dd)
+
+running 1 test
+test d0_governed_unbounded_is_byte_identical_to_ungoverned ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/sparql_conformance.rs (target/native-build/debug/build/purrdf-sparql-conformance/3a5b6c9edbab309a/out/sparql_conformance-3a5b6c9edbab309a)
+
+running 74 tests
+[suite/purrdf-list-functions/manifest.ttl] 8 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-list-functions/manifest.ttl ... ok
+[suite/purrdf-smoke/manifest.ttl] 9 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-smoke/manifest.ttl ... ok
+[suite/purrdf-property-functions/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-property-functions/manifest.ttl ... ok
+[suite/purrdf-update/manifest.ttl] 3 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-update/manifest.ttl ... ok
+[suite/w3c-sparql10/ask/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/ask/manifest.ttl ... ok
+[suite/w3c-sparql10/bnode-coreference/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/bnode-coreference/manifest.ttl ... ok
+[suite/w3c-sparql10/algebra/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/algebra/manifest.ttl ... ok
+[suite/w3c-sparql10/bound/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/bound/manifest.ttl ... ok
+[suite/w3c-sparql10/basic/manifest.ttl] 27 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/basic/manifest.ttl ... ok
+[suite/w3c-sparql10/boolean-effective-value/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/boolean-effective-value/manifest.ttl ... ok
+[suite/w3c-sparql10/cast/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/cast/manifest.ttl ... ok
+[suite/purrdf-extend/manifest.ttl] 56 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-extend/manifest.ttl ... ok
+[suite/w3c-sparql10/construct/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/construct/manifest.ttl ... ok
+[suite/w3c-sparql10/distinct/manifest.ttl] 11 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/distinct/manifest.ttl ... ok
+[suite/w3c-sparql10/dataset/manifest.ttl] 12 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/dataset/manifest.ttl ... ok
+[suite/w3c-sparql10/expr-equals/manifest.ttl] 15 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/expr-equals/manifest.ttl ... ok
+[suite/w3c-sparql10/expr-ops/manifest.ttl] 18 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/expr-ops/manifest.ttl ... ok
+[suite/w3c-sparql10/i18n/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/i18n/manifest.ttl ... ok
+[suite/w3c-sparql10/expr-builtin/manifest.ttl] 25 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/expr-builtin/manifest.ttl ... ok
+[suite/w3c-sparql10/graph/manifest.ttl] 17 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/graph/manifest.ttl ... ok
+[suite/w3c-sparql10/reduced/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/reduced/manifest.ttl ... ok
+[suite/w3c-sparql10/optional-filter/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/optional-filter/manifest.ttl ... ok
+[suite/w3c-sparql10/optional/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/optional/manifest.ttl ... ok
+[suite/w3c-sparql10/open-world/manifest.ttl] 18 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/open-world/manifest.ttl ... ok
+[suite/w3c-sparql10/regex/manifest.ttl] 21 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/regex/manifest.ttl ... ok
+[suite/w3c-sparql10/solution-seq/manifest.ttl] 13 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/solution-seq/manifest.ttl ... ok
+[suite/w3c-sparql10/sort/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/sort/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql4/manifest.ttl] 12 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql4/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql3/manifest.ttl] 51 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql3/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql5/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql5/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql2/manifest.ttl] 53 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql2/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql1/manifest.ttl] 81 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql1/manifest.ttl ... ok
+[suite/w3c-sparql10/triple-match/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/triple-match/manifest.ttl ... ok
+[suite/w3c-sparql11/add/manifest.ttl] 8 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/add/manifest.ttl ... ok
+[suite/w3c-sparql11/basic-update/manifest.ttl] 13 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/basic-update/manifest.ttl ... ok
+[suite/w3c-sparql11/bind/manifest.ttl] 10 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/bind/manifest.ttl ... ok
+[suite/w3c-sparql10/type-promotion/manifest.ttl] 30 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/type-promotion/manifest.ttl ... ok
+[suite/w3c-sparql11/bindings/manifest.ttl] 11 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/bindings/manifest.ttl ... ok
+[suite/w3c-sparql11/clear/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/clear/manifest.ttl ... ok
+[suite/w3c-sparql11/cast/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/cast/manifest.ttl ... ok
+[suite/w3c-sparql11/construct/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/construct/manifest.ttl ... ok
+[suite/w3c-sparql11/aggregates/manifest.ttl] 47 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/aggregates/manifest.ttl ... ok
+[suite/w3c-sparql11/copy/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/copy/manifest.ttl ... ok
+[suite/w3c-sparql11/delete-data/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete-data/manifest.ttl ... ok
+[suite/w3c-sparql11/delete-insert/manifest.ttl] 17 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete-insert/manifest.ttl ... ok
+[suite/w3c-sparql11/drop/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/drop/manifest.ttl ... ok
+[suite/w3c-sparql11/delete-where/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete-where/manifest.ttl ... ok
+[suite/w3c-sparql11/delete/manifest.ttl] 19 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete/manifest.ttl ... ok
+[suite/w3c-sparql11/exists/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/exists/manifest.ttl ... ok
+[suite/w3c-sparql11/grouping/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/grouping/manifest.ttl ... ok
+[suite/w3c-sparql11/move/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/move/manifest.ttl ... ok
+[suite/w3c-sparql11/project-expression/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/project-expression/manifest.ttl ... ok
+[suite/w3c-sparql11/negation/manifest.ttl] 8 passed, 0 xfail, 0 unexpected-pass, 4 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/negation/manifest.ttl ... FAILED
+[suite/w3c-sparql11/service/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/service/manifest.ttl ... ok
+[suite/w3c-sparql11/property-path/manifest.ttl] 33 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/property-path/manifest.ttl ... ok
+[suite/w3c-sparql11/subquery/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/subquery/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-fed/manifest.ttl] 3 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-fed/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-update-1/manifest.ttl] 54 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-update-1/manifest.ttl ... ok
+[suite/w3c-sparql11/functions/manifest.ttl] 75 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/functions/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-update-2/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-update-2/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-query/manifest.ttl] 94 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-query/manifest.ttl ... ok
+[suite/w3c-sparql11/update-silent/manifest.ttl] 13 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/update-silent/manifest.ttl ... ok
+[suite/w3c-sparql12/codepoint-escapes/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/codepoint-escapes/manifest.ttl ... ok
+[suite/w3c-sparql12/expression/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/expression/manifest.ttl ... ok
+[suite/w3c-sparql12/grouping/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/grouping/manifest.ttl ... ok
+[suite/w3c-sparql12/rdf11/manifest.ttl] 3 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/rdf11/manifest.ttl ... ok
+[suite/w3c-sparql12/lang-basedir/manifest.ttl] 11 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/lang-basedir/manifest.ttl ... ok
+[suite/w3c-sparql12/syntax/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/syntax/manifest.ttl ... ok
+[suite/w3c-sparql12/syntax-triple-terms-negative/manifest.ttl] 65 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/syntax-triple-terms-negative/manifest.ttl ... ok
+[suite/w3c-sparql12/version/manifest.ttl] 9 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql10/manifest.ttl] index of test run_manifest_case::w3c-sparql12/version/manifest.ttl ... ok
+29 manifests, each run as its own case
+test index_manifest::w3c-sparql10/manifest.ttl ... ok
+[suite/w3c-sparql12/eval-triple-terms/manifest.ttl] 41 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/eval-triple-terms/manifest.ttl ... ok
+[suite/w3c-sparql12/syntax-triple-terms-positive/manifest.ttl] 113 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/syntax-triple-terms-positive/manifest.ttl ... ok
+[suite/w3c-sparql11/entailment/manifest.ttl] 70 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/entailment/manifest.ttl ... ok
+
+failures:
+
+---- run_manifest_case::w3c-sparql11/negation/manifest.ttl stdout ----
+suite/w3c-sparql11/negation/manifest.ttl failed:
+  • FAIL http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation/manifest#set-equals-1: solution multiset mismatch: 2 expected rows vs 15 actual rows; first canonical difference: expected _:c14n0 <urn:purrdf:conformance:var:s1> <http://example/c> . / actual _:c14n0 <urn:purrdf:conformance:var:s1> <http://example/d> .
+  • FAIL http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation/manifest#subset-01: solution multiset mismatch: 11 expected rows vs 30 actual rows; first canonical difference: expected _:c14n10 <urn:purrdf:conformance:var:subset> <http://example/empty> . / actual _:c14n10 <urn:purrdf:conformance:var:subset> <http://example/d> .
+  • FAIL http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation/manifest#subset-02: solution multiset mismatch: 11 expected rows vs 36 actual rows; first canonical difference: expected _:c14n10 <urn:purrdf:conformance:var:subset> <http://example/empty> . / actual _:c14n10 <urn:purrdf:conformance:var:subset> <http://example/d> .
+  • FAIL http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation/manifest#subset-03: solution multiset mismatch: 7 expected rows vs 26 actual rows; first canonical difference: expected _:c14n1 <urn:purrdf:conformance:var:subset> <http://example/empty> . / actual _:c14n1 <urn:purrdf:conformance:var:subset> <http://example/d> .
+
+failures:
+    run_manifest_case::w3c-sparql11/negation/manifest.ttl
+
+test result: FAILED. 73 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+error: test failed, to rerun pass `-p purrdf-sparql-conformance --test sparql_conformance`
+error: 2 targets failed:
+    `-p purrdf-sparql-conformance --test evaluator_trace`
+    `-p purrdf-sparql-conformance --test sparql_conformance`

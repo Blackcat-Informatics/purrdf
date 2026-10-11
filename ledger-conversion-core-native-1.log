@@ -1,0 +1,17 @@
+Running as unit: purrdf-ledger-conversion-core-native-1.service
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 18s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 3 tests
+test evidence::conversion::tests::missing_ambiguous_and_invalid_causes_remain_hard_failures ... ok
+test evidence::conversion::tests::canonical_spelling_refusal_remains_physical ... ok
+test evidence::conversion::tests::original_loss_codes_share_reasons_without_changing_the_json_ledger ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1273 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1min 18.795s
+             CPU time consumed: 165ms
+                   Memory peak: 15.9M (swap: 0B)

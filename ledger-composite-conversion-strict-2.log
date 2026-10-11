@@ -1,0 +1,97 @@
+Running as unit: purrdf-ledger-composite-conversion-strict-2.service
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/datalog)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+error: `drain(..)` used on a `Vec`
+   --> crates/datalog/src/seminaive/evidence.rs:189:37
+    |
+189 |             for (key, _) in pending.drain(..) {
+    |                                     ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+    = note: `-D clippy::iter-with-drain` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::iter_with_drain)]`
+
+error: this function has too many arguments (8/7)
+    --> crates/datalog/src/seminaive.rs:3406:1
+     |
+3406 | / fn emit_solution<'r>(
+3407 | |     buffer: &mut RoundBuffer<'r>,
+3408 | |     head: &'r [ArgShape; ATOM_ARITY],
+3409 | |     solution: &SlotSolution,
+...    |
+3414 | |     uses_absence: bool,
+3415 | | ) -> Result<(), EvalError> {
+     | |__________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this function has too many arguments (8/7)
+    --> crates/datalog/src/seminaive.rs:3884:1
+     |
+3884 | / fn evaluate_with_evidence(
+3885 | |     exe: &Executable,
+3886 | |     edb: RelationStore,
+3887 | |     stop: Option<&dyn StopSignal>,
+...    |
+3892 | |     evidence: &mut Option<&mut dyn evidence::RuleEvidence>,
+3893 | | ) -> Result<Evaluation, EvalError> {
+     | |__________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: this `if` statement can be collapsed
+    --> crates/datalog/src/seminaive.rs:4058:13
+     |
+4058 | /             if let Some(owner) = evidence.as_mut() {
+4059 | |                 if owner.commit(&state.rel)? {
+4060 | |                     delta = Delta::all(state.rel.row_count());
+4061 | |                     continue;
+4062 | |                 }
+4063 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+     = note: `-D clippy::collapsible-if` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+     |
+4058 ~             if let Some(owner) = evidence.as_mut()
+4059 ~                 && owner.commit(&state.rel)? {
+4060 |                     delta = Delta::all(state.rel.row_count());
+4061 |                     continue;
+4062 ~                 }
+     |
+
+error: this `if` statement can be collapsed
+    --> crates/datalog/src/seminaive.rs:4069:9
+     |
+4069 | /         if let Some(owner) = evidence.as_mut() {
+4070 | |             if owner.commit(&state.rel)? {
+4071 | |                 delta = Delta::all(state.rel.row_count());
+4072 | |                 continue;
+4073 | |             }
+4074 | |         }
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+     |
+4069 ~         if let Some(owner) = evidence.as_mut()
+4070 ~             && owner.commit(&state.rel)? {
+4071 |                 delta = Delta::all(state.rel.row_count());
+4072 |                 continue;
+4073 ~             }
+     |
+
+error: could not compile `purrdf-datalog` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-datalog` (lib test) due to 5 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 23.089s
+             CPU time consumed: 162ms
+                   Memory peak: 35.6M (swap: 0B)

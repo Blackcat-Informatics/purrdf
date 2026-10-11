@@ -1,0 +1,214 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 44.88s
+     Running tests/evidence_ingress.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/933c5385acd98653/out/evidence_ingress-933c5385acd98653)
+
+running 20 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.25s
+
+     Running tests/prepared_execution.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+COLLECT ingress/prepared status=0
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 19s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 39 tests
+test path::recursion_free_tests::the_machine_answers_the_reference_set_and_bag_on_generated_shapes ... ok
+test path::recursion_free_tests::the_program_folds_reflexivity_and_repetition_as_the_reference_does ... ok
+test path::tests::absent_ground_endpoint_is_empty ... ok
+test path::tests::alternative_unions_both ... ok
+test path::tests::both_ground_is_ask_shaped ... ok
+test path::tests::both_variable_enumerates_pairs_with_zero_length_self_pairs ... ok
+test path::tests::composite_step_cycle_terminates_and_reports ... ok
+test path::tests::cyclic_graph_p_n_m_terminates_without_a_budget ... ok
+test path::tests::determinism_rows_are_termid_ordered ... ok
+test path::tests::large_exact_range_uses_polynomial_powers_on_coprime_cycles ... ok
+test path::tests::list_walk_members_rest_star_first ... ok
+test path::tests::named_predicate_forward_and_reverse ... ok
+test path::tests::negated_property_set_direct_and_inverse ... ok
+test path::tests::negated_property_set_excludes_named ... ok
+test path::tests::negated_property_set_pure_inverse ... ok
+test path::tests::negated_under_one_or_more ... ok
+test path::tests::nested_alternative_inverse_plus ... ok
+test path::tests::non_reflexive_ground_endpoint_absent_from_dataset_is_empty ... ok
+test path::tests::one_or_more_includes_start_only_via_cycle ... ok
+test path::tests::range_exact_and_bounded_on_chain ... ok
+test path::tests::range_on_cycle_reports_nodes_at_multiple_counts ... ok
+test path::tests::range_path_answers_are_unchanged_by_the_early_exit ... ok
+test path::tests::same_var_nonreflexive_no_cycle_is_empty ... ok
+test path::tests::same_var_reflexive_optional ... ok
+test path::tests::same_var_reflexive_range_zero_min ... ok
+test path::tests::same_var_reflexive_star ... ok
+test path::tests::same_variable_keeps_only_reflexive_pairs ... ok
+test path::tests::sequence_backward_from_object ... ok
+test path::tests::sequence_chains_two_predicates ... ok
+test path::tests::star_fanout_charges_each_candidate_edge ... ok
+test path::tests::star_terminates_on_a_cycle ... ok
+test path::tests::variable_inside_quoted_triple_endpoint_names_the_path_not_a_bgp ... ok
+test path::tests::wildcard_any_and_namespace_scoped ... ok
+test path::tests::zero_or_more_includes_self_and_transitive ... ok
+test path::tests::zero_or_more_reflexive_ground_endpoint_absent_from_empty_dataset ... ok
+test path::tests::zero_or_one_reflexive_ground_endpoint_absent_from_empty_dataset ... ok
+test path::recursion_free_tests::the_machine_charges_in_the_reference_order_under_every_budget ... ok
+test path::recursion_free_tests::a_hundred_thousand_reverses_evaluate_on_a_128_kib_thread ... ok
+test path::recursion_free_tests::a_hundred_thousand_zero_or_ones_evaluate_on_a_128_kib_thread ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 1471 filtered out; finished in 0.09s
+
+COLLECT lib path:: status=0
+    Finished `test` profile [optimized] target(s) in 0.14s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 12 tests
+test vm::tests::a_deep_not_nest_evaluates_on_a_small_stack ... ok
+test vm::tests::a_deep_coalesce_nest_evaluates_on_a_small_stack ... ok
+test vm::tests::a_link_resolves_each_variable_once_not_once_per_row ... ok
+test vm::tests::a_plan_site_compiles_once_and_every_call_shares_it ... ok
+test vm::tests::a_deep_if_nest_evaluates_on_a_small_stack ... ok
+test vm::tests::a_deep_arithmetic_chain_evaluates_on_a_small_stack ... ok
+test vm::tests::the_vm_matches_the_tree_walk_over_nan_comparisons ... ok
+test vm::tests::a_deep_triple_constructor_chain_interns_its_outermost_term_once ... ok
+test vm::tests::the_vm_matches_the_tree_walk_over_nested_triple_constructors ... ok
+test vm::tests::the_vm_matches_the_tree_walk_over_numeric_casts ... ok
+test vm::tests::the_vm_matches_the_tree_walk_over_every_suite_expression ... ok
+test vm::tests::the_vm_matches_the_tree_walk_over_generated_expressions ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1498 filtered out; finished in 0.41s
+
+COLLECT lib vm:: status=0
+    Finished `test` profile [optimized] target(s) in 0.05s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-shapes-dictionary-qualification/build/debug/build/purrdf-sparql-eval/25dde7f7b70bdfd9/out/purrdf_sparql_eval-25dde7f7b70bdfd9)
+
+running 81 tests
+test modifier::custom_owner_regressions::contextual_custom_fold_releases_original_control_tuple_and_visibility_owners ... ok
+test modifier::emptiness_proof_tests::the_proofs_agree_with_their_recursive_references_on_generated_shapes ... ok
+test modifier::numeric_chain_tests::an_escaped_integer_sum_joins_a_float_sum_correctly_rounded ... ok
+test modifier::numeric_chain_tests::a_large_group_containing_the_witness_sums_to_the_chain_value ... ok
+test modifier::numeric_chain_tests::a_decimal_sum_past_the_mantissa_agrees_in_parallel ... ok
+test modifier::numeric_chain_tests::the_witness_group_sums_to_the_chain_value ... ok
+test modifier::numeric_chain_tests::exact_tiers_merge_in_parallel_and_only_unprovable_rows_replay ... ok
+test modifier::sort_key_walk_tests::the_order_over_generated_terms_agrees_with_the_recursive_reference ... ok
+test modifier::tests::aggregates_skip_unbound_argument_rows_but_count_star_does_not ... ok
+test modifier::tests::avg_double_nan_propagates ... ok
+test modifier::tests::avg_double_overflow_is_ieee_infinity_not_poisoned_or_exact ... ok
+test modifier::tests::avg_empty_group_is_zero ... ok
+test modifier::tests::avg_integers ... ok
+test modifier::tests::avg_of_mixed_sign_durations ... ok
+test modifier::tests::avg_over_durations_rounds_months ... ok
+test modifier::tests::avg_overflow_cancelling_values_is_exact ... ok
+test modifier::tests::avg_overflow_exceeding_i128_answers_exact_total ... ok
+test modifier::tests::compare_values_agrees_with_order_values ... ok
+test modifier::tests::count_star_over_empty_is_one_group_zero ... ok
+test modifier::tests::delivered_distinct_seals_native_alternatives_without_an_external_source ... ok
+test modifier::tests::distinct_drops_duplicate_rows ... ok
+test modifier::tests::every_builtin_agrees_across_thread_pool_sizes ... ok
+test modifier::tests::fold_values_matches_the_group_by_accumulators ... ok
+test modifier::tests::fold_values_over_the_empty_bag ... ok
+test modifier::tests::fold_values_ranks_blank_nodes_and_triple_terms ... ok
+test modifier::tests::group_aggregate_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::group_by_with_count ... ok
+test modifier::tests::group_by_with_count_distinct ... ok
+test modifier::tests::group_concat_empty_group_is_empty_string ... ok
+test modifier::tests::group_concat_poisons_on_a_blank_node_value ... ok
+test modifier::tests::group_concat_without_separator_uses_default_space ... ok
+test modifier::tests::group_min ... ok
+test modifier::tests::max_empty_group_is_unbound ... ok
+test modifier::tests::max_integers ... ok
+test modifier::tests::native_group_keeps_whole_search_for_empty_and_found_members ... ok
+test modifier::tests::order_by_ascending_value_space ... ok
+test modifier::tests::order_by_descending ... ok
+test modifier::tests::order_by_has_no_value_versus_syntactic_cycle ... ok
+test modifier::tests::order_values_compares_triple_terms_componentwise ... ok
+test modifier::tests::order_values_is_stable_and_keeps_duplicates ... ok
+test modifier::tests::order_values_orders_literals_by_value ... ok
+test modifier::tests::order_values_ranks_every_rdf12_term_kind ... ok
+test modifier::tests::project_keeps_only_listed_vars_in_order ... ok
+test modifier::tests::sample_empty_group_is_unbound ... ok
+test modifier::tests::sample_returns_first_row_order_value ... ok
+test modifier::tests::slice_offset_and_limit ... ok
+test modifier::tests::stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_last_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_median_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_median_duration_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_mode_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_moments_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::stat_agg_topk_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::sum_double_nan_propagates ... ok
+test modifier::tests::sum_double_overflow_is_ieee_infinity_not_poisoned_or_exact ... ok
+test modifier::tests::sum_empty_group_is_zero ... ok
+test modifier::tests::sum_group_by_integration ... ok
+test modifier::tests::sum_integers ... ok
+test modifier::tests::sum_mixed_integer_and_float_promotes_to_float_as_before ... ok
+test modifier::tests::sum_non_numeric_is_unbound ... ok
+test modifier::tests::sum_over_durations_agrees_across_thread_pool_sizes ... ok
+test modifier::tests::sum_over_durations_is_the_group_sum ... ok
+test modifier::tests::sum_over_mixed_numeric_and_duration_is_unbound ... ok
+test modifier::tests::sum_over_mixed_sign_durations_agrees_across_a_forced_chunk_boundary ... ok
+test modifier::tests::sum_over_mixed_sign_durations_is_order_independent ... ok
+test modifier::tests::sum_over_mixed_subtype_durations_is_the_general_duration ... ok
+test modifier::tests::sum_overflow_agrees_across_thread_pool_sizes ... ok
+test modifier::tests::sum_overflow_cancelling_values_answers_exact_total ... ok
+test modifier::tests::sum_overflow_exceeding_i128_answers_exact_total ... ok
+test modifier::tests::sum_overflow_then_decimal_stays_exact ... ok
+test modifier::tests::sum_overflow_then_double_promotes_without_poisoning ... ok
+test modifier::tests::sum_whose_final_value_is_mixed_sign_is_unbound ... ok
+test modifier::tests::sum_with_decimal ... ok
+test modifier::tests::the_sparql_ordering_is_a_total_order_over_every_term_kind ... ok
+test modifier::tests::values_seeds_solutions ... ok
+test modifier::emptiness_proof_tests::a_hundred_thousand_level_shape_is_proven_on_a_128_kib_thread ... ok
+test modifier::tests::within_group_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::tests::within_group_distinct_dedup_survives_chunking_keeping_input_order_first_occurrence ... ok
+test modifier::tests::within_group_custom_aggregate_chunked_fold_forced_parallel_and_sequential_agree ... ok
+test modifier::sort_key_walk_tests::a_hundred_thousand_level_key_is_projected_compared_and_released_on_a_128_kib_stack ... ok
+test modifier::numeric_chain_tests::parallel_sum_and_avg_equal_the_sequential_chain_bit_for_bit ... ok
+
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 1429 filtered out; finished in 1.04s
+
+COLLECT lib modifier:: status=0
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/retrieval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 15.35s
+COLLECT strict status=0

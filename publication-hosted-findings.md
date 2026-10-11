@@ -1,0 +1,6 @@
+PR #532's first hosted run has two additional demonstrated findings on head `5e1f3658a`:
+
+- [Documentation job](https://github.com/Blackcat-Informatics/purrdf/actions/runs/38181556067/job/114595017985): `cargo doc` fails on unresolved intra-doc links `check_plan_matches_relations` at `crates/sparql-eval/src/engine.rs:6534` and `NativeSparqlEngine::admit` at line 6539. Correct the stale references to the actual production admission homes; do not suppress broken-link warnings.
+- [MSRV job](https://github.com/Blackcat-Informatics/purrdf/actions/runs/38181556067/job/114595017929): compiler E0275 at `crates/shapes/src/schema_surface.rs:3462`, calling `purrdf_core::graph::scc_component_index(graph)`. The solver recursively tries `&SharedWorkspace<SharedWorkspace<...>>: IntoIterator` through the generic shared wrapper. Diagnose the actual generic bound/type inference and retain the supported compiler contract; increasing a recursion limit is not an established repair.
+
+These are failed hosted checks, distinct from the final local round's stale temp-root artifact failure. Other hosted checks are still running, so this is not the final hosted verdict. Raw job logs are retained as `hosted-doc.log` and `hosted-msrv.log` in the selected Stage evidence. No additional implementation or retest round was started under the user's publication instruction.

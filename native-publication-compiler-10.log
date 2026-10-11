@@ -1,0 +1,145 @@
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/bindings/python)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-capi)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cli)
+error[E0308]: mismatched types
+    --> bindings/python/src/py_retrieval.rs:776:33
+     |
+ 776 |     Ok(CandidateDomains::Within(blocks))
+     |        ------------------------ ^^^^^^ expected `SharedWorkspace<AdmittedOrderedSet<_>>`, found `BTreeSet<DomainTag>`
+     |        |
+     |        arguments to this enum variant are incorrect
+     |
+     = note: expected struct `SharedWorkspace<AdmittedOrderedSet<DomainTag>>`
+                found struct `BTreeSet<DomainTag>`
+note: tuple variant defined here
+    --> crates/sparql-eval/src/property_fn.rs:1407:5
+     |
+1407 |     Within(crate::SharedWorkspace<crate::AdmittedOrderedSet<DomainTag>>),
+     |     ^^^^^^
+
+error[E0277]: `&purrdf_lex::allocation::text::OwnedText` cannot be converted to a Python object
+    --> bindings/python/src/py_retrieval.rs:2539:42
+     |
+2539 |                 entry.set_item("reason", reason)?;
+     |                       --------           ^^^^^^ the trait `pyo3::IntoPyObject<'_>` is not implemented for `&purrdf_lex::allocation::text::OwnedText`
+     |                       |
+     |                       required by a bound introduced by this call
+     |
+     = note: `IntoPyObject` is automatically implemented by the `#[pyclass]` macro
+     = note: if you do not wish to have a corresponding Python type, implement it manually
+     = note: if you do not own `&purrdf_lex::allocation::text::OwnedText` you can perform a manual conversion to one of the types in `pyo3::types::*`
+     = help: the following other types implement trait `pyo3::IntoPyObject<'py>`:
+               &&'a T
+               &&OsStr
+               &&std::path::Path
+               &&str
+               &'a (T0, T1)
+               &'a (T0, T1, T2)
+               &'a (T0, T1, T2, T3)
+               &'a (T0, T1, T2, T3, T4)
+             and 196 others
+note: required by a bound in `pyo3::types::PyDictMethods::set_item`
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-0.29.0/src/types/dict.rs:161:12
+     |
+ 158 |     fn set_item<K, V>(&self, key: K, value: V) -> PyResult<()>
+     |        -------- required by a bound in this associated function
+...
+ 161 |         V: IntoPyObject<'py>;
+     |            ^^^^^^^^^^^^^^^^^ required by this bound in `PyDictMethods::set_item`
+
+error[E0308]: mismatched types
+    --> bindings/python/src/py_retrieval.rs:2622:55
+     |
+2622 |             exactness.set_item("deficit", strata_list(deficit))?;
+     |                                           ----------- ^^^^^^^ expected `&BTreeSet<Iri>`, found `&SharedWorkspace<_>`
+     |                                           |
+     |                                           arguments to this function are incorrect
+     |
+     = note: expected reference `&BTreeSet<purrdf::retrieval::Iri>`
+                found reference `&SharedWorkspace<AdmittedOrderedSet<purrdf::retrieval::Iri>>`
+note: function defined here
+    --> bindings/python/src/py_retrieval.rs:2606:8
+     |
+2606 |     fn strata_list(strata: &BTreeSet<Iri>) -> Vec<&str> {
+     |        ^^^^^^^^^^^ ----------------------
+
+error[E0308]: mismatched types
+    --> bindings/python/src/py_retrieval.rs:2623:57
+     |
+2623 |             exactness.set_item("inflation", strata_list(inflation))?;
+     |                                             ----------- ^^^^^^^^^ expected `&BTreeSet<Iri>`, found `&SharedWorkspace<_>`
+     |                                             |
+     |                                             arguments to this function are incorrect
+     |
+     = note: expected reference `&BTreeSet<purrdf::retrieval::Iri>`
+                found reference `&SharedWorkspace<AdmittedOrderedSet<purrdf::retrieval::Iri>>`
+note: function defined here
+    --> bindings/python/src/py_retrieval.rs:2606:8
+     |
+2606 |     fn strata_list(strata: &BTreeSet<Iri>) -> Vec<&str> {
+     |        ^^^^^^^^^^^ ----------------------
+
+error[E0308]: mismatched types
+    --> bindings/python/src/py_retrieval.rs:2624:57
+     |
+2624 |             exactness.set_item("unbounded", strata_list(unbounded))?;
+     |                                             ----------- ^^^^^^^^^ expected `&BTreeSet<Iri>`, found `&SharedWorkspace<_>`
+     |                                             |
+     |                                             arguments to this function are incorrect
+     |
+     = note: expected reference `&BTreeSet<purrdf::retrieval::Iri>`
+                found reference `&SharedWorkspace<AdmittedOrderedSet<purrdf::retrieval::Iri>>`
+note: function defined here
+    --> bindings/python/src/py_retrieval.rs:2606:8
+     |
+2606 |     fn strata_list(strata: &BTreeSet<Iri>) -> Vec<&str> {
+     |        ^^^^^^^^^^^ ----------------------
+
+error[E0308]: mismatched types
+    --> bindings/python/src/py_retrieval.rs:2725:37
+     |
+2725 |         planned_resolution_dict(py, &result.planned_resolution)?,
+     |         -----------------------     ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&BTreeMap<Iri, PlannedResolution>`, found `&SharedWorkspace<_>`
+     |         |
+     |         arguments to this function are incorrect
+     |
+     = note: expected reference `&BTreeMap<purrdf::retrieval::Iri, PlannedResolution>`
+                found reference `&SharedWorkspace<AdmittedOrderedMap<purrdf::retrieval::Iri, PlannedResolution>>`
+note: function defined here
+    --> bindings/python/src/py_retrieval.rs:2320:4
+     |
+2320 | fn planned_resolution_dict<'py>(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^
+2321 |     py: Python<'py>,
+2322 |     planned: &BTreeMap<Iri, PlannedResolution>,
+     |     ------------------------------------------
+
+error[E0308]: mismatched types
+    --> bindings/python/src/py_retrieval.rs:2766:27
+     |
+2766 |         unserved_list(py, result.unserved_terms.clone())?,
+     |         -------------     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Vec<UnservedTerm>`, found `SharedWorkspace<AdmittedVec<_>>`
+     |         |
+     |         arguments to this function are incorrect
+     |
+     = note: expected struct `Vec<UnservedTerm>`
+                found struct `SharedWorkspace<AdmittedVec<UnservedTerm>>`
+note: function defined here
+    --> bindings/python/src/py_retrieval.rs:2296:4
+     |
+2296 | fn unserved_list(
+     |    ^^^^^^^^^^^^^
+2297 |     py: Python<'_>,
+2298 |     unserved: Vec<crate::retrieval::UnservedTerm>,
+     |     ---------------------------------------------
+help: try using a conversion method
+     |
+2766 -         unserved_list(py, result.unserved_terms.clone())?,
+2766 +         unserved_list(py, result.unserved_terms.to_vec())?,
+     |
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-python` (lib) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...

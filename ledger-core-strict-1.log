@@ -1,0 +1,197 @@
+Running as unit: purrdf-ledger-core-strict-1.service
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking typenum v1.20.1
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-events)
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking cpufeatures v0.3.0
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking cfg-if v1.0.4
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking regex v1.12.4
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking hashbrown v0.17.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+error: function call inside of `ok_or`
+  --> crates/rdf-core/src/evidence/ledger/frame.rs:79:72
+   |
+79 |                   LedgerNodeKey::Frame(frame.alternative_identity(index).ok_or(
+   |  ________________________________________________________________________^
+80 | |                     LedgerError::MissingNode(LedgerNodeKey::Frame(frame.identity())),
+81 | |                 )?),
+   | |_________________^ help: try: `ok_or_else(|| LedgerError::MissingNode(LedgerNodeKey::Frame(frame.identity())))`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+   = note: `-D clippy::or-fun-call` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+
+error: function call inside of `ok_or`
+   --> crates/rdf-core/src/evidence/ledger/frame.rs:169:82
+    |
+169 |                       let branch_id = self.frame.alternative_identity(self.branch).ok_or(
+    |  __________________________________________________________________________________^
+170 | |                         LedgerError::MissingNode(LedgerNodeKey::Frame(self.frame.identity())),
+171 | |                     )?;
+    | |_____________________^ help: try: `ok_or_else(|| LedgerError::MissingNode(LedgerNodeKey::Frame(self.frame.identity())))`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+
+error: temporary with significant `Drop` can be early dropped
+  --> crates/rdf-core/src/evidence/ledger/view.rs:89:17
+   |
+88 |       fn fail<T>(&self, error: LedgerReadError) -> Result<T, LedgerReadError> {
+   |  _____________________________________________________________________________-
+89 | |         let mut status = lock_read_state(&self.error);
+   | |                 ^^^^^^
+90 | |         let first = status.unwrap_or(error);
+91 | |         *status = Some(first);
+92 | |         Err(first)
+93 | |     }
+   | |_____- temporary `status` is currently being dropped at the end of its contained scope
+   |
+   = note: this might lead to unnecessary resource contention
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+   = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+   |
+91 ~         *status = Some(first);
+92 +         drop(status);
+   |
+
+error: temporary with significant `Drop` in `if let` scrutinee will live until the end of the `if let` expression
+   --> crates/rdf-core/src/evidence/ledger/view.rs:130:30
+    |
+130 |         if let Some(error) = *lock_read_state(&self.error) {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+131 |             return Err(error);
+132 |         }
+    |          - temporary lives until here
+    |
+    = note: this might lead to deadlocks or other unexpected behavior
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_in_scrutinee
+    = note: `-D clippy::significant-drop-in-scrutinee` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_in_scrutinee)]`
+help: try moving the temporary above the match
+    |
+130 ~         let value = *lock_read_state(&self.error);
+131 ~         if let Some(error) = value {
+    |
+
+error: temporary with significant `Drop` in `if let` scrutinee will live until the end of the `if let` expression
+   --> crates/rdf-core/src/evidence/ledger/view.rs:152:30
+    |
+152 |         if let Some(error) = *lock_read_state(&self.error) {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+153 |             return Err(error);
+154 |         }
+    |          - temporary lives until here
+    |
+    = note: this might lead to deadlocks or other unexpected behavior
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_in_scrutinee
+help: try moving the temporary above the match
+    |
+152 ~         let value = *lock_read_state(&self.error);
+153 ~         if let Some(error) = value {
+    |
+
+error: temporary with significant `Drop` in `if let` scrutinee will live until the end of the `if let` expression
+   --> crates/rdf-core/src/evidence/ledger/view.rs:163:30
+    |
+163 |         if let Some(error) = *lock_read_state(&self.error) {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+164 |             return Err(error);
+165 |         }
+    |          - temporary lives until here
+    |
+    = note: this might lead to deadlocks or other unexpected behavior
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_in_scrutinee
+help: try moving the temporary above the match
+    |
+163 ~         let value = *lock_read_state(&self.error);
+164 ~         if let Some(error) = value {
+    |
+
+error: matching over `()` is more explicit
+   --> crates/rdf-core/src/evidence/ledger/view.rs:188:9
+    |
+188 |         _: &Self::ProbePlan,
+    |         ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+    = note: `-D clippy::ignored-unit-patterns` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::ignored_unit_patterns)]`
+
+error: temporary with significant `Drop` in `if let` scrutinee will live until the end of the `if let` expression
+   --> crates/rdf-core/src/evidence/ledger/view.rs:208:30
+    |
+208 |         if let Some(error) = *lock_read_state(&self.error) {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+209 |             return Err(error);
+210 |         }
+    |          - temporary lives until here
+    |
+    = note: this might lead to deadlocks or other unexpected behavior
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_in_scrutinee
+help: try moving the temporary above the match
+    |
+208 ~         let value = *lock_read_state(&self.error);
+209 ~         if let Some(error) = value {
+    |
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-core/src/evidence/ledger/view.rs:208:47
+    |
+208 |         if let Some(error) = *lock_read_state(&self.error) {
+    |                                               ^^^^^^^^^^^ help: change this to: `self.error`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-core/src/evidence/ledger/view.rs:214:33
+    |
+214 |                 lock_read_state(&self.terms).resize_workspace(self.bytes, bytes)?;
+    |                                 ^^^^^^^^^^^ help: change this to: `self.terms`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-core/src/evidence/ledger/view.rs:220:46
+    |
+220 |             let mut status = lock_read_state(&self.error);
+    |                                              ^^^^^^^^^^^ help: change this to: `self.error`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-core/src/evidence/ledger/view.rs:231:38
+    |
+231 |         let result = lock_read_state(&self.terms).resize_workspace(self.bytes, 0);
+    |                                      ^^^^^^^^^^^ help: change this to: `self.terms`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-core/src/evidence/ledger/view.rs:233:46
+    |
+233 |             let mut status = lock_read_state(&self.error);
+    |                                              ^^^^^^^^^^^ help: change this to: `self.error`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: could not compile `purrdf-core` (lib) due to 13 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 18.851s
+             CPU time consumed: 126ms
+                   Memory peak: 28.7M (swap: 0B)

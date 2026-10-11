@@ -1,0 +1,15 @@
+   Compiling typenum v1.20.1
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/purrdf-evidence-default-baseline/source/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+    Finished `bench` profile [optimized] target(s) in 58.05s

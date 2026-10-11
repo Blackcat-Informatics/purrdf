@@ -1,0 +1,8 @@
+Running as unit: purrdf-ledger-core-strict-2.service
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.58s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11.080s
+             CPU time consumed: 168ms
+                   Memory peak: 32.9M (swap: 0B)

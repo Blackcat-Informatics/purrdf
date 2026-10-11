@@ -1,0 +1,30 @@
+Running as unit: purrdf-evidence-path-source-control-20261010-1.service
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 1m 42s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/96ff3be4e197661d/out/evidence_ingress-96ff3be4e197661d)
+
+running 1 test
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... FAILED
+
+failures:
+
+---- native_paths_keep_derivation_polarity_and_complete_found_witnesses stdout ----
+
+thread 'native_paths_keep_derivation_polarity_and_complete_found_witnesses' (3747778) panicked at crates/sparql-eval/tests/evidence_ingress.rs:881:21:
+assertion `left == right` failed: <https://example.org/p>/<https://example.org/q>
+  left: [Supported, Supported]
+ right: [Supported, Opposed]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_paths_keep_derivation_polarity_and_complete_found_witnesses
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test evidence_ingress`
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 1min 43.136s
+             CPU time consumed: 86ms
+                   Memory peak: 20M (swap: 0B)

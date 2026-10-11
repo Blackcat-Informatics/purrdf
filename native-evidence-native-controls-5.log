@@ -1,0 +1,103 @@
+Running as unit: purrdf-evidence-native-controls-20261010-5.service
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking hybrid-array v0.4.15
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-events)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/lex)
+   Compiling libc v0.2.186
+    Checking cpufeatures v0.3.0
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking regex-automata v0.4.14
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/xsd)
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Checking regex v1.12.4
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/deflate)
+    Checking hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/cdt)
+    Checking either v1.16.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/stack)
+    Checking rayon v1.12.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-algebra)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/alloc-probe)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 11.07s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 4m 12s
+     Running tests/evidence_ledger_query.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/6f5495220261dca0/out/evidence_ledger_query-6f5495220261dca0)
+
+running 3 tests
+test native_ledger_refusal_is_an_operational_error_without_partial_answers ... ok
+test composite_literal_blanks_have_native_ids_without_changing_literal_bytes ... ok
+test shared_reason_group_count_and_private_construct_use_the_native_engine ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.90s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 7m 34s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/9f8a28817b3f52dd/out/purrdf_sparql_eval-9f8a28817b3f52dd)
+
+running 34 tests
+test path::tests::absent_ground_endpoint_is_empty ... ok
+test path::tests::alternative_unions_both ... ok
+test path::tests::both_ground_is_ask_shaped ... ok
+test path::tests::both_variable_enumerates_pairs_with_zero_length_self_pairs ... ok
+test path::tests::composite_step_cycle_terminates_and_reports ... ok
+test path::tests::determinism_rows_are_termid_ordered ... ok
+test path::tests::cyclic_graph_p_n_m_terminates_without_a_budget ... ok
+test path::tests::list_walk_members_rest_star_first ... ok
+test path::tests::large_exact_range_uses_polynomial_powers_on_coprime_cycles ... ok
+test path::tests::named_predicate_forward_and_reverse ... ok
+test path::tests::negated_property_set_direct_and_inverse ... ok
+test path::tests::negated_property_set_pure_inverse ... ok
+test path::tests::negated_property_set_excludes_named ... ok
+test path::tests::negated_under_one_or_more ... ok
+test path::tests::nested_alternative_inverse_plus ... ok
+test path::tests::non_reflexive_ground_endpoint_absent_from_dataset_is_empty ... ok
+test path::tests::one_or_more_includes_start_only_via_cycle ... ok
+test path::tests::range_exact_and_bounded_on_chain ... ok
+test path::tests::range_on_cycle_reports_nodes_at_multiple_counts ... ok
+test path::tests::same_var_reflexive_optional ... ok
+test path::tests::same_var_nonreflexive_no_cycle_is_empty ... ok
+test path::tests::same_var_reflexive_range_zero_min ... ok
+test path::tests::same_var_reflexive_star ... ok
+test path::tests::same_variable_keeps_only_reflexive_pairs ... ok
+test path::tests::sequence_backward_from_object ... ok
+test path::tests::sequence_chains_two_predicates ... ok
+test path::tests::star_fanout_charges_each_candidate_edge ... ok
+test path::tests::star_terminates_on_a_cycle ... ok
+test path::tests::variable_inside_quoted_triple_endpoint_names_the_path_not_a_bgp ... ok
+test path::tests::wildcard_any_and_namespace_scoped ... ok
+test path::tests::zero_or_more_includes_self_and_transitive ... ok
+test path::tests::range_path_answers_are_unchanged_by_the_early_exit ... ok
+test path::tests::zero_or_more_reflexive_ground_endpoint_absent_from_empty_dataset ... ok
+test path::tests::zero_or_one_reflexive_ground_endpoint_absent_from_empty_dataset ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 1462 filtered out; finished in 0.00s
+
+    Finished `release` profile [optimized] target(s) in 0.25s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/release/build/purrdf-sparql-eval/9f8a28817b3f52dd/out/purrdf_sparql_eval-9f8a28817b3f52dd)
+
+running 1 test
+test row_checkpoint::tests::identity_commits_reuse_the_scheduler_output_without_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1495 filtered out; finished in 0.02s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 12min 16.901s
+             CPU time consumed: 645ms
+                   Memory peak: 48.9M (swap: 0B)

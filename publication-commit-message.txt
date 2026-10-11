@@ -1,0 +1,15 @@
+fix(eval): retain query evidence ownership and closed absence
+
+Keep native evidence on the original lazy query owner across correlated
+expressions, workers, aggregate groups and ranked producer boundaries.
+Distinguish closed complete empty searches from incomplete absence, retain
+undecidable positive EXISTS rows, and map preserved EXISTS bodies faithfully.
+Avoid enabling evidence execution for unused relation registries.
+
+Restore the ordinary row to 40 bytes, preserve native allocation/grant/drop
+semantics, and keep successful append paths free of overflow-error cleanup.
+Record the two explained evidence-bearing fuel changes in governor profile
+v15. Consolidate shared helper bodies and use repository-contained native
+profile fixtures with the existing execution admission guard intact.
+
+Defect-Class: semantic-identity-loss

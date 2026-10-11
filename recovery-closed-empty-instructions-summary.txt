@@ -1,0 +1,3 @@
+Five pairs, 1000 queries/run, all enabled==running.
+baseline_median=32191575.742 current_median=30833871.080 instructions_per_query
+change_percent=-4.217578

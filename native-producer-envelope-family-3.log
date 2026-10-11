@@ -1,0 +1,370 @@
+Running as unit: run-p598396-i8879999.scope; invocation ID: 9eed868ed5cd4133b358fea64ed99402
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 18.88s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 54s
+     Running unittests src/lib.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 4 tests
+test query_scope::tests::scoped_decoder_borrows_original_payload_and_rejects_malformed_fields ... ok
+test query_scope::counters::tests::operational_failure_cannot_publish_partial_counts_or_an_unknown_row ... ok
+test query_scope::counters::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test query_scope::counters::tests::unknown_time_is_counted_separately_even_when_place_rejects ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1288 filtered out; finished in 0.00s
+
+     Running tests/blank_publication.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/997a3f84adc19225/out/blank_publication-997a3f84adc19225)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/builder_locations.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/f281741c982a5ac2/out/builder_locations-f281741c982a5ac2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/byte_cover.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/74c92439bb584317/out/byte_cover-74c92439bb584317)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/canonical_term_mapping.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/f25f4bd1d27bfdc7/out/canonical_term_mapping-f25f4bd1d27bfdc7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/cdt_blank_identity.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/8abcb83f873f3369/out/cdt_blank_identity-8abcb83f873f3369)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/cdt_blank_storage.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/a6ecd34b8f0280f3/out/cdt_blank_storage-a6ecd34b8f0280f3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/composite_probe_alloc.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/457eb069f18b9b4e/out/composite_probe_alloc-457eb069f18b9b4e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/csv_differential.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/aaf166c9461d69e8/out/csv_differential-aaf166c9461d69e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/csv_scan_wasm.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/71d99406b1efe5fd/out/csv_scan_wasm-71d99406b1efe5fd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/dataset_state_digest.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/061756c18c7e8230/out/dataset_state_digest-061756c18c7e8230)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s
+
+     Running tests/graph_existence_modes.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/28e778f5915f82d6/out/graph_existence_modes-28e778f5915f82d6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/import_view.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/86aaae5217e61e41/out/import_view-86aaae5217e61e41)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/ir_absolute_iri.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/a13462727131d78b/out/ir_absolute_iri-a13462727131d78b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/ir_zero_alloc.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/d6b90db314d11c62/out/ir_zero_alloc-d6b90db314d11c62)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/iri_authority.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/d7daf6a6998dff49/out/iri_authority-d7daf6a6998dff49)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/literal_shapes.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/b68c82bce4bb7a8c/out/literal_shapes-b68c82bce4bb7a8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/materialize_configuration.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/ce765df349cbdc1c/out/materialize_configuration-ce765df349cbdc1c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/model_traits.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/732f21e30d8d5811/out/model_traits-732f21e30d8d5811)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/mutable_declared_graph_drain.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/2c37e1481ab92760/out/mutable_declared_graph_drain-2c37e1481ab92760)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/named_graph_membership.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/c423ea5a1c60d432/out/named_graph_membership-c423ea5a1c60d432)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/native_regex_storage.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/113335ae5181f833/out/native_regex_storage-113335ae5181f833)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.00s
+
+     Running tests/pack_certify.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/c233fe60db4fc363/out/pack_certify-c233fe60db4fc363)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/pack_container.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/805a7057122464cd/out/pack_container-805a7057122464cd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+     Running tests/pack_dataset_view.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/a64aea6f2a46d9bb/out/pack_dataset_view-a64aea6f2a46d9bb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/pack_graph_declarations.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/a46d3d2792e2332f/out/pack_graph_declarations-a46d3d2792e2332f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/pack_id_unification.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/d7c90575157ac20d/out/pack_id_unification-d7c90575157ac20d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/pack_index_compare.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/1ed7f8770d50a778/out/pack_index_compare-1ed7f8770d50a778)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/pack_mmap.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/cbe18a634bdd8a27/out/pack_mmap-cbe18a634bdd8a27)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/pack_side.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/217fad0358af05e3/out/pack_side-217fad0358af05e3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/pack_triples.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/7b6f8c54add45cff/out/pack_triples-7b6f8c54add45cff)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/paged_admission_law.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/8256a5422ebc17ac/out/paged_admission_law-8256a5422ebc17ac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/paged_backend.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/aa7527c6b337151a/out/paged_backend-aa7527c6b337151a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+
+     Running tests/paged_fallible.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/0d2b45876ca0c8f5/out/paged_fallible-0d2b45876ca0c8f5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/paged_stack.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/e7198b4ae2dd2d13/out/paged_stack-e7198b4ae2dd2d13)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
+
+     Running tests/purremb_adversarial.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/3a0fa4030ab437fa/out/purremb_adversarial-3a0fa4030ab437fa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/purremb_corpus.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/2fde4b8961bbf69e/out/purremb_corpus-2fde4b8961bbf69e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/purremb_f64.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/2be23e50f41ee7b1/out/purremb_f64-2be23e50f41ee7b1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/purremb_float_environment.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/e20b6f5336eb03e6/out/purremb_float_environment-e20b6f5336eb03e6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/purremb_indexes.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/d88d2e10da32056c/out/purremb_indexes-d88d2e10da32056c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/purremb_metric.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/a7bc5677fde2927f/out/purremb_metric-a7bc5677fde2927f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/purremb_mmap.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/100eee33b7277099/out/purremb_mmap-100eee33b7277099)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/purremb_rdf12.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/2fd1804566957a3e/out/purremb_rdf12-2fd1804566957a3e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/purremb_roundtrip.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/2368c731e0a2152a/out/purremb_roundtrip-2368c731e0a2152a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/purremb_source.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/eed6f8d699944dfb/out/purremb_source-eed6f8d699944dfb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/reifier_quads_of.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/bea6663068abe097/out/reifier_quads_of-bea6663068abe097)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/segmented.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+     Running tests/semver_additive.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/cb37a566cc0de7cc/out/semver_additive-cb37a566cc0de7cc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/shared_owned_control.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/789135dc762284d9/out/shared_owned_control-789135dc762284d9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/shared_views.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/bee58025193afead/out/shared_views-bee58025193afead)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.00s
+
+     Running tests/validated_append.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/692c36e7f553de84/out/validated_append-692c36e7f553de84)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/wrapper_graph_narrowing.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/1edeb3ad598b1763/out/wrapper_graph_narrowing-1edeb3ad598b1763)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/xsd_regex_conformance.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-core/884b3f6e0f878c05/out/xsd_regex_conformance-884b3f6e0f878c05)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/515-sparql-eval-datalog-per-row-evidence/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 27s
+     Running tests/evidence_ingress.rs (/opt/.cargo/slots/238ef69c46276366/0/build/debug/build/purrdf-sparql-eval/428ba0641e6fc943/out/evidence_ingress-428ba0641e6fc943)
+
+running 20 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... FAILED
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+
+failures:
+
+---- native_property_rows_retain_original_declarations_through_normal_ingestion stdout ----
+
+thread 'native_property_rows_retain_original_declarations_through_normal_ingestion' (606716) panicked at crates/sparql-eval/tests/evidence_ingress.rs:2279:7:
+original producer envelope reaches normal row operators: RdfDiagnostic { severity: Error, code: "native-sparql-workspace-unpriced", message: "bounded query workspace has no certified price for an opaque property function without a physical workspace certificate", detail: None, location: None, presentation: None }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_property_rows_retain_original_declarations_through_normal_ingestion
+
+test result: FAILED. 19 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test evidence_ingress`

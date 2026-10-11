@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "unit": "ns",
+  "median": 20521400.5,
+  "mad": 1819348,
+  "ci_low": 18356828.5,
+  "ci_high": 22136929.75,
+  "confidence": 0.95,
+  "resamples": 10000,
+  "iterations_per_sample": 2,
+  "samples": [18237627.5, 17998459.5, 18356828.5, 19047276.5, 20215320, 21082613, 20827481, 23191246.5, 21918161.5, 26072811.5],
+  "outliers": {"low_severe": 0, "low_mild": 0, "high_mild": 0, "high_severe": 0},
+  "throughput": {"kind": "elements", "per_iteration": 16384}
+}
