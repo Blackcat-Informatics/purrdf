@@ -579,12 +579,7 @@ def _read_methods(exposed: Exposed, body: list[str], where: str) -> None:
 
 
 def stub_classes(text: str) -> dict[str, list[str]]:
-    """Every `class X:` of the stub, keyed by name, with its body lines.
-
-    By INDENTATION, because a nested class (`class shapes:` re-exports the engine
-    classes) is a class too, and because a `def` that has drifted out of a class body is
-    exactly the drift this gate is about.
-    """
+    """Class bodies in one stub, including nested namespaces, by indentation."""
     lines = text.splitlines()
     found: dict[str, list[str]] = {}
     for index, line in enumerate(lines):
@@ -892,6 +887,9 @@ def gate_problems() -> list[str]:
     """
     classes = exposed_classes()
     stubs = stub_classes(_read(_STUB))
+    # Explicit PEP 561 namespace re-exports carry their classes in sibling stubs.
+    for module in re.findall(r"^from \. import (\w+) as \1$", _read(_STUB), re.MULTILINE):
+        stubs.update(stub_classes(_read(_STUB.parent / f"{module}.pyi")))
     problems: list[str] = []
     for exposed in sorted(classes.values(), key=lambda item: item.python_name):
         resolved = _resolves_to(exposed.python_name, stubs)

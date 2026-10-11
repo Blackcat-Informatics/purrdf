@@ -5,191 +5,135 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # GeoSPARQL
 
-**What it replaces, and where it stops.** This is the surface that lets an RDF
-project drop the PostGIS it kept beside its triple store for spatial
-predicates: `?a geo:sfWithin ?b` and its Simple Features, Egenhofer and RCC8
-siblings, plus the `geof:` functions, answered in-process over the dataset the
-query already holds, exactly, with no GEOS or PROJ, and byte-identical natively
-and on wasm32. It is GeoSPARQL 1.1's topological predicates, accessors, and
-exactly computable measures and constructors over vector geometry, not a
-PostGIS: `geof:transform` hard-errors by name (there is no CRS database), a
-`metric*` measure answers only in a CRS the caller declared in metres (there is
-no ellipsoidal geodesic), and the buffers, the concave hull (`geof:convexHull`
-is implemented), the overlay set operations and the GML/KML/DGGS encodings are
-registered and hard-error by name. No raster.
+PurRDF evaluates spatial predicates, geographic metrics, buffers and explicit
+coordinate operations in process, over the dataset a query already holds.
+`purrdf-geo` is the Rust facade: it reexports the geometry and geographic types
+from `purrdf-geo-kernel` and the native evaluator's scalar and property-function
+adapters. The computational kernel depends on no SPARQL evaluator, GEOS, PROJ
+or external geographic runtime. The same kernel serves Rust, Python, C,
+WebAssembly and the CLI.
 
-`purrdf-geo` (`purrdf::geo` from the umbrella crate) implements GeoSPARQL 1.1
-(OGC 22-047r1) for PurRDF: exact, float-free geometry reached from SPARQL
-through the evaluator's two existing extension seams. It parses
-`geo:wktLiteral` and `geo:geoJSONLiteral` lexical forms into an exact geometry
-model, decides the OGC topological relations over that model, computes the
-non-topological accessors, measures and constructors, and hands the `geof:`
-family to a host as scalar-function registrations and the spatial relations as
-property-function registrations. There is no GEOS and no PROJ behind it — the
-DE-9IM engine, WKT and GeoJSON are implemented in-crate, in pure Rust, which is
-what lets it build for `wasm32-unknown-unknown`.
+## References are explicit
 
-## It mints no vocabulary
+The standard geographic profile assigns unprefixed WKT, OGC CRS84 and GeoJSON
+to WGS84 longitude followed by latitude. Original decimal coordinates remain
+exact rationals. Longitude outside `[-180, 180]` and latitude outside
+`[-90, 90]` refuse before conversion; valid inputs are never wrapped or clamped.
 
-GeoSPARQL's IRIs are OGC's, not PurRDF's. Every IRI the crate reads or writes —
-the two literal datatypes, the `geof:` function names, the `geo:` spatial
-relations, the Simple Features geometry classes, and the coordinate reference
-system a WKT literal omits — is supplied by the caller through `GeoVocab`,
-which has no `Default` and never will. A term that is absent makes the feature
-that needs it a hard error, never a fabricated fallback.
+EPSG:4326 requires an explicit WGS84 latitude/longitude registration. Other
+references, units and operation chains require caller registrations. An
+ellipsoid does not establish a datum transformation, and the engine does not
+guess zones, height, epoch, control points or regional transformation
+parameters. Standard OGC terms have their published meanings; application
+namespaces and custom registrations remain caller supplied.
 
-```rust,ignore
-use purrdf::geo::{Crs, GeoVocabBuilder};
+[`Geographic profiles and requests`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GEO-PROFILE.md)
+specifies the versioned JSON records, reference axes, operation parameters,
+limits, identity rules and every host entry.
 
-let crs = Crs::new("http://www.opengis.net/def/crs/OGC/1.3/CRS84")?;
-let vocab = GeoVocabBuilder::new(
-    "http://www.opengis.net/ont/geosparql#",       // geo:
-    "http://www.opengis.net/def/function/geosparql/", // geof:
-    crs.clone(),                                    // the CRS a bare WKT literal means
-    crs.clone(),                                    // the CRS GeoJSON is in
-)?
-.declare_crs_unit(&crs, "http://www.opengis.net/def/uom/OGC/1.0/metre")?
-.declare_metre("http://www.opengis.net/def/uom/OGC/1.0/metre")?
-.declare_simple_features_namespace("http://www.opengis.net/ont/sf#")?
-.build();
-```
+## Scalar functions in the native query engine
 
-## The `geof:` family on the scalar seam
-
-`functions::register` installs every `geof:` function into a
-`UserFunctionRegistry` under the vocabulary's function namespace. The engine
-binds the registry with `NativeSparqlEngine::bind_functions`, and the bound
-registry is handed to a query through `QueryOptions::with_functions`:
+The default `NativeSparqlEngine` installs the immutable standard `geof:`
+functions. Registering a conflicting standard function is a hard error before
+execution. A query selects additional bindings and independent numerical
+limits with `QueryOptions::with_geo`:
 
 ```rust,ignore
-use purrdf::geo::functions;
-use purrdf::sparql::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
+use purrdf::geo::GeoProfile;
+use purrdf::sparql::{NativeSparqlEngine, QueryOptions};
 use purrdf::SparqlRequest;
 
-let mut functions_registry = UserFunctionRegistry::default();
-functions::register(&mut functions_registry, &vocab);
-
-let engine = NativeSparqlEngine::new();
-// Every `geof:` function is a native closure, so binding parses nothing.
-let bound = engine.bind_functions(functions_registry, ExtensionEnv::empty())?;
-
-let result = engine.query_with_options_view(
-    &dataset,
-    SparqlRequest {
-        query: r#"PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
-                  PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
-                  SELECT ?a ?b WHERE {
-                    ?fa geo:hasGeometry/geo:asWKT ?a .
-                    ?fb geo:hasGeometry/geo:asWKT ?b .
-                    FILTER(geof:sfWithin(?a, ?b))
-                  }"#,
-        base_iri: None,
-        substitutions: &[],
-    },
-    QueryOptions::new().with_functions(&bound),
-)?;
-```
-
-A function's refusals travel exactly as far as SPARQL says they should. A
-malformed literal or a domain refusal — mixed CRSs, the measure of an empty
-geometry, an out-of-range index — is a per-solution **expression error**: the
-row is eliminated under `FILTER`, and the variable is left unbound under
-`BIND`/`SELECT`, while the query continues. An unimplemented function, an
-undeclared vocabulary term or a wrong argument count holds for every solution
-alike and stays query-fatal, because answering "no value" there would empty a
-result set and present that as the answer. A caller that needs the refusal
-itself, with its message and kind intact, calls `functions::compute`.
-
-## Spatial relations on the property-function seam
-
-GeoSPARQL's Query Rewrite rules let `?a geo:sfWithin ?b` hold between
-*features* whose geometries satisfy the relation, not only where a triple
-asserts it. `GeoIndex::from_dataset` projects a dataset's geometry literals
-once, and `relation::register` installs one property function per relation of
-the families the caller names — Simple Features, Egenhofer, RCC8 — against a
-`PropertyFunctionRegistry`. An empty family list is refused: registering
-nothing and returning success would surface much later as a query whose
-`geo:sfWithin` was parsed as an ordinary triple pattern and matched nothing.
-
-```rust,ignore
-use std::sync::Arc;
-use purrdf::geo::relation::{self, GeoIndex, GeoIndexConfig, GraphSelector};
-use purrdf::geo::{GeoTerm, RelationFamily};
-use purrdf::sparql::{ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
-use purrdf::{SparqlRequest, TermValue};
-
-let config = GeoIndexConfig::new(
-    vec![TermValue::iri(vocab.term(GeoTerm::AsWkt))],
-    GraphSelector::Any,
-)?;
-let index = Arc::new(GeoIndex::from_dataset(&dataset, &vocab, &config)?);
-
-let mut relations = PropertyFunctionRegistry::new();
-relation::register(&mut relations, &vocab, &index, &[RelationFamily::SimpleFeatures])?;
-
-// The environment a query text is read in claims every registered relation IRI
-// — `geo:sfWithin` among them — in predicate position, so no parser option is
-// needed to reach it.
-let env = ExtensionEnv::over_relations(relations)?;
-
+let profile = GeoProfile::standard();
 let result = NativeSparqlEngine::new().query_with_options_view(
     &dataset,
     SparqlRequest {
-        query: r#"PREFIX geo: <http://www.opengis.net/ont/geosparql#>
-                  SELECT ?a ?b WHERE { ?a geo:sfWithin ?b }"#,
+        query: r#"PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+                  PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+                  SELECT (geof:metricDistance(
+                    "POINT(0 0)"^^geo:wktLiteral,
+                    "POINT(1 0)"^^geo:wktLiteral) AS ?metres)
+                  WHERE {}"#,
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions::new().with_env(&env),
+    QueryOptions::new().with_geo(&profile),
 )?;
 ```
 
-An asserted `geo:sfWithin` triple matches whether or not the geometries
-satisfy it — the rewrite rules are entailments, not definitions — and a
-relation the index refutes contributes no row beyond what the data asserts.
+Geographic `metricDistance`, `metricLength`, `metricPerimeter`, `metricArea`
+and `metricBuffer`, and their explicit-unit counterparts, use the declared
+ellipsoid. Projected metre systems retain their planar law. Length includes
+polygon boundaries and preserves the declared mixed-dimension rule; area
+subtracts holes and squares unit factors. Z and M are retained without
+inventing an elevation.
 
-## Every answer is exact, and identical on every target
+Malformed arguments and geometric domain errors retain SPARQL expression-error
+behavior. Operational precision, work, memory, convergence, cancellation and
+floating-environment failures remain fatal through `FILTER` and `BIND`.
+Governed evaluation retains its original incomplete-outcome and work evidence.
+The direct geographic request API preserves the same typed causes instead of
+turning a refused invocation into an empty result.
 
-Geometry is where floating point normally destroys reproducibility: `f64`
-addition is not associative, so a different traversal order gives a different
-answer, and a native build and a wasm32 build can disagree about a predicate
-that sits near a boundary. This crate closes that channel rather than
-mitigating it.
+## Geometry and geographic laws
 
-- **Coordinates are read as exact rationals.** A lexical decimal is parsed
-  digit by digit into an exact numerator and denominator; nothing is rounded on
-  the way in.
-- **Every geometric decision is integer arithmetic.** Orientation, segment
-  intersection, point-in-ring, ring winding and the DE-9IM matrix are
-  comparisons of exact rationals over arbitrary-precision integers, which Rust
-  specifies completely and identically on every target.
-- **Irrational measures are integer square roots** at a fixed internal scale,
-  summed as integers — one rounding, at the end, of a value that was exact
-  until then.
-- **The single float boundary is the result literal.** An `xsd:double` result
-  is the correctly rounded nearest double, computed with integer arithmetic and
-  assembled with `f64::from_bits`. The crate root denies
-  `clippy::float_arithmetic`, so there is no second float path to find.
+WKT and GeoJSON retain their original coordinate-linear edges, including a
+written long route across longitude. Explicit shortest-geodesic and
+azimuth/length arcs retain their selected branches; ambiguous endpoint-only
+arcs refuse. Prepared regions represent holes, complements and the whole
+surface. Metrics, topology, continuous coordinate-operation images, buffers
+and covers use those same prepared curves and regions.
 
-Native Rust pins the complete geometry corpus against committed digest bytes.
-`make wasm` separately builds the crate for the WASM target.
+Point distance is the correctly rounded shortest ellipsoidal distance at six
+decimal metre places, using half-even rounding. A complete certified enclosure
+must select one rounded answer; acceptable approximation error alone does not
+authorize a result. Direct coordinates use the declared angular grid.
+Geometric distance, length, perimeter, area and outward buffers carry their
+own declared certificates and rounding laws. The numerical primitives have
+one home in `purrdf-xsd`; no platform `libm` or reassociated reduction selects
+an answer.
 
-## What is here, and what is not
+Explicit coordinate chains cover projections, geographic/geocentric
+conversion, the named GCJ/BD equations, and caller-parameter Helmert,
+similarity, polynomial and in-memory grid models. Bounded inverses isolate all
+admissible roots and refuse ambiguity. These mathematical laws do not claim
+surveying accuracy or official provider certification.
 
-Implemented: the WKT and GeoJSON codecs (with CRS and coordinate-dimension
-support); every topological relation of the Simple Features, Egenhofer and RCC8
-families over an exact DE-9IM; the accessors; and the measures and constructors
-that are exactly computable.
+## Spatial relations and cells
 
-Registered but **hard-erroring by name**: the operations that would require
-facilities the crate deliberately does not have — a coordinate-reference-system
-database for `geof:transform`, and an ellipsoidal geodesic for the `metric*`
-family. They are never silently absent and never answer a default. A
-topological predicate that returned `false` because it was unimplemented would
-be indistinguishable from one that returned `false` because the geometries
-genuinely do not relate, and that is the failure this crate exists to keep out.
+The property-function adapter projects caller-selected geometry predicates
+into a reusable `GeoIndex` and registers the selected Simple Features,
+Egenhofer or RCC8 relations. Asserted relation triples retain their RDF
+meaning; calculated relations add the entailed matches. The actual query's
+selected geographic context and original allocation owners remain live through
+the cursor. An empty relation-family registration refuses.
 
-Like the full-text index, this is a Rust-host seam: the registrations are host
-closures and do not cross the Python, WebAssembly or C boundary. The full
-exactness accounting is
-[`docs/design/purrdf-geo-exactness.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-geo-exactness.md).
+The native cubed-sphere hierarchy assigns profile-qualified cell IDs at levels
+0–30. Parent/child operations, big-endian keys and ordered ranges share that
+definition. Closed disk, box and prepared-region covers are conservative;
+caller limits refuse a complete cover rather than truncate or silently
+coarsen it. Reusable point indexes keep original coordinates and refine
+candidates with the requested physical or reported-distance law. H3 v4.0
+compatibility is an architecture document, not an implemented family.
+
+## Host ownership and qualification
+
+`GeoSession` and `GeoPointIndex` expose the same versioned requests on every
+host. Python query and update entries accept `geo=`. WebAssembly engines
+snapshot the selected profile for suspended operations. C provides opaque
+create/call/free handles and context-taking query entries. The CLI accepts
+`--geo-profile` for geographic requests, queries and updates.
+
+A semantic refusal has a complete response record. An operational refusal
+keeps its original failure channel and creates no unadmitted response under
+the failed invocation. Prepared data is immutable and shareable; live
+numerical contexts stay thread bound. Native storage is admitted before birth
+and retained until its actual payload is destroyed.
+
+Frozen numerical, geometry and hierarchy transcripts compare completed native
+and WebAssembly answers. The public GeodTest collector checks the complete
+500,000-row source by digest, while allocator, backend and host fixtures check
+their separate contracts. Mathematical derivations and exactness boundaries
+are recorded in
+[`Geodesic numerics`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-geodesic-numerics.md)
+and
+[`Geometry exactness`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-geo-exactness.md).

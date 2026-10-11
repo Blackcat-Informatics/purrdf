@@ -3,17 +3,20 @@
 
 # PurRDF geometry: exactness, determinism, and the answers this crate refuses to guess
 
-`purrdf-geo` implements OGC GeoSPARQL 1.1 (OGC 22-047r1) as an out-of-core
-sibling crate. This document records the decisions behind that surface which a
-reader would otherwise take for oversights — the missing dependency, the missing
-function, the hand-written parser, the constant that is not configurable — and
-states the limits of the guarantees it makes.
+`purrdf-geo` is the facade over the shared geometry kernel and native GeoSPARQL
+adapters. This document records the exact planar carrier and topology laws.
+Geographic metrics, continuous operation images, prepared global regions and
+conservative cells/covers extend them under the explicit laws in
+[`GEO-PROFILE.md`](../GEO-PROFILE.md) and
+[`purrdf-geodesic-numerics.md`](purrdf-geodesic-numerics.md). Geographic numerical
+enclosures use the shared XSD math home; the integer-only descriptions below
+refer to planar computations, not to every geographic computation.
 
 All example IRIs use `example.org`. PurRDF mints no vocabulary IRIs.
 
 ---
 
-## 1. Every computation is integer arithmetic, and that is a correctness requirement
+## 1. Planar computations use exact integer arithmetic
 
 Geometry is the part of a data-carrier backbone where floating point normally
 destroys reproducibility, and it does so in two distinct ways.
@@ -29,7 +32,7 @@ Neither is a tolerance problem to be papered over with an epsilon. An epsilon
 turns "wrong" into "wrong less often", and a topological predicate that is wrong
 less often is still a query that returns the wrong rows with no symptom.
 
-So this crate does not use floating point.
+The planar computational bodies do not use floating-point arithmetic.
 
 * **Coordinates are read as exact rationals.** A WKT or GeoJSON coordinate is a
   decimal lexical form, and decimal lexical forms are exactly representable as
@@ -37,7 +40,7 @@ So this crate does not use floating point.
   numerator and denominator through `Rat::parse_decimal`. `str::parse::<f64>()`
   appears nowhere on the ingest path, so nothing is rounded on the way in and
   `1.5`, `1.50` and `15e-1` produce the identical geometry.
-* **Every geometric decision is a comparison of exact integers.** Orientation,
+* **Every planar geometric decision is a comparison of exact integers.** Orientation,
   segment intersection, point-in-ring, ring winding, the noding, the scan line
   and the DE-9IM matrix are all sign tests over `Int`, an arbitrary-precision
   signed integer. Rust specifies integer arithmetic completely and identically on
@@ -50,7 +53,7 @@ So this crate does not use floating point.
   is one truncation, at the end, of a value that was exact until then, and its
   error is at most `k · 10^-18` for `k` segments. That bound is stated on the
   function rather than left for a reader to discover.
-* **The single float boundary is the result literal.** GeoSPARQL's numeric
+* **The planar float boundary is the result literal.** GeoSPARQL's numeric
   functions return `xsd:double`, so exactly one conversion happens: `Rat::to_f64`
   computes the correctly rounded nearest double using integer arithmetic and
   assembles it with `f64::from_bits`. It is a rounding, not a computation.
@@ -171,31 +174,29 @@ point/point pair, and `sfOverlaps` is false whenever the dimensions differ.
 
 ---
 
-## 4. Nothing is reprojected, and no unit is converted
+## 4. References and units never imply a coordinate operation
 
-`purrdf-geo` ships no coordinate-reference-system database. That is a
-deliberate scope line: a CRS database is megabytes of tabular data with its own
-release cadence, and dragging one into a wasm-clean carrier crate would be the
-"heavy dependency" the umbrella issue's constraint resolution exists to avoid.
+`purrdf-geo-kernel` ships no ambient coordinate-reference-system database.
+References, units and coordinate chains are explicit, immutable profile
+registrations. The standard profile binds CRS84 to WGS84 longitude/latitude;
+an ellipsoid declaration alone never supplies datum-transformation parameters.
 
-Two consequences, both refusals rather than guesses:
+Two consequences:
 
 * **A binary operation on two geometries in different systems is refused** by
   name, naming both systems. Coordinates in two systems are two different numbers
   describing the same place; arithmetic across them is meaningless, and answering
   anyway would be plausible and silently wrong.
-* **A measurement is computed in the coordinate system's own unit.** The caller
-  *declares* the linear unit of each CRS it uses
-  (`GeoVocabBuilder::declare_crs_unit`), and a measurement requested in a unit
-  that has not been declared for that system is refused by name. The `metric*`
-  family additionally requires the caller to have declared which IRI denotes the
-  metre. A number in the wrong unit is the worst kind of wrong answer: plausible,
-  silent, and off by a factor nobody can see.
+* **Measurement uses the declared reference law and exact unit factor.** The
+  explicit planar `GeoVocab` adapter retains its own-unit contract. The standard
+  geographic functions use the selected ellipsoid and return metres or square
+  metres; custom output units require positive exact factors. Area squares the
+  linear factor. No name or angular unit alone establishes a geographic datum.
 
 ### How far a refusal travels
 
 "Refused" is two different outcomes, and which one a `geof:` call gets is decided
-by `GeoError::is_expression_error` — the single site in `crates/geo/src/error.rs`
+by `GeoError::is_expression_error` — the single site in `crates/geo-kernel/src/error.rs`
 that answers it — rather than at each call site.
 
 A refusal that is a statement about *these arguments* (`GeoError::Literal`, a
@@ -211,19 +212,21 @@ one malformed geometry anywhere in a dataset fails every query that scans past i
 
 A refusal that holds for *every* solution alike stays query-fatal, because
 answering "no value" would empty a result set and present that as the answer.
-Three kinds are in this class: `GeoError::Unsupported` (a function this crate does
+Configuration and operational kinds are in this class: `GeoError::Unsupported` (a function this crate does
 not implement — a `false` from an unimplemented predicate is indistinguishable
 from an honest `false`), `GeoError::Config` (a declaration the host never made,
 which no row can repair and PurRDF fabricates no default for), and
 `GeoError::Arity` (a wrong argument count, which is a defect in the query text
 that no row can satisfy).
 
-`geof:transform` is registered and hard-errors (`GeoError::Unsupported`, so
-query-fatal), naming the missing database.
+Precision, work, memory, convergence, cancellation and floating-environment
+refusals are also fatal. `geof:transform` executes a caller-registered source to
+target chain. Missing or ambiguous chains refuse rather than search a database
+or guess a transformation.
 
 ---
 
-## 5. The JSON reader is hand-written, because `serde_json` would round every coordinate
+## 5. The shared JSON reader retains every coordinate lexeme
 
 `serde_json` parses a JSON number into an `f64` or an `i64`. Using it would round
 every GeoJSON coordinate on ingest and destroy the guarantee of section 1 before
@@ -232,10 +235,12 @@ features unify across a workspace, so enabling it here would change
 `serde_json`'s behaviour for `purrdf-rdf`'s JSON-LD codec as well — a
 per-consumer semantic change of exactly the kind this repository forbids.
 
-`crates/geo/src/json.rs` is therefore a complete RFC 8259 reader whose `Number`
-variant retains the **source lexeme verbatim**, so the consumer decides the value
-exactly. Object members are kept as an ordered vector of pairs rather than a map,
-because RFC 8259 permits duplicate names and a map would silently drop one.
+`crates/geo-kernel/src/json.rs` calls the workspace's sole RFC 8259 reader,
+`purrdf_lex::json`. Its `Number` retains the **source lexeme verbatim**, so the
+consumer decides the value exactly. Object members are kept in source order;
+the geographic record boundary can therefore diagnose duplicate fields rather
+than silently discard one. Native parsing and rendering admit the original
+buffers before allocation and retain their grants through actual destruction.
 
 ---
 
@@ -258,8 +263,11 @@ the failure this crate exists to keep out.
 * The accessors: `dimension`, `coordinateDimension`, `spatialDimension`,
   `geometryType`, `isEmpty`, `isSimple`, `is3D`, `isMeasured`, `getSRID`,
   `numGeometries`, `geometryN`, `minX`/`maxX`/`minY`/`maxY`/`minZ`/`maxZ`.
-* The exactly-computable measures: `area`, `length`, `perimeter`, `distance`, and
-  their `metric*` counterparts under a declared metre.
+* Planar measures under declared units, and geographic `area`, `length`,
+  `perimeter`, `distance` and their `metric*` counterparts under the selected
+  reference. Polygon boundaries contribute to length.
+* Geographic `buffer` and `metricBuffer`, with complete source regions and
+  certified outward materialization, and `transform` over explicit chains.
 * The exactly-computable constructors: `envelope`, `boundary`, `convexHull`,
   `centroid`.
 * `asWKT` and `asGeoJSON`.
@@ -270,8 +278,7 @@ the failure this crate exists to keep out.
 
 | Function | Why |
 |---|---|
-| `transform` | Needs a coordinate-reference-system database; see §4. |
-| `buffer`, `metricBuffer`, `boundingCircle`, `concaveHull` | Need curve approximation whose parameters the standard leaves implementation-defined — it says so explicitly for `concaveHull` — so an answer here would be an invented one presented as a computed one. |
+| `boundingCircle`, `concaveHull` | No selected construction law implements these scalar operations. |
 | `intersection`, `union`, `difference`, `symDifference` | Need a planar overlay. The exact noder this crate already has is the foundation for one, but an overlay is a separate subsystem and a half-correct one is worse than a loud refusal. |
 | `asGML`, `asKML`, `asDGGS` | Those serializations are not implemented. |
 

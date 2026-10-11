@@ -187,7 +187,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
-        xpath_regex=None,
+        xpath_regex=None, geo=None,
         division=None,
     ))]
     #[allow(
@@ -207,6 +207,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         self.query_impl(
@@ -221,13 +222,14 @@ impl PyQuadStore {
             path_relations,
             aggregate_namespace,
             xpath_regex,
+            geo,
             division,
             (),
         )
     }
 
     /// Execute RDFLib contextual assignment semantics through the native compiler.
-    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, property_fn_namespaces=None, standpoint_predicates=None, relations=None, relations_from_graph=None, path_relations=None, aggregate_namespace=None, xpath_regex=None, division=None, named_graphs=true, default_graph=None, default_union=false))]
+    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, property_fn_namespaces=None, standpoint_predicates=None, relations=None, relations_from_graph=None, path_relations=None, aggregate_namespace=None, xpath_regex=None, geo=None, division=None, named_graphs=true, default_graph=None, default_union=false))]
     #[allow(
         clippy::too_many_arguments,
         reason = "each engine-configuration axis is named explicitly at the call site"
@@ -245,6 +247,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         named_graphs: bool,
         default_graph: Option<&Bound<'_, PyAny>>,
@@ -262,6 +265,7 @@ impl PyQuadStore {
             path_relations,
             aggregate_namespace,
             xpath_regex,
+            geo,
             division,
             (named_graphs, default_graph, default_union),
         )
@@ -305,7 +309,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
-        xpath_regex=None,
+        xpath_regex=None, geo=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -334,6 +338,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -354,6 +359,7 @@ impl PyQuadStore {
                 property_fn_namespaces,
                 standpoint_predicates,
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let args = GovernorArgs {
                 fuel,
@@ -375,6 +381,7 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 engine
                     .query_governed(
@@ -385,6 +392,10 @@ impl PyQuadStore {
                             substitutions: &subs,
                         },
                         purrdf_sparql_eval::QueryOptions::new()
+                            .with_geo(
+                                geo.as_deref()
+                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                            )
                             .with_env(&extension_env(
                                 parser_options,
                                 registry.as_ref(),
@@ -455,7 +466,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
-        xpath_regex=None,
+        xpath_regex=None, geo=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -489,6 +500,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -530,6 +542,7 @@ impl PyQuadStore {
                 property_fn_namespaces,
                 standpoint_predicates,
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let outcome = run_governed(py, args, cancel, move |governors| {
                 let dataset = inner
@@ -554,6 +567,7 @@ impl PyQuadStore {
                     ClosureRelations::rebuilt_by(&rebuild)
                 };
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
@@ -568,6 +582,10 @@ impl PyQuadStore {
                     &EntailmentClosure::new(plan.entailment(), &imports)
                         .with_limits(limits.eval_options()),
                     purrdf_sparql_eval::QueryOptions::new()
+                        .with_geo(
+                            geo.as_deref()
+                                .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                        )
                         .with_env(&extension_env(
                             parser_options,
                             registry.as_ref(),
@@ -618,7 +636,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
-        xpath_regex=None,
+        xpath_regex=None, geo=None,
         division=None,
     ))]
     #[allow(
@@ -637,6 +655,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
     ) -> PyResult<()> {
         presentation::settled(move || {
@@ -648,6 +667,7 @@ impl PyQuadStore {
                 property_fn_namespaces,
                 standpoint_predicates,
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             // Snapshot + evaluation run detached (GIL released); the fresh frozen
             // base is adopted after reacquiring.
@@ -661,6 +681,7 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 engine
                     .update_with_options(
@@ -671,6 +692,10 @@ impl PyQuadStore {
                             substitutions: &[],
                         },
                         purrdf_sparql_eval::QueryOptions::new()
+                            .with_geo(
+                                geo.as_deref()
+                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                            )
                             .with_graph_existence(mode)
                             .with_env(&extension_env(
                                 parser_options,
@@ -715,7 +740,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
-        xpath_regex=None,
+        xpath_regex=None, geo=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -742,6 +767,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -760,6 +786,7 @@ impl PyQuadStore {
                 property_fn_namespaces,
                 standpoint_predicates,
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let args = GovernorArgs {
                 fuel,
@@ -781,6 +808,7 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let outcome = build_engine(config)
                     .update_governed(
                         &mut dataset,
@@ -790,6 +818,10 @@ impl PyQuadStore {
                             substitutions: &[],
                         },
                         purrdf_sparql_eval::QueryOptions::new()
+                            .with_geo(
+                                geo.as_deref()
+                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                            )
                             .with_graph_existence(mode)
                             .with_env(&extension_env(
                                 parser_options,
@@ -1048,6 +1080,7 @@ impl PyQuadStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         mode: M,
     ) -> PyResult<Py<PyAny>> {
@@ -1064,6 +1097,7 @@ impl PyQuadStore {
                 property_fn_namespaces,
                 standpoint_predicates,
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let inner = &self.inner;
             // Snapshot + engine build + evaluation run detached (GIL released);
@@ -1077,9 +1111,14 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 let env = extension_env(parser_options, registry.as_ref(), aggregates.as_ref())?;
                 let options = purrdf_sparql_eval::QueryOptions::new()
+                    .with_geo(
+                        geo.as_deref()
+                            .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                    )
                     .with_env(&env)
                     .with_division(division);
                 let request = SparqlRequest {

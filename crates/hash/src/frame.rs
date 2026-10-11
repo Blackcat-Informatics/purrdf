@@ -60,8 +60,7 @@ const fn prefix(len: usize) -> [u8; 8] {
 #[inline]
 pub fn frame_le(out: &mut Vec<u8>, bytes: &[u8]) {
     out.reserve(8 + bytes.len());
-    out.extend_from_slice(&prefix(bytes.len()));
-    out.extend_from_slice(bytes);
+    frame_le_with(bytes, &mut |part| out.extend_from_slice(part));
 }
 
 /// The checked exact destination layout of one published labelled frame.
@@ -121,13 +120,61 @@ pub fn frame_be_labelled(out: &mut Vec<u8>, label: &str, value: &[u8]) {
 /// ```
 #[inline]
 pub fn frame_le_into<D: Digest + ?Sized>(digest: &mut D, bytes: &[u8]) {
-    digest.update(&prefix(bytes.len()));
-    digest.update(bytes);
+    frame_le_with(bytes, &mut |part| digest.update(part));
+}
+
+/// Send a field's exact canonical prefix and borrowed bytes to one native sink.
+/// This is the shared framing body for a digest, fixed caller storage or a
+/// resident byte buffer. The callback receives no allocated intermediate field.
+pub fn frame_le_with(bytes: &[u8], output: &mut impl FnMut(&[u8])) {
+    output(&prefix(bytes.len()));
+    output(bytes);
+}
+
+/// Absorb one display field whose exact UTF-8 length is known before rendering.
+/// The renderer writes directly to the original digest; no intermediate string
+/// is created. Use this for native renderers that expose their exact output
+/// length, such as prepared decimal digits. Its bytes are exactly one
+/// [`frame_le_into`] field.
+///
+/// # Errors
+/// Returns a formatting error if the renderer fails or emits a byte count
+/// different from `length`. A failed digest must not be published.
+pub fn frame_le_display_into<D: Digest + ?Sized>(
+    digest: &mut D,
+    length: usize,
+    value: &(impl core::fmt::Display + ?Sized),
+) -> core::fmt::Result {
+    struct Field<'a, D: ?Sized> {
+        digest: &'a mut D,
+        remaining: usize,
+    }
+    impl<D: Digest + ?Sized> core::fmt::Write for Field<'_, D> {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            self.remaining = self
+                .remaining
+                .checked_sub(text.len())
+                .ok_or(core::fmt::Error)?;
+            self.digest.update(text.as_bytes());
+            Ok(())
+        }
+    }
+    digest.update(&prefix(length));
+    let mut field = Field {
+        digest,
+        remaining: length,
+    };
+    core::fmt::write(&mut field, format_args!("{value}"))?;
+    if field.remaining == 0 {
+        Ok(())
+    } else {
+        Err(core::fmt::Error)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_be_labelled, frame_le, frame_le_into};
+    use super::{frame_be_labelled, frame_le, frame_le_display_into, frame_le_into};
     use crate::sha1::Sha1;
     use crate::{Digest, Domain};
 
@@ -181,6 +228,27 @@ mod tests {
         let mut appended = Vec::new();
         frame_le(&mut appended, b"x");
         assert_eq!(through_dyn.finalize(), Sha1::digest(&appended));
+    }
+
+    #[test]
+    fn native_display_frames_fragmented_utf8_without_an_intermediate_string() {
+        struct Pieces;
+        impl core::fmt::Display for Pieces {
+            fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                out.write_str("-123")?;
+                out.write_str("\u{1f408}")?;
+                out.write_str("\0x")
+            }
+        }
+        let bytes = "-123\u{1f408}\0x".as_bytes();
+        let mut actual = Sha1::new();
+        frame_le_display_into(&mut actual as &mut dyn Digest, bytes.len(), &Pieces).unwrap();
+        let mut expected = Sha1::new();
+        frame_le_into(&mut expected, bytes);
+        assert_eq!(actual.finalize(), expected.finalize());
+        for wrong in [bytes.len() - 1, bytes.len() + 1] {
+            assert!(frame_le_display_into(&mut Sha1::new(), wrong, &Pieces).is_err());
+        }
     }
 
     /// The labelled framing is big-endian: its lengths read the other way

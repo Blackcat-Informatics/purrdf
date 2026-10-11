@@ -130,11 +130,12 @@ impl JsonEscapes {
 
 /// Emit `\u` and the four lowercase hex digits of one UTF-16 code unit.
 #[inline]
-fn emit_u_escape(unit: u16, emit: &mut impl FnMut(&str)) {
-    emit("\\u");
+fn emit_u_escape<E>(unit: u16, emit: &mut impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+    emit("\\u")?;
     for shift in [12_u16, 8, 4, 0] {
-        emit(HEX_LOWER[usize::from(unit >> shift & 0xF)]);
+        emit(HEX_LOWER[usize::from(unit >> shift & 0xF)])?;
     }
+    Ok(())
 }
 
 /// Write the JSON string BODY of `value` — everything between the quotes — as
@@ -151,6 +152,27 @@ fn emit_u_escape(unit: u16, emit: &mut impl FnMut(&str)) {
 /// ```
 #[inline]
 pub fn escape_body(value: &str, escapes: JsonEscapes, mut emit: impl FnMut(&str)) {
+    let result = try_escape_body(value, escapes, |piece| {
+        emit(piece);
+        Ok::<(), core::convert::Infallible>(())
+    });
+    match result {
+        Ok(()) => {}
+        Err(never) => match never {},
+    }
+}
+
+/// Emit the same string spelling through a fallible caller-owned sink.
+/// No temporary string is created, and the first refusal stops escaping.
+///
+/// # Errors
+///
+/// Returns the sink's original error unchanged.
+pub fn try_escape_body<E>(
+    value: &str,
+    escapes: JsonEscapes,
+    mut emit: impl FnMut(&str) -> Result<(), E>,
+) -> Result<(), E> {
     let mut rest = value;
     while !rest.is_empty() {
         let run = match escapes {
@@ -162,7 +184,7 @@ pub fn escape_body(value: &str, escapes: JsonEscapes, mut emit: impl FnMut(&str)
         }
         .unwrap_or(rest.len());
         if run > 0 {
-            emit(&rest[..run]);
+            emit(&rest[..run])?;
             rest = &rest[run..];
         }
         let Some(ch) = rest.chars().next() else {
@@ -183,14 +205,16 @@ pub fn escape_body(value: &str, escapes: JsonEscapes, mut emit: impl FnMut(&str)
             {
                 let mut units = [0_u16; 2];
                 for &unit in c.encode_utf16(&mut units).iter() {
-                    emit_u_escape(unit, &mut emit);
+                    emit_u_escape(unit, &mut emit)?;
                 }
+                Ok(())
             }
             // A `0xC2` stop that is not a C1 control: the scalar is written raw.
             _ => emit(&rest[..width]),
-        }
+        }?;
         rest = &rest[width..];
     }
+    Ok(())
 }
 
 /// Append the JSON string body of `value` to `out`, spelled per `escapes`.
@@ -222,6 +246,22 @@ pub fn push_string(out: &mut String, value: &str, escapes: JsonEscapes) {
     out.push('"');
     push_body(out, value, escapes);
     out.push('"');
+}
+
+/// Append the same whole JSON string with original native storage admission.
+///
+/// # Errors
+///
+/// Returns checked layout, allocator or caller admission refusal before growth.
+pub fn push_string_with_memory<S: Admission + ?Sized>(
+    out: &mut String,
+    value: &str,
+    escapes: JsonEscapes,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    memory.push_char(out, '"')?;
+    try_escape_body(value, escapes, |piece| memory.push_str(out, piece))?;
+    memory.push_char(out, '"')
 }
 
 /// What is wrong with a JSON escape (RFC 8259 §7).

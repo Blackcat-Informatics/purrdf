@@ -1545,6 +1545,22 @@ impl WorkspaceCapability {
     }
 }
 
+/// Admit and allocate one native concrete control. The private recipient moves
+/// both outputs directly into an ordered owner: Box before its original grant.
+pub(crate) fn box_native<T>(
+    value: T,
+    workspace: &WorkspaceCapability,
+    construct: &'static str,
+) -> Result<(Box<T>, WorkspaceAllocation), EvalError> {
+    let allocation = workspace.charge(
+        u64::try_from(std::alloc::Layout::new::<T>().size())
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+    )?;
+    let value = purrdf_core::small::try_boxed(value)
+        .map_err(|_| EvalError::AllocationFailed { construct })?;
+    Ok((value, allocation))
+}
+
 impl<E> std::fmt::Debug for Account<E> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -2065,6 +2081,121 @@ mod owned_row_regressions {
             ledger,
             base,
         )
+    }
+
+    struct DropCursor {
+        ledger: Arc<Ledger>,
+        drops: Arc<AtomicUsize>,
+        base: u64,
+        admitted: bool,
+    }
+
+    impl crate::PfCursor for DropCursor {
+        fn next(&mut self) -> Result<Option<crate::PfRow>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl Drop for DropCursor {
+        fn drop(&mut self) {
+            let live = self.ledger.live.load(Ordering::Relaxed);
+            if self.admitted {
+                assert!(
+                    live > self.base,
+                    "the original cursor grant covers destruction"
+                );
+            } else {
+                assert_eq!(live, self.base, "a refused birth owns no cursor control");
+            }
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn native_cursor_retains_control_until_drop_and_refuses_raw_extraction() {
+        let (workspace, ledger, base) = account(4096);
+        let capability = workspace.capability();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut cursor = crate::WorkspaceCursor::new(
+            DropCursor {
+                ledger: ledger.clone(),
+                drops: drops.clone(),
+                base,
+                admitted: true,
+            },
+            &capability,
+            "native cursor control",
+        )
+        .unwrap();
+        assert!(cursor.next().unwrap().is_none());
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        assert!(matches!(
+            cursor.into_resident(),
+            Err(EvalError::WorkspaceUnpriced(
+                "raw extraction of a bounded native cursor"
+            ))
+        ));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_cursor_control_refusal_preserves_original_typed_cause() {
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace, ledger, _) = account(base);
+        let capability = workspace.capability();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let error = crate::WorkspaceCursor::new(
+            DropCursor {
+                ledger: ledger.clone(),
+                drops: drops.clone(),
+                base,
+                admitted: false,
+            },
+            &capability,
+            "native cursor control",
+        )
+        .unwrap_err();
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        assert!(matches!(
+            capability.charge(1),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        drop(workspace);
+        drop(capability);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn resident_cursor_uses_the_same_control_body_and_moves_without_copying() {
+        let (workspace, ledger, base) = account(4096);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let cursor = crate::WorkspaceCursor::new(
+            DropCursor {
+                ledger: ledger.clone(),
+                drops: drops.clone(),
+                base,
+                admitted: false,
+            },
+            &super::WorkspaceCapability::resident(),
+            "native cursor control",
+        )
+        .unwrap();
+        let mut cursor = cursor.into_resident().unwrap();
+        assert!(cursor.next().unwrap().is_none());
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        drop(cursor);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]

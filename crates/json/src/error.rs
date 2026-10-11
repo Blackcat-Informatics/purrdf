@@ -7,6 +7,11 @@ use purrdf_core::{IriError, RdfDiagnostic, cover::ReconstructError};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum JsonError {
+    /// The original reader progress observer refused work at this byte offset.
+    Interrupted {
+        /// Byte where the original progress observer stopped the read.
+        at: usize,
+    },
     /// The shared reader refused physical allocation or admission.
     Storage(purrdf_lex::allocation::StorageError),
     /// A source or vocabulary IRI is not absolute and well formed.
@@ -60,6 +65,7 @@ pub enum JsonError {
 impl std::fmt::Display for JsonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Interrupted { at } => write!(f, "JSON input progress interrupted at byte {at}"),
             Self::Storage(error) => write!(f, "JSON storage: {error}"),
             Self::Iri(error) => write!(f, "invalid JSON codec IRI: {error}"),
             Self::Profile(message) => write!(f, "invalid JSON profile: {message}"),

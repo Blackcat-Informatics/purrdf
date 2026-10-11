@@ -109,6 +109,9 @@ pub(super) struct EngineConfig {
     /// caller's `xpath_regex` keyword by [`crate::xpath_regex::selection`]. Unset
     /// means the engine default: the compatibility pattern behaviour, unchanged.
     pub(super) xpath_regex: Option<crate::xpath_regex::Selection>,
+    /// An immutable geographic profile decoded while the GIL is held. The
+    /// selected profile survives every detached preparation and evaluation.
+    pub(super) geo: Option<purrdf_validate::geo::GeoProfileSnapshot>,
 }
 
 /// Build the [`NativeSparqlEngine`] for one query/update call from the optional
@@ -123,6 +126,7 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
         property_fn_namespaces,
         standpoint_predicates,
         xpath_regex,
+        geo: _,
     } = config;
     // The namespace declarations do NOT live here: they are parse configuration, and
     // parse configuration lives on the extension environment. See

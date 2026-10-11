@@ -628,13 +628,8 @@ impl WorkspaceAccumulator {
         value: A,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
-        let allocation = workspace.charge(
-            u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-        )?;
-        let value =
-            purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
-                construct: "native aggregate control",
-            })?;
+        let (value, allocation) =
+            crate::workspace::box_native(value, workspace, "native aggregate control")?;
         Ok(Self { value, allocation })
     }
     fn resident(value: Box<dyn AggregateAccumulator>) -> Self {

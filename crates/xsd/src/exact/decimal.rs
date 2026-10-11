@@ -55,6 +55,30 @@ impl<W: fmt::Write + ?Sized> fmt::Write for DecimalPointWriter<'_, W> {
 }
 
 impl PreparedDecimalText {
+    fn from_coefficient(
+        coefficient: &BigInt,
+        scale: u32,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        use crate::bigint::LimbScratchError::SizeOverflow;
+        let digits = coefficient.prepare_decimal_digits()?;
+        let scale = usize::try_from(scale).map_err(|_| SizeOverflow)?;
+        let body = if scale == 0 {
+            digits.digits_len()
+        } else if digits.digits_len() > scale {
+            digits.digits_len().checked_add(1).ok_or(SizeOverflow)?
+        } else {
+            scale.checked_add(2).ok_or(SizeOverflow)?
+        };
+        let length = body
+            .checked_add(usize::from(digits.is_negative()))
+            .ok_or(SizeOverflow)?;
+        Ok(Self {
+            digits,
+            scale,
+            length,
+        })
+    }
+
     /// Exact final length, known before allocating an output destination.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -112,6 +136,83 @@ impl PreparedDecimalText {
         self.write_fmt(out)
             .expect("prepared decimal fits the checked String capacity");
         Ok(())
+    }
+}
+
+/// Native decimal conversion or the original lexical destination refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecimalTextError {
+    /// Checked native group conversion or its fallible destination failed.
+    Numeric(crate::bigint::LimbScratchError),
+    /// The original physical owner refused a lexical buffer or its layout.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+
+impl fmt::Display for DecimalTextError {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Numeric(error) => error.fmt(output),
+            Self::Storage(error) => error.fmt(output),
+        }
+    }
+}
+
+impl std::error::Error for DecimalTextError {}
+
+purrdf_lex::variant_from!(DecimalTextError {
+    Storage(purrdf_lex::allocation::StorageError),
+    Numeric(crate::bigint::LimbScratchError),
+});
+
+/// Append `coefficient × 10^-scale` through the shared native decimal renderer.
+///
+/// Fractional trailing zeros and negative zero are suppressed. The original
+/// owner admits the complete group conversion before it starts, then admits
+/// actual destination growth while the original buffer is still alive. Group
+/// scratch dies before its original allowance is released; output stays under
+/// the same account until destruction or ownership-carrying publication.
+///
+/// # Errors
+/// Distinguishes native numerical storage from lexical layout, admission, and
+/// allocator refusal. No source magnitude copy or intermediate String is made.
+pub fn append_scaled_integer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    coefficient: &BigInt,
+    scale: u32,
+    output: &mut String,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), DecimalTextError> {
+    use purrdf_lex::allocation::StorageError;
+    if coefficient.is_zero() {
+        return memory.push_str(output, "0").map_err(Into::into);
+    }
+    let layout = coefficient.decimal_render_layout(scale)?;
+    let temporary = layout.temporary_bytes();
+    memory.add_bytes(temporary)?;
+    let result = (|| {
+        let prepared = PreparedDecimalText::from_coefficient(coefficient, scale)?;
+        let required = output
+            .len()
+            .checked_add(prepared.len())
+            .ok_or(StorageError::SizeOverflow)?;
+        memory.reserve_string(output, required)?;
+        prepared
+            .write_fmt(output)
+            .map_err(|_| StorageError::FormattingFailed)?;
+        if scale != 0 {
+            let fraction = output.trim_end_matches('0');
+            let end = fraction.strip_suffix('.').unwrap_or(fraction).len();
+            output.truncate(end);
+        }
+        Ok(())
+    })();
+    // The prepared group payload has died, including on an earlier refusal.
+    // Never replace that original error with a later sticky-account refund.
+    let refund = memory
+        .release_bytes(temporary)
+        .map_err(DecimalTextError::from);
+    match result {
+        Ok(()) => refund,
+        Err(original) => Err(original),
     }
 }
 
@@ -382,23 +483,8 @@ impl Decimal {
     /// # Errors
     /// Distinguishes physical native storage refusal from numerical errors.
     pub fn prepare_text(&self) -> Result<PreparedDecimalText, crate::bigint::LimbScratchError> {
-        use crate::bigint::LimbScratchError::SizeOverflow;
-        let digits = self.unscaled.prepare_decimal_digits()?;
-        let scale = usize::try_from(self.scale).map_err(|_| SizeOverflow)?;
-        let body = if scale == 0 {
-            digits.digits_len()
-        } else if digits.digits_len() > scale {
-            digits.digits_len().checked_add(1).ok_or(SizeOverflow)?
-        } else {
-            scale.checked_add(2).ok_or(SizeOverflow)?
-        };
-        let length = body
-            .checked_add(usize::from(digits.is_negative()))
-            .ok_or(SizeOverflow)?;
-        Ok(PreparedDecimalText {
-            digits,
-            scale,
-            length,
+        self.unscaled.with_bigint(|coefficient| {
+            PreparedDecimalText::from_coefficient(coefficient, self.scale)
         })
     }
 
@@ -2171,6 +2257,98 @@ impl fmt::Display for Decimal {
     /// The canonical lexical form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.prepare_text().map_err(|_| fmt::Error)?.write_fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod physical_render_tests {
+    use super::{DecimalTextError, append_scaled_integer_with_memory};
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+    #[derive(Debug)]
+    struct Account {
+        live: usize,
+        peak: usize,
+        ceiling: usize,
+        refused: Option<usize>,
+    }
+
+    impl Admission for Account {
+        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+            if live > self.ceiling {
+                self.refused = Some(live);
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = live;
+            self.peak = self.peak.max(live);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn decimal_groups_share_spelling_and_release_only_destroyed_scratch() {
+        let mut account = Account {
+            live: 0,
+            peak: 0,
+            ceiling: usize::MAX,
+            refused: None,
+        };
+        let mut memory = Memory::new(&mut account);
+        let mut output = memory.string("prefix:").unwrap();
+        for (value, scale, expected) in [
+            ("0", 19, "0"),
+            ("-1", 3, "-0.001"),
+            ("1000", 2, "10"),
+            ("-1200100", 4, "-120.01"),
+            (
+                "123456789012345678901234567890123456789000",
+                7,
+                "12345678901234567890123456789012345.6789",
+            ),
+        ] {
+            output.truncate("prefix:".len());
+            let coefficient = value.parse::<crate::exact::Integer>().unwrap().to_bigint();
+            append_scaled_integer_with_memory(&coefficient, scale, &mut output, &mut memory)
+                .unwrap();
+            assert_eq!(output.strip_prefix("prefix:"), Some(expected));
+            assert_eq!(memory.admitted_bytes(), output.capacity());
+        }
+        memory.release_string(output).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(account.live, 0);
+        assert!(account.peak > 0);
+    }
+
+    #[test]
+    fn decimal_group_and_output_refusals_keep_the_original_prefix_and_account() {
+        let coefficient =
+            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+                .parse::<crate::exact::Integer>()
+                .unwrap()
+                .to_bigint();
+        let layout = coefficient.decimal_render_layout(7).unwrap();
+        assert!(layout.temporary_bytes() > 0);
+        for allowed_temporary in [0, layout.temporary_bytes()] {
+            let mut account = Account {
+                live: 0,
+                peak: 0,
+                ceiling: usize::MAX,
+                refused: None,
+            };
+            let mut output = Memory::new(&mut account).string("prefix:").unwrap();
+            let baseline = output.capacity();
+            account.ceiling = baseline + allowed_temporary;
+            let mut memory = Memory::resume(&mut account, baseline);
+            assert_eq!(
+                append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
+                Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
+            );
+            assert_eq!(output, "prefix:");
+            assert_eq!(memory.admitted_bytes(), baseline);
+            memory.release_string(output).unwrap();
+            assert_eq!(account.live, 0);
+            assert!(account.refused.is_some());
+        }
     }
 }
 

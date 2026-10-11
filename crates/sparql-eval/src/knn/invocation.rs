@@ -301,23 +301,11 @@ impl AdmittedKnnInvocation {
     pub fn cursor<S: RankSource + 'static>(
         self,
         source: S,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let layout = std::alloc::Layout::new::<RankedCursor<S>>();
-        let cursor_admission = self
-            .workspace
-            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
-        let cursor = RankedCursor::with_admission(
-            source,
-            self.invocation,
-            self.admission,
-            self.workspace,
-            cursor_admission,
-        );
+    ) -> Result<crate::WorkspaceCursor, EvalError> {
+        let workspace = self.workspace.clone();
         let cursor =
-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
-                construct: "native ranked cursor",
-            })?;
-        Ok(cursor)
+            RankedCursor::with_admission(source, self.invocation, self.admission, self.workspace);
+        crate::WorkspaceCursor::new(cursor, &workspace, "native ranked cursor")
     }
 }
 
@@ -692,7 +680,6 @@ pub struct RankedCursor<S> {
     unreported_work: u64,
     workspace: crate::WorkspaceCapability,
     _invocation_admission: Option<InvocationAdmission>,
-    _cursor_admission: Option<crate::WorkspaceAllocation>,
 }
 
 impl<S: RankSource> RankedCursor<S> {
@@ -708,7 +695,6 @@ impl<S: RankSource> RankedCursor<S> {
             unreported_work: 0,
             workspace: crate::WorkspaceCapability::resident(),
             _invocation_admission: None,
-            _cursor_admission: None,
         }
     }
 
@@ -717,7 +703,6 @@ impl<S: RankSource> RankedCursor<S> {
         invocation: KnnInvocation,
         admission: InvocationAdmission,
         workspace: crate::WorkspaceCapability,
-        cursor_admission: crate::WorkspaceAllocation,
     ) -> Self {
         Self {
             source,
@@ -727,7 +712,6 @@ impl<S: RankSource> RankedCursor<S> {
             unreported_work: 0,
             workspace,
             _invocation_admission: Some(admission),
-            _cursor_admission: Some(cursor_admission),
         }
     }
 

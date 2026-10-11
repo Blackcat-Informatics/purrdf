@@ -16,7 +16,11 @@ use purrdf_geo::determinism::{corpus_len, digest};
 use purrdf_testkit::harness::report_digest;
 
 /// The pinned native output digest, also read directly by the conformance matrix.
-const GOLDEN_DIGEST: u64 = 0x9667_c2ee_2cd3_ad4b;
+/// GeoSPARQL 1.1 sections 10.9.24--25 include polygon boundaries in length and
+/// select the greatest dimension-total. Compared with `9667c2ee2cd3ad4b`, only
+/// the five polygon/mixed-collection lengths and their double encodings change;
+/// every other input in the same twenty-member corpus is byte-identical.
+const GOLDEN_DIGEST: u64 = 0xcae6_3e40_6267_a3d7;
 
 /// The digest equals the pinned golden, on whichever target this runs.
 fn the_digest_is_the_pinned_golden() {

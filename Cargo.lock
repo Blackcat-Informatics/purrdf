@@ -620,16 +620,29 @@ name = "purrdf-geo"
 version = "3.0.1"
 dependencies = [
  "purrdf-core",
+ "purrdf-geo-kernel",
  "purrdf-hash",
- "purrdf-iri",
- "purrdf-lex",
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-stack",
  "purrdf-testkit",
+]
+
+[[package]]
+name = "purrdf-geo-kernel"
+version = "3.0.1"
+dependencies = [
+ "purrdf-alloc-probe",
+ "purrdf-core",
+ "purrdf-hash",
+ "purrdf-iri",
+ "purrdf-lex",
+ "purrdf-stack",
+ "purrdf-testkit",
  "purrdf-xsd",
+ "sha2",
 ]
 
 [[package]]
@@ -914,6 +927,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-core",
+ "purrdf-geo-kernel",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
@@ -978,9 +992,11 @@ dependencies = [
 name = "purrdf-validate"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-entail",
+ "purrdf-geo-kernel",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
@@ -990,6 +1006,7 @@ dependencies = [
  "purrdf-sparql-results",
  "purrdf-stack",
  "purrdf-testkit",
+ "purrdf-xsd",
  "sha2",
 ]
 

@@ -54,6 +54,34 @@ impl Integer {
             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
     }
 
+    /// Copy a canonical coefficient into an original preparation account.
+    ///
+    /// # Errors
+    /// Returns the original admission or allocation refusal before publication.
+    pub fn detached_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(Self::from_i128(*value)),
+            Repr::Big(value) => value.detached_with_memory(memory).map(Self::from_bigint),
+        }
+    }
+
+    /// Publish an admitted detached coefficient under its original lease.
+    ///
+    /// # Errors
+    /// Returns a shared-control allocation refusal without changing the value.
+    pub fn publish_detached(
+        &mut self,
+        original: &purrdf_lex::allocation::SharedOwned<()>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        match &mut self.0 {
+            Repr::Small(_) => Ok(()),
+            Repr::Big(value) => value.publish_detached(original),
+        }
+    }
+
     /// Borrow a spilled magnitude; machine coefficients construct only inline limbs.
     pub(crate) fn with_bigint<T>(&self, use_value: impl FnOnce(&BigInt) -> T) -> T {
         match &self.0 {
@@ -227,6 +255,25 @@ impl Integer {
         match &self.0 {
             Repr::Small(value) => BigInt::from_i128(*value),
             Repr::Big(value) => value.clone(),
+        }
+    }
+
+    /// Borrow the existing binary magnitude, or convert an inline integer on
+    /// the stack. Neither branch allocates or clones a heap magnitude.
+    #[must_use]
+    pub fn bigint_operand(&self) -> std::borrow::Cow<'_, BigInt> {
+        match &self.0 {
+            Repr::Small(value) => std::borrow::Cow::Owned(BigInt::from_i128(*value)),
+            Repr::Big(value) => std::borrow::Cow::Borrowed(value),
+        }
+    }
+
+    /// Move the original binary magnitude; inline values convert without a heap.
+    #[must_use]
+    pub fn into_bigint(self) -> BigInt {
+        match self.0 {
+            Repr::Small(value) => BigInt::from_i128(value),
+            Repr::Big(value) => value,
         }
     }
 

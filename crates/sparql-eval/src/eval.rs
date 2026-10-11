@@ -743,6 +743,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
     pub(crate) user_functions: &'d crate::user_fn::BoundFunctionRegistry,
+    /// Immutable geographic reference, operation and numerical policy selection.
+    pub(crate) geo: &'d purrdf_geo_kernel::GeoProfile,
     /// The request's explicit invocation law, borrowed without allocating on
     /// healthy paths and inherited by function children and parallel workers.
     pub(crate) user_function_admission: Option<&'d Arc<dyn crate::user_fn::UserFunctionAdmission>>,
@@ -1302,6 +1304,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
+            geo: &purrdf_geo_kernel::binding::STANDARD_PROFILE,
             user_function_admission: None,
             property_functions: &EMPTY_RELATIONS,
             aggregates: &EMPTY_AGGREGATES,
@@ -2790,6 +2793,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // depth: a worker that evaluates a `Function::Custom` user-function call
             // must see the same table and depth bound as its parent.
             user_functions: self.user_functions,
+            geo: self.geo,
             user_function_admission: self.user_function_admission,
             // Read-only shared registry (a `Copy` pointer), for the same reason: a
             // worker that evaluates a property-function call must resolve the
@@ -2888,6 +2892,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     #[must_use]
     pub fn with_call_depth(mut self, depth: u32) -> Self {
         self.udf_depth = depth;
+        self
+    }
+
+    /// Carry the caller's geographic bindings through this context and its children.
+    #[must_use]
+    pub const fn with_geo_profile(mut self, profile: &'d purrdf_geo_kernel::GeoProfile) -> Self {
+        self.geo = profile;
         self
     }
 
@@ -3107,6 +3118,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: self.user_functions,
+            geo: self.geo,
             user_function_admission: self.user_function_admission,
             // Inherited with the function table: a function body is SPARQL like any
             // other, so a property-function call inside it resolves against the same
@@ -4608,8 +4620,15 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
+    ctx.user_functions
+        .declarations()
+        .validate_standard(&ctx.growth)?;
     {
         let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+        crate::user_fn::validate_standard_algebra_with_memory(
+            query_pattern(query),
+            &mut purrdf_lex::allocation::Memory::new(&mut frame),
+        )?;
         crate::governor::soundness::validate_graph_pattern_depth_with_memory(
             query_pattern(query),
             &mut purrdf_lex::allocation::Memory::new(&mut frame),

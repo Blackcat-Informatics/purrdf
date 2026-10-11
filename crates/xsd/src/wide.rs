@@ -45,6 +45,10 @@ pub const fn wide_mul(a: u128, b: u128) -> (u128, u128) {
 /// rather than left to overflow.
 #[must_use]
 pub const fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
+    div_wide_rem(high, low, divisor).0
+}
+
+const fn div_wide_rem(high: u128, low: u128, divisor: u128) -> (u128, u128) {
     debug_assert!(high < divisor, "the quotient must fit a u128");
     let mut remainder = high;
     let mut quotient: u128 = 0;
@@ -62,7 +66,7 @@ pub const fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
             quotient |= 1;
         }
     }
-    quotient
+    (quotient, remainder)
 }
 
 /// `a × b / c`, truncated, over the full `u128` range — `None` if `c` is zero or
@@ -77,11 +81,18 @@ pub const fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
 /// operations were written in.
 #[must_use]
 pub const fn mul_div(a: u128, b: u128, c: u128) -> Option<u128> {
+    match mul_div_rem(a, b, c) {
+        Some((quotient, _)) => Some(quotient),
+        None => None,
+    }
+}
+
+const fn mul_div_rem(a: u128, b: u128, c: u128) -> Option<(u128, u128)> {
     if c == 0 {
         return None;
     }
     if let Some(product) = a.checked_mul(b) {
-        return Some(product / c);
+        return Some((product / c, product % c));
     }
     let (high, low) = wide_mul(a, b);
     // The quotient is at least `high · 2^128 / c`, so it exceeds a `u128` unless
@@ -89,7 +100,24 @@ pub const fn mul_div(a: u128, b: u128, c: u128) -> Option<u128> {
     if high >= c {
         return None;
     }
-    Some(div_wide(high, low, c))
+    Some(div_wide_rem(high, low, c))
+}
+
+/// `a × b / c` over the full 256-bit product, rounded to nearest with an
+/// exact halfway quotient rounded to even. Returns `None` for a zero divisor
+/// or an unrepresentable rounded quotient.
+#[must_use]
+pub const fn mul_div_round_even(a: u128, b: u128, c: u128) -> Option<u128> {
+    let Some((quotient, remainder)) = mul_div_rem(a, b, c) else {
+        return None;
+    };
+    // Comparing the two distances avoids doubling a full-width remainder.
+    let complement = c - remainder;
+    if remainder > complement || (remainder == complement && quotient & 1 != 0) {
+        quotient.checked_add(1)
+    } else {
+        Some(quotient)
+    }
 }
 
 /// The greatest common divisor of two `u128`s by Euclid's algorithm;
@@ -106,7 +134,22 @@ pub const fn gcd(mut a: u128, mut b: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{div_wide, gcd, mul_div, wide_mul};
+    use super::{div_wide, gcd, mul_div, mul_div_round_even, wide_mul};
+
+    #[test]
+    fn rounded_wide_quotient_preserves_halfway_and_overflow_laws() {
+        assert_eq!(mul_div_round_even(5, 1, 2), Some(2));
+        assert_eq!(mul_div_round_even(7, 1, 2), Some(4));
+        assert_eq!(mul_div_round_even(1, 1, 3), Some(0));
+        assert_eq!(mul_div_round_even(2, 1, 3), Some(1));
+        assert_eq!(
+            mul_div_round_even(u128::MAX, u128::MAX, u128::MAX),
+            Some(u128::MAX)
+        );
+        assert_eq!(mul_div_round_even(u128::MAX, 2, 2), Some(u128::MAX));
+        assert_eq!(mul_div_round_even(u128::MAX, 2, 1), None);
+        assert_eq!(mul_div_round_even(1, 1, 0), None);
+    }
 
     /// `mul_div` must agree with the direct computation wherever the direct one
     /// fits, and keep answering where it does not.

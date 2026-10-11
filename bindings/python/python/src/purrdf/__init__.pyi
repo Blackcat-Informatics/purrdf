@@ -21,6 +21,9 @@ from typing import IO, Any, Callable, Required, TypeAlias, TypedDict, overload
 # class in `_Term` to `typing.Literal` and demands type parameters for it. Same
 # reason `builtins` is imported qualified above.
 from typing import Literal as TypingLiteral
+from . import geo as geo
+
+type GeoConfiguration = geo.GeoProfile | geo.GeoSession | str | None
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -758,6 +761,7 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     def query_rdflib(
@@ -773,6 +777,7 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         named_graphs: bool = ...,
         default_graph: NamedNode | BlankNode | None = ...,
@@ -796,6 +801,7 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -839,6 +845,7 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -864,6 +871,7 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
@@ -880,6 +888,7 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -987,6 +996,7 @@ class Store(_QuadStore):
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
     ) -> PreparedQuery: ...
     # `base` is the document base the dump is WRITTEN under — the egress mirror of

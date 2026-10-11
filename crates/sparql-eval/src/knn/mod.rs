@@ -1631,6 +1631,7 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
+            .and_then(crate::WorkspaceCursor::into_resident)
     }
 
     fn open_admitted(
@@ -1638,7 +1639,7 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: crate::WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<crate::WorkspaceCursor, EvalError> {
         KnnInvocation::open_owned(
             "the embedding kNN relation",
             args,

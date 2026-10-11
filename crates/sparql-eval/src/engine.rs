@@ -155,6 +155,8 @@ struct PreparingQuery {
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
 pub struct PreparedQuery {
+    /// Mathematical laws, carrier bindings and selected numerical policy.
+    geo: purrdf_geo_kernel::GeoQueryIdentity,
     /// The parsed algebra. Private — see [`Self::query`] for why, and for the
     /// guarantee that privacy buys.
     query: Query,
@@ -244,6 +246,11 @@ impl PreparedRdflibQuery {
 }
 
 impl PreparedQuery {
+    /// The laws, binding identity and execution policy this plan was prepared under.
+    #[must_use]
+    pub const fn geo_identity(&self) -> purrdf_geo_kernel::GeoQueryIdentity {
+        self.geo
+    }
     /// Structurally admit and feasibility-order algebra a caller built or rewrote.
     ///
     /// This uses the same term, row, registry and call checks as
@@ -342,9 +349,14 @@ impl PreparedQuery {
             relations,
             aggregates,
             memory,
+            options.geo.query_identity(),
         ))
     }
 
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "The complete selected geographic cache identity is moved into this plan owner; borrowing would require a second full identity copy"
+    )]
     fn admitted(
         query: Query,
         source: Option<Box<Query>>,
@@ -352,6 +364,7 @@ impl PreparedQuery {
         relations: String,
         aggregates: String,
         memory: &PlanMemoryObserver,
+        geo: purrdf_geo_kernel::GeoQueryIdentity,
     ) -> Self {
         let bytes = plan_payload_bytes(
             &query,
@@ -361,6 +374,7 @@ impl PreparedQuery {
             aggregates.capacity(),
         );
         Self {
+            geo,
             query,
             source,
             source_schema,
@@ -874,6 +888,7 @@ impl PlanCache {
             &agg_fingerprint,
             &[],
             &[],
+            &purrdf_geo_kernel::binding::STANDARD_PROFILE,
         )
     }
 
@@ -899,7 +914,14 @@ impl PlanCache {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_execution_plan(query, base_iri, env, &[], &[])
+        self.prepare_execution_plan(
+            query,
+            base_iri,
+            env,
+            &[],
+            &[],
+            &purrdf_geo_kernel::binding::STANDARD_PROFILE,
+        )
     }
 
     /// [`Self::prepare_in_env`] for a prepared execution that will bind every name in
@@ -918,6 +940,7 @@ impl PlanCache {
         env: &crate::extension_env::ExtensionEnv,
         parameters: &[&str],
         exempt: &[&str],
+        geo: &purrdf_geo_kernel::GeoProfile,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         debug_assert!(
             parameters.windows(2).all(|pair| pair[0] < pair[1]),
@@ -933,6 +956,7 @@ impl PlanCache {
             env.aggregates_fingerprint(),
             parameters,
             exempt,
+            geo,
         )
     }
 
@@ -961,6 +985,7 @@ impl PlanCache {
         agg_fingerprint: &str,
         parameters: &[&str],
         exempt: &[&str],
+        geo: &purrdf_geo_kernel::GeoProfile,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         let workspace = crate::WorkspaceCapability::resident();
         let prepared = self
@@ -974,6 +999,7 @@ impl PlanCache {
                 agg_fingerprint,
                 parameters,
                 exempt,
+                geo,
                 &workspace,
             )
             .map_err(EvaluationFailure::into_diagnostic)?;
@@ -985,6 +1011,10 @@ impl PlanCache {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The cache key keeps explicit geographic binding/policy, registry, parameter and native workspace inputs as distinct borrowed components"
+    )]
     pub(crate) fn prepare_execution_plan_admitted(
         &mut self,
         query: &str,
@@ -992,6 +1022,7 @@ impl PlanCache {
         env: &crate::extension_env::ExtensionEnv,
         parameters: &[&str],
         exempt: &[&str],
+        geo: &purrdf_geo_kernel::GeoProfile,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<PreparedHandle, EvaluationFailure> {
         self.prepare_keyed_admitted(
@@ -1004,6 +1035,7 @@ impl PlanCache {
             env.aggregates_fingerprint(),
             parameters,
             exempt,
+            geo,
             workspace,
         )
     }
@@ -1023,6 +1055,7 @@ impl PlanCache {
         agg_fingerprint: &str,
         parameters: &[&str],
         exempt: &[&str],
+        geo: &purrdf_geo_kernel::GeoProfile,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<PreparedHandle, EvaluationFailure> {
         let result = self.build_keyed_admitted(
@@ -1035,6 +1068,7 @@ impl PlanCache {
             agg_fingerprint,
             parameters,
             exempt,
+            geo,
             workspace,
         );
         if result.is_err() && workspace.is_bounded() {
@@ -1060,12 +1094,15 @@ impl PlanCache {
         agg_fingerprint: &str,
         parameters: &[&str],
         exempt: &[&str],
+        geo: &purrdf_geo_kernel::GeoProfile,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<PreparedHandle, EvaluationFailure> {
         use crate::workspace::{AdmittedVec, LexicalFrame, SharedWorkspace};
         use purrdf_lex::allocation::Memory;
 
+        crate::user_fn::validate_standard_parser(options, workspace)?;
         PlanCacheKey {
+            geo: geo.query_identity(),
             query: text,
             base_iri,
             options,
@@ -1197,6 +1234,7 @@ impl PlanCache {
         let charge = PlanCharge::new(&self.memory, bytes);
         let plan = crate::plan::PlanCache::default();
         let value = PreparedQuery {
+            geo: geo.query_identity(),
             query: preparing.query,
             source: preparing.source,
             source_schema: preparing.source_schema,
@@ -1241,6 +1279,7 @@ impl PlanCache {
 /// Length-prefixed fields cannot alias when a caller's configuration contains
 /// separator characters. List lengths distinguish namespace-set boundaries.
 struct PlanCacheKey<'a> {
+    geo: purrdf_geo_kernel::GeoQueryIdentity,
     /// The query text.
     query: &'a str,
     /// The base IRI the query is parsed against, if any.
@@ -1278,6 +1317,7 @@ impl PlanCacheKey<'_> {
             purrdf_hash::frame::frame_le(out, value.as_bytes());
         }
         let Self {
+            geo,
             query,
             base_iri,
             options,
@@ -1292,6 +1332,8 @@ impl PlanCacheKey<'_> {
             &options.property_fn_iris,
         ];
         let mut capacity = 2usize
+            .checked_add(purrdf_geo_kernel::GeoQueryIdentity::FRAMED_BYTES)
+            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?
             .checked_add(Self::FIXED_LENGTH_PREFIXES * size_of::<u64>())
             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
         for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
@@ -1336,6 +1378,7 @@ impl PlanCacheKey<'_> {
         for value in [relations, aggregates, query] {
             field(out, value);
         }
+        geo.append_to(out);
         debug_assert_eq!(
             out.len(),
             capacity,
@@ -1649,7 +1692,7 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         options: QueryOptions<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_for(query, base_iri, options.env)
+        self.prepare_for(query, base_iri, options.env, options.geo)
     }
 
     /// Inspect the cached algebra a borrowed request will execute, before any
@@ -1674,7 +1717,13 @@ impl NativeSparqlEngine {
             Prebindings::Borrowed(request.substitutions),
             options.declared_prebound,
         );
-        self.prepare_request(request.query, request.base_iri, options.env, &admitted)
+        self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted,
+            options.geo,
+        )
     }
 
     /// Evaluate a plan returned by [`Self::prepare_query`] or
@@ -1904,6 +1953,7 @@ impl NativeSparqlEngine {
             request.base_iri,
             options.env,
             &substitutions.parameters,
+            options.geo,
             &reporting.capability(),
         ) {
             Ok(prepared) => prepared,
@@ -1994,6 +2044,7 @@ impl NativeSparqlEngine {
                 request.base_iri,
                 options.env,
                 &admitted.parameters,
+                options.geo,
                 &workspace.capability(),
             )?;
             let state = crate::workspace::SharedWorkspace::new_admitted(
@@ -2410,6 +2461,7 @@ impl NativeSparqlEngine {
                 request.base_iri,
                 options.env,
                 &admitted.parameters,
+                options.geo,
                 &workspace.capability(),
             )?;
             self.query_governed_prepared_admitted(
@@ -2530,6 +2582,7 @@ impl NativeSparqlEngine {
             request.base_iri,
             options.env,
             &admitted.parameters,
+            options.geo,
             &reporting.capability(),
         ) {
             Ok(prepared) => prepared,
@@ -2955,8 +3008,11 @@ impl NativeSparqlEngine {
         query: &str,
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
+        geo: &purrdf_geo_kernel::GeoProfile,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.cache.borrow_mut().prepare_in_env(query, base_iri, env)
+        self.cache
+            .borrow_mut()
+            .prepare_execution_plan(query, base_iri, env, &[], &[], geo)
     }
 
     /// [`Self::prepare_for`] for a request that carries substitutions: the plan is
@@ -2979,6 +3035,7 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
         admitted: &RequestParameters<'_>,
+        geo: &purrdf_geo_kernel::GeoProfile,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         self.cache.borrow_mut().prepare_execution_plan(
             query,
@@ -2986,6 +3043,7 @@ impl NativeSparqlEngine {
             env,
             &admitted.names,
             &admitted.exempt,
+            geo,
         )
     }
 
@@ -2994,6 +3052,7 @@ impl NativeSparqlEngine {
         query: &str,
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
+        geo: &purrdf_geo_kernel::GeoProfile,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<PreparedHandle, EvaluationFailure> {
         self.cache.borrow_mut().prepare_execution_plan_admitted(
@@ -3002,6 +3061,7 @@ impl NativeSparqlEngine {
             env,
             &[],
             &[],
+            geo,
             workspace,
         )
     }
@@ -3012,6 +3072,7 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
         admitted: &RequestParameters<'_>,
+        geo: &purrdf_geo_kernel::GeoProfile,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<PreparedHandle, EvaluationFailure> {
         self.cache.borrow_mut().prepare_execution_plan_admitted(
@@ -3020,6 +3081,7 @@ impl NativeSparqlEngine {
             env,
             &admitted.names,
             &admitted.exempt,
+            geo,
             workspace,
         )
     }
@@ -3063,6 +3125,9 @@ impl NativeSparqlEngine {
         functions: crate::user_fn::UserFunctionRegistry,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<crate::user_fn::BoundFunctionRegistry, RdfDiagnostic> {
+        functions
+            .validate_standard(&crate::WorkspaceCapability::resident())
+            .map_err(|error| EvaluationFailure::from(error).into_diagnostic())?;
         let mut bodies = crate::DetHashMap::with_hasher(crate::DetHasher::new());
         for (iri, func) in functions.sparql_bodied() {
             let prepared = self
@@ -3364,6 +3429,7 @@ impl NativeSparqlEngine {
             query_text,
             base_iri,
             options.env,
+            options.geo,
             &reporting.capability(),
         ) {
             Ok(prepared) => prepared,
@@ -3435,6 +3501,7 @@ impl NativeSparqlEngine {
                 query_text,
                 base_iri,
                 options.env,
+                options.geo,
                 &workspace.capability(),
             ) {
                 Ok(prepared) => prepared,
@@ -3496,7 +3563,8 @@ impl NativeSparqlEngine {
             .with_user_function_admission(options.user_function_admission)
             .with_property_functions(relations)
             .with_aggregates(aggregates)
-            .with_division_policy(options.division);
+            .with_division_policy(options.division)
+            .with_geo_profile(options.geo);
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
         if let Some(source) = options.remote {
@@ -3675,6 +3743,7 @@ impl NativeSparqlEngine {
                 request.base_iri,
                 options.env,
                 &admitted.parameters,
+                options.geo,
                 &workspace.capability(),
             )?;
             self.query_prepared_admitted(
@@ -3799,6 +3868,7 @@ impl NativeSparqlEngine {
             options.env,
             &declared,
             &exempt,
+            options.geo,
         )?;
         // The whole admission check, run ONCE here rather than on every run of this
         // execution: the algebra soundness walk, the feasibility replanning walk,
@@ -4292,6 +4362,7 @@ impl NativeSparqlEngine {
                 request.base_iri,
                 options.env,
                 &admitted,
+                options.geo,
                 &workspace.capability(),
             )?;
             let ctx = self.eval_ctx(dataset, &workspace)?;
@@ -4348,6 +4419,7 @@ impl NativeSparqlEngine {
                 request.base_iri,
                 options.env,
                 &admitted,
+                options.geo,
                 &workspace.capability(),
             )?;
             admitted.check_admitted(&prepared, options, &workspace.capability())?;
@@ -5315,6 +5387,8 @@ pub struct QueryOptions<'a> {
     /// expansion is an expression error (unbound, err:FOAR0002 in the governed
     /// evidence), as division by zero is.
     pub division: purrdf_xsd::exact::DivisionPolicy,
+    /// Immutable geographic references, coordinate operations, units and execution policy.
+    pub geo: &'a purrdf_geo_kernel::GeoProfile,
     /// Variables the caller binds before evaluation beyond the request's
     /// substitutions — names its context binds even where this request supplies no
     /// value for them (a SHACL node expression's scope variable whose argument
@@ -5361,6 +5435,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
             .field("load", &self.load.is_some())
             .field("xpath_regex", &self.xpath_regex)
             .field("division", &self.division)
+            .field("geo", &self.geo)
             .field("declared_prebound", &self.declared_prebound)
             .field("disjoint_language_strings", &self.disjoint_language_strings)
             .finish()
@@ -5409,6 +5484,7 @@ impl QueryOptions<'_> {
         load: None,
         xpath_regex: None,
         division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        geo: &purrdf_geo_kernel::binding::STANDARD_PROFILE,
         declared_prebound: &[],
         disjoint_language_strings: false,
     };
@@ -5564,6 +5640,14 @@ impl<'a> QueryOptions<'a> {
     #[must_use]
     pub const fn with_division(mut self, division: purrdf_xsd::exact::DivisionPolicy) -> Self {
         self.division = division;
+        self
+    }
+
+    /// Select explicit geographic bindings and independent numerical limits.
+    /// CRS84 remains the immutable WGS84 longitude/latitude reference.
+    #[must_use]
+    pub const fn with_geo(mut self, profile: &'a purrdf_geo_kernel::GeoProfile) -> Self {
+        self.geo = profile;
         self
     }
 
@@ -5903,6 +5987,7 @@ fn admit_structure_with_memory<const CONTEXTUAL: bool>(
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<(), EvaluationFailure> {
     crate::stack::height::admit_query_with_memory(query, memory)?;
+    crate::user_fn::validate_standard_algebra_with_memory(query_pattern(query), memory)?;
     let validation = if CONTEXTUAL {
         query.validate_with_memory(memory)
     } else {
@@ -5975,6 +6060,17 @@ fn check_prepared_registries_with_memory(
     options: QueryOptions<'_>,
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<(), EvaluationFailure> {
+    options
+        .functions
+        .declarations()
+        .validate_standard(memory.admission_mut().workspace())?;
+    if prepared.geo != options.geo.query_identity() {
+        return Err(EvaluationFailure::native_diagnostic(
+            "native-sparql-geo-profile-mismatch",
+            &"prepared geographic laws, carrier bindings or execution policy differ",
+            memory.admission_mut().workspace(),
+        ));
+    }
     let supplied = crate::property_fn_plan::registry_fingerprint_with_memory(
         options.property_functions(),
         memory,
@@ -6192,6 +6288,7 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
         .with_aggregates(options.aggregates())
         .with_call_depth(options.call_depth)
         .with_division_policy(options.division)
+        .with_geo_profile(options.geo)
         .with_disjoint_language_strings(options.disjoint_language_strings);
     if let Some(graph) = options.focus_graph {
         ctx = ctx.with_focus_graph(graph);
@@ -6545,6 +6642,7 @@ mod tests {
         let parameters = ["?a", "?b"];
         let mut key = PlanKeyScratch::default();
         PlanCacheKey {
+            geo: purrdf_geo_kernel::binding::STANDARD_PROFILE.query_identity(),
             query: "SELECT * WHERE { ?s ?p ?o }",
             base_iri: Some("http://example.org/base/"),
             options: &options,
@@ -6576,6 +6674,9 @@ mod tests {
         for field in ["relations", "", "SELECT * WHERE { ?s ?p ?o }"] {
             framed(&mut expected, field);
         }
+        purrdf_geo_kernel::binding::STANDARD_PROFILE
+            .query_identity()
+            .append_to(&mut expected);
         assert_eq!(key.bytes, expected);
     }
 

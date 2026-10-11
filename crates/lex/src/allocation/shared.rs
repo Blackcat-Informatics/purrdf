@@ -12,6 +12,22 @@ use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering, fence};
 
+mod buffers;
+pub use buffers::{SharedBuffer, SharedBufferMut};
+
+fn clone_count(strong: &AtomicUsize) -> Result<(), SharedCloneError> {
+    let mut count = strong.load(Ordering::Relaxed);
+    loop {
+        if count >= usize::MAX / 2 {
+            return Err(SharedCloneError);
+        }
+        match strong.compare_exchange_weak(count, count + 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(()),
+            Err(current) => count = current,
+        }
+    }
+}
+
 struct Header<T> {
     strong: AtomicUsize,
     value: T,
@@ -66,6 +82,17 @@ unsafe impl<T: Send + Sync> Send for Shared<T> {}
 unsafe impl<T: Send + Sync> Sync for Shared<T> {}
 
 impl<T> Shared<T> {
+    /// Observe the current strong-owner count without allocating or cloning.
+    /// A live reference keeps the header valid; concurrent owners may change
+    /// the returned snapshot immediately after the atomic load.
+    #[must_use]
+    pub fn strong_count(&self) -> usize {
+        // SAFETY: this reference owns one strong count in the live header.
+        unsafe { self.pointer.as_ref() }
+            .strong
+            .load(Ordering::Acquire)
+    }
+
     /// Borrow the payload mutably only while this is the sole strong owner.
     /// There are no weak owners or raw exported pointers in this protocol.
     pub fn get_mut(&mut self) -> Option<&mut T> {
@@ -151,21 +178,7 @@ impl<T> Shared<T> {
     pub fn try_clone(&self) -> Result<Self, SharedCloneError> {
         // SAFETY: self holds a strong reference, so the header is live.
         let header = unsafe { self.pointer.as_ref() };
-        let mut count = header.strong.load(Ordering::Relaxed);
-        loop {
-            if count >= usize::MAX / 2 {
-                return Err(SharedCloneError);
-            }
-            match header.strong.compare_exchange_weak(
-                count,
-                count + 1,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(current) => count = current,
-            }
-        }
+        clone_count(&header.strong)?;
         Ok(Self {
             pointer: self.pointer,
             _owner: PhantomData,
@@ -264,11 +277,26 @@ impl<V: Send + Sync + 'static> SharedOwned<V> {
         value: V,
         owner: O,
     ) -> Result<Self, SharedAllocError> {
-        let input = OwnedPayload {
-            value,
-            _owner: owner,
-        };
-        let shared = Shared::try_new_with(move || input)?;
+        Self::try_from_admitted_with(|| (value, owner))
+    }
+
+    /// Allocate shared control before moving an admitted value and original owner.
+    /// The infallible factory is not invoked on refusal, leaving the caller's
+    /// payload and grant available for its original failure cleanup.
+    ///
+    /// # Errors
+    /// Returns allocator refusal before ownership transfer. The returned payload
+    /// must already have admission for this concrete control layout.
+    pub fn try_from_admitted_with<O: Send + Sync + 'static>(
+        factory: impl FnOnce() -> (V, O),
+    ) -> Result<Self, SharedAllocError> {
+        let shared = Shared::try_new_with(|| {
+            let (value, owner) = factory();
+            OwnedPayload {
+                value,
+                _owner: owner,
+            }
+        })?;
         let pointer = shared.pointer.cast();
         core::mem::forget(shared);
         Ok(Self {
@@ -280,6 +308,32 @@ impl<V: Send + Sync + 'static> SharedOwned<V> {
             },
             _value: PhantomData,
         })
+    }
+}
+
+impl SharedOwned<()> {
+    /// Retain a producer's existing account without copying its live payloads.
+    /// Both shared controls are admitted before allocating this owner or moving
+    /// the original account. `replacement` starts a separate empty account;
+    /// its construction must not detach any of the existing payload's grants.
+    ///
+    /// # Errors
+    /// Preserves checked layout, original admission and physical refusal. On
+    /// failure the original account remains in `storage` for payload cleanup.
+    pub fn retain_current<S: super::Admission + Send + Sync + 'static>(
+        storage: &mut S,
+        replacement: S,
+        admitted: usize,
+        control: Layout,
+    ) -> Result<(Self, usize), super::StorageError> {
+        let total = admitted
+            .checked_add(control.size())
+            .and_then(|bytes| bytes.checked_add(Self::allocation_layout::<S>().size()))
+            .ok_or(super::StorageError::SizeOverflow)?;
+        storage.resize(total)?;
+        Self::try_from_admitted_with(|| ((), core::mem::replace(storage, replacement)))
+            .map(|owner| (owner, total))
+            .map_err(|_| super::StorageError::AllocationFailed)
     }
 }
 
@@ -396,6 +450,16 @@ impl SharedText {
             TextStorage::Static(text) => text,
         }
     }
+    /// Original owned UTF-8 capacity; static text owns no allocation.
+    /// This describes surviving storage, rather than proving a future allocation.
+    #[must_use]
+    pub fn owned_capacity(&self) -> usize {
+        match &self.0 {
+            TextStorage::Owned(text) => text.capacity(),
+            TextStorage::Static(_) => 0,
+        }
+    }
+
     /// Clone the original shared owner without allocating.
     ///
     /// # Errors

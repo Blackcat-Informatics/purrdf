@@ -1053,8 +1053,35 @@ export class Reasoner {
  */
 export type BlankScopeMode = "keep" | "merge";
 
+/** Immutable strict native geographic profile and scalar/batch request session. */
+export class GeoSession {
+  /** Omitted profile selects the standard CRS84 profile; invalid input throws. */
+  constructor(profile?: string | null);
+  /** Canonical strict version-one profile, including its explicit limits. */
+  profile(): string;
+  /**
+   * Return canonical JSON for completed and semantic refusal outcomes.
+   * Operational refusal throws before another JSON envelope is allocated.
+   */
+  call(request: string): string;
+  /** Construct immutable ordered buckets from a strict point-index request. */
+  pointIndex(request: string): GeoPointIndex;
+  free(): void;
+}
+
+/** Reusable immutable native point index created by GeoSession.pointIndex. */
+export class GeoPointIndex {
+  /** Search under the native physical/reported law; operational refusal throws. */
+  call(request: string): string;
+  free(): void;
+}
+
 export class QueryEngine {
   constructor();
+  /** Select this immutable profile for future operations; started jobs keep their snapshot. */
+  setGeoSession(session: GeoSession): void;
+  /** Select strict profile JSON; invalid input leaves the current selection intact. */
+  setGeoProfile(profile: string): void;
   /**
    * How a blank node's scope crosses to JS in the typed results this engine returns:
    * see {@link BlankScopeMode}. It applies to `query`, `select`, `queryGoverned` and

@@ -175,6 +175,7 @@ impl GraphDerivedRelations {
         &self,
         engine: &NativeSparqlEngine,
         dataset: &RdfDataset,
+        geo: &purrdf_validate::geo::GeoProfile,
     ) -> PyResult<(PreparedExecution, ExtensionEnv)> {
         let registry = build_relations(self.specs.clone(), dataset)?;
         let aggregates =
@@ -191,6 +192,7 @@ impl GraphDerivedRelations {
                 None,
                 &borrowed,
                 purrdf_sparql_eval::QueryOptions::new()
+                    .with_geo(geo)
                     .with_env(&env)
                     .with_division(self.division),
             )
@@ -267,6 +269,8 @@ pub(crate) struct PyPreparedQuery {
     /// engine, by `REGEX` and `REPLACE`, so the fresh engine [`run`](Self::run) builds
     /// is given it again; `None` keeps the compatibility pattern behaviour.
     xpath_regex: Option<crate::xpath_regex::Selection>,
+    /// The immutable profile and identity retained from admission through each run.
+    geo: purrdf_validate::geo::GeoProfileSnapshot,
     /// The precision policy `Store.prepare`'s `division` named: the plan is admitted
     /// under it and every [`run`](Self::run) evaluates under it, so a quotient reads the
     /// same on the first run and the hundredth.
@@ -357,7 +361,7 @@ impl PyPreparedQuery {
             // from one point in time. Both fields are replaced together, and only on
             // success: a rebuild that fails leaves the handle exactly as it was.
             let readmitted = match self.graph_derived.as_ref() {
-                Some(sources) => Some(sources.readmit(&engine, &dataset)?),
+                Some(sources) => Some(sources.readmit(&engine, &dataset, &self.geo)?),
                 None => None,
             };
             if let Some((execution, env)) = readmitted {
@@ -392,6 +396,7 @@ impl PyPreparedQuery {
             // `execute` refuses, and the pairing is what keeps that refusal a guard
             // against a caller's mistake rather than a trap this surface walks into.
             let options = purrdf_sparql_eval::QueryOptions::new()
+                .with_geo(&self.geo)
                 .with_env(&self.env)
                 .with_division(self.division);
             engine
@@ -477,6 +482,7 @@ pub(super) fn prepare(
     aggregates: Option<&AggregateRegistry>,
     standpoint_predicates: Option<(String, String)>,
     xpath_regex: Option<crate::xpath_regex::Selection>,
+    geo: purrdf_validate::geo::GeoProfileSnapshot,
     graph_derived: Option<GraphDerivedRelations>,
     division: DivisionPolicy,
 ) -> PyResult<PyPreparedQuery> {
@@ -488,6 +494,7 @@ pub(super) fn prepare(
             None,
             &borrowed,
             purrdf_sparql_eval::QueryOptions::new()
+                .with_geo(&geo)
                 .with_env(&env)
                 .with_division(division),
         )
@@ -506,6 +513,7 @@ pub(super) fn prepare(
         graph_derived,
         standpoint_predicates,
         xpath_regex,
+        geo,
         division,
     })
 }

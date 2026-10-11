@@ -566,6 +566,7 @@ pub fn try_parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     let storage_error = |error| match error {
         crate::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
         crate::bigint::LimbScratchError::AllocationFailed => StorageError::AllocationFailed,
+        crate::bigint::LimbScratchError::Storage(error) => error,
         crate::bigint::LimbScratchError::Capacity { .. }
         | crate::bigint::LimbScratchError::Exhausted { .. }
         | crate::bigint::LimbScratchError::Retained { .. } => StorageError::AdmissionFailed,

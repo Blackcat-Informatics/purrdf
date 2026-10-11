@@ -175,6 +175,31 @@ const fn cli_materialize_limits(
 }
 
 fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
+    if cli.geo_profile.is_some()
+        && !matches!(
+            &cli.cmd,
+            Command::Geo { .. } | Command::Query { .. } | Command::Update { .. }
+        )
+    {
+        return Err(CliError::Usage(
+            "--geo-profile requires geo, query or update".to_owned(),
+        ));
+    }
+    let geo = cli
+        .geo_profile
+        .as_ref()
+        .map(|path| {
+            let path = path
+                .to_str()
+                .ok_or_else(|| CliError::Usage("--geo-profile path is not UTF-8".to_owned()))?;
+            let text = source::read_text(path, "geographic profile")?;
+            purrdf_validate::geo::profile_from_str(&text)
+                .map_err(|error| CliError::Usage(format!("--geo-profile: {error}")))
+        })
+        .transpose()?;
+    let selected_geo = geo
+        .as_ref()
+        .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE);
     let ledger_target = cli.ledger_target();
     let jsonld_options = cli
         .jsonld_options
@@ -194,6 +219,35 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         })
         .transpose()?;
     match &cli.cmd {
+        Command::Geo { input, output } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "geo emits a typed geographic record and has no RDF loss ledger",
+                "geo emits a typed geographic record and accepts no JSON-LD options",
+            )?;
+            let text = source::read_text(input, "geographic request")?;
+            let session = match geo {
+                Some(profile) => purrdf_validate::geo::GeoSession::try_new(
+                    profile,
+                    purrdf::geo::ExecutionPolicy::geometry(),
+                )
+                .map_err(|error| CliError::Runtime(format!("geographic profile: {error}")))?,
+                None => purrdf_validate::geo::GeoSession::default(),
+            };
+            let (response, success) = session
+                .try_response(&text)
+                .map_err(|error| CliError::Runtime(format!("geographic operation: {error}")))?;
+            sink::write_out(output, response.as_bytes())?;
+            if success {
+                Ok(CliOutcome::Complete)
+            } else {
+                Err(CliError::Runtime(
+                    "geographic operation refused; the typed response contains the reason"
+                        .to_owned(),
+                ))
+            }
+        }
         Command::Convert {
             from,
             inputs,
@@ -255,6 +309,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             query,
         } => query::run(
             &query::QueryOptions {
+                geo: selected_geo,
                 data,
                 base: base.as_deref(),
                 entailment: *entailment,
@@ -304,6 +359,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             update,
         } => update::run(
             &update::UpdateOptions {
+                geo: selected_geo,
                 data,
                 from: *from,
                 output,

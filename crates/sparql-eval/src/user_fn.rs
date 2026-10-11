@@ -426,10 +426,144 @@ pub type AdmittedNativeFnBody = Arc<
         + Sync,
 >;
 
+/// An admitted native body with internal work and cancellation checkpoints.
+/// The result keeps its original physical allocation, including across clones.
+pub type MeteredNativeFnBody =
+    Arc<dyn Fn(&NativeFnCall<'_>) -> Result<Option<WorkspaceTerm>, EvalError> + Send + Sync>;
+
+/// Arguments and immutable capabilities of one native function invocation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct NativeFnCall<'a> {
+    /// The actual call-position IRI.
+    pub iri: &'a str,
+    /// Values borrowed from the evaluator's original argument owners.
+    pub args: &'a [&'a TermValue],
+    /// Work charging and stop checks, with no evaluator or dataset access.
+    pub context: &'a NativeFnContext<'a>,
+    /// Actual physical admission shared with the invoking query.
+    pub workspace: &'a WorkspaceCapability,
+    /// Caller-selected immutable geographic bindings and numerical policy.
+    pub geo: &'a purrdf_geo_kernel::GeoProfile,
+}
+
+#[derive(Clone, Copy)]
+enum NativeCharge {
+    Work(u64),
+    WorkspaceGrowth(u64),
+    Checkpoint,
+}
+
+/// A borrowed native body's restricted work and cancellation capability.
+/// Numerical code releases its floating environment guard before invoking it.
+pub struct NativeFnContext<'a> {
+    charge: &'a dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
+    stopped: core::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+    workspace: &'a WorkspaceCapability,
+    physical_failure: core::cell::RefCell<Option<EvalError>>,
+}
+purrdf_hash::debug_non_exhaustive!(NativeFnContext<'_> { stopped });
+
+impl NativeFnContext<'_> {
+    /// Borrow the actual query's physical admission capability.
+    #[must_use]
+    pub const fn workspace(&self) -> &WorkspaceCapability {
+        self.workspace
+    }
+
+    /// Preserve the first actual physical failure without rendering a second
+    /// diagnostic or replacing the governor's original stop cause.
+    pub(crate) fn record_physical_failure(&self, error: EvalError) {
+        let mut failure = self.physical_failure.borrow_mut();
+        if failure.is_none() {
+            *failure = Some(error);
+        }
+    }
+
+    /// Charge the operation law's documented units before the next work chunk.
+    /// # Errors
+    /// Returns the first governor that refused work or stopped this invocation.
+    pub fn charge_work(&self, units: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::Work(units))
+    }
+    /// Report additional numerical-policy workspace to the scratch governor.
+    /// Physical ownership must also use [`NativeFnCall::workspace`] before birth.
+    /// # Errors
+    /// Returns the original refusing governor; this never acquires a physical grant.
+    pub fn charge_workspace_growth(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::WorkspaceGrowth(bytes))
+    }
+    /// Poll the selected host stop law without consuming fuel.
+    /// # Errors
+    /// Returns the governor that stopped the call.
+    pub fn checkpoint(&self) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::Checkpoint)
+    }
+    fn apply(&self, charge: NativeCharge) -> Result<(), purrdf_core::TrippedGovernor> {
+        if let Some(stopped) = self.stopped.get() {
+            return Err(stopped);
+        }
+        let result = (self.charge)(charge);
+        if let Err(stopped) = result {
+            self.stopped.set(Some(stopped));
+        }
+        result
+    }
+}
+
+pub(crate) fn metered_native_call<D: DatasetView + Sync, T>(
+    ctx: &EvalCtx<'_, D>,
+    work_point: crate::governor::ChargePoint,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
+    let charge = |point| match point {
+        NativeCharge::Work(units) => ctx.charge_occurrences(work_point, units),
+        NativeCharge::WorkspaceGrowth(bytes) => {
+            if let Some(stopped) = ctx.stop_check() {
+                return Err(stopped);
+            }
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+        }
+        NativeCharge::Checkpoint => ctx.stop_check().map_or(Ok(()), Err),
+    };
+    native_call(&ctx.growth, &charge, body)
+}
+
+fn native_call<T>(
+    workspace: &WorkspaceCapability,
+    charge: &dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
+    let context = NativeFnContext {
+        charge,
+        stopped: core::cell::Cell::new(None),
+        workspace,
+        physical_failure: core::cell::RefCell::new(None),
+    };
+    let result = body(&context);
+    let failure = context.physical_failure.into_inner();
+    (result, context.stopped.get(), failure)
+}
+
+pub(crate) fn unmetered_native_call<T>(
+    workspace: &WorkspaceCapability,
+    body: impl FnOnce(&NativeFnContext<'_>) -> Result<T, EvalError>,
+) -> Result<T, EvalError> {
+    let (result, _, failure) = native_call(workspace, &|_| Ok(()), body);
+    if let Some(error) = failure {
+        drop(result);
+        Err(error)
+    } else {
+        result
+    }
+}
+
 #[derive(Clone)]
 enum NativeBody {
     Resident(NativeFnBody),
     Admitted(AdmittedNativeFnBody),
+    Metered(MeteredNativeFnBody),
+    Standard(crate::geo::functions::GeofFunction),
 }
 
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
@@ -686,6 +820,99 @@ pub struct NativeFunction {
     pub(crate) volatility: Volatility,
 }
 
+macro_rules! standard_native_population {
+    ($($index:literal),* $(,)?) => { [$(NativeFunction {
+        body: NativeBody::Standard(crate::geo::functions::GeofFunction::ALL[$index]),
+        arity: crate::geo::functions::GeofFunction::ALL[$index].arity(),
+        volatility: Volatility::Stable,
+    }),*] };
+}
+static STANDARD_NATIVE: [NativeFunction; crate::geo::functions::GeofFunction::COUNT] = standard_native_population!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+);
+
+fn standard_native(iri: &str) -> Option<&'static NativeFunction> {
+    let local = iri.strip_prefix(purrdf_iri::vocab::ogc::geof::NS)?;
+    crate::geo::functions::GeofFunction::ALL
+        .iter()
+        .position(|function| function.local_name() == local)
+        .map(|index| &STANDARD_NATIVE[index])
+}
+
+/// A parser namespace cannot intercept an immutable standard scalar function.
+pub(crate) fn validate_standard_parser(
+    options: &purrdf_sparql_algebra::ParserOptions,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut conflict: Option<&str> = None;
+    for function in crate::geo::functions::GeofFunction::ALL {
+        // A namespace may end within either the official prefix or local name;
+        // compare the borrowed split spelling without constructing a String.
+        for namespace in &options.extension_fn_namespaces {
+            let prefix = purrdf_iri::vocab::ogc::geof::NS;
+            let intercepts = prefix.starts_with(namespace)
+                || namespace
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| function.local_name().starts_with(suffix));
+            if intercepts && conflict.is_none_or(|old| function.local_name() < old) {
+                conflict = Some(function.local_name());
+            }
+        }
+    }
+    if let Some(local) = conflict {
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::StandardFunctionConflict,
+            format_args!(
+                "extension parser namespace intercepts immutable standard function <{}{local}>",
+                purrdf_iri::vocab::ogc::geof::NS
+            ),
+            workspace,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_standard_algebra_with_memory(
+    pattern: &purrdf_sparql_algebra::GraphPattern,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    use purrdf_sparql_algebra::{Expression, Flow, Function, NodeRef, Visit};
+    let mut conflict = None;
+    purrdf_sparql_algebra::walk::walk_pre_post_with_memory(
+        NodeRef::Pattern(pattern),
+        |visit, node, _| -> Result<Flow, purrdf_lex::allocation::StorageError> {
+            if visit == Visit::Enter
+                && let NodeRef::Expr(Expression::FunctionCall(Function::Purrdf(call), _)) = node
+                && standard_native(&call.iri).is_some()
+            {
+                conflict = Some(call.iri.as_str());
+                return Ok(Flow::Stop);
+            }
+            Ok(Flow::Descend)
+        },
+        memory,
+    )
+    .map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "standard scalar validation walk")
+    })?;
+    // The shared walk's temporary grant must cover the work-list until it dies.
+    // Its owner callback is the lower Memory scope, not a post-traversal fee.
+    if let Some(iri) = conflict {
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::StandardFunctionConflict,
+            format_args!(
+                "closed function annotation intercepts immutable standard function <{iri}>"
+            ),
+            memory.admission_mut().workspace(),
+        ));
+    }
+    Ok(())
+}
+
 purrdf_hash::debug_non_exhaustive!(
     /// The closure body has no `Debug` impl, so only the declared arity and
     /// volatility are shown (the same two fields the fork-join parallel gate and
@@ -856,6 +1083,62 @@ impl UserFunctionRegistry {
         self.register_native_body(iri.into(), arity, volatility, NativeBody::Admitted(body));
     }
 
+    /// Register a producer that admits its own allocations and meters native work.
+    pub fn register_native_metered(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: MeteredNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Metered(body));
+    }
+
+    pub(crate) fn register_standard_geo(
+        &mut self,
+        iri: String,
+        function: crate::geo::functions::GeofFunction,
+    ) {
+        self.register_native_body(
+            iri,
+            function.arity(),
+            Volatility::Stable,
+            NativeBody::Standard(function),
+        );
+    }
+
+    /// Reject any non-identical shadow of the immutable official scalar set.
+    /// The minimum conflicting IRI makes the refusal independent of map order.
+    pub(crate) fn validate_standard(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let nonnative = self
+            .fns
+            .keys()
+            .chain(self.exprs.keys())
+            .filter(|iri| standard_native(iri).is_some());
+        let native = self.native.iter().filter_map(|(iri, native)| {
+            let standard = standard_native(iri)?;
+            let same_body = matches!((&native.body, &standard.body),
+                (NativeBody::Standard(left), NativeBody::Standard(right)) if left == right);
+            (!same_body
+                || native.arity != standard.arity
+                || native.volatility != standard.volatility)
+                .then_some(iri)
+        });
+        if let Some(iri) = nonnative.chain(native).min() {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::StandardFunctionConflict,
+                format_args!(
+                    "caller registration conflicts with immutable standard function <{iri}>"
+                ),
+                workspace,
+            ));
+        }
+        Ok(())
+    }
+
     fn register_native_body(
         &mut self,
         iri: String,
@@ -903,7 +1186,7 @@ impl UserFunctionRegistry {
     /// Resolve a call-position IRI to its declared native function, if any.
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
-        self.native.get(iri)
+        standard_native(iri).or_else(|| self.native.get(iri))
     }
 
     /// Resolve a call-position IRI to its declared dataset-aware
@@ -1623,12 +1906,13 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 /// An arity violation stays hard on purpose: the call
 /// as written cannot be evaluated at all, which is a defect in the query text
 /// rather than a value this row happens not to have.
-pub(crate) fn eval_native_function(
+pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     native: &NativeFunction,
     iri: &str,
     args: &[Option<TermValue>],
-    workspace: &WorkspaceCapability,
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let workspace = &ctx.growth;
     // Fail-fast: a wrong-count call never reaches the host closure with a short
     // or long slice.
     if !native.arity.accepts(args.len()) {
@@ -1665,10 +1949,51 @@ pub(crate) fn eval_native_function(
     // surface nondeterministically. The error message is fixed and
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
-    match catch_unwind(AssertUnwindSafe(|| match &native.body {
-        NativeBody::Resident(body) => body(&values).map(|value| value.map(WorkspaceTerm::resident)),
-        NativeBody::Admitted(body) => body(&values, workspace),
-    })) {
+    if let Err(stopped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
+        ctx.expression_barrier.record(stopped);
+        return Ok(None);
+    }
+    let (result, stopped, physical_failure) = metered_native_call(
+        ctx,
+        crate::governor::ChargePoint::NativeFunctionWork,
+        |context| {
+            let call = NativeFnCall {
+                iri,
+                args: &values,
+                context,
+                workspace,
+                geo: ctx.geo,
+            };
+            catch_unwind(AssertUnwindSafe(|| match &native.body {
+                NativeBody::Resident(body) => {
+                    body(&values).map(|value| value.map(WorkspaceTerm::resident))
+                }
+                NativeBody::Admitted(body) => body(&values, workspace),
+                NativeBody::Metered(body) => body(&call),
+                NativeBody::Standard(function) => {
+                    crate::geo::functions::evaluate_standard(*function, &call)
+                }
+            }))
+        },
+    );
+    // The actual physical account's first failure outranks an observed governor.
+    // Never render a second diagnostic after admission has already stopped.
+    if let Some(error) = physical_failure {
+        drop(result);
+        return Err(error);
+    }
+    if workspace.has_failed() {
+        return match result {
+            Ok(Err(error)) => Err(error),
+            _ => Err(EvalError::WorkspaceStopped),
+        };
+    }
+    if let Some(stopped) = stopped {
+        drop(result);
+        ctx.expression_barrier.record(stopped);
+        return Ok(None);
+    }
+    match result {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
         Err(_) => Err(NativeDiagnostic::error(
             NativeDiagnosticKind::FunctionOperational,

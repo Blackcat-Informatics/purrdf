@@ -224,6 +224,11 @@ the IRI failure without parsing English. The error message and the record's
   appended `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (see
   [Dated regular-expression laws](#dated-regular-expression-laws)); every existing
   entry point keeps its prototype and behaviour.
+  The same unshipped bump adds the eleven geo session, point-index and explicit
+  `*_with_geo` query/update entry points, and appends `PURRDF_STATUS_GEO_ERROR`.
+  Existing query/update functions keep their prototypes and caller policy;
+  the new entry points carry the caller's selected geo session into the same
+  native evaluator.
 
 ## Shapes-graph tools
 

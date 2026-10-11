@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-geo-kernel"
+description = "Deterministic geometry, geodesy and spatial indexes shared by PurRDF hosts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-geo-kernel"
+rust-version.workspace = true
+keywords = ["geosparql", "rdf", "sparql", "wkt", "geojson"]
+categories = ["science::geo", "parser-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+purrdf-core = { workspace = true }
+purrdf-hash = { workspace = true }
+purrdf-iri = { workspace = true }
+purrdf-lex = { workspace = true }
+purrdf-xsd = { workspace = true }
+
+[dev-dependencies]
+purrdf-alloc-probe = { workspace = true }
+purrdf-stack = { workspace = true }
+purrdf-testkit = { workspace = true }
+sha2 = { workspace = true }
+
+[[test]]
+name = "cells_determinism"
+harness = false
+
+[[test]]
+name = "geo_determinism"
+harness = false
+
+[[bench]]
+name = "relate"
+harness = false
+
+[[bench]]
+name = "geojson_parse"
+harness = false
+
+[[bench]]
+name = "covers"
+harness = false
+
+[[bench]]
+name = "geodesic"
+harness = false
+
+[[bench]]
+name = "cells"
+harness = false
+
+[[bench]]
+name = "transforms"
+harness = false

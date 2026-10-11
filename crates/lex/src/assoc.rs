@@ -52,11 +52,27 @@ where
 /// replaces, or append the pair when there is none: the list keeps its order and
 /// its length grows only for a new key.
 pub fn insert<K: PartialEq, V>(pairs: &mut Vec<(K, V)>, key: K, value: V) -> Option<V> {
+    try_insert(pairs, key, value, |pairs, pair| {
+        pairs.push(pair);
+        Ok::<(), core::convert::Infallible>(())
+    })
+    .unwrap_or_else(|never| match never {})
+}
+
+/// The same first-match update with a caller-owned fallible append operation.
+/// # Errors
+/// Preserves the original append refusal without changing existing members.
+pub fn try_insert<K: PartialEq, V, E>(
+    pairs: &mut Vec<(K, V)>,
+    key: K,
+    value: V,
+    append: impl FnOnce(&mut Vec<(K, V)>, (K, V)) -> Result<(), E>,
+) -> Result<Option<V>, E> {
     match get_mut(pairs, &key) {
-        Some(slot) => Some(mem::replace(slot, value)),
+        Some(slot) => Ok(Some(mem::replace(slot, value))),
         None => {
-            pairs.push((key, value));
-            None
+            append(pairs, (key, value))?;
+            Ok(None)
         }
     }
 }

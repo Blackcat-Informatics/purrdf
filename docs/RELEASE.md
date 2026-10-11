@@ -91,6 +91,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-ed25519`
 - `purrdf-gts`
 - `purrdf-core`
+- `purrdf-geo-kernel`
 - `purrdf-columnar`
 - `purrdf-datalog`
 - `purrdf-entail`
@@ -188,11 +189,12 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-mime`
+### Outstanding bootstrap: `purrdf-geo-kernel` and `purrdf-mime`
 
-One crate is in the release set above and requires a new record before tagging.
-`purrdf-mime` is the **twenty-fourth** crate in publish order. Its implementation
-is part of the workspace; the registry's public index has no record for it.
+Two crates are in the release set above and require new records before tagging.
+`purrdf-geo-kernel` is the **thirteenth** crate in publish order;
+`purrdf-mime` is the **twenty-fifth** crate in publish order. Their implementations
+are part of the workspace; the registry's public index has no records for them.
 Create the isolated empty bootstrap package, configure its Trusted Publisher
 entry and lock, then reconcile the ledger after the public preflight verifies
 the record. No functional publication is authorized by this source addition.
@@ -350,7 +352,7 @@ git push origin rust-v0.1.5
 
 The workflow refuses before packaging if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
-registry; see [bootstrap status](#outstanding-bootstrap-purrdf-mime). It publishes
+registry; see [bootstrap status](#outstanding-bootstrap-purrdf-geo-kernel-and-purrdf-mime). It publishes
 functional crates in the declared dependency order and skips a version already
 present. A partially completed release resumes with `gh run rerun <run-id>`.
 

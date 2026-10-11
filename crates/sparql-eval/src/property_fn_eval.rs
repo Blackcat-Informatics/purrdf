@@ -891,13 +891,35 @@ fn eval_call_over<D: DatasetView + Sync>(
         let invocation_ceiling = ceiling
             .filter(|_| plan.ceiling_is_offerable)
             .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
-        let mut cursor = open_with_workspace_contained(
-            relation.as_ref(),
-            &call.iri,
-            &pf_args,
-            invocation_ceiling,
-            &ctx.growth,
-        )?;
+        let (opened, stopped, physical_failure) = crate::user_fn::metered_native_call(
+            ctx,
+            ChargePoint::PropertyFunctionWork,
+            |context| {
+                open_with_workspace_contained(
+                    relation.as_ref(),
+                    &call.iri,
+                    &pf_args,
+                    invocation_ceiling,
+                    &ctx.growth,
+                    Some(context),
+                    ctx.geo,
+                )
+            },
+        );
+        if let Some(error) = physical_failure {
+            drop(opened);
+            return Err(error);
+        }
+        if ctx.growth.has_failed() {
+            drop(opened);
+            return Err(EvalError::WorkspaceStopped);
+        }
+        if let Some(governor) = stopped {
+            drop(opened);
+            tripped = Some(governor);
+            break 'input;
+        }
+        let mut cursor = opened?;
         // The generation, read HERE and once: an index-backed relation pins its snapshot
         // when it opens, so this is the instant at which "which version is answering" is
         // true of every row this cursor will go on to emit. See `PfCursor::generation`.

@@ -786,14 +786,6 @@ fingerprints = ["rule:length-prefix-frame"]
 names = []
 
 [[job.variant]]
-symbol = "purrdf_geo::relation::Digest::field"
-file = "crates/geo/src/relation.rs"
-detector = "forbidden"
-criterion = "a"
-anchor = "purrdf_geo::relation::Digest::field"
-reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen."
-
-[[job.variant]]
 symbol = "purrdf_datalog::resolve_fol::frame"
 file = "crates/datalog/src/resolve_fol.rs"
 detector = "forbidden"
@@ -916,14 +908,6 @@ detector = "forbidden"
 criterion = "b"
 anchor = "purrdf_shapes::json_schema::numeric_order::Decimal"
 reason = "The numeric-order patterns are written digit by digit, so a range bound is kept as its integer and fraction digit strings; the dyadic expansion itself is BigInt::from_binary, which this converts to those strings."
-
-[[job.variant]]
-symbol = "purrdf_geo::exact::Int::pow10"
-file = "crates/geo/src/exact.rs"
-detector = "forbidden"
-criterion = "c"
-anchor = "purrdf_geo::exact::Int"
-reason = "The geometry-facing Int wraps the shared exact Integer facade; its power-of-ten constructor delegates to the single purrdf-xsd BigInt arithmetic home and adapts the result to the geometric value type. It owns no separate integer representation or arithmetic engine."
 
 [[job.variant]]
 symbol = "purrdf_testkit::exact::Natural::mul_small"
@@ -2405,7 +2389,7 @@ reason = "Each grammar's own parser cursor (Turtle/TriG, SRL, SPARQL) advancing 
 
 [[distinct]]
 members = [
-    "purrdf_geo::wkt::Cursor::eat",
+    "purrdf_geo_kernel::wkt::Cursor::eat",
     "purrdf_jsonschema::ecma::Parser::eat",
     "purrdf_shex::parser::Parser::eat",
 ]

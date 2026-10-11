@@ -156,6 +156,41 @@ impl Object {
         self
     }
 
+    /// Construct the same first-match member under one original native account.
+    /// Owned input values must already belong to that account or their explicit
+    /// caller; borrowed text and primitive number spellings are admitted here.
+    /// # Errors
+    /// Preserves the first checked layout, admission or physical refusal.
+    pub fn with_memory<S: crate::allocation::Admission + ?Sized>(
+        mut self,
+        name: &str,
+        value: impl super::record::IntoJsonNative,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<Self, crate::allocation::StorageError> {
+        let name = memory.string(name)?;
+        let value = value.into_json_native(memory)?;
+        let old = crate::assoc::try_insert(&mut self.members, name, value, |members, entry| {
+            memory.push(members, entry)
+        })?;
+        drop(old);
+        Ok(self)
+    }
+
+    /// Use a short borrow of the same native record account for this member.
+    /// Nested value producers finish before the borrow, so a fluent record can
+    /// share one account with its child producers without retaining a mutable
+    /// borrow across the next member's construction.
+    /// # Errors
+    /// Returns the unchanged native member construction refusal.
+    pub fn with_memory_cell<S: crate::allocation::Admission + ?Sized>(
+        self,
+        name: &str,
+        value: impl super::record::IntoJsonNative,
+        memory: &std::cell::RefCell<crate::allocation::Memory<'_, S>>,
+    ) -> Result<Self, crate::allocation::StorageError> {
+        self.with_memory(name, value, &mut memory.borrow_mut())
+    }
+
     /// Remove the first member named `name`, keeping the others' order.
     pub fn remove(&mut self, name: &str) -> Option<Value> {
         let index = self.members.iter().position(|(member, _)| member == name)?;
@@ -468,105 +503,157 @@ impl Value {
 
 // ── Drop, Clone, PartialEq over work lists ─────────────────────────────────
 
-impl Drop for Value {
-    /// Every container below this one is moved onto a heap work list and
-    /// emptied there, so no drop recurses a level per nesting level. A
-    /// scalar child is never moved: it drops where it lies, with the vector
-    /// that holds it.
-    fn drop(&mut self) {
-        /// Move each child of `value` that itself has children onto `work`,
-        /// leaving `null` in its place.
-        fn take_containers(value: &mut Value, work: &mut Vec<Value>) {
-            match value {
-                Value::Array(items) => {
-                    for item in items {
-                        if item.has_children() {
-                            work.push(mem::take(item));
-                        }
-                    }
-                }
-                Value::Object(object) => {
-                    for (_, member) in &mut object.members {
-                        if member.has_children() {
-                            work.push(mem::take(member));
-                        }
-                    }
-                }
-                _ => {}
+struct DroppingValue(Value);
+
+impl crate::walk::DismantleOwned for DroppingValue {
+    fn take_child(&mut self) -> Option<Self> {
+        loop {
+            let child = match &mut self.0 {
+                Value::Array(items) => items.pop(),
+                Value::Object(object) => object.members.pop().map(|(_, value)| value),
+                _ => None,
+            }?;
+            if child.has_children() {
+                return Some(Self(child));
             }
+            drop(child);
         }
-        if !self.has_children() {
-            return;
+    }
+
+    fn store_parent(&mut self, parent: Option<Self>) {
+        let value = parent.map_or(Value::Null, |parent| parent.0);
+        match &mut self.0 {
+            Value::Array(items) => {
+                assert!(items.len() < items.capacity());
+                items.push(value);
+            }
+            Value::Object(object) => {
+                assert!(object.members.len() < object.members.capacity());
+                object.members.push((String::new(), value));
+            }
+            _ => unreachable!("a removed child leaves an original container slot"),
         }
-        let mut work: Vec<Self> = Vec::new();
-        take_containers(self, &mut work);
-        while let Some(mut value) = work.pop() {
-            take_containers(&mut value, &mut work);
-            // `value` now holds no container, so the drop it runs is this
-            // one's early return, and its scalars drop with its vector.
+    }
+
+    fn take_parent(&mut self) -> Option<Self> {
+        let parent = match &mut self.0 {
+            Value::Array(items) => items.pop(),
+            Value::Object(object) => object.members.pop().map(|(_, value)| value),
+            _ => None,
+        }
+        .expect("the original continuation slot");
+        if matches!(parent, Value::Null) {
+            None
+        } else {
+            Some(Self(parent))
+        }
+    }
+}
+
+impl Drop for Value {
+    fn drop(&mut self) {
+        if self.has_children() {
+            // Vacated original array/member slots carry ancestor continuations;
+            // a failed native allocation never needs another allocation to drop.
+            crate::walk::dismantle_owned(DroppingValue(mem::take(self)));
         }
     }
 }
 
 /// A copy of a value that owns no value; an array or object here is empty.
-fn clone_leaf(value: &Value) -> Value {
-    match value {
+fn clone_leaf<S: crate::allocation::Admission + ?Sized>(
+    value: &Value,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<Value, crate::allocation::StorageError> {
+    Ok(match value {
         Value::Null => Value::Null,
         Value::Bool(flag) => Value::Bool(*flag),
-        Value::Number(number) => Value::Number(number.clone()),
-        Value::String(text) => Value::String(text.clone()),
+        Value::Number(number) => Value::Number(Number::from_valid(memory.string(number.lexeme())?)),
+        Value::String(text) => Value::String(memory.string(text)?),
         Value::Array(_) => Value::Array(Vec::new()),
         Value::Object(_) => Value::Object(Object::new()),
+    })
+}
+
+impl Value {
+    /// Clone the original ordered JSON tree under one pre-admitted account.
+    /// Partial clones drop without allocation; scratch dies before its refund.
+    /// # Errors
+    /// Returns the first native layout, admission or allocator refusal.
+    pub fn clone_with_memory<S: crate::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<Self, crate::allocation::StorageError> {
+        memory.scope(|memory| {
+            enum Step<'a> {
+                Enter(&'a Value),
+                Exit(&'a Value),
+            }
+            if !self.has_children() {
+                return clone_leaf(self, memory);
+            }
+            let mut steps = Vec::new();
+            memory.push(&mut steps, Step::Enter(self))?;
+            let mut copies: Vec<Self> = Vec::new();
+            while let Some(step) = steps.pop() {
+                match step {
+                    Step::Enter(node) if node.has_children() => {
+                        memory.push(&mut steps, Step::Exit(node))?;
+                        match node {
+                            Self::Array(items) => {
+                                memory.extend(&mut steps, items.iter().rev().map(Step::Enter))?;
+                            }
+                            Self::Object(object) => {
+                                memory
+                                    .extend(&mut steps, object.values().rev().map(Step::Enter))?;
+                            }
+                            _ => unreachable!("only a container has children"),
+                        }
+                    }
+                    Step::Enter(leaf) => {
+                        let value = clone_leaf(leaf, memory)?;
+                        memory.push(&mut copies, value)?;
+                    }
+                    Step::Exit(node) => {
+                        let copy = match node {
+                            Self::Array(items) => {
+                                let first = copies.len() - items.len();
+                                let mut result = Vec::new();
+                                memory.reserve(&mut result, items.len())?;
+                                // The original scratch buffer stays live until release_vec.
+                                result.extend(copies.drain(first..));
+                                Self::Array(result)
+                            }
+                            Self::Object(object) => {
+                                let first = copies.len() - object.len();
+                                let mut members = Vec::new();
+                                memory.reserve(&mut members, object.len())?;
+                                for (name, value) in object.keys().zip(copies.drain(first..)) {
+                                    let name = memory.string(name)?;
+                                    members.push((name, value));
+                                }
+                                Self::Object(Object { members })
+                            }
+                            _ => unreachable!("only a container is exited"),
+                        };
+                        memory.push(&mut copies, copy)?;
+                    }
+                }
+            }
+            let root = copies.pop().expect("the root's copy is assembled last");
+            memory.release_vec(steps)?;
+            memory.release_vec(copies)?;
+            Ok(root)
+        })
     }
 }
 
 impl Clone for Value {
     fn clone(&self) -> Self {
-        enum Step<'a> {
-            Enter(&'a Value),
-            Exit(&'a Value),
-        }
-        if !self.has_children() {
-            return clone_leaf(self);
-        }
-        let mut steps = vec![Step::Enter(self)];
-        let mut copies: Vec<Self> = Vec::new();
-        while let Some(step) = steps.pop() {
-            match step {
-                Step::Enter(node) if node.has_children() => {
-                    steps.push(Step::Exit(node));
-                    match node {
-                        Self::Array(items) => steps.extend(items.iter().rev().map(Step::Enter)),
-                        Self::Object(object) => {
-                            steps.extend(object.values().rev().map(Step::Enter));
-                        }
-                        _ => unreachable!("only a container has children"),
-                    }
-                }
-                Step::Enter(leaf) => copies.push(clone_leaf(leaf)),
-                Step::Exit(node) => {
-                    let copy = match node {
-                        Self::Array(items) => {
-                            let first = copies.len() - items.len();
-                            Self::Array(copies.drain(first..).collect())
-                        }
-                        Self::Object(object) => {
-                            let first = copies.len() - object.len();
-                            Self::Object(Object {
-                                members: object
-                                    .keys()
-                                    .cloned()
-                                    .zip(copies.drain(first..))
-                                    .collect(),
-                            })
-                        }
-                        _ => unreachable!("only a container is exited"),
-                    };
-                    copies.push(copy);
-                }
-            }
-        }
-        copies.pop().expect("the root's copy is assembled last")
+        self.clone_with_memory(&mut crate::allocation::Memory::new(
+            &mut crate::allocation::Resident,
+        ))
+        .expect("resident JSON clone allocation")
     }
 }
 

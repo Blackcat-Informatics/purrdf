@@ -225,6 +225,10 @@ pub(crate) struct Cli {
     /// rejected instead of ignored.
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) jsonld_options: Option<PathBuf>,
+    /// Strict version-one geographic profile for geo, query, and update.
+    /// Omitting it selects the declared standard CRS84 profile.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) geo_profile: Option<PathBuf>,
 }
 
 /// Where (if anywhere) the loss ledger should be surfaced — the decoded form of
@@ -321,6 +325,15 @@ impl Cli {
 /// The sixteen pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Execute a strict geographic scalar, batch, conversion, cover or index request.
+    Geo {
+        /// Request JSON source; `-` reads standard input.
+        #[arg(default_value = "-")]
+        input: String,
+        /// Canonical typed response; `-` writes standard output.
+        #[arg(default_value = "-")]
+        output: String,
+    },
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert {
         /// Input format override; inferred from each input's extension when omitted.

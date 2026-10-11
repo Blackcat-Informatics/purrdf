@@ -42,10 +42,9 @@
 use crate::query_workspace::{QueryString, admitted, query_error};
 use crate::score::{distinct_terms_owned, score_located_owned, select_counted_owned};
 use purrdf_sparql_eval::{
-    AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceAllocation,
-    WorkspaceCapability, WorkspaceTerm,
+    AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability,
+    WorkspaceCursor, WorkspaceTerm,
 };
-use std::mem::size_of;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1228,7 +1227,7 @@ impl TextSearchRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         check_arity_owned(args, self.arity(), "text search", &workspace)?;
         let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
             format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
@@ -1310,10 +1309,7 @@ impl TextSearchRelation {
             }
         }
         let bound = bound_terms(args, &workspace)?;
-        let control = workspace.charge(
-            u64::try_from(size_of::<SearchCursor>())
-                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-        )?;
+        let owner_workspace = workspace.clone();
         let cursor = SearchCursor {
             index: Arc::clone(&self.index),
             generation: Arc::clone(&self.generation),
@@ -1322,13 +1318,8 @@ impl TextSearchRelation {
             bound,
             remaining: ceiling,
             workspace,
-            _control: control,
         };
-        let cursor =
-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
-                construct: "text search cursor",
-            })?;
-        Ok(cursor)
+        WorkspaceCursor::new(cursor, &owner_workspace, "text search cursor")
     }
 }
 
@@ -1471,6 +1462,7 @@ impl PropertyFunction for TextSearchRelation {
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         self.open_owned(args, ceiling, WorkspaceCapability::default())
+            .and_then(WorkspaceCursor::into_resident)
     }
 
     fn open_admitted(
@@ -1478,7 +1470,7 @@ impl PropertyFunction for TextSearchRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         self.open_owned(args, ceiling, workspace)
     }
 }
@@ -1512,7 +1504,6 @@ struct SearchCursor {
     bound: AdmittedVec<Option<WorkspaceTerm>>,
     remaining: Option<u64>,
     workspace: WorkspaceCapability,
-    _control: WorkspaceAllocation,
 }
 
 impl SearchCursor {
@@ -1786,7 +1777,7 @@ impl TermOccurrenceRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         check_arity_owned(args, self.arity(), "term occurrence", &workspace)?;
         let needle = args.get(OCCURRENCE_TERM).ok_or_else(|| {
             NativeDiagnostic::error(
@@ -1839,10 +1830,7 @@ impl TermOccurrenceRelation {
             }
         }
         let bound = bound_terms(args, &workspace)?;
-        let control = workspace.charge(
-            u64::try_from(size_of::<OccurrenceCursor>())
-                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-        )?;
+        let owner_workspace = workspace.clone();
         let cursor = OccurrenceCursor {
             index: Arc::clone(&self.index),
             generation: Arc::clone(&self.generation),
@@ -1854,13 +1842,8 @@ impl TermOccurrenceRelation {
             bound,
             remaining: ceiling,
             workspace,
-            _control: control,
         };
-        let cursor =
-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
-                construct: "term occurrence cursor",
-            })?;
-        Ok(cursor)
+        WorkspaceCursor::new(cursor, &owner_workspace, "term occurrence cursor")
     }
 
     /// The index this relation answers from.
@@ -1939,6 +1922,7 @@ impl PropertyFunction for TermOccurrenceRelation {
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         self.open_owned(args, ceiling, WorkspaceCapability::default())
+            .and_then(WorkspaceCursor::into_resident)
     }
 
     fn open_admitted(
@@ -1946,7 +1930,7 @@ impl PropertyFunction for TermOccurrenceRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         self.open_owned(args, ceiling, workspace)
     }
 }
@@ -1973,7 +1957,6 @@ struct OccurrenceCursor {
     bound: AdmittedVec<Option<WorkspaceTerm>>,
     remaining: Option<u64>,
     workspace: WorkspaceCapability,
-    _control: WorkspaceAllocation,
 }
 
 impl OccurrenceCursor {
