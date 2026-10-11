@@ -410,16 +410,23 @@ impl ReadBound {
 }
 
 impl RetrievalRequest {
-    /// The request as a JSON object: `terms`, then `bound`.
+    /// The request as a JSON object: `terms`, then `bound`, with explicit
+    /// nonempty hard constraints appended without changing ordinary requests.
     #[must_use]
     pub fn to_json(&self) -> Value {
-        Object::new()
+        let mut object = Object::new()
             .with(
                 "terms",
                 Value::array(self.terms.iter().map(RequestTerm::to_json)),
             )
-            .with("bound", self.bound.to_json())
-            .into()
+            .with("bound", self.bound.to_json());
+        if !self.constraints.is_empty() {
+            object = object.with(
+                "constraints",
+                Value::array(self.constraints.iter().map(RequestTerm::to_json)),
+            );
+        }
+        object.into()
     }
 
     /// Read a request from its JSON object.
@@ -434,6 +441,11 @@ impl RetrievalRequest {
             terms: fields
                 .required_with("terms", |value| items_with(value, RequestTerm::from_json))?,
             bound: fields.required_with("bound", ReadBound::from_json)?,
+            constraints: fields
+                .optional_with("constraints", |value| {
+                    items_with(value, RequestTerm::from_json)
+                })?
+                .unwrap_or_default(),
         })
     }
 }
@@ -746,7 +758,7 @@ impl Plan {
             .iter()
             .map(|(stratum, inputs)| (stratum.as_str(), inputs.to_json()))
             .collect();
-        Object::new()
+        let mut object = Object::new()
             .with("version", self.version)
             .with(
                 "request_terms",
@@ -776,8 +788,14 @@ impl Plan {
             .with(
                 "registry_content_fingerprint",
                 &self.registry_content_fingerprint,
-            )
-            .into()
+            );
+        if !self.constraints.is_empty() {
+            object = object.with(
+                "constraints",
+                Value::array(self.constraints.iter().map(RequestTerm::to_json)),
+            );
+        }
+        object.into()
     }
 
     /// Read a plan from its JSON object. The plan's origin is
@@ -801,6 +819,11 @@ impl Plan {
             request_terms: fields.required_with("request_terms", |value| {
                 items_with(value, RequestTerm::from_json)
             })?,
+            constraints: fields
+                .optional_with("constraints", |value| {
+                    items_with(value, RequestTerm::from_json)
+                })?
+                .unwrap_or_default(),
             read_bound: fields.required_with("read_bound", ReadBound::from_json)?,
             producer_bindings: fields.required_with("producer_bindings", |value| {
                 items_with(value, ProducerBinding::from_json)

@@ -131,7 +131,12 @@ pub(crate) fn without_joined_blanks_admitted<I: ViewTermId>(
     .shared_admitted(workspace)?;
     let mut rows = crate::solution::RowsBuilder::new(workspace);
     for row in seq.rows {
-        rows.push_cells(keep.len(), keep.iter().map(|&column| row[column]))?;
+        let projected = crate::solution::RetainedRow::from_cells(
+            keep.len(),
+            keep.iter().map(|&column| row[column]),
+            workspace,
+        )?;
+        rows.push_row(projected.with_evidence_from(&row, workspace)?)?;
     }
     Ok(SolutionSeq {
         schema,

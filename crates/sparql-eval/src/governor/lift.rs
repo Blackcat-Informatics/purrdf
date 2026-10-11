@@ -431,6 +431,14 @@ pub(crate) enum Evaluated<I: ViewTermId> {
 }
 
 impl<I: ViewTermId> Evaluated<I> {
+    /// The original retained bag, preserving the outcome and its certificate.
+    pub(crate) fn rows_mut(&mut self) -> &mut SolutionSeq<I> {
+        match self {
+            Self::Complete(seq) => seq,
+            Self::Truncated(truncation) => &mut truncation.rows,
+        }
+    }
+
     /// The rows this result holds, complete or not.
     pub(crate) const fn rows(&self) -> &SolutionSeq<I> {
         match self {
@@ -439,11 +447,16 @@ impl<I: ViewTermId> Evaluated<I> {
         }
     }
 
-    /// The complete bag, or the truncation that prevented one.
-    pub(crate) fn into_complete(self) -> Result<SolutionSeq<I>, Truncation<I>> {
+    /// The complete bag, or the caller's typed refusal derived from the original
+    /// truncation. Mapping in place keeps the retained partial bag off the error
+    /// channel without allocating or losing its certificate before inspection.
+    pub(crate) fn into_complete<E>(
+        self,
+        on_truncated: impl FnOnce(Truncation<I>) -> E,
+    ) -> Result<SolutionSeq<I>, E> {
         match self {
             Self::Complete(seq) => Ok(seq),
-            Self::Truncated(truncation) => Err(truncation),
+            Self::Truncated(truncation) => Err(on_truncated(truncation)),
         }
     }
 

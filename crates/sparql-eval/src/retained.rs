@@ -467,7 +467,7 @@ impl RetainedDiagnostic {
     /// Render borrowed native error fields through one original admission.
     /// The diagnostic text and code are allocated only after their concrete
     /// layouts are admitted; the control header is added before publication.
-    pub(crate) fn render(
+    pub fn render(
         code: &str,
         message: &(impl std::fmt::Display + ?Sized),
         workspace: &crate::WorkspaceCapability,

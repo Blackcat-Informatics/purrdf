@@ -13,14 +13,59 @@ use std::hash::BuildHasher as _;
 
 /// Hash/equality are exact SolutionTerm cell identity. RetainedRow clones share
 /// the original cell allocation and lease, including wide spilled rows.
-pub(super) struct DedupState<I: ViewTermId, const ADJACENT: bool> {
-    table: HashTable<RetainedRow<I>>,
-    previous: Option<RetainedRow<I>>,
+pub(super) struct DedupState<K: DedupKey, const ADJACENT: bool> {
+    table: HashTable<K>,
+    previous: Option<K>,
     allocation: Option<WorkspaceAllocation>,
     workspace: WorkspaceCapability,
 }
 
-impl<I: ViewTermId, const ADJACENT: bool> DedupState<I, ADJACENT> {
+/// Only tracked duplicate witnesses need the survivor's output ordinal. Keeping
+/// it out of ordinary keys preserves their row-only physical representation.
+pub(super) trait DedupKey {
+    type Id: ViewTermId;
+    const COALESCE: bool;
+
+    fn row(&self) -> &RetainedRow<Self::Id>;
+    fn ordinal(&self) -> usize;
+    fn from_row(row: RetainedRow<Self::Id>, ordinal: usize) -> Self;
+}
+
+impl<I: ViewTermId> DedupKey for RetainedRow<I> {
+    type Id = I;
+    const COALESCE: bool = false;
+
+    fn row(&self) -> &Self {
+        self
+    }
+
+    fn ordinal(&self) -> usize {
+        0
+    }
+
+    fn from_row(row: Self, _ordinal: usize) -> Self {
+        row
+    }
+}
+
+impl<I: ViewTermId> DedupKey for (RetainedRow<I>, usize) {
+    type Id = I;
+    const COALESCE: bool = true;
+
+    fn row(&self) -> &RetainedRow<I> {
+        &self.0
+    }
+
+    fn ordinal(&self) -> usize {
+        self.1
+    }
+
+    fn from_row(row: RetainedRow<I>, ordinal: usize) -> Self {
+        (row, ordinal)
+    }
+}
+
+impl<K: DedupKey, const ADJACENT: bool> DedupState<K, ADJACENT> {
     pub(super) fn new(workspace: &WorkspaceCapability) -> Self {
         Self {
             table: HashTable::new(),
@@ -30,15 +75,25 @@ impl<I: ViewTermId, const ADJACENT: bool> DedupState<I, ADJACENT> {
         }
     }
 
-    pub(super) fn keep(&mut self, row: &RetainedRow<I>) -> Result<bool, EvalError> {
+    /// Return the first survivor's ordinal; equality remains binding-only.
+    /// Evidence is merged in the original output owner, never in hash keys.
+    pub(super) fn survivor(
+        &mut self,
+        row: &RetainedRow<K::Id>,
+        ordinal: usize,
+    ) -> Result<Option<usize>, EvalError> {
         if ADJACENT {
-            let keep = self.previous.as_ref() != Some(row);
-            self.previous = Some(row.clone_admitted(&self.workspace)?);
-            return Ok(keep);
+            if let Some(previous) = &self.previous
+                && previous.row() == row
+            {
+                return Ok(Some(previous.ordinal()));
+            }
+            self.previous = Some(K::from_row(row.clone_admitted(&self.workspace)?, ordinal));
+            return Ok(None);
         }
         let hash = row_hash(row);
-        if self.table.find(hash, |seen| seen == row).is_some() {
-            return Ok(false);
+        if let Some(seen) = self.table.find(hash, |seen| seen.row() == row) {
+            return Ok(Some(seen.ordinal()));
         }
         let needed = self
             .table
@@ -48,9 +103,12 @@ impl<I: ViewTermId, const ADJACENT: bool> DedupState<I, ADJACENT> {
         if needed > self.table.capacity() {
             self.grow(needed)?;
         }
-        self.table
-            .insert_unique(hash, row.clone_admitted(&self.workspace)?, row_hash::<I>);
-        Ok(true)
+        self.table.insert_unique(
+            hash,
+            K::from_row(row.clone_admitted(&self.workspace)?, ordinal),
+            |key| row_hash(key.row()),
+        );
+        Ok(None)
     }
 
     /// Old bucket/control bytes and all cell leases remain covered until the
@@ -62,19 +120,19 @@ impl<I: ViewTermId, const ADJACENT: bool> DedupState<I, ADJACENT> {
             .checked_mul(2)
             .ok_or(EvalError::WorkspaceBoundOverflow)?
             .max(needed);
-        let bytes = purrdf_core::hash::hash_table_allocation_bound::<RetainedRow<I>>(capacity)
+        let bytes = purrdf_core::hash::hash_table_allocation_bound::<K>(capacity)
             .ok_or(EvalError::WorkspaceBoundOverflow)?;
         let allocation = self
             .workspace
             .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
         let mut next = HashTable::new();
-        next.try_reserve(capacity, row_hash::<I>)
+        next.try_reserve(capacity, |key: &K| row_hash(key.row()))
             .map_err(|_| EvalError::AllocationFailed {
                 construct: "distinct row keys",
             })?;
         let old = std::mem::take(&mut self.table);
-        for row in old {
-            next.insert_unique(row_hash(&row), row, row_hash::<I>);
+        for entry in old {
+            next.insert_unique(row_hash(entry.row()), entry, |key| row_hash(key.row()));
         }
         self.table = next;
         // The old IntoIter freed its allocation before this releases its grant.

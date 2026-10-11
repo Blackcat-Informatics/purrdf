@@ -155,6 +155,69 @@ pub struct PfArgs<'a> {
     /// Per flattened position, whether its emitted value is read by nothing. Empty
     /// means every position is observed — the reading [`Self::new`] gives.
     unobserved: &'a [bool],
+    candidate_scope: Option<&'a dyn CandidateScope>,
+}
+
+/// Membership of an original producer candidate, before ranking or depth.
+/// Unknown membership carries its original query-owned reasons and is retained
+/// separately from both established candidates and actual rejections.
+#[derive(Clone, Debug)]
+pub enum CandidateMembership {
+    /// Membership is established; retain the candidate's original declaration.
+    Established(crate::RowEvidence),
+    /// The data establishes that the candidate fails the declared scope.
+    Rejected,
+    /// The data cannot decide membership; never count this as a rejection.
+    Undecided(crate::RowEvidence),
+}
+
+impl CandidateMembership {
+    /// Retain the original declaration, checking that its independent unknown
+    /// membership bit agrees with the decision before any producer emits it.
+    ///
+    /// # Errors
+    /// Refuses contradictory caller declarations through the native diagnostic.
+    pub fn into_evidence(
+        self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::RowEvidence>, EvalError> {
+        match self {
+            Self::Rejected => Ok(None),
+            Self::Established(row) if !row.is_undecided() => Ok(Some(row)),
+            Self::Undecided(row) if row.is_undecided() => Ok(Some(row)),
+            Self::Established(_) | Self::Undecided(_) => Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Config,
+                "candidate scope decision disagrees with its original membership declaration",
+                workspace,
+            )),
+        }
+    }
+}
+
+/// A caller's admitted hard constraints over original producer keys.
+///
+/// A producer borrows this at open and evaluates it inside its original
+/// candidate generation, before its requested depth. Retained decisions
+/// own their query dictionary; the borrowed evaluator never escapes into a
+/// cursor. A failure is operational and must abort that original search.
+pub trait CandidateScope: core::fmt::Debug + Sync {
+    /// Original dictionary shared by candidate and dataset declarations.
+    /// Ordinary membership-only scopes need no metadata owner.
+    fn evidence_owner(&self) -> Option<&crate::QueryEvidence> {
+        None
+    }
+
+    /// Decide the original key, accounting for every declared constraint even
+    /// when another rejects it. Constraint reasons and counters belong to this
+    /// invocation, independently of which established rows the depth selects.
+    ///
+    /// # Errors
+    /// Returns the original read, declaration, cancellation or admission failure.
+    fn decide(
+        &self,
+        candidate: &TermValue,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<CandidateMembership, EvalError>;
 }
 
 impl<'a> PfArgs<'a> {
@@ -168,7 +231,22 @@ impl<'a> PfArgs<'a> {
             subject,
             object,
             unobserved: &[],
+            candidate_scope: None,
         }
+    }
+
+    /// Attach the explicit original hard-constraint evaluator. A producer that
+    /// has no pre-depth implementation is refused before its open is entered.
+    #[must_use]
+    pub const fn with_candidate_scope(mut self, scope: &'a dyn CandidateScope) -> Self {
+        self.candidate_scope = Some(scope);
+        self
+    }
+
+    /// Borrow the declared scope; absence keeps ordinary candidate generation.
+    #[must_use]
+    pub const fn candidate_scope(&self) -> Option<&'a dyn CandidateScope> {
+        self.candidate_scope
     }
 
     /// This view with the positions `unobserved` marks reported as unobserved.
@@ -447,6 +525,25 @@ impl PfAttestation {
 /// stop-check granularity to one call — it can make a stop *late*, never a partial
 /// answer unsound, and never an answer wrong.
 pub trait PfCursor {
+    /// Whether this cursor transports original row evidence in its native
+    /// envelope. Such rows must use `next_admitted`, even without a memory
+    /// ceiling: converting them to raw cells would erase their declarations.
+    fn carries_row_evidence(&self) -> bool {
+        false
+    }
+    /// The original declaration for the whole invocation, including an empty
+    /// answer. It shares the same query owner as this cursor's native rows.
+    /// Row envelopes alone cannot declare the search that produced no rows.
+    ///
+    /// Read only for cursors declaring `carries_row_evidence`, at open and after
+    /// pulls or completion. A declaration discovered late must preserve its
+    /// original completeness, closure and operational ownership.
+    ///
+    /// # Errors
+    /// Preserves the producer's original operational or admission failure.
+    fn search_evidence(&self) -> Result<Option<&crate::RowEvidence>, EvalError> {
+        Ok(None)
+    }
     /// The next row, or `None` when the invocation is exhausted.
     ///
     /// # Errors
@@ -1180,13 +1277,13 @@ impl RankArithmetic {
 /// encoding a pure function of the value rather than of the order a host
 /// happened to insert its tags in.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DomainTag(Iri);
+pub struct DomainTag(crate::OwnedIri);
 
 impl DomainTag {
     /// Carry `iri` as a domain tag.
     #[must_use]
     pub const fn new(iri: Iri) -> Self {
-        Self(iri)
+        Self(crate::OwnedIri::caller(iri))
     }
 
     /// Parse and validate `text` as a domain tag.
@@ -1197,31 +1294,51 @@ impl DomainTag {
     /// a valid IRI. Nothing is guessed or repaired: a tag that is not an IRI is
     /// refused where it is written.
     pub fn parse(text: &str) -> Result<Self, purrdf_core::IriError> {
-        purrdf_core::parse_iri(text).map(Self)
+        purrdf_core::parse_iri(text).map(Self::new)
     }
 
     /// The tag's IRI text, verbatim.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.0.as_iri().as_str()
     }
 
     /// The tag's underlying IRI.
     #[must_use]
-    pub const fn as_iri(&self) -> &Iri {
-        &self.0
+    pub fn as_iri(&self) -> &Iri {
+        self.0.as_iri()
+    }
+
+    /// Retain an already native tag or admit the original caller IRI copy.
+    /// # Errors
+    /// Returns original layout, admission or allocator refusal.
+    pub fn clone_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        self.0.clone_admitted(workspace).map(Self)
+    }
+
+    /// Parse a projected block under the producing row's original authority.
+    /// # Errors
+    /// Returns the original physical refusal or admitted grammar diagnostic.
+    pub fn parse_admitted(
+        text: &str,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        workspace.parse_iri(text).map(Self)
     }
 }
 
 impl From<Iri> for DomainTag {
     fn from(iri: Iri) -> Self {
-        Self(iri)
+        Self::new(iri)
     }
 }
 
 impl core::fmt::Display for DomainTag {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.0.as_str())
+        f.write_str(self.as_str())
     }
 }
 
@@ -1233,13 +1350,13 @@ impl PartialOrd for DomainTag {
 
 impl Ord for DomainTag {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.0.as_str().cmp(other.0.as_str())
+        self.as_str().cmp(other.as_str())
     }
 }
 
 impl core::hash::Hash for DomainTag {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.0.as_str().hash(state);
+        self.as_str().hash(state);
     }
 }
 
@@ -1306,19 +1423,52 @@ pub enum CandidateDomains {
     /// and
     /// [`register_ranked`](PropertyFunctionRegistry::register_ranked) refuses
     /// it where it is written.
-    Within(std::collections::BTreeSet<DomainTag>),
+    Within(crate::SharedWorkspace<crate::AdmittedOrderedSet<DomainTag>>),
 }
 
 impl CandidateDomains {
     /// A restriction to the tags `tags` yields, in any order.
     ///
-    /// A convenience over building the set, and it is deliberately **not** the
+    /// A convenience over building the admitted set, and it is deliberately **not** the
     /// place the empty case is refused: this is plain data with public
     /// variants, so a host can spell an empty restriction either way and the
     /// one refusal that matters is the one at registration, where the
     /// declaration is committed.
+    /// # Panics
+    /// When the resident allocator cannot acquire the caller's declaration.
     pub fn within<I: IntoIterator<Item = DomainTag>>(tags: I) -> Self {
-        Self::Within(tags.into_iter().collect())
+        Self::within_admitted(tags, &crate::WorkspaceCapability::resident())
+            .expect("resident domain declaration allocation failed")
+    }
+
+    /// Acquire domain membership and its shared control under the original scope.
+    /// # Errors
+    /// Returns original layout, admission or allocator refusal before publication.
+    pub fn within_admitted(
+        tags: impl IntoIterator<Item = DomainTag>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut members = crate::AdmittedOrderedSet::new(workspace);
+        for tag in tags {
+            members.insert(tag.clone_admitted(workspace)?)?;
+        }
+        Ok(Self::Within(crate::SharedWorkspace::new_admitted(
+            members, workspace,
+        )?))
+    }
+
+    /// Copy a declaration through its original admitted membership home.
+    /// # Errors
+    /// Returns original layout, admission or allocator refusal.
+    pub fn clone_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        match self {
+            Self::Unrestricted => Ok(Self::Unrestricted),
+            Self::Within(tags) if tags.workspace().is_bounded() => Ok(Self::Within(tags.clone())),
+            Self::Within(tags) => Self::within_admitted(tags.iter().cloned(), workspace),
+        }
     }
 
     /// Whether some candidate could satisfy both restrictions at once.
@@ -1335,7 +1485,7 @@ impl CandidateDomains {
     pub fn intersects(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Unrestricted, _) | (_, Self::Unrestricted) => true,
-            (Self::Within(left), Self::Within(right)) => left.intersection(right).next().is_some(),
+            (Self::Within(left), Self::Within(right)) => left.intersects(right),
         }
     }
 
@@ -1352,7 +1502,7 @@ impl CandidateDomains {
     /// The blocks this declaration names, or `None` when it names no
     /// restriction at all.
     #[must_use]
-    pub const fn tags(&self) -> Option<&std::collections::BTreeSet<DomainTag>> {
+    pub fn tags(&self) -> Option<&crate::AdmittedOrderedSet<DomainTag>> {
         match self {
             Self::Unrestricted => None,
             Self::Within(tags) => Some(tags),
@@ -1364,7 +1514,7 @@ impl CandidateDomains {
     /// A present/absent discriminant, then — for a restriction — the tag count
     /// and every tag length-framed in canonical order. The count is what makes
     /// a set of two tags unreadable as a set of one followed by whatever came
-    /// next, and the `BTreeSet`'s own order is what makes the bytes a function
+    /// next, and the admitted set's own order is what makes the bytes a function
     /// of the value rather than of the host's insertion order.
     fn write_canonical(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
         match self {
@@ -1401,6 +1551,15 @@ pub(crate) const NOT_RANKED_CANONICAL: &str = "n";
 pub enum RequestFacet {
     /// The term's own value — the needle, the vector, the IRI.
     Value,
+    /// A lexical needle and optional field in the explicit RDF 1.2 argument
+    /// encoding supplied by `purrdf_core::query_scope::LexicalQuery`.
+    ///
+    /// This transports the field into candidate generation without requiring
+    /// another relation position or silently discarding a request predicate.
+    /// Other request kinds retain `Value`'s spelling and validation, permitting
+    /// an explicitly declared general-purpose producer to transport each kind
+    /// through one value position without dropping a lexical field.
+    ScopedLexicalValue,
     /// The term's language tag.
     Language,
     /// The predicate IRI the term is associated with.
@@ -1424,6 +1583,7 @@ impl RequestFacet {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Value => "value",
+            Self::ScopedLexicalValue => "scoped-lexical-value",
             Self::Language => "language",
             Self::Predicate => "predicate",
             Self::MaxDistance => "max-distance",
@@ -1793,6 +1953,95 @@ fn write_canonical_option(
 // The relation trait
 // ---------------------------------------------------------------------------
 
+/// One authored VALUES row in an expanded positional dictionary. The complete
+/// payload and each original single-token argument retain their native owners.
+#[derive(Debug)]
+pub struct OccurrenceDictionaryInput {
+    /// Original VALUES columns in their authored order, including UNDEF.
+    pub payload: crate::AdmittedVec<Option<crate::WorkspaceTerm>>,
+    /// Original term arguments in positional-join order.
+    pub tokens: crate::AdmittedVec<crate::WorkspaceTerm>,
+}
+
+/// Exact, complete, uniform-evidence positional access. This declaration is
+/// deliberately absent for generic or lossy producers. Only a producer that
+/// preserves its ordinary token rows and complete search declaration may supply it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OccurrenceShape {
+    /// The index's exact analyzer and Unicode table law.
+    pub analyzer: [u8; 32],
+}
+
+/// A compiled occurrence dictionary, independent of any borrowed query AST.
+pub trait OccurrenceDictionary: Send + Sync {
+    /// Scan the current immutable occurrence universe once for all entries.
+    /// # Errors
+    /// Native allocation and source failures remain hard failures.
+    fn scan(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Box<dyn OccurrenceMatches>, EvalError>;
+}
+
+/// Full positional derivations in original entry/occurrence traversal order.
+pub trait OccurrenceMatches {
+    /// Actual source visits and automaton transitions.
+    fn work(&self) -> crate::shapes::ShapeWork;
+    /// Immutable generation pinned by this scan.
+    fn generation(&self) -> IndexGeneration;
+    /// Pull one full derivation: entry ordinal plus the original four-cell
+    /// occurrence row for each token, all before-allocation owned.
+    /// # Errors
+    /// Preserves native row production and physical refusal.
+    fn next(
+        &mut self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<(usize, crate::AdmittedVec<AdmittedPfRow>)>, EvalError>;
+}
+
+/// Native inputs for an exact phrase batch. Original input values and their
+/// grants remain live for the complete batch and each invocation cursor.
+#[derive(Debug)]
+pub struct BatchInvocation {
+    /// Flattened arguments, subject then object. Free positions remain `None`.
+    pub arguments: crate::AdmittedVec<Option<crate::WorkspaceTerm>>,
+    /// Original subject-side width.
+    pub subject_len: usize,
+    /// Complete driving VALUES payload in column order, including UNDEF.
+    pub identity: crate::AdmittedVec<Option<crate::WorkspaceTerm>>,
+}
+
+/// Exact dictionary capability explicitly supplied by a registered producer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DictionaryShape {
+    /// Phrase input position in flattened arguments.
+    pub phrase: usize,
+    /// Inclusive start output position.
+    pub start: usize,
+    /// Exclusive end output position.
+    pub end: usize,
+    /// Exact analyzer/table identity.
+    pub analyzer: [u8; 32],
+}
+
+/// One analyzer-bound bulk scan. Cursors still cross ordinary native ingress.
+pub trait DictionaryBatch: Send + Sync {
+    /// Actual source and transition counts for the one bulk scan.
+    fn work(&self) -> crate::shapes::ShapeWork {
+        crate::shapes::ShapeWork::default()
+    }
+    /// Open the already-computed slice for the original driving row.
+    /// # Errors
+    /// Preserve native construction and operational failures.
+    fn open(
+        &self,
+        ordinal: usize,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError>;
+}
+
 /// A host-injected relation invoked from predicate position.
 ///
 /// Object-safe and shared behind an [`Arc`] across the whole evaluation (including
@@ -1838,6 +2087,44 @@ fn write_canonical_option(
 /// the engine's side: it withholds the ceiling entirely for such a call rather than ask
 /// a relation to account for something it was never told.
 pub trait PropertyFunction: Send + Sync {
+    /// Whether this producer evaluates an explicit scope inside original
+    /// candidate generation before ranking depth. The default refuses scoped
+    /// admission; filtering a producer's already limited rows is insufficient.
+    fn supports_candidate_scope(&self) -> bool {
+        false
+    }
+    /// Complete positional rows with uniform native row/search evidence.
+    /// Generic and lossy producers retain the ordinary literal path.
+    fn occurrence_shape(&self) -> Option<OccurrenceShape> {
+        None
+    }
+    /// Compile a certified expanded VALUES/token dictionary before source reads.
+    /// `None` is a semantic mismatch (for example, no authored phrase matches
+    /// the token chain). No physical failure is converted into a mismatch.
+    /// # Errors
+    /// Preserves analyzer and original native preparation failures.
+    fn prepare_occurrence_dictionary(
+        &self,
+        _inputs: &[OccurrenceDictionaryInput],
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<Box<dyn OccurrenceDictionary>>, EvalError> {
+        Ok(None)
+    }
+    /// Explicit exact dictionary capability. An IRI spelling is never a capability.
+    fn dictionary_shape(&self) -> Option<DictionaryShape> {
+        None
+    }
+    /// Compile/bind one dictionary and scan once for all supplied invocations.
+    /// A semantic non-match is `None`; accepted physical failures are hard errors.
+    /// # Errors
+    /// Preserves native analyzer, storage, and producer failures.
+    fn prepare_dictionary(
+        &self,
+        _inputs: &[BatchInvocation],
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<Box<dyn DictionaryBatch>>, EvalError> {
+        Ok(None)
+    }
     /// Allocation-free declaration for an opaque producer's complete open/pull
     /// working set and each returned row. The producer must respect both bounds.
     /// Native producers can instead implement `open_admitted` with local owners.
@@ -1911,6 +2198,13 @@ pub trait PropertyFunction: Send + Sync {
     /// A genuinely unbounded generator declares [`u64::MAX`].
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64;
 
+    /// Physical row bound for a scoped invocation, including undecided rows
+    /// outside the established ranked depth. Native scoped producers override
+    /// this when their ordinary bound is tightened by the neighbour guard.
+    fn scoped_rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        self.rows_per_invocation(mode)
+    }
+
     /// Begin one invocation, returning its row cursor.
     ///
     /// `ceiling` is the optimization licence described in the trait docs — the number
@@ -1951,24 +2245,30 @@ pub struct ProducerWorkspaceCertificate {
 #[derive(Debug)]
 pub struct AdmittedPfRow {
     row: PfRow,
+    evidence: crate::RowEvidence,
     term_admissions: crate::workspace::AdmittedVec<crate::WorkspaceAllocation>,
     admission: crate::WorkspaceAllocation,
 }
 
 impl AdmittedPfRow {
     /// Move raw resident cells only when none of this row's actual grants owns
-    /// operational admission. A bounded row returns its unchanged envelope.
+    /// operational admission or evidence declaration. Refusal destroys the
+    /// native envelope under its original owners; no raw cells escape it.
     ///
     /// # Errors
-    /// Returns this row if any original allocation still requires admission.
-    pub fn try_into_resident(self) -> Result<PfRow, Self> {
-        if self.admission.is_bounded()
+    /// Refuses evidence erasure or releasing a bounded allocation's admission.
+    pub fn try_into_resident(self) -> Result<PfRow, EvalError> {
+        if !self.evidence.is_default() {
+            Err(EvalError::WorkspaceUnpriced(
+                "raw property-function cells cannot transport original row evidence",
+            ))
+        } else if self.admission.is_bounded()
             || self
                 .term_admissions
                 .iter()
                 .any(crate::WorkspaceAllocation::is_bounded)
         {
-            Err(self)
+            Err(EvalError::WorkspaceStopped)
         } else {
             Ok(self.row)
         }
@@ -1978,6 +2278,7 @@ impl AdmittedPfRow {
     pub fn new(row: PfRow, admission: crate::WorkspaceAllocation) -> Self {
         Self {
             row,
+            evidence: crate::RowEvidence::default(),
             term_admissions: crate::workspace::AdmittedVec::new(
                 &crate::WorkspaceCapability::default(),
             ),
@@ -2008,6 +2309,7 @@ impl AdmittedPfRow {
         }
         Ok(Self {
             row,
+            evidence: crate::RowEvidence::default(),
             term_admissions: grants,
             admission,
         })
@@ -2017,6 +2319,21 @@ impl AdmittedPfRow {
     #[must_use]
     pub fn cells(&self) -> &[TermValue] {
         &self.row
+    }
+
+    /// Attach the original query-owned declaration without copying term cells
+    /// or reconstructing a dictionary. The declaration's owner travels with
+    /// this row through native ingestion.
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: crate::RowEvidence) -> Self {
+        self.evidence = evidence;
+        self
+    }
+
+    /// Borrow the original declaration while its query owner remains retained.
+    #[must_use]
+    pub const fn evidence(&self) -> &crate::RowEvidence {
+        &self.evidence
     }
 }
 
@@ -2028,10 +2345,19 @@ struct CertifiedCursor {
 }
 
 impl PfCursor for CertifiedCursor {
+    fn carries_row_evidence(&self) -> bool {
+        self.cursor.carries_row_evidence()
+    }
+    fn search_evidence(&self) -> Result<Option<&crate::RowEvidence>, EvalError> {
+        self.cursor.search_evidence()
+    }
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         self.cursor.next()
     }
     fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+        if self.cursor.carries_row_evidence() {
+            return self.cursor.next_admitted();
+        }
         let admission = self.workspace.charge(self.row_bytes)?;
         self.cursor
             .next()
@@ -2065,6 +2391,15 @@ impl std::ops::Deref for PfRowOwner {
         match self {
             Self::Resident(row) => row,
             Self::Admitted(row) => row.cells(),
+        }
+    }
+}
+
+impl PfRowOwner {
+    pub(crate) fn evidence(&self) -> crate::RowEvidence {
+        match self {
+            Self::Resident(_) => crate::RowEvidence::default(),
+            Self::Admitted(row) => row.evidence().clone(),
         }
     }
 }
@@ -2141,6 +2476,22 @@ pub(crate) fn open_with_workspace_contained(
             workspace,
         ));
     }
+    if args.candidate_scope().is_some()
+        && !declaration_contained_admitted(
+            iri,
+            "candidate scope support",
+            || relation.supports_candidate_scope(),
+            workspace,
+        )?
+    {
+        return Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::Config,
+            format_args!(
+                "property function <{iri}> has no pre-depth candidate scope implementation"
+            ),
+            workspace,
+        ));
+    }
     crate::contain::call_contained_admitted(
         "property function",
         iri,
@@ -2161,17 +2512,21 @@ pub(crate) fn next_with_workspace_contained(
     iri: &str,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<Option<PfRowOwner>, EvalError> {
-    if !workspace.is_bounded() {
-        return next_contained(cursor, iri).map(|row| row.map(PfRowOwner::Resident));
-    }
     crate::contain::call_contained_admitted(
         "property function",
         iri,
         "producing a row",
-        || cursor.next_admitted(),
+        || {
+            if workspace.is_bounded() || cursor.carries_row_evidence() {
+                cursor
+                    .next_admitted()
+                    .map(|row| row.map(PfRowOwner::Admitted))
+            } else {
+                cursor.next().map(|row| row.map(PfRowOwner::Resident))
+            }
+        },
         workspace,
     )
-    .map(|row| row.map(PfRowOwner::Admitted))
 }
 
 /// Pull one row from `cursor` with the host call contained.
@@ -2185,6 +2540,11 @@ pub(crate) fn next_with_workspace_contained(
 /// failure. More specific typed causes propagate unchanged.
 pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfRow>, EvalError> {
     crate::contain::call_contained("property function", iri, "producing a row", || {
+        if cursor.carries_row_evidence() {
+            return Err(EvalError::WorkspaceUnpriced(
+                "raw property-function cells cannot transport original row evidence",
+            ));
+        }
         cursor.next()
     })
 }
@@ -2268,6 +2628,48 @@ pub(crate) fn service_level_contained_admitted(
         || cursor.service_level_with_workspace(workspace),
         workspace,
     )?
+}
+
+pub(crate) fn search_evidence_contained_admitted(
+    cursor: &dyn PfCursor,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(bool, Option<crate::RowEvidence>), EvalError> {
+    declaration_contained_admitted(
+        iri,
+        "original search evidence",
+        || {
+            let carries = cursor.carries_row_evidence();
+            Ok((
+                carries,
+                if carries {
+                    cursor.search_evidence()?.cloned()
+                } else {
+                    None
+                },
+            ))
+        },
+        workspace,
+    )?
+}
+
+pub(crate) fn retain_search_evidence_contained_admitted(
+    cursor: &dyn PfCursor,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+    previous: &mut Option<crate::RowEvidence>,
+) -> Result<bool, EvalError> {
+    let (carries, current) = search_evidence_contained_admitted(cursor, iri, workspace)?;
+    if let Some(current) = current {
+        *previous = Some(match previous.as_ref() {
+            Some(previous) => previous.combine(
+                &current,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?,
+            None => current,
+        });
+    }
+    Ok(carries)
 }
 
 /// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or

@@ -909,8 +909,10 @@ fn build_site<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
 ) -> Result<ExistsSite, EvalError> {
     let workspace = &ctx.growth;
-    let prepared =
-        SharedWorkspace::new_admitted(PreparedExists::build_admitted(body, workspace)?, workspace)?;
+    let prepared = SharedWorkspace::new_admitted(
+        PreparedExists::build_with_evidence_admitted(body, ctx.may_have_evidence(), workspace)?,
+        workspace,
+    )?;
     let vars = crate::expr::pattern_all_vars_admitted(body, workspace)?;
     let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern_with_admitted(
         body,

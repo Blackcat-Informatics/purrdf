@@ -9,10 +9,18 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 34 named cases in 14 integration targets,
-with 39 executions across 18 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 97 named cases in 17 integration targets,
+with 102 executions across 21 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
-interface, except the numeric, sentence and MIME byte-identity targets. WebAssembly has 32- and
+interface, except the numeric, sentence and MIME byte-identity targets and the
+evidence, real-producer and physical-shape acceptance targets. These exercise the original
+admitted owners, four-valued evidence, exact aggregation and refusal paths on the
+32-bit target; the scoped text cases retain original candidate rows and scores.
+The twenty-one real-producer cases exercise both shipped text and kNN strata,
+pre-depth membership, unknown receipts, generation identity, native admission
+refusal, independent candidate depths, original fusion evidence, retained fused
+acceptance and typed terminal refusal during suffix settlement.
+WebAssembly has 32- and
 64-bit integers only, so every `i128` step of the arbitrary-precision numeric
 tower and every `u64`/`u128` carry lane under it is lowered differently there; a
 lowering bug would bind a different digit rather than crash. Those targets hold
@@ -85,6 +93,11 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-text` / `wasm_determinism` | scalar | `promoted_field_arithmetic_is_exact` | Preserves every truncation while maximal nonnegative weights and thirty-two fields promote intermediates through the existing exact integer home; genuine invalid data still refuses. |
 | `purrdf-text` / `wasm_determinism` | scalar | `thirty_two_index_fields_are_exact` | Builds and routes thirty-two actual fields through native indexing, ranking and explanation, retaining the exact independent score. |
 | `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Reproduces the frozen native transcript of message and RDF bytes across all three serializers; reconstructs repeated, nested, multipart and malformed originals through the production RDF parser and byte-cover decoder. |
+
+| `purrdf-sparql-eval` / `evidence_ingress` | scalar | All twenty exact cases registered in the original target | Preserves polarity, closure, unknown status, scope, ledger cells and accepted ordering through actual operators and query forms; native empty, late-emitted and unclosed whole-search declarations retain their original owners and admitted COUNT bounds through EXISTS and ASK functions without an external evidence source; producer refusal prevents partial publication. |
+| `purrdf-text` / `physical_shapes` | scalar | All nineteen exact cases registered in the original target | Compares dictionary, ordered-window and bucket execution with literal execution, exercises original owner lifetimes and admission refusal, and retains exact bytes and work bounds. |
+| `purrdf-retrieval` / `real_producers` | scalar | All twenty-one exact cases registered in the original target | Exercises the shipped text and kNN strata, scoped ranks, retained fused acceptance without another producer call, and typed terminal suffix-settlement refusal with original owner release. |
+| `purrdf-text` / `wasm_determinism` | scalar | `scoped_text_bound_candidates_retain_unknown_membership`, `scoped_text_depth_preserves_original_unknown_rows_and_scores`, `scoped_text_preserves_original_constraint_failure` | Retains original scoped candidate membership, unknown rows, scores and constraint failures through production text retrieval. |
 
 The hash benchmark targets remain native benchmarks. No benchmark smoke target
 runs in the WASM lane; the selected testkit host-clock case exercises its WASM

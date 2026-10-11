@@ -15,15 +15,15 @@ use crate::ranked_stream::{
     validate_rank, validate_receipt,
 };
 use core::fmt;
+use purrdf_sparql_eval::{AdmittedOrderedMap, AdmittedOrderedSet, AdmittedVec, SharedWorkspace};
 use purrdf_sparql_eval::{Completeness, DuplicatePolicy, OrderFidelity, PfAttestation};
-use std::collections::{BTreeMap, BTreeSet};
 
 /// A subject in a set, carrying every original rank at which each producer named it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnionCandidate {
     /// Original ranks, in producer emission order. Allowed duplicates retain all
     /// their ranks; they do not produce duplicate subjects in the candidate set.
-    pub ranks: BTreeMap<Iri, Vec<u64>>,
+    pub ranks: SharedWorkspace<AdmittedOrderedMap<Iri, AdmittedVec<u64>>>,
     /// The first declared block placement, if a producer provided one.
     pub block: Option<(Iri, crate::DomainTag)>,
 }
@@ -92,24 +92,24 @@ impl UnionProducer {
 
 /// A candidate set with no relevance score, top-k truncation or ranking.
 ///
-/// BTreeMap order is its canonical set representation, not a relevance order.
+/// Lexical key order is its canonical set representation, not a relevance order.
 /// Every producer's independent prefix and original evidence remains inspectable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CandidateUnion {
     /// The explicit candidate-plan identity.
     pub plan_id: PlanId,
     /// Distinct subjects and all their original producer ranks.
-    pub candidates: BTreeMap<Term, UnionCandidate>,
+    pub candidates: SharedWorkspace<AdmittedOrderedMap<Term, UnionCandidate>>,
     /// Every selected producer, including one that failed before opening.
-    pub producers: BTreeMap<Iri, UnionProducer>,
+    pub producers: SharedWorkspace<AdmittedOrderedMap<Iri, UnionProducer>>,
     /// True only after every selected producer certifies its own requested prefix.
     pub completed_prefix: bool,
     /// Every request term/placement that no producer could serve.
-    pub unserved_terms: Vec<UnservedTerm>,
+    pub unserved_terms: SharedWorkspace<AdmittedVec<UnservedTerm>>,
     /// Original term-to-producer binding records.
-    pub producer_bindings: Vec<ProducerBinding>,
+    pub producer_bindings: SharedWorkspace<Vec<ProducerBinding>>,
     /// Original selection/rejection decisions.
-    pub producer_decisions: Vec<ProducerDecision>,
+    pub producer_decisions: SharedWorkspace<Vec<ProducerDecision>>,
 }
 
 /// A refusal of an inconsistent candidate stage or the original ranked protocol.
@@ -178,18 +178,22 @@ purrdf_lex::variant_from!(UnionError { Protocol(ProtocolError) });
 
 /// A whole-stage refusal with the original cause and all ranks/evidence observed so far.
 #[derive(Debug)]
-pub struct UnionFailure {
+pub struct UnionFailure<'d> {
     /// The first whole-stage refusal; cleanup never replaces it.
     pub cause: UnionError,
-    /// The explicitly incomplete observed set, with all settlement evidence retained.
-    pub partial: CandidateUnion,
+    /// The incomplete observed set; absent only if admission failed before a read.
+    pub partial: Option<CandidateUnion>,
+    /// Original execution and settled reads retained through the refusal.
+    /// This moves the already-admitted arena; no new evidence storage is
+    /// allocated after refusal and every producer's settlement remains visible.
+    pub execution: CandidateExecutionResult<'d>,
 }
-impl fmt::Display for UnionFailure {
+impl fmt::Display for UnionFailure<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.cause.fmt(f)
     }
 }
-impl std::error::Error for UnionFailure {
+impl std::error::Error for UnionFailure<'_> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.cause)
     }
@@ -212,49 +216,85 @@ impl std::error::Error for UnionFailure {
     clippy::future_not_send,
     reason = "native on-demand reads retain Rc invocation state and are awaited in one task"
 )]
-pub async fn union(
-    mut execution: CandidateExecutionResult<'_>,
+#[expect(
+    clippy::result_large_err,
+    reason = "a native refusal must retain its partial evidence without allocating an error box after admission has stopped"
+)]
+pub async fn union<'d>(
+    mut execution: CandidateExecutionResult<'d>,
     depths: &CandidateDepths,
-) -> Result<CandidateUnion, Box<UnionFailure>> {
+) -> Result<CandidateUnion, UnionFailure<'d>> {
+    let workspace = execution.streams.workspace().clone();
+    let arenas = (|| {
+        let candidates =
+            SharedWorkspace::new_admitted(AdmittedOrderedMap::new(&workspace), &workspace)?;
+        let producers =
+            SharedWorkspace::new_admitted(AdmittedOrderedMap::new(&workspace), &workspace)?;
+        Ok::<_, purrdf_sparql_eval::EvalError>((candidates, producers))
+    })();
+    let (candidates, producers) = match arenas {
+        Ok(arenas) => arenas,
+        Err(error) => {
+            return Err(settle_admission_failure(execution, error).await);
+        }
+    };
     let mut result = CandidateUnion {
         plan_id: execution.plan_id,
-        candidates: BTreeMap::new(),
-        producers: BTreeMap::new(),
+        candidates,
+        producers,
         completed_prefix: false,
-        unserved_terms: std::mem::take(&mut execution.unserved_terms),
-        producer_bindings: std::mem::take(&mut execution.producer_bindings),
-        producer_decisions: std::mem::take(&mut execution.producer_decisions),
+        unserved_terms: execution.unserved_terms.clone(),
+        producer_bindings: execution.producer_bindings.clone(),
+        producer_decisions: execution.producer_decisions.clone(),
     };
-    for (stratum, depth) in execution.depths.sorted() {
-        result.producers.insert(
-            stratum.clone(),
-            UnionProducer::new(
-                depth,
-                execution.contracts.get(stratum).cloned(),
-                execution.statuses.get(stratum).cloned(),
-            ),
-        );
-    }
-    for read in &execution.streams {
-        result
-            .producers
-            .entry(read.stratum.clone())
-            .or_insert_with(|| {
-                UnionProducer::new(read.requested_depth, Some(read.contract.clone()), None)
-            })
-            .announced = Some(read.attestation.clone());
-    }
-    let mut primary = check_execution(&execution, depths)
-        .err()
-        .map(|error| *error);
+    let mut primary = None;
     if primary.is_none() {
-        'reads: for read in &mut execution.streams {
+        let setup = (|| {
+            let producers = result
+                .producers
+                .get_mut()
+                .expect("unpublished producer arena is unique");
+            for (stratum, depth) in execution.depths.iter() {
+                producers.insert(
+                    stratum.clone_admitted(&workspace)?,
+                    UnionProducer::new(
+                        depth,
+                        execution.contracts.get(stratum).cloned(),
+                        execution.statuses.get(stratum).cloned(),
+                    ),
+                )?;
+            }
+            for read in &execution.streams {
+                if !producers.contains_key(&read.stratum) {
+                    producers.insert(
+                        read.stratum.clone_admitted(&workspace)?,
+                        UnionProducer::new(read.requested_depth, Some(read.contract.clone()), None),
+                    )?;
+                }
+                producers
+                    .get_mut(&read.stratum)
+                    .expect("actual selected producer")
+                    .announced = Some(read.attestation.clone());
+            }
+            Ok::<(), purrdf_sparql_eval::EvalError>(())
+        })();
+        if let Err(error) = setup {
+            primary = Some(ProtocolError::NativeFailure(error).into());
+        }
+    }
+    if primary.is_none() {
+        primary = check_execution(&execution, depths).err();
+    }
+    if primary.is_none() {
+        'reads: for read in execution.streams.iter_mut() {
             loop {
                 let pulled = read.stream.next().await;
                 match pulled {
                     Ok(Some((rank, subject, block))) => {
                         let producer = result
                             .producers
+                            .get_mut()
+                            .expect("unpublished producer arena is unique")
                             .get_mut(&read.stratum)
                             .expect("the actual stream's producer was recorded");
                         let expected = producer.rows_pulled + 1;
@@ -307,25 +347,60 @@ pub async fn union(
                             primary = Some(error.into());
                             break 'reads;
                         }
-                        let candidate =
-                            result
+                        let recorded = (|| {
+                            let candidates = result
                                 .candidates
-                                .entry(subject)
-                                .or_insert_with(|| UnionCandidate {
-                                    ranks: BTreeMap::new(),
-                                    block: None,
-                                });
-                        let ranks = candidate.ranks.entry(read.stratum.clone()).or_default();
-                        ranks.push(rank);
-                        if candidate.block.is_none()
-                            && let Some(tag) = block.tag()
-                        {
-                            candidate.block = Some((read.stratum.clone(), tag.clone()));
+                                .get_mut()
+                                .expect("unpublished candidate arena is unique");
+                            if !candidates.contains_key(&subject) {
+                                let ranks = SharedWorkspace::new_admitted(
+                                    AdmittedOrderedMap::new(&workspace),
+                                    &workspace,
+                                )?;
+                                candidates.insert(
+                                    subject.clone_admitted(&workspace)?,
+                                    UnionCandidate { ranks, block: None },
+                                )?;
+                            }
+                            let candidate = candidates
+                                .get_mut(&subject)
+                                .expect("candidate installed before rank mutation");
+                            let ranks = candidate
+                                .ranks
+                                .get_mut()
+                                .expect("unpublished ranks arena is unique");
+                            if !ranks.contains_key(&read.stratum) {
+                                ranks.insert(
+                                    read.stratum.clone_admitted(&workspace)?,
+                                    AdmittedVec::new(&workspace),
+                                )?;
+                            }
+                            ranks
+                                .get_mut(&read.stratum)
+                                .expect("rank array installed")
+                                .push(rank)?;
+                            if candidate.block.is_none()
+                                && let Some(tag) = block.tag()
+                            {
+                                candidate.block = Some((
+                                    read.stratum.clone_admitted(&workspace)?,
+                                    tag.clone_admitted(&workspace)?,
+                                ));
+                            }
+                            Ok::<(), purrdf_sparql_eval::EvalError>(())
+                        })();
+                        if let Err(error) = recorded {
+                            let error = ProtocolError::NativeFailure(error);
+                            producer.read_error = Some(error.clone());
+                            primary = Some(error.into());
+                            break 'reads;
                         }
                     }
                     Ok(None) => {
                         let producer = result
                             .producers
+                            .get_mut()
+                            .expect("unpublished producer arena is unique")
                             .get_mut(&read.stratum)
                             .expect("the actual stream's producer was recorded");
                         match read.stream.receipt().await.and_then(|receipt| {
@@ -360,16 +435,30 @@ pub async fn union(
                     Err(error) => {
                         let producer = result
                             .producers
+                            .get_mut()
+                            .expect("unpublished producer arena is unique")
                             .get_mut(&read.stratum)
                             .expect("the actual stream's producer was recorded");
                         producer.read_error = Some(error.clone());
-                        if let ProtocolError::ReadFailed { reason, .. } = &error
-                            && !read.stream.run_invalidated()
+                        if matches!(
+                            error,
+                            ProtocolError::ReadFailed { .. } | ProtocolError::NativeFailure(_)
+                        ) && !read.stream.run_invalidated()
                         {
                             // A failure is a status, never a forged terminal receipt.
-                            producer.status = Some(ProducerStatus::ExecutionFailed {
-                                reason: reason.clone(),
-                            });
+                            let workspace =
+                                read.stream.workspace().cloned().unwrap_or_else(
+                                    purrdf_sparql_eval::WorkspaceCapability::resident,
+                                );
+                            match ProducerStatus::failed_admitted(&error, &workspace) {
+                                Ok(status) => producer.status = Some(status),
+                                Err(error) => {
+                                    let error = ProtocolError::NativeFailure(error);
+                                    producer.read_error = Some(error.clone());
+                                    primary = Some(error.into());
+                                    break 'reads;
+                                }
+                            }
                             break;
                         }
                         primary = Some(error.into());
@@ -380,7 +469,12 @@ pub async fn union(
         }
     }
     settle_reads(&mut execution.streams, &mut result, &mut primary).await;
-    for producer in result.producers.values_mut() {
+    for producer in result
+        .producers
+        .get_mut()
+        .expect("unpublished producer arena is unique")
+        .values_mut()
+    {
         producer.certify_prefix();
     }
     result.completed_prefix = primary.is_none()
@@ -389,62 +483,93 @@ pub async fn union(
             .values()
             .all(|producer| producer.completed_prefix);
     match primary {
-        Some(cause) => Err(Box::new(UnionFailure {
+        Some(cause) => Err(UnionFailure {
             cause,
-            partial: result,
-        })),
+            partial: Some(result),
+            execution,
+        }),
         None => Ok(result),
     }
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "settlement retains the same task-local native invocation owners"
+)]
+async fn settle_admission_failure(
+    mut execution: CandidateExecutionResult<'_>,
+    error: purrdf_sparql_eval::EvalError,
+) -> UnionFailure<'_> {
+    for read in execution.streams.iter_mut() {
+        read.admission_failure_settlement = Some(read.stream.settle().await);
+    }
+    UnionFailure {
+        cause: ProtocolError::NativeFailure(error).into(),
+        partial: None,
+        execution,
+    }
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "depth verification retains existing identifiers and native first refusal; failure cannot allocate a replacement owner"
+)]
 fn check_execution(
     execution: &CandidateExecutionResult<'_>,
     depths: &CandidateDepths,
-) -> Result<(), Box<UnionError>> {
+) -> Result<(), UnionError> {
     for stratum in execution.depths.0.keys().chain(depths.0.keys()) {
         if execution.depths.get(stratum) != depths.get(stratum) {
-            return Err(Box::new(UnionError::DepthMismatch {
+            return Err(UnionError::DepthMismatch {
                 stratum: stratum.clone(),
                 executed: execution.depths.get(stratum),
                 requested: depths.get(stratum),
-            }));
+            });
         }
     }
-    let mut seen = BTreeSet::new();
+    let workspace = execution.streams.workspace();
+    let mut seen = AdmittedOrderedSet::new(workspace);
     for read in &execution.streams {
-        if !seen.insert(read.stratum.clone()) {
-            return Err(Box::new(UnionError::InconsistentExecution {
+        if !seen
+            .insert(
+                read.stratum
+                    .clone_admitted(workspace)
+                    .map_err(ProtocolError::NativeFailure)?,
+            )
+            .map_err(ProtocolError::NativeFailure)?
+        {
+            return Err(UnionError::InconsistentExecution {
                 reason: format!("candidate stratum {} appears twice", read.stratum),
-            }));
+            });
         }
         if read.plan_id != execution.plan_id
             || execution.depths.get(&read.stratum) != Some(read.requested_depth)
             || execution.contracts.get(&read.stratum) != Some(&read.contract)
         {
-            return Err(Box::new(UnionError::InconsistentExecution {
+            return Err(UnionError::InconsistentExecution {
                 reason: format!(
                     "candidate stratum {} differs from its compiled attribution",
                     read.stratum
                 ),
-            }));
+            });
         }
     }
     for stratum in execution.depths.0.keys() {
         if !execution.contracts.contains_key(stratum)
             || !seen.contains(stratum) && !execution.statuses.contains_key(stratum)
         {
-            return Err(Box::new(UnionError::InconsistentExecution {
+            return Err(UnionError::InconsistentExecution {
                 reason: format!(
                     "candidate stratum {stratum} has no admitted contract or read/status"
                 ),
-            }));
+            });
         }
     }
     for stratum in execution.statuses.keys().chain(execution.contracts.keys()) {
         if execution.depths.get(stratum).is_none() {
-            return Err(Box::new(UnionError::InconsistentExecution {
+            return Err(UnionError::InconsistentExecution {
                 reason: format!("candidate evidence names unselected stratum {stratum}"),
-            }));
+            });
         }
     }
     Ok(())
@@ -462,8 +587,20 @@ async fn settle_reads(
     for read in reads {
         let producer = result
             .producers
-            .get_mut(&read.stratum)
-            .expect("every actual stream was recorded before validation");
+            .get_mut()
+            .expect("unpublished producer arena is unique")
+            .get_mut(&read.stratum);
+        let Some(producer) = producer else {
+            // Setup stopped at the first arena refusal. Its original error is
+            // already primary; retain every remaining settlement in the existing
+            // read slot instead of requiring another refused map insertion.
+            assert!(
+                primary.is_some(),
+                "a missing producer follows setup refusal"
+            );
+            read.admission_failure_settlement = Some(read.stream.settle().await);
+            continue;
+        };
         producer.rows_materialised = Some(read.stream.rows_materialised());
         producer.rows_emitted = Some(read.stream.rows_emitted());
         let settlement = read.stream.settle().await.and_then(|settled| {
@@ -492,9 +629,13 @@ async fn settle_reads(
 impl CandidateUnion {
     /// Canonical set bytes. Subject/stratum order, framing and integer widths are
     /// fixed across native and WASM; no score, relevance order or native usize is written.
-    #[must_use]
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut writer = Writer::new();
+    /// # Errors
+    /// Returns the original native allocation refusal if export cannot be admitted.
+    pub fn canonical_bytes(
+        &self,
+    ) -> Result<SharedWorkspace<AdmittedVec<u8>>, purrdf_sparql_eval::EvalError> {
+        let workspace = self.candidates.workspace();
+        let mut writer = Writer::admitted(workspace);
         writer.u16(1);
         writer.string("candidate-union");
         writer.bytes(self.plan_id.as_bytes());
@@ -530,31 +671,34 @@ impl CandidateUnion {
             writer.u8(u8::from(producer.completed_prefix));
             write_status(&mut writer, producer.status.as_ref());
             write_contract(&mut writer, producer.contract.as_ref());
-            write_attestation(&mut writer, stratum, producer.announced.as_ref());
-            write_attestation(&mut writer, stratum, producer.settled.as_ref());
-            writer.option_string(
-                producer
-                    .read_error
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .as_deref(),
-            );
-            writer.option_string(
-                producer
-                    .settlement_error
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .as_deref(),
-            );
+            write_attestation(&mut writer, stratum, producer.announced.as_ref(), workspace)?;
+            write_attestation(&mut writer, stratum, producer.settled.as_ref(), workspace)?;
+            writer.ensure_live()?;
+            let read_error = producer
+                .read_error
+                .as_ref()
+                .map(|error| workspace.authored_text(error))
+                .transpose()?;
+            writer.option_string(read_error.as_deref());
+            writer.ensure_live()?;
+            let settlement_error = producer
+                .settlement_error
+                .as_ref()
+                .map(|error| workspace.authored_text(error))
+                .transpose()?;
+            writer.option_string(settlement_error.as_deref());
         }
         crate::plan::write_bindings(&mut writer, &self.producer_bindings);
         crate::plan::write_decisions(&mut writer, &self.producer_decisions);
         crate::plan::write_unserved_terms(&mut writer, &self.unserved_terms);
-        writer.into_bytes()
+        writer.into_admitted()
     }
 }
 
-fn write_status(writer: &mut Writer, status: Option<&ProducerStatus>) {
+fn write_status(
+    writer: &mut Writer<impl crate::canonical::CanonicalSink>,
+    status: Option<&ProducerStatus>,
+) {
     match status {
         None => writer.u8(0),
         Some(ProducerStatus::Exhausted { rows_emitted }) => {
@@ -585,7 +729,10 @@ fn write_status(writer: &mut Writer, status: Option<&ProducerStatus>) {
     }
 }
 
-fn write_contract(writer: &mut Writer, contract: Option<&StreamContract>) {
+fn write_contract(
+    writer: &mut Writer<impl crate::canonical::CanonicalSink>,
+    contract: Option<&StreamContract>,
+) {
     let Some(contract) = contract else {
         writer.u8(0);
         return;
@@ -619,15 +766,138 @@ fn write_contract(writer: &mut Writer, contract: Option<&StreamContract>) {
     writer.string(contract.exclusion.as_str());
 }
 
-fn write_attestation(writer: &mut Writer, stratum: &Iri, attestation: Option<&PfAttestation>) {
+fn write_attestation(
+    writer: &mut Writer<crate::canonical::AdmittedBytes>,
+    stratum: &Iri,
+    attestation: Option<&PfAttestation>,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<(), purrdf_sparql_eval::EvalError> {
     match attestation {
         None => writer.u8(0),
         Some(attestation) => {
             writer.u8(1);
-            writer.bytes(&crate::fusion_stream::evidence_canonical_bytes(
-                &BTreeMap::from([(stratum.clone(), attestation.clone())]),
-                &BTreeMap::new(),
-            ));
+            writer.ensure_live()?;
+            let mut evidence = Writer::admitted(workspace);
+            crate::fusion_stream::write_evidence(
+                &mut evidence,
+                || core::iter::once((stratum, attestation)),
+                core::iter::empty,
+            );
+            writer.bytes(&evidence.into_admitted()?);
         }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod admission_failure_tests {
+    use super::*;
+
+    #[test]
+    fn result_admission_refusal_settles_all_reads_and_moves_original_evidence() {
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let stratum = Iri::parse("http://example.org/producer").unwrap();
+        let plan_id = PlanId::from_canonical(b"settlement-before-result-admission");
+        let contract = StreamContract::new(
+            DuplicatePolicy::Unique,
+            crate::RankFidelity::EXACT,
+            crate::CandidateDomains::Unrestricted,
+            crate::ExclusionBasis::Unavailable,
+        );
+        let streams = AdmittedVec::from_iter_admitted(
+            (0..2).map(|_| ReadStratum {
+                stratum: stratum.clone(),
+                plan_id,
+                requested_depth: 3,
+                contract: contract.clone(),
+                attestation: PfAttestation::UNDECLARED,
+                stream: crate::RankedStreamImpl::new(Vec::new(), crate::StreamEnding::Exhausted),
+                admission_failure_settlement: None,
+            }),
+            &workspace,
+        )
+        .unwrap();
+        let original_buffer = streams.as_slice().as_ptr();
+        let execution = CandidateExecutionResult {
+            streams,
+            statuses: AdmittedOrderedMap::new(&workspace),
+            plan_id,
+            depths: CandidateDepths::new([(stratum, 3)]).unwrap(),
+            contracts: SharedWorkspace::new_admitted(
+                AdmittedOrderedMap::new(&workspace),
+                &workspace,
+            )
+            .unwrap(),
+            unserved_terms: SharedWorkspace::new_admitted(AdmittedVec::new(&workspace), &workspace)
+                .unwrap(),
+            producer_bindings: std::sync::Arc::new(Vec::new()).into(),
+            producer_decisions: std::sync::Arc::new(Vec::new()).into(),
+        };
+        let failure = crate::block_on(settle_admission_failure(
+            execution,
+            purrdf_sparql_eval::EvalError::AllocationFailed {
+                construct: "original result control",
+            },
+        ));
+        assert!(matches!(
+            failure.cause,
+            UnionError::Protocol(ProtocolError::NativeFailure(
+                purrdf_sparql_eval::EvalError::AllocationFailed {
+                    construct: "original result control"
+                }
+            ))
+        ));
+        assert!(failure.partial.is_none());
+        let mut retained = failure.execution;
+        assert_eq!(retained.plan_id, plan_id);
+        assert_eq!(retained.streams.as_slice().as_ptr(), original_buffer);
+        assert_eq!(retained.streams.len(), 2);
+        for read in &retained.streams {
+            assert!(matches!(read.admission_failure_settlement, Some(Ok(None))));
+            assert_eq!(read.stream.rows_emitted(), 0);
+        }
+        // A later setup refusal can leave the producer map without entries.
+        // Exercise that separate settlement route with the same original arena.
+        for read in retained.streams.iter_mut() {
+            read.admission_failure_settlement = None;
+        }
+        let mut partial = CandidateUnion {
+            plan_id,
+            candidates: SharedWorkspace::new_admitted(
+                AdmittedOrderedMap::new(&workspace),
+                &workspace,
+            )
+            .unwrap(),
+            producers: SharedWorkspace::new_admitted(
+                AdmittedOrderedMap::new(&workspace),
+                &workspace,
+            )
+            .unwrap(),
+            completed_prefix: false,
+            unserved_terms: retained.unserved_terms.clone(),
+            producer_bindings: retained.producer_bindings.clone(),
+            producer_decisions: retained.producer_decisions.clone(),
+        };
+        let mut primary = Some(UnionError::Protocol(ProtocolError::NativeFailure(
+            purrdf_sparql_eval::EvalError::WorkspaceStopped,
+        )));
+        crate::block_on(settle_reads(
+            &mut retained.streams,
+            &mut partial,
+            &mut primary,
+        ));
+        assert!(matches!(
+            primary,
+            Some(UnionError::Protocol(ProtocolError::NativeFailure(
+                purrdf_sparql_eval::EvalError::WorkspaceStopped
+            )))
+        ));
+        assert_eq!(retained.streams.as_slice().as_ptr(), original_buffer);
+        assert!(
+            retained
+                .streams
+                .iter()
+                .all(|read| matches!(read.admission_failure_settlement, Some(Ok(None))))
+        );
     }
 }

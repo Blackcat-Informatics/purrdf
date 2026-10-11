@@ -59,6 +59,12 @@ pub struct Shared<T> {
     _owner: PhantomData<Header<T>>,
 }
 
+// Moving the owner moves only its pointer, never the allocated payload. Like
+// Arc, this pointer is Unpin even when the pointee is not; pinning the owner
+// does not structurally pin T. Avoid deriving this property through T's entire
+// recursive ownership graph.
+impl<T> Unpin for Shared<T> {}
+
 // SAFETY: References expose only &T. Ownership may cross threads only when T
 // permits both transfer and shared access. The strong count is atomic.
 unsafe impl<T: Send + Sync> Send for Shared<T> {}
@@ -460,6 +466,16 @@ impl fmt::Display for SharedText {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn moving_an_unpin_owner_preserves_a_non_unpin_payload_address() {
+        let mut owner = Shared::try_new(core::marker::PhantomPinned).unwrap();
+        let original = core::ptr::from_ref(&*owner);
+        let pinned_owner = core::pin::Pin::new(&mut owner);
+        assert_eq!(core::ptr::from_ref(&**pinned_owner), original);
+        let moved = [owner];
+        assert_eq!(core::ptr::from_ref(&*moved[0]), original);
+    }
+
     use super::*;
     use std::sync::Arc;
 

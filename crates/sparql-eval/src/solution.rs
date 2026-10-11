@@ -146,6 +146,11 @@ impl PartialEq for VarSchema {
     }
 }
 impl Eq for VarSchema {}
+impl std::hash::Hash for VarSchema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(self.vars(), state);
+    }
+}
 
 /// Above this many columns a schema builds a hash index; at or below it, lookups
 /// scan the column vector.
@@ -464,6 +469,23 @@ pub struct RetainedRow<I: ViewTermId = TermId> {
 enum RowStorage<I: ViewTermId> {
     Resident(Solution<I>),
     Shared(purrdf_core::small::Shared<RowPayload<I>>),
+    Tracked(crate::SharedWorkspace<TrackedRow<I>>),
+}
+
+#[derive(Debug)]
+enum RowCells<I: ViewTermId> {
+    Resident {
+        cells: Solution<I>,
+        _allocation: Option<crate::WorkspaceAllocation>,
+    },
+    Shared(purrdf_core::small::Shared<RowPayload<I>>),
+}
+
+#[derive(Debug)]
+struct TrackedRow<I: ViewTermId> {
+    // Cell ownership is flat and shared independently of changed metadata.
+    cells: crate::SharedWorkspace<RowCells<I>>,
+    evidence: crate::evidence_exec::RowEvidence,
 }
 
 #[derive(Debug)]
@@ -478,6 +500,10 @@ impl<I: ViewTermId> std::ops::Deref for RetainedRow<I> {
         match &self.storage {
             RowStorage::Resident(cells) => cells,
             RowStorage::Shared(payload) => &payload.cells,
+            RowStorage::Tracked(payload) => match &*payload.cells {
+                RowCells::Resident { cells, .. } => cells,
+                RowCells::Shared(payload) => &payload.cells,
+            },
         }
     }
 }
@@ -501,6 +527,157 @@ impl<'a, I: ViewTermId> IntoIterator for &'a RetainedRow<I> {
 }
 
 impl<I: ViewTermId> RetainedRow<I> {
+    /// Physical attachments include original rank and query-owner lifetimes,
+    /// even when their public evidence record is default-supported.
+    #[inline]
+    pub(crate) fn has_evidence_attachment(&self) -> bool {
+        matches!(self.storage, RowStorage::Tracked(_))
+    }
+
+    /// Copy an existing attachment without materializing virtual metadata on
+    /// ordinary rows. Tracked owners keep the original fallible attachment path.
+    #[inline]
+    pub(crate) fn with_evidence_from(
+        self,
+        source: &Self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        if !self.has_evidence_attachment() && !source.has_evidence_attachment() {
+            return Ok(self);
+        }
+        self.with_evidence(source.evidence().clone(), workspace)
+    }
+
+    /// Compute a dependency attachment before constructing its output cells.
+    /// Only physically ordinary operands have no attachment to combine.
+    #[inline]
+    pub(crate) fn combined_evidence(
+        &self,
+        other: &Self,
+        law: purrdf_core::evidence::EvidenceCombination,
+    ) -> Result<Option<crate::evidence_exec::RowEvidence>, crate::EvalError> {
+        if !self.has_evidence_attachment() && !other.has_evidence_attachment() {
+            return Ok(None);
+        }
+        self.evidence().combine(other.evidence(), law).map(Some)
+    }
+
+    /// Borrow evidence while retaining its original query-local dictionary.
+    #[must_use]
+    pub fn evidence(&self) -> &crate::evidence_exec::RowEvidence {
+        match &self.storage {
+            RowStorage::Tracked(payload) => &payload.evidence,
+            RowStorage::Resident(_) | RowStorage::Shared(_) => {
+                &crate::evidence_exec::VIRTUAL_ROW_EVIDENCE
+            }
+        }
+    }
+
+    /// Move an immutable row and its evidence through an operator together.
+    ///
+    /// # Errors
+    /// Returns original native admission or allocation refusal before changing
+    /// ownership. Ordinary virtual evidence allocates nothing.
+    #[inline]
+    pub fn with_evidence(
+        mut self,
+        evidence: crate::evidence_exec::RowEvidence,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        if evidence.is_virtual() && !matches!(self.storage, RowStorage::Tracked(_)) {
+            return Ok(self);
+        }
+        self.attach_evidence(evidence, workspace)?;
+        Ok(self)
+    }
+
+    fn attach_evidence(
+        &mut self,
+        evidence: crate::evidence_exec::RowEvidence,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        if self.evidence().same_attachment(&evidence) {
+            return Ok(());
+        }
+        let existing_cells = match &self.storage {
+            RowStorage::Tracked(payload) => Some(payload.cells.clone()),
+            RowStorage::Resident(_) | RowStorage::Shared(_) => None,
+        };
+        let first_attachment = existing_cells.is_none();
+        let cells = match existing_cells {
+            Some(cells) => cells,
+            None => {
+                let allocation = match &self.storage {
+                    RowStorage::Resident(cells) if workspace.is_bounded() => {
+                        let spill = if cells.spilled() {
+                            std::alloc::Layout::array::<Option<SolutionTerm<I>>>(cells.capacity())
+                                .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?
+                                .size()
+                        } else {
+                            0
+                        };
+                        Some(
+                            workspace.charge(
+                                u64::try_from(spill)
+                                    .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+                            )?,
+                        )
+                    }
+                    RowStorage::Resident(_) | RowStorage::Shared(_) => None,
+                    RowStorage::Tracked(_) => unreachable!("ordinary first attachment"),
+                };
+                crate::SharedWorkspace::new_admitted(
+                    RowCells::Resident {
+                        cells: Solution::new(),
+                        _allocation: allocation,
+                    },
+                    workspace,
+                )?
+            }
+        };
+        let mut tracked =
+            crate::SharedWorkspace::new_admitted(TrackedRow { cells, evidence }, workspace)?;
+        if first_attachment {
+            // Both controls are admitted before moving the existing cell owner.
+            // On refusal the original row and all its grants remain untouched.
+            let cells = tracked
+                .get_mut()
+                .and_then(|payload| payload.cells.get_mut())
+                .ok_or_else(|| {
+                    crate::error::NativeDiagnostic::error(
+                        crate::error::NativeDiagnosticKind::Internal,
+                        "fresh tracked row controls are unexpectedly shared",
+                        workspace,
+                    )
+                })?;
+            match std::mem::replace(&mut self.storage, RowStorage::Resident(Solution::new())) {
+                RowStorage::Resident(original) => {
+                    let RowCells::Resident { cells, .. } = cells else {
+                        unreachable!("fresh original cell capsule is resident")
+                    };
+                    *cells = original;
+                }
+                RowStorage::Shared(payload) => *cells = RowCells::Shared(payload),
+                RowStorage::Tracked(_) => unreachable!("first attachment has ordinary cells"),
+            }
+        }
+        self.storage = RowStorage::Tracked(tracked);
+        Ok(())
+    }
+
+    pub(crate) fn combine_evidence(
+        &mut self,
+        evidence: &crate::evidence_exec::RowEvidence,
+        law: purrdf_core::evidence::EvidenceCombination,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        if !self.has_evidence_attachment() && evidence.is_virtual() {
+            return Ok(());
+        }
+        let evidence = self.evidence().combine(evidence, law)?;
+        self.attach_evidence(evidence, workspace)
+    }
+
     /// Move an already-owned resident cell buffer without cloning its spill.
     pub(crate) fn from_resident(cells: Solution<I>) -> Self {
         Self {
@@ -508,10 +685,24 @@ impl<I: ViewTermId> RetainedRow<I> {
         }
     }
 
-    pub(crate) fn into_resident(self) -> Result<Solution<I>, Self> {
+    /// Worker transport moves cells and evidence together, never detaching ids.
+    pub(crate) fn into_resident_parts(
+        mut self,
+    ) -> Result<(Solution<I>, crate::evidence_exec::RowEvidence), Self> {
+        if let RowStorage::Tracked(payload) = &mut self.storage
+            && let Some(payload) = payload.get_mut()
+            && let Some(RowCells::Resident {
+                cells,
+                _allocation: None,
+            }) = payload.cells.get_mut()
+        {
+            return Ok((std::mem::take(cells), std::mem::take(&mut payload.evidence)));
+        }
         match self.storage {
-            RowStorage::Resident(cells) => Ok(cells),
-            storage @ RowStorage::Shared(_) => Err(Self { storage }),
+            RowStorage::Resident(cells) => {
+                Ok((cells, crate::evidence_exec::RowEvidence::default()))
+            }
+            storage @ (RowStorage::Shared(_) | RowStorage::Tracked(_)) => Err(Self { storage }),
         }
     }
 
@@ -522,7 +713,7 @@ impl<I: ViewTermId> RetainedRow<I> {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, crate::EvalError> {
         match &self.storage {
-            RowStorage::Shared(_) => Ok(self.clone()),
+            RowStorage::Shared(_) | RowStorage::Tracked(_) => Ok(self.clone()),
             RowStorage::Resident(cells) => {
                 Self::from_cells(cells.len(), cells.iter().copied(), workspace)
             }
@@ -617,6 +808,7 @@ impl<I: ViewTermId> RetainedRow<I> {
 #[derive(Clone, Debug)]
 pub struct RowBag<I: ViewTermId = TermId> {
     storage: BagStorage<I>,
+    search_evidence: crate::evidence_exec::RowEvidence,
 }
 
 impl<I: ViewTermId> PartialEq for RowBag<I> {
@@ -659,6 +851,15 @@ impl<I: ViewTermId> std::ops::Deref for RowBag<I> {
     }
 }
 impl<I: ViewTermId> RowBag<I> {
+    /// The original search attestation, retained even when this bag is empty.
+    #[must_use]
+    pub fn search_evidence(&self) -> &crate::evidence_exec::RowEvidence {
+        &self.search_evidence
+    }
+
+    pub(crate) fn retain_search_evidence(&mut self, evidence: crate::evidence_exec::RowEvidence) {
+        self.search_evidence = evidence;
+    }
     #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         match &self.storage {
@@ -674,12 +875,17 @@ impl<I: ViewTermId> RowBag<I> {
         };
         rows.push(RetainedRow::from_resident(row));
     }
-    /// Move the existing resident metadata buffer for an unbounded worker commit.
+    /// Move the existing resident buffer and its original search declaration.
     /// A bounded bag returns its unchanged owner instead of shedding admission.
-    pub(crate) fn into_resident_rows(self) -> Result<Vec<RetainedRow<I>>, Self> {
+    pub(crate) fn into_resident_rows(
+        self,
+    ) -> Result<(Vec<RetainedRow<I>>, crate::evidence_exec::RowEvidence), Self> {
         match self.storage {
-            BagStorage::Resident(rows) => Ok(rows),
-            storage @ BagStorage::Shared { .. } => Err(Self { storage }),
+            BagStorage::Resident(rows) => Ok((rows, self.search_evidence)),
+            storage @ BagStorage::Shared { .. } => Err(Self {
+                storage,
+                search_evidence: self.search_evidence,
+            }),
         }
     }
 
@@ -734,15 +940,21 @@ impl<I: ViewTermId> RowBag<I> {
                 }
                 Ok(Self {
                     storage: BagStorage::Resident(rows),
+                    search_evidence: self.search_evidence,
                 })
             }
             storage => {
-                let source = Self { storage };
+                let source = Self {
+                    storage,
+                    search_evidence: self.search_evidence,
+                };
                 let mut rows = RowsBuilder::new(workspace);
                 for &ordinal in &order {
                     rows.push_row(source[ordinal].clone_admitted(workspace)?)?;
                 }
-                rows.finish()
+                let mut ordered = rows.finish()?;
+                ordered.search_evidence = source.search_evidence;
+                Ok(ordered)
             }
         }
     }
@@ -751,6 +963,7 @@ impl<I: ViewTermId> RowBag<I> {
 impl<I: ViewTermId> From<Vec<Solution<I>>> for RowBag<I> {
     fn from(rows: Vec<Solution<I>>) -> Self {
         Self {
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
             storage: BagStorage::Resident(
                 rows.into_iter()
                     .map(|row| RetainedRow {
@@ -765,6 +978,7 @@ impl<I: ViewTermId> Default for RowBag<I> {
     fn default() -> Self {
         Self {
             storage: BagStorage::Resident(Vec::new()),
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
         }
     }
 }
@@ -780,6 +994,16 @@ impl<'a, I: ViewTermId> IntoIterator for &'a RowBag<I> {
 #[derive(Debug)]
 pub struct RowBagIntoIter<I: ViewTermId> {
     storage: BagIteration<I>,
+    search_evidence: crate::evidence_exec::RowEvidence,
+}
+
+impl<I: ViewTermId> RowBagIntoIter<I> {
+    /// Retain the original search scope through consuming delivery, including
+    /// a zero-row iterator whose scope cannot be carried by an emitted row.
+    #[must_use]
+    pub fn search_evidence(&self) -> &crate::evidence_exec::RowEvidence {
+        &self.search_evidence
+    }
 }
 #[derive(Debug)]
 enum BagIteration<I: ViewTermId> {
@@ -825,6 +1049,7 @@ impl<I: ViewTermId> IntoIterator for RowBag<I> {
     type IntoIter = RowBagIntoIter<I>;
     fn into_iter(self) -> Self::IntoIter {
         RowBagIntoIter {
+            search_evidence: self.search_evidence,
             storage: match self.storage {
                 BagStorage::Resident(rows) => BagIteration::Resident(rows.into_iter()),
                 BagStorage::Shared { payload, length } => BagIteration::Shared {
@@ -848,6 +1073,19 @@ impl<I: ViewTermId> std::ops::Deref for RowsBuilder<I> {
     }
 }
 impl<I: ViewTermId> RowsBuilder<I> {
+    /// Merge an alternative witness in the original admitted survivor payload.
+    pub(crate) fn combine_evidence(
+        &mut self,
+        ordinal: usize,
+        evidence: &crate::evidence_exec::RowEvidence,
+    ) -> Result<(), crate::EvalError> {
+        let row = &mut self.rows.as_mut_slice()[ordinal];
+        row.combine_evidence(
+            evidence,
+            purrdf_core::evidence::EvidenceCombination::Alternatives,
+            &self.workspace,
+        )
+    }
     pub(crate) fn new(workspace: &crate::WorkspaceCapability) -> Self {
         Self {
             rows: crate::workspace::AdmittedVec::new(workspace),
@@ -885,6 +1123,7 @@ impl<I: ViewTermId> RowsBuilder<I> {
         };
         let (rows, vector) = self.rows.into_parts();
         Ok(RowBag {
+            search_evidence: crate::evidence_exec::RowEvidence::default(),
             storage: match allocation {
                 Some(allocation) => {
                     let length = rows.len();
@@ -942,14 +1181,18 @@ impl<I: ViewTermId> SolutionSeq<I> {
         }
         let mut rows = RowsBuilder::new(workspace);
         for row in &self.rows {
-            rows.push_cells(
+            let reordered = RetainedRow::from_cells(
                 columns.len(),
                 columns
                     .iter()
                     .map(|column| column.and_then(|column| row[column])),
+                workspace,
             )?;
+            rows.push_row(reordered.with_evidence_from(row, workspace)?)?;
         }
+        let search = self.rows.search_evidence.clone();
         self.rows = rows.finish()?;
+        self.rows.search_evidence = search;
         self.schema = out.shared_admitted(workspace)?;
         Ok(self)
     }

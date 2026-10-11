@@ -234,6 +234,7 @@ fn plan_message(
 /// the name without its sigil, exactly as
 /// [`NativeSparqlEngine::prepare_execution`](crate::NativeSparqlEngine::prepare_execution)
 /// declares it and `crate::substitute` binds it.
+#[cfg(test)]
 pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
     names.iter().map(|name| Variable::new(*name)).collect()
 }

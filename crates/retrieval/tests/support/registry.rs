@@ -51,7 +51,7 @@ pub fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
                 Vec::new()
             } else {
                 vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     datatype: None,
                 }]
@@ -296,7 +296,7 @@ pub fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
 /// One `Value` placement at `position`, untyped.
 pub fn value_at(position: usize) -> Vec<TermPlacement> {
     vec![TermPlacement {
-        facet: RequestFacet::Value,
+        facet: RequestFacet::ScopedLexicalValue,
         position,
         datatype: None,
     }]

@@ -155,6 +155,63 @@ pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDeliver
     }
 }
 
+// A variable alias carries the source column's aggregate certificate.
+fn extend_evidence(
+    evidence: &crate::evidence_exec::RowEvidence,
+    computed: Option<crate::evidence_exec::RowEvidence>,
+    expression: &Expression,
+    target: &Variable,
+) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+    let evidence = match expression {
+        Expression::Variable(source) => evidence.alias_column(source.as_str(), target.as_str()),
+        _ => Ok(evidence.clone()),
+    }?;
+    match computed {
+        None => Ok(evidence),
+        Some(computed) => evidence.combine(
+            &computed,
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        ),
+    }
+}
+
+pub(crate) fn filter_evidence<D: DatasetView + Sync>(
+    value: Option<bool>,
+    computed: Option<crate::evidence_exec::RowEvidence>,
+    expression: &Expression,
+    row: &RetainedRow<D::Id>,
+    schema: &VarSchema,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+    let undecided = computed
+        .as_ref()
+        .is_some_and(crate::evidence_exec::RowEvidence::is_undecided);
+    let evidence = match computed {
+        None => row.evidence().clone(),
+        Some(computed) => row.evidence().combine(
+            &computed,
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        )?,
+    };
+    if let Some(input) = &ctx.evidence_input
+        && let Some(gap) = input.expression_evidence(
+            expression,
+            schema.vars(),
+            row,
+            ctx.active_graph,
+            &ctx.growth,
+        )?
+    {
+        return evidence
+            .combine(
+                &gap,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )
+            .map(Some);
+    }
+    Ok((value == Some(true) || undecided).then_some(evidence))
+}
+
 // Share the sequence loop without a second call boundary or native result copy.
 #[allow(clippy::inline_always)]
 #[inline(always)]
@@ -210,8 +267,18 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
                 {
                     return Ok(());
                 }
-                if linked.ebv(row, &schema, child)? == Some(true) {
-                    acc.push(row.clone_admitted(&child.growth)?);
+                if let Some(evidence) = filter_evidence(
+                    linked.ebv(row, &schema, child)?,
+                    linked.result_evidence()?,
+                    expr,
+                    row,
+                    &schema,
+                    child,
+                )? {
+                    acc.push(
+                        row.clone_admitted(&child.growth)?
+                            .with_evidence(evidence, &child.growth)?,
+                    );
                     checkpoint.keep();
                 }
                 checkpoint.settle(child);
@@ -239,8 +306,18 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
                 if checkpoint.pass(ctx).is_err() {
                     break;
                 }
-                if linked.ebv(row, &schema, ctx)? == Some(true) {
-                    rows.push(row.clone_admitted(&ctx.growth)?);
+                if let Some(evidence) = filter_evidence(
+                    linked.ebv(row, &schema, ctx)?,
+                    linked.result_evidence()?,
+                    expr,
+                    row,
+                    &schema,
+                    ctx,
+                )? {
+                    rows.push(
+                        row.clone_admitted(&ctx.growth)?
+                            .with_evidence(evidence, &ctx.growth)?,
+                    );
                 }
             }
         }
@@ -257,8 +334,15 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
             if checkpoint.pass(ctx).is_err() {
                 break;
             }
-            if linked.ebv(&row, &schema, ctx)? == Some(true) {
-                rows.push_row(row)?;
+            if let Some(evidence) = filter_evidence(
+                linked.ebv(&row, &schema, ctx)?,
+                linked.result_evidence()?,
+                expr,
+                &row,
+                &schema,
+                ctx,
+            )? {
+                rows.push_row(row.with_evidence(evidence, &ctx.growth)?)?;
             }
         }
         rows.finish()?
@@ -354,6 +438,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
     let growth = ctx.growth.clone();
+    let search_evidence = seq.rows.search_evidence().clone();
     let forked = !growth.is_bounded()
         && ctx.may_fork_row_loop(expr)
         && ctx.may_fork_governed_loop()
@@ -367,7 +452,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     let program = crate::vm::program_at(ctx, node, expr)?;
     let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
 
-    let rows = if forked {
+    let mut rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
@@ -403,7 +488,11 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 row.resize(width, None);
                 let value = linked.term(&row, &schema, child)?;
                 row[col] = value;
-                acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                let row = RetainedRow::from_resident(row).with_evidence(
+                    extend_evidence(in_row.evidence(), linked.result_evidence()?, expr, var)?,
+                    &child.growth,
+                )?;
+                acc.push(crate::parallel::minted_row(&child.scratch, base, row)?);
                 checkpoint.keep();
                 checkpoint.settle(child);
                 Ok(())
@@ -421,23 +510,17 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
         // The commit re-interns each kept row into the evaluation's own arena, in source
         // order, charging the growth at its row.
         let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
-            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
-                .map(RetainedRow::from_resident)
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row, &ctx.growth)
         };
         let (mut rows, resume) = if ctx.governor_state().is_none() {
             // Workers have finished reading the input. Plain BIND preserves one
             // row per input and cannot resume, so reuse that owned typed buffer.
-            checkpoint.commit_into(
-                ctx,
-                minted,
-                chunks,
-                core::mem::take(&mut seq.rows)
-                    .into_resident_rows()
-                    .map_err(|_| {
-                        EvalError::WorkspaceUnpriced("resident BIND input metadata extraction")
-                    })?,
-                admit_row,
-            )?
+            let (input, _search_owner) = core::mem::take(&mut seq.rows)
+                .into_resident_rows()
+                .map_err(|_| {
+                    EvalError::WorkspaceUnpriced("resident BIND input metadata extraction")
+                })?;
+            checkpoint.commit_into(ctx, minted, chunks, input, admit_row)?
         } else {
             checkpoint.commit(ctx, minted, chunks, admit_row)?
         };
@@ -457,7 +540,10 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                     row[col] = linked.term(row, &schema, ctx)?;
                     Ok(())
                 })?;
-                rows.push(row);
+                rows.push(row.with_evidence(
+                    extend_evidence(in_row.evidence(), linked.result_evidence()?, expr, var)?,
+                    &growth,
+                )?);
             }
         }
         RowsBuilder::from_storage(crate::AdmittedVec::from_parts(rows, None, &growth), &growth)
@@ -478,10 +564,14 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 row[col] = linked.term(row, &schema, ctx)?;
                 Ok(())
             })?;
-            rows.push_row(row)?;
+            rows.push_row(row.with_evidence(
+                extend_evidence(in_row.evidence(), linked.result_evidence()?, expr, var)?,
+                &growth,
+            )?)?;
         }
         rows.finish()?
     };
+    rows.retain_search_evidence(search_evidence);
     // An `EXISTS` inside the bound expression is an opaque edge; see `eval_filter`.
     if let Some(tripped) = ctx.expression_barrier.observed() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
@@ -2072,6 +2162,33 @@ pub(crate) fn exists<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
+    if ctx.may_have_evidence() {
+        exists_evidence(pattern, row, schema, ctx).map(|(found, _)| found)
+    } else {
+        exists_recorded(pattern, row, schema, ctx, None)
+    }
+}
+
+/// Return the original witness record with the ordinary existential value.
+/// Both values come from the same execution, including memoized probes.
+pub(crate) fn exists_evidence<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(bool, crate::evidence_exec::RowEvidence), EvalError> {
+    let mut evidence = crate::evidence_exec::RowEvidence::default();
+    let value = exists_recorded(pattern, row, schema, ctx, Some(&mut evidence))?;
+    Ok((value, evidence))
+}
+
+fn exists_recorded<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+) -> Result<bool, EvalError> {
     // Before the site is prepared: preparing it walks its whole inner pattern, and
     // evaluating it recurses into that pattern. See `crate::stack`.
     crate::stack::check("EXISTS")?;
@@ -2083,7 +2200,7 @@ pub(crate) fn exists<D: DatasetView + Sync>(
         .and_then(crate::deferred_exists::Deferred::exists)
         .cloned()
     {
-        return exists_deferred(&slot, row, schema, ctx);
+        return exists_deferred(&slot, row, schema, ctx, evidence);
     }
     if crate::deferred_exists::is_placeholder(pattern) {
         return Err(crate::NativeDiagnostic::error(
@@ -2106,6 +2223,7 @@ pub(crate) fn exists<D: DatasetView + Sync>(
         row,
         schema,
         ctx,
+        evidence,
     )
 }
 
@@ -2130,6 +2248,7 @@ fn exists_prepared<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
 ) -> Result<bool, EvalError> {
     let ledger_source = site.plan_map;
     let (
@@ -2239,7 +2358,8 @@ fn exists_prepared<D: DatasetView + Sync>(
     // any expression scope. Its full independent bag can contain a disconnected
     // product that no outer row ever needs. Keep the indexed singleton fast path
     // for one triple, where the once-built probe is already bounded by one index.
-    let native_positive = correlated
+    let native_positive = evidence.is_none()
+        && correlated
         && !stateful
         && !matches!(normalized.as_ref(), GraphPattern::Bgp { patterns } if patterns.len() <= 1)
         && crate::bgp::PositivePlan::seed_eligible_admitted(normalized, schema, &ctx.growth)?;
@@ -2327,7 +2447,7 @@ fn exists_prepared<D: DatasetView + Sync>(
                     return Ok(false);
                 }
                 let inner = crate::workspace::SharedWorkspace::new_admitted(
-                    evaluated.into_complete().unwrap_or_else(|_| {
+                    evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
                         unreachable!("a non-truncated result is complete by construction")
                     }),
                     &ctx.growth,
@@ -2356,6 +2476,13 @@ fn exists_prepared<D: DatasetView + Sync>(
         };
 
         // Existence-only probe of the full outer row against the reused index.
+        if evidence.is_some() {
+            let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
+            if let Some(output) = evidence {
+                *output = record;
+            }
+            return Ok(found);
+        }
         crate::binop::probe_has_match(
             row,
             &entry.shared,
@@ -2394,20 +2521,28 @@ fn exists_prepared<D: DatasetView + Sync>(
         if let Some(key) = &memo_key
             && let Some(&answer) = ctx.exists_definition_memo.get(key)
         {
+            if let Some(output) = evidence {
+                *output = ctx
+                    .exists_evidence_memo
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+            }
             return Ok(answer);
         }
 
         // `witness_wrapped` is `normalized` wrapped in `Slice{0, Some(1)}` — the ENF
         // law 4a proof sketch read in reverse (`crate::enf`'s module doc): emptiness
         // is preserved, so the substituted evaluation may stop at the first witness.
-        // Applied unconditionally in production; [`suppress_first_witness_wrap_for_test`]
-        // is a `cfg(test)`-only seam that evaluates `normalized` unwrapped instead, to
-        // compare consumption without changing the boolean answer.
-        let (to_evaluate, sites): (&GraphPattern, _) = if exists_apply_first_witness_wrap() {
-            (witness_wrapped, witness_sites)
-        } else {
-            (normalized, normalized_sites)
-        };
+        // Ordinary queries use this in production. Evidence queries retain all
+        // witnesses: emptiness preservation does not preserve information joins.
+        // [`suppress_first_witness_wrap_for_test`] compares ordinary consumption.
+        let (to_evaluate, sites): (&GraphPattern, _) =
+            if evidence.is_none() && exists_apply_first_witness_wrap() {
+                (witness_wrapped, witness_sites)
+            } else {
+                (normalized, normalized_sites)
+            };
         // Push this site's ledger-source correspondence (`PreparedExists::Pattern::
         // ledger_source` — `crate::enf::ledger_source_map`) as the enclosing window
         // `eval_correlated` reads BEFORE pushing its own per-row map: that is what makes
@@ -2429,7 +2564,18 @@ fn exists_prepared<D: DatasetView + Sync>(
             sites: crate::deferred_exists::SiteSlot::Prepared(sites),
             plan_map: Some(ledger_source.as_ref()),
         };
-        let inner_result = crate::binop::eval_correlated(to_evaluate, row, schema, source, ctx);
+        let inner_result = match crate::shapes::barrier::inner(
+            site.key,
+            normalized,
+            ledger_source.as_ref(),
+            row,
+            schema,
+            ctx,
+        ) {
+            Ok(Some(inner)) => Ok(inner),
+            Ok(None) => crate::binop::eval_correlated(to_evaluate, row, schema, source, ctx),
+            Err(error) => Err(error),
+        };
         if track_ledger {
             ctx.correlated_node_maps.pop();
         }
@@ -2450,7 +2596,33 @@ fn exists_prepared<D: DatasetView + Sync>(
                 return Ok(false);
             }
         }
-        let answer = !inner.rows().is_empty();
+        let answer = if evidence.is_some() {
+            inner
+                .rows()
+                .rows
+                .iter()
+                .any(|row| !row.evidence().is_undecided())
+        } else {
+            !inner.rows().is_empty()
+        };
+        if evidence.is_some() {
+            let record = ctx.existential_evidence(
+                inner.rows().rows.iter().map(RetainedRow::evidence),
+                inner.rows().rows.search_evidence(),
+            )?;
+            if !record.is_virtual()
+                && let Some(key) = &memo_key
+            {
+                ctx.exists_evidence_memo.insert_admitted(
+                    (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
+                    record.clone(),
+                    &ctx.growth,
+                )?;
+            }
+            if let Some(output) = evidence {
+                *output = record;
+            }
+        }
         if let Some(key) = memo_key {
             ctx.exists_definition_memo
                 .insert_admitted(key, answer, &ctx.growth)?;
@@ -2591,6 +2763,7 @@ fn exists_deferred<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
 ) -> Result<bool, EvalError> {
     let site = &slot.site;
     let crate::eval::PreparedExists::Pattern {
@@ -2614,10 +2787,11 @@ fn exists_deferred<D: DatasetView + Sync>(
                 row,
                 schema,
                 ctx,
+                evidence,
             );
         }
         crate::deferred_exists::EnvState::Layered => {
-            return exists_layered(slot, row, schema, ctx);
+            return exists_layered(slot, row, schema, ctx, evidence);
         }
         crate::deferred_exists::EnvState::Merged(env) => env,
     };
@@ -2650,11 +2824,24 @@ fn exists_deferred<D: DatasetView + Sync>(
         if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
             return Ok(false);
         }
-        let inner = evaluated
-            .into_complete()
-            .unwrap_or_else(|_| unreachable!("a non-truncated result is complete by construction"));
+        let inner = evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
+            unreachable!("a non-truncated result is complete by construction")
+        });
         let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
         let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+        if evidence.is_some() {
+            let entry = crate::eval::ExistsInner {
+                inner: crate::workspace::SharedWorkspace::new_admitted(inner, &ctx.growth)?,
+                shared,
+                keyed,
+                wild,
+            };
+            let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
+            if let Some(output) = evidence {
+                *output = record;
+            }
+            return Ok(found);
+        }
         return crate::binop::probe_has_match(
             row,
             &shared,
@@ -2671,13 +2858,14 @@ fn exists_deferred<D: DatasetView + Sync>(
         crate::deferred_exists::with_row(env, &current, &site.vars, &ctx.growth)?
     else {
         // This row disagrees with a carried layer: the layers are applied one at a time.
-        return exists_layered(slot, row, schema, ctx);
+        return exists_layered(slot, row, schema, ctx, evidence);
     };
-    let (to_evaluate, sites): (&GraphPattern, _) = if exists_apply_first_witness_wrap() {
-        (witness_wrapped, witness_sites)
-    } else {
-        (normalized, normalized_sites)
-    };
+    let (to_evaluate, sites): (&GraphPattern, _) =
+        if evidence.is_none() && exists_apply_first_witness_wrap() {
+            (witness_wrapped, witness_sites)
+        } else {
+            (normalized, normalized_sites)
+        };
     if track_ledger {
         ctx.correlated_node_maps
             .push(site.plan_map.clone(), &ctx.growth)?;
@@ -2704,7 +2892,25 @@ fn exists_deferred<D: DatasetView + Sync>(
             return Ok(false);
         }
     }
-    Ok(!inner.rows().is_empty())
+    let answer = if evidence.is_some() {
+        inner
+            .rows()
+            .rows
+            .iter()
+            .any(|row| !row.evidence().is_undecided())
+    } else {
+        !inner.rows().is_empty()
+    };
+    if evidence.is_some() {
+        let record = ctx.existential_evidence(
+            inner.rows().rows.iter().map(RetainedRow::evidence),
+            inner.rows().rows.search_evidence(),
+        )?;
+        if let Some(output) = evidence {
+            *output = record;
+        }
+    }
+    Ok(answer)
 }
 
 /// [`exists_deferred`] for layers that disagree: substitute them into the body one at a
@@ -2715,6 +2921,7 @@ fn exists_layered<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
 ) -> Result<bool, EvalError> {
     let crate::eval::PreparedExists::Pattern { normalized, .. } = slot.site.prepared.as_ref()
     else {
@@ -2726,7 +2933,11 @@ fn exists_layered<D: DatasetView + Sync>(
         copy = Some(substitute_pattern_admitted(from, layer, &ctx.growth)?);
     }
     let body: &GraphPattern = copy.as_deref().unwrap_or(normalized);
-    let prepared = crate::eval::PreparedExists::build_admitted(body, &ctx.growth)?;
+    let prepared = crate::eval::PreparedExists::build_with_evidence_admitted(
+        body,
+        ctx.may_have_evidence(),
+        &ctx.growth,
+    )?;
     let crate::eval::PreparedExists::Pattern { ledger_source, .. } = &prepared else {
         return Ok(false);
     };
@@ -2739,6 +2950,7 @@ fn exists_layered<D: DatasetView + Sync>(
         row,
         schema,
         ctx,
+        evidence,
     )
 }
 
@@ -3086,7 +3298,7 @@ impl SubstitutionRow {
     }
 }
 
-fn correlated_boolean(
+pub(crate) fn correlated_boolean(
     value: bool,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<purrdf_sparql_algebra::Literal, EvalError> {
@@ -14221,17 +14433,33 @@ impl crate::eval::PreparedExists {
         pattern: &GraphPattern,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
+        Self::build_with_evidence_admitted(pattern, false, workspace)
+    }
+
+    /// Emptiness rewrites do not prove preservation of evidence. An evidence
+    /// query retains the original body through the same admitted preparation
+    /// and evaluation homes, including nested deferred sites.
+    pub(crate) fn build_with_evidence_admitted(
+        pattern: &GraphPattern,
+        preserve_evidence: bool,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
         #[cfg(test)]
         crate::eval::PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(count.get() + 1));
-        let mut frame = crate::workspace::LexicalFrame::new(workspace);
-        let body = {
-            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
-            match crate::enf::normalize_with_memory(pattern, &mut memory)? {
-                crate::enf::Enf::FoldedEmpty => return Ok(Self::FoldedFalse),
-                crate::enf::Enf::Pattern(pattern) => correlated_box(pattern, &mut memory)?,
-            }
+        let original = if preserve_evidence {
+            CorrelatedPattern::copy(pattern, workspace)?
+        } else {
+            let mut frame = crate::workspace::LexicalFrame::new(workspace);
+            let body = {
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                match crate::enf::normalize_with_memory(pattern, &mut memory)? {
+                    crate::enf::Enf::FoldedEmpty => return Ok(Self::FoldedFalse),
+                    crate::enf::Enf::Pattern(pattern) => correlated_box(pattern, &mut memory)?,
+                }
+            };
+            CorrelatedPattern { body, frame }
         };
-        let normalized = PreparedPattern::new(CorrelatedPattern { body, frame }, workspace)?;
+        let normalized = PreparedPattern::new(original, workspace)?;
         let mut ledger_source =
             crate::enf::ledger_source_map_admitted(pattern, &normalized, workspace)?;
         #[cfg(test)]

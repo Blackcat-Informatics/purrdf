@@ -21,8 +21,15 @@
 //! the lexical is what a consumer receives and what a serializer writes.
 
 mod support {
+    pub(crate) mod scoped_candidates;
     pub(crate) mod sentence_cases;
 }
+
+use support::scoped_candidates::{
+    scoped_text_bound_candidates_retain_unknown_membership,
+    scoped_text_depth_preserves_original_unknown_rows_and_scores,
+    scoped_text_preserves_original_constraint_failure,
+};
 
 use std::sync::Arc;
 use support::sentence_cases::the_sentence_boundaries_are_reproduced_on_this_target;
@@ -202,6 +209,9 @@ fn the_independent_fielded_reference_is_reproduced_on_this_target() {
 }
 
 purrdf_testkit::harness_main!(
+    scoped_text_bound_candidates_retain_unknown_membership,
+    scoped_text_depth_preserves_original_unknown_rows_and_scores,
+    scoped_text_preserves_original_constraint_failure,
     the_independent_fielded_reference_is_reproduced_on_this_target,
     the_integer_logarithm_agrees_with_its_hand_values_on_this_target,
     the_pinned_ranking_is_reproduced_on_this_target,

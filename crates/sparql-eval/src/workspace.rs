@@ -9,6 +9,13 @@ use purrdf_core::{OwnedWorkspaceReservation, small::Shared};
 
 use crate::EvalError;
 
+mod ordered;
+pub use ordered::{AdmittedOrderedMap, AdmittedOrderedSet};
+mod boxed;
+pub use boxed::WorkspaceBox;
+mod array;
+pub use array::WorkspaceArray;
+
 fn append_capacity<T>(len: usize, capacity: usize, additional: usize) -> Result<usize, EvalError> {
     let required = len
         .checked_add(additional)
@@ -21,7 +28,7 @@ fn append_capacity<T>(len: usize, capacity: usize, additional: usize) -> Result<
 /// A caller-provided Arc remains caller-owned; native controls use the same
 /// immutable, fallible Shared home as rows and parsed values.
 #[derive(Debug)]
-pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+pub struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
 
 #[derive(Debug)]
 enum SharedWorkspaceStorage<T> {
@@ -45,6 +52,19 @@ impl<T> Clone for SharedWorkspace<T> {
     }
 }
 
+impl<T> SharedWorkspace<T> {
+    /// Mutate before publication only while the original control has one owner.
+    /// A shared native payload is never cloned to manufacture mutable access.
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        match &mut self.0 {
+            SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
+            SharedWorkspaceStorage::Native(value) => {
+                value.get_mut().map(|payload| &mut payload.value)
+            }
+        }
+    }
+}
+
 impl<T> std::ops::Deref for SharedWorkspace<T> {
     type Target = T;
     fn deref(&self) -> &T {
@@ -61,9 +81,42 @@ impl<T> AsRef<T> for SharedWorkspace<T> {
     }
 }
 
+impl<T: PartialEq> PartialEq for SharedWorkspace<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+impl<T: Eq> Eq for SharedWorkspace<T> {}
+impl<T: std::hash::Hash> std::hash::Hash for SharedWorkspace<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_ref().hash(state);
+    }
+}
+
+impl<'a, T> IntoIterator for &'a SharedWorkspace<T>
+where
+    &'a T: IntoIterator,
+{
+    type Item = <&'a T as IntoIterator>::Item;
+    type IntoIter = <&'a T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_ref().into_iter()
+    }
+}
+
 impl<T> From<std::sync::Arc<T>> for SharedWorkspace<T> {
     fn from(value: std::sync::Arc<T>) -> Self {
         Self(SharedWorkspaceStorage::Caller(value))
+    }
+}
+
+impl<T> SharedWorkspace<T> {
+    /// Borrow the payload's original iterator while retaining its shared owner.
+    pub fn iter(&self) -> <&T as IntoIterator>::IntoIter
+    where
+        for<'a> &'a T: IntoIterator,
+    {
+        self.as_ref().into_iter()
     }
 }
 
@@ -99,10 +152,11 @@ impl<T> SharedWorkspace<T> {
         Shared::<SharedWorkspacePayload<T>>::allocation_layout().size()
     }
 
-    pub(crate) fn new_admitted(
-        value: T,
-        workspace: &WorkspaceCapability,
-    ) -> Result<Self, EvalError> {
+    /// Share one native payload with its inseparable allocation owner.
+    ///
+    /// # Errors
+    /// Returns the original layout, allocation or workspace admission refusal.
+    pub fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
         let bytes = fallible_shared_layout::<SharedWorkspacePayload<T>>()?;
         let allocation = workspace.charge(bytes)?;
         let payload = Shared::try_new(SharedWorkspacePayload {
@@ -321,16 +375,8 @@ impl LexicalFrame {
         error: purrdf_lex::allocation::StorageError,
         construct: &'static str,
     ) -> EvalError {
-        self.take_failure().unwrap_or(match error {
-            purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
-            purrdf_lex::allocation::StorageError::AllocationFailed => {
-                EvalError::AllocationFailed { construct }
-            }
-            purrdf_lex::allocation::StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
-            purrdf_lex::allocation::StorageError::FormattingFailed => {
-                EvalError::UnstableNativeDiagnostic
-            }
-        })
+        self.take_failure()
+            .unwrap_or_else(|| self.workspace.storage_error(error, construct))
     }
 
     /// Preserve a native diagnostic's original payload admission at publication.
@@ -592,6 +638,19 @@ impl<T> std::ops::Deref for AdmittedVec<T> {
     }
 }
 
+impl<T> std::ops::DerefMut for AdmittedVec<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.values
+    }
+}
+
+impl<T: PartialEq> PartialEq for AdmittedVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+impl<T: Eq> Eq for AdmittedVec<T> {}
+
 impl<'a, T> IntoIterator for &'a AdmittedVec<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
@@ -601,6 +660,42 @@ impl<'a, T> IntoIterator for &'a AdmittedVec<T> {
 }
 
 impl<T> AdmittedVec<T> {
+    /// Borrow the original retained array without allocating or detaching its grant.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        &self.values
+    }
+
+    /// Move iterator values into an array whose replacement storage is admitted
+    /// before allocation. Payloads retain their own independent native owners.
+    /// # Errors
+    /// Returns the original layout, allocation or admission refusal.
+    pub fn from_iter_admitted(
+        values: impl IntoIterator<Item = T>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Self::try_from_iter_admitted(values.into_iter().map(Ok), workspace)
+    }
+
+    /// Collect fallible payload factories through the original array admission.
+    /// # Errors
+    /// Returns the first payload, layout, admission or allocator refusal.
+    pub fn try_from_iter_admitted<E: From<EvalError>>(
+        values: impl IntoIterator<Item = Result<T, E>>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, E> {
+        let values = values.into_iter();
+        let mut output = Self::with_capacity(values.size_hint().0, workspace)?;
+        for value in values {
+            output.push(value?)?;
+        }
+        Ok(output)
+    }
+    /// Borrow the authority retained by this array, including an empty array.
+    #[must_use]
+    pub fn workspace(&self) -> &WorkspaceCapability {
+        &self.workspace
+    }
     /// A known array layout, admitted before its fallible allocation.
     /// # Errors
     /// Returns layout overflow, admission refusal or allocator failure.
@@ -682,6 +777,13 @@ impl<T> AdmittedVec<T> {
     /// Drop values after a prefix, retaining the existing buffer admission.
     pub fn truncate(&mut self, length: usize) {
         self.values.truncate(length);
+    }
+    /// Remove adjacent equal values without replacing the admitted buffer.
+    pub(crate) fn dedup(&mut self)
+    where
+        T: PartialEq,
+    {
+        self.values.dedup();
     }
 
     /// Move the last element while retaining its vector metadata admission.
@@ -1098,6 +1200,140 @@ pub struct WorkspaceCapability {
     owner: Option<Shared<Box<dyn GrowthAdmission>>>,
 }
 
+/// A validated native IRI retaining its original lexical allocation admission.
+#[derive(Debug)]
+pub struct WorkspaceIri {
+    value: purrdf_core::Iri,
+    _frame: LexicalFrame,
+}
+impl std::ops::Deref for WorkspaceIri {
+    type Target = purrdf_core::Iri;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+impl PartialEq for WorkspaceIri {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+impl Eq for WorkspaceIri {}
+
+/// Validated IRI retaining either caller configuration or its original native grant.
+#[derive(Clone)]
+pub struct OwnedIri(OwnedIriStorage);
+#[derive(Clone)]
+enum OwnedIriStorage {
+    Caller(purrdf_core::Iri),
+    Native(SharedWorkspace<WorkspaceIri>),
+}
+impl OwnedIri {
+    /// Move caller-owned validated configuration without another allocation.
+    #[must_use]
+    pub const fn caller(value: purrdf_core::Iri) -> Self {
+        Self(OwnedIriStorage::Caller(value))
+    }
+    /// Borrow the validated value without detaching its native owner.
+    #[must_use]
+    pub fn as_iri(&self) -> &purrdf_core::Iri {
+        match &self.0 {
+            OwnedIriStorage::Caller(value) => value,
+            OwnedIriStorage::Native(value) => value,
+        }
+    }
+    /// Admit the first caller-to-native copy; native clones share its original grant.
+    /// # Errors
+    /// Returns original layout, admission or allocator refusal before publication.
+    pub fn clone_admitted(&self, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+        match &self.0 {
+            OwnedIriStorage::Native(value) => Ok(Self(OwnedIriStorage::Native(value.clone()))),
+            OwnedIriStorage::Caller(value) => workspace
+                .clone_iri(value)
+                .map(|value| Self(OwnedIriStorage::Native(value))),
+        }
+    }
+}
+impl PartialEq for OwnedIri {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_iri().as_str() == other.as_iri().as_str()
+    }
+}
+impl Eq for OwnedIri {}
+impl PartialOrd for OwnedIri {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OwnedIri {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_iri().as_str().cmp(other.as_iri().as_str())
+    }
+}
+impl std::hash::Hash for OwnedIri {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(self.as_iri().as_str(), state);
+    }
+}
+impl std::fmt::Debug for OwnedIri {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.as_iri(), f)
+    }
+}
+
+impl WorkspaceCapability {
+    /// Parse one new IRI through the original lexical home before publication.
+    /// # Errors
+    /// Returns the original physical refusal or an admitted grammar diagnostic.
+    pub fn parse_iri(&self, text: &str) -> Result<OwnedIri, EvalError> {
+        let mut frame = LexicalFrame::new(self);
+        let parsed = purrdf_iri::parse_with_memory(
+            text,
+            &mut purrdf_lex::allocation::Memory::new(&mut frame),
+        );
+        let value = match parsed {
+            Ok(value) => value,
+            Err(purrdf_iri::IriReadError::Storage(error)) => {
+                return Err(frame.storage_error(error, "native IRI recognition"));
+            }
+            Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                return Err(crate::NativeDiagnostic::error(
+                    crate::NativeDiagnosticKind::Data,
+                    format_args!("invalid IRI <{text}>: {error}"),
+                    self,
+                ));
+            }
+        };
+        SharedWorkspace::new_admitted(
+            WorkspaceIri {
+                value,
+                _frame: frame,
+            },
+            self,
+        )
+        .map(|value| OwnedIri(OwnedIriStorage::Native(value)))
+    }
+
+    /// Copy one validated IRI through its single lexical home and retain both
+    /// the payload and its admitted shared control through final destruction.
+    /// # Errors
+    /// Returns the original native layout, admission or allocator refusal.
+    pub fn clone_iri(
+        &self,
+        value: &purrdf_core::Iri,
+    ) -> Result<SharedWorkspace<WorkspaceIri>, EvalError> {
+        let mut frame = LexicalFrame::new(self);
+        let result = value.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut frame));
+        let value = result.map_err(|error| frame.storage_error(error, "native IRI lexical"))?;
+        SharedWorkspace::new_admitted(
+            WorkspaceIri {
+                value,
+                _frame: frame,
+            },
+            self,
+        )
+    }
+}
+
 /// Admission for one allocation owner. Declare it after the payload it covers so
 /// the payload dies before the capacity is released. It deliberately cannot be
 /// cloned independently of that payload.
@@ -1116,6 +1352,11 @@ pub struct WorkspaceTerm {
 impl std::ops::Deref for WorkspaceTerm {
     type Target = purrdf_core::TermValue;
     fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+impl std::borrow::Borrow<purrdf_core::TermValue> for WorkspaceTerm {
+    fn borrow(&self) -> &purrdf_core::TermValue {
         &self.value
     }
 }
@@ -1159,7 +1400,11 @@ impl WorkspaceTerm {
     pub(crate) fn into_parts(self) -> (purrdf_core::TermValue, WorkspaceAllocation) {
         (self.value, self.allocation)
     }
-    pub(crate) fn into_resident(self) -> Result<purrdf_core::TermValue, Self> {
+    /// Move a resident term out while refusing to detach any native admission.
+    ///
+    /// # Errors
+    /// Returns the original owner unchanged when its allocation is bounded.
+    pub fn into_resident(self) -> Result<purrdf_core::TermValue, Self> {
         if self.allocation.is_bounded() {
             Err(self)
         } else {
@@ -1259,6 +1504,80 @@ impl WorkspaceAllocation {
 }
 
 impl WorkspaceCapability {
+    /// Construct one owned term through the original native lexical memory.
+    /// The producer releases construction scratch before returning its payload.
+    ///
+    /// # Errors
+    /// Preserves the original producer, admission, layout or allocator failure.
+    pub fn authored_term_with(
+        &self,
+        produce: impl FnOnce(
+            &mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission>,
+        ) -> Result<purrdf_core::TermValue, EvalError>,
+    ) -> Result<WorkspaceTerm, EvalError> {
+        let mut frame = LexicalFrame::new(self);
+        let produced = produce(&mut purrdf_lex::allocation::Memory::new(
+            &mut frame as &mut dyn purrdf_lex::allocation::Admission,
+        ));
+        let value = match produced {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(match error {
+                    EvalError::WorkspaceStopped => frame.take_failure().unwrap_or(error),
+                    // A failed physical operation can precede a failed refund.
+                    // Preserve that operation's original typed cause.
+                    _ => error,
+                });
+            }
+        };
+        frame.finish_term(|| value)
+    }
+
+    /// Adapt a lexical storage marker without allocating a diagnostic payload.
+    /// The enclosing native frame retains any original admission failure.
+    #[must_use]
+    pub fn storage_error(
+        &self,
+        error: purrdf_lex::allocation::StorageError,
+        construct: &'static str,
+    ) -> EvalError {
+        match error {
+            purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
+            purrdf_lex::allocation::StorageError::AllocationFailed => {
+                EvalError::AllocationFailed { construct }
+            }
+            purrdf_lex::allocation::StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
+            purrdf_lex::allocation::StorageError::FormattingFailed => {
+                EvalError::UnstableNativeDiagnostic
+            }
+        }
+    }
+
+    /// Publish text constructed through the original native lexical memory.
+    ///
+    /// The producer releases construction scratch and returns the one surviving
+    /// string. Publication moves that exact buffer into its shared owner; an
+    /// original admission refusal outranks the producer's static storage marker.
+    ///
+    /// # Errors
+    /// Returns the original producer, storage, admission or allocator failure.
+    pub fn authored_text_with(
+        &self,
+        produce: impl FnOnce(
+            &mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission>,
+        ) -> Result<String, EvalError>,
+    ) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+        let mut frame = LexicalFrame::new(self);
+        let produced = produce(&mut purrdf_lex::allocation::Memory::new(
+            &mut frame as &mut dyn purrdf_lex::allocation::Admission,
+        ));
+        let text = match produced {
+            Ok(text) => text,
+            Err(error) => return Err(frame.take_failure().unwrap_or(error)),
+        };
+        frame.finish_text(&mut Some(text))
+    }
+
     /// Publish native-authored algebra text with its original immutable owner.
     pub fn authored_text(
         &self,
@@ -1671,6 +1990,14 @@ impl<E> QueryWorkspace<E> {
         }
     }
 
+    /// Borrow an already-owned native authority without constructing a second account.
+    pub(crate) fn with_capability(capability: &WorkspaceCapability) -> Self {
+        Self {
+            account: None,
+            capability: capability.clone(),
+        }
+    }
+
     pub(crate) fn owned(
         reservation: OwnedWorkspaceReservation<E>,
         bytes: u64,
@@ -1785,6 +2112,11 @@ impl<E: Clone> QueryWorkspace<E> {
             account.children = children;
         }
         Ok(WorkspaceCharge {
+            native: if self.account.is_none() {
+                Some(self.capability.charge(bytes)?)
+            } else {
+                None
+            },
             workspace: self.clone(),
             bytes,
         })
@@ -1821,6 +2153,7 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> QueryWorkspace<E> {
 /// One engine-owned allocation's admission. Clone the enclosing payload owner,
 /// never this individual charge: sharing one allocation shares one reservation.
 pub(crate) struct WorkspaceCharge<E: Clone> {
+    native: Option<WorkspaceAllocation>,
     workspace: QueryWorkspace<E>,
     bytes: u64,
 }
@@ -1863,6 +2196,9 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner for W
                 return Err(EvalError::WorkspaceStopped);
             }
             account.children = children;
+        }
+        if let Some(native) = &mut self.native {
+            native.resize(bytes)?;
         }
         self.bytes = bytes;
         Ok(())
@@ -2068,6 +2404,206 @@ mod owned_row_regressions {
     }
 
     #[test]
+    fn prepared_native_query_and_slots_retain_the_original_account() {
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let engine = crate::NativeSparqlEngine::new();
+        let query = "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }";
+        let prepared = engine
+            .prepare_query_admitted(query, None, crate::QueryOptions::default(), &capability)
+            .expect("original admitted parser and cache");
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        let shared = prepared.clone();
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        let execution = engine
+            .prepare_execution_admitted(
+                query,
+                None,
+                &["candidate"],
+                crate::QueryOptions::default(),
+                &capability,
+            )
+            .expect("original native plan and parameter slots");
+        assert_eq!(execution.slot("candidate"), Some(0));
+        assert_eq!(execution.slot("missing"), None);
+        drop(engine);
+        drop(prepared);
+        drop(shared);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        assert_eq!(execution.slot("candidate"), Some(0));
+        drop(execution);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn governed_native_materialization_survives_execution_and_account_scope() {
+        let (workspace, ledger, _) = account(u64::MAX);
+        let capability = workspace.capability();
+        let engine = crate::NativeSparqlEngine::new();
+        let dataset = purrdf_core::RdfDatasetBuilder::new()
+            .freeze()
+            .expect("empty native dataset");
+        let mut execution = engine
+            .prepare_execution_admitted(
+                "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }",
+                None,
+                &[],
+                crate::QueryOptions::default(),
+                &capability,
+            )
+            .expect("native prepared query");
+        let receipt = engine
+            .execute_governed_admitted(
+                &mut execution,
+                &dataset,
+                crate::QueryOptions::default(),
+                &crate::QueryGovernors::UNBOUNDED,
+                &capability,
+                |outcome| {
+                    let crate::InternedOutcome::Solutions(solutions) = outcome else {
+                        panic!("SELECT solutions");
+                    };
+                    let row = solutions.rows().first().expect("original VALUES row");
+                    solutions.try_cell_owned(row, 0, &capability)
+                },
+            )
+            .expect("original governed visitor");
+        drop(execution);
+        drop(engine);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        let cell = receipt.consume(
+            |cell, _, _| cell.expect("native term admission").expect("bound cell"),
+            |_| panic!("unbounded query cannot certify an exhausted prefix"),
+        );
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        assert_eq!(
+            &*cell,
+            &purrdf_core::TermValue::iri("https://example.org/item")
+        );
+        drop(cell);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_preparation_refusal_keeps_the_original_typed_identity() {
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        let (workspace, ledger, _) = account(base);
+        let engine = crate::NativeSparqlEngine::new();
+        let result = engine.prepare_execution_admitted(
+            "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }",
+            None,
+            &["candidate"],
+            crate::QueryOptions::default(),
+            &workspace.capability(),
+        );
+        let Err(crate::EvaluationFailure::Evaluation(error)) = result else {
+            panic!("native preparation must publish its original typed refusal");
+        };
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original reservation failure")
+                .identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(error);
+        drop(engine);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn published_ordered_membership_keeps_original_arena_until_final_owner_drop() {
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let members = super::AdmittedOrderedSet::from_iter_admitted([9_u64, 1, 9, 4], &capability)
+            .expect("admitted membership");
+        let published = super::SharedWorkspace::new_admitted(members, &capability)
+            .expect("admitted immutable publication");
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        let clone = published.clone();
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            live,
+            "sharing cannot acquire another arena"
+        );
+        drop(published);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        assert_eq!((&clone).into_iter().copied().collect::<Vec<_>>(), [1, 4, 9]);
+        drop(clone);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn declared_domains_retain_native_iris_membership_and_control_after_scope_drop() {
+        use crate::{CandidateDomains, DomainTag};
+        let a = DomainTag::parse("http://example.org/domain/a?q=1#f").unwrap();
+        let b = DomainTag::parse("http://example.org/domain/b").unwrap();
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let domains =
+            CandidateDomains::within_admitted([b.clone(), a.clone(), b.clone()], &capability)
+                .unwrap();
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        let retained = domains.clone();
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        drop(domains);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        let tags = retained.tags().unwrap();
+        assert_eq!(tags.len(), 2);
+        let first = tags.iter().next().unwrap();
+        assert_eq!(first.as_iri().query(), Some("q=1"));
+        assert_eq!(first.as_iri().fragment(), Some("f"));
+        assert!(retained.admits(&a));
+        assert!(retained.intersects(&CandidateDomains::within([a.clone()])));
+        assert!(!retained.intersects(&CandidateDomains::within([
+            DomainTag::parse("http://example.org/domain/c").unwrap()
+        ])));
+        drop(retained);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        assert_eq!(a.as_str(), "http://example.org/domain/a?q=1#f");
+        assert_eq!(b.as_str(), "http://example.org/domain/b");
+    }
+
+    #[test]
+    fn ordered_membership_refuses_first_arena_before_publication() {
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("concrete account layout");
+        let (workspace, ledger, _) = account(base);
+        let capability = workspace.capability();
+        let mut members = super::AdmittedOrderedSet::new(&capability);
+        assert!(matches!(
+            members.insert(7_u64),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        assert!(members.is_empty());
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original typed cause")
+                .identity,
+            7
+        );
+        drop(members);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn compiled_expression_retains_original_constant_buffers_after_authored_tree_drop() {
         use purrdf_sparql_algebra::{Expression, Function, Literal};
         let expression = Expression::FunctionCall(
@@ -2176,6 +2712,89 @@ mod owned_row_regressions {
             "last receipt owner releases every original payload and array grant"
         );
         drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_failure_spelling_clone_retains_grant_without_factory_reentry() {
+        use purrdf_lex::allocation::OwnedText;
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let caller = OwnedText::from("original failure");
+        let native = caller
+            .try_clone_with(|text| capability.authored_text(text))
+            .expect("first native copy is admitted before birth");
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        let copy = native
+            .try_clone_with::<EvalError>(|_| panic!("native clone cannot reauthor text"))
+            .expect("native owner sharing");
+        assert_eq!(native, caller);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        drop(native);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+
+        let (workspace, ledger, _) = account(base);
+        let refused = caller
+            .try_clone_with(|text| workspace.capability().authored_text(text))
+            .expect_err("first native copy is refused before text allocation");
+        assert!(matches!(refused, EvalError::WorkspaceStopped));
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original typed cause")
+                .identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(caller.as_ref(), "original failure");
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn mutable_native_trait_box_retains_concrete_allocation_and_first_refusal() {
+        trait ReadByte {
+            fn increment(&mut self) -> u8;
+        }
+        struct Payload([u8; 64]);
+        impl ReadByte for Payload {
+            fn increment(&mut self) -> u8 {
+                self.0[0] += 1;
+                self.0[0]
+            }
+        }
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let concrete = super::WorkspaceBox::new_admitted(Payload([0; 64]), &capability)
+            .expect("concrete backing allocation admitted");
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained >= base + 64);
+        let mut erased: super::WorkspaceBox<dyn ReadByte> =
+            concrete.coerce(|value| -> Box<dyn ReadByte> { value });
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert_eq!(erased.increment(), 1);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        assert_eq!(erased.increment(), 2);
+        drop(erased);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+
+        let (workspace, ledger, _) = account(base);
+        let result = super::WorkspaceBox::new_admitted(Payload([0; 64]), &workspace.capability());
+        assert!(matches!(result, Err(EvalError::WorkspaceStopped)));
+        assert_eq!(
+            workspace.take_failure().expect("original refusal").identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
         drop(workspace);
         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }

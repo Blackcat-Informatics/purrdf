@@ -1061,7 +1061,12 @@ impl ScratchInterner {
         }
     }
 
-    pub(crate) fn try_owned_value_of<D: DatasetView>(
+    /// Resolve one original cell through native physical admission, retaining
+    /// its payload after the scratch interner and dataset borrow are released.
+    ///
+    /// # Errors
+    /// Preserves the original source read or native allocation refusal.
+    pub fn try_owned_value_of<D: DatasetView>(
         &self,
         dataset: &D,
         term: SolutionTerm<D::Id>,

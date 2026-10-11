@@ -980,6 +980,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/text/benches/analysis.rs` | text.unicode-ascii-lower |
 | `crates/text/benches/search.rs` | text.bm25f |
 | `crates/text/benches/dictionaries.rs` | text.dictionary-storage, text.dictionary-lattice |
+| `crates/text/benches/physical_shapes.rs` | text.unicode-ascii-lower, eval.bgp-join-probe, eval.aggregate-fold, xsd.exact-arith |
 | `crates/text/benches/emoji.rs` | text.emoji-recognition |
 | `crates/text/benches/phonetic.rs` | text.phonetic-spelling, text.phonetic-distance |
 | `crates/text/benches/surface.rs` | text.surface-build, text.surface-substring |

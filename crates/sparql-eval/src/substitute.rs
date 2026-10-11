@@ -95,6 +95,8 @@ pub(crate) enum Prebindings<'a> {
 pub(crate) enum ParameterValue {
     /// A caller-owned term, carrying no dataset-local identity.
     Value(TermValue),
+    /// A native producer's value retains its original payload and control grants.
+    AdmittedValue(crate::SharedWorkspace<crate::WorkspaceTerm>),
     /// The algebra term a dataset's own entry resolved to, already grounded.
     Ground(GroundTerm),
     /// An admitted id-door binding keeps its original child grant with its payload.
@@ -168,6 +170,9 @@ impl<'a> Prebindings<'a> {
                 .expect("a prepared execution refuses to run with a parameter unbound")
             {
                 ParameterValue::Value(value) => ground_term_from_value_with_memory(value, memory),
+                ParameterValue::AdmittedValue(value) => {
+                    ground_term_from_value_with_memory(value, memory)
+                }
                 ParameterValue::Ground(ground) => clone_ground_with_memory(ground, memory),
                 ParameterValue::AdmittedGround(ground) => {
                     clone_ground_with_memory(&ground.term, memory)
@@ -226,6 +231,7 @@ impl<'a> Prebindings<'a> {
             Self::Borrowed(list) => Some(&list[index].value),
             Self::Paired(_, values) => match values[index].as_ref()? {
                 ParameterValue::Value(value) => Some(value),
+                ParameterValue::AdmittedValue(value) => Some(value),
                 ParameterValue::Ground(_) | ParameterValue::AdmittedGround(_) => None,
             },
         }

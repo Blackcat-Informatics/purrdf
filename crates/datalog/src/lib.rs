@@ -292,6 +292,7 @@ pub mod cache;
 pub mod chase;
 pub mod clause;
 pub mod cursor;
+pub mod evidence;
 pub mod guard;
 pub mod id;
 pub(crate) mod paths;

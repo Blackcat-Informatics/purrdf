@@ -317,6 +317,11 @@ harness = false
 name = "query_completion"
 harness = false
 
+[[test]]
+# The same original claim/operator/tier/ledger cases on native and WASM.
+name = "evidence_ingress"
+harness = false
+
 [[bench]]
 # Fixed production calls, retired instructions and exact PMU coverage; no elapsed sampler.
 name = "governor_instructions"

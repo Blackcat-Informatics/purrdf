@@ -1545,7 +1545,12 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
 /// nothing) or a `MIN`/`MAX`/`SAMPLE` group (whose result is an existing bound
 /// value passed through) — `BIND`/most aggregates mint a genuinely new value
 /// and always take the `Portable` arm, exactly as before this fast path.
-pub(crate) enum MintedRow<I = TermId> {
+pub(crate) struct MintedRow<I = TermId> {
+    cells: MintedCells<I>,
+    evidence: crate::evidence_exec::RowEvidence,
+}
+
+enum MintedCells<I = TermId> {
     /// No cell of this row is a post-fork mint — pass it through untouched.
     Direct(Solution<I>),
     /// At least one cell was freshly minted by the child after the fork;
@@ -1560,16 +1565,20 @@ pub(crate) enum MintedRow<I = TermId> {
 pub(crate) fn minted_row<I: ViewTermId>(
     local: &ScratchInterner,
     base: usize,
-    row: Solution<I>,
-) -> MintedRow<I> {
+    row: crate::solution::RetainedRow<I>,
+) -> Result<MintedRow<I>, EvalError> {
+    let (row, evidence) = row.into_resident_parts().map_err(|_| {
+        EvalError::WorkspaceUnpriced("forked worker cell transport requires resident cells")
+    })?;
     let has_fresh_mint = row
         .iter()
         .any(|cell| matches!(cell, Some(SolutionTerm::Computed(sid)) if sid.index() >= base));
-    if has_fresh_mint {
-        MintedRow::Portable(portable_row(local, base, &row))
+    let cells = if has_fresh_mint {
+        MintedCells::Portable(portable_row(local, base, &row))
     } else {
-        MintedRow::Direct(row)
-    }
+        MintedCells::Direct(row)
+    };
+    Ok(MintedRow { cells, evidence })
 }
 
 /// Re-intern one [`MintedRow`] back into the parent (`main`) scratch: a
@@ -1582,11 +1591,13 @@ pub(crate) fn reintern_minted_row<D: DatasetView>(
     main: &mut ScratchInterner,
     dataset: &D,
     row: MintedRow<D::Id>,
-) -> Result<Solution<D::Id>, EvalError> {
-    match row {
-        MintedRow::Direct(solution) => Ok(solution),
-        MintedRow::Portable(prow) => reintern_portable_row(main, dataset, prow),
-    }
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::solution::RetainedRow<D::Id>, EvalError> {
+    let cells = match row.cells {
+        MintedCells::Direct(solution) => solution,
+        MintedCells::Portable(prow) => reintern_portable_row(main, dataset, prow)?,
+    };
+    crate::solution::RetainedRow::from_resident(cells).with_evidence(row.evidence, workspace)
 }
 
 #[cfg(test)]

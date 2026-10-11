@@ -412,6 +412,26 @@ pub(crate) fn place(
             .iter()
             .find(|accepted| pattern_matches(&accepted.pattern, term))
             .ok_or(PlacementError::NoAcceptedAlternative { term_index })?;
+        if matches!(
+            term,
+            RequestTerm::Lexical {
+                predicate: Some(_),
+                ..
+            }
+        ) && !alternative.placements.iter().any(|placement| {
+            matches!(
+                placement.facet,
+                RequestFacet::Predicate | RequestFacet::ScopedLexicalValue
+            )
+        }) {
+            return Err(PlacementError::Unrenderable {
+                term_index,
+                facet: RequestFacet::Predicate,
+                reason: format!(
+                    "producer {producer} cannot receive this lexical field scope; declare Predicate or ScopedLexicalValue placement"
+                ),
+            });
+        }
         // Whether a separate position already carries the tag decides whether the
         // needle rides tagged; see this module's header.
         let language_placed = alternative
@@ -508,6 +528,23 @@ fn facet_value(
     let facet = placement.facet;
     match facet {
         RequestFacet::Value => value_facet(producer, term_index, term, placement, language_placed),
+        RequestFacet::ScopedLexicalValue => {
+            let needle = value_facet(producer, term_index, term, placement, language_placed)?;
+            let RequestTerm::Lexical { predicate, .. } = term else {
+                return Ok(needle);
+            };
+            purrdf_core::query_scope::LexicalQuery::encode(
+                needle,
+                predicate
+                    .as_ref()
+                    .map(|predicate| TermValue::iri(predicate.as_str())),
+            )
+            .map_err(|error| PlacementError::Unrenderable {
+                term_index,
+                facet,
+                reason: error.to_string(),
+            })
+        }
         RequestFacet::Language => match term {
             RequestTerm::Lexical {
                 language: Some(tag),
@@ -913,7 +950,7 @@ mod tests {
         RequestTerm::Lexical {
             text: "quick brown fox".to_owned(),
             language: language.map(ToOwned::to_owned),
-            predicate: Some(Iri::parse(&ex("body")).expect("fixture IRI")),
+            predicate: None,
         }
     }
 
@@ -931,6 +968,50 @@ mod tests {
                 UnitArgument::Depth { datatype } => format!("<the unit's depth>^^<{datatype}>"),
             })
             .collect()
+    }
+
+    #[test]
+    fn field_scope_requires_transport_and_keeps_the_original_tag() {
+        let descriptor = descriptor(1, 1, &["ff"]);
+        let mut request = lexical(Some("en"));
+        let RequestTerm::Lexical { predicate, .. } = &mut request else {
+            panic!("lexical fixture");
+        };
+        *predicate = Some(Iri::parse(&ex("body")).unwrap());
+        assert!(matches!(
+            place(
+                &ex("pf/mock"),
+                &descriptor,
+                &declaration(any_accepting(value_at(1)), None),
+                std::slice::from_ref(&request),
+                &[0]
+            ),
+            Err(PlacementError::Unrenderable { .. })
+        ));
+        let invocation = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(
+                any_accepting(vec![TermPlacement {
+                    facet: RequestFacet::ScopedLexicalValue,
+                    position: 1,
+                    datatype: None,
+                }]),
+                None,
+            ),
+            &[request],
+            &[0],
+        )
+        .unwrap();
+        let super::Slot::Placed(argument) = &invocation.slots[1] else {
+            panic!("the scoped argument is placed");
+        };
+        let decoded = purrdf_core::query_scope::LexicalQuery::decode(argument).unwrap();
+        assert_eq!(
+            decoded.predicate,
+            Some(&purrdf_core::TermValue::iri(ex("body")))
+        );
+        assert!(placed(&invocation)[1].contains("\"quick brown fox\"@en"));
     }
 
     #[test]

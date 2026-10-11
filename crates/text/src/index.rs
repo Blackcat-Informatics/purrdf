@@ -528,6 +528,10 @@ pub struct TextIndex {
     partitions: Vec<(PartitionKey, PartitionStats)>,
     /// The term dictionary, sorted by term text.
     terms: Vec<TermEntry>,
+    /// Original streams, sharing dictionary strings instead of re-analyzing documents.
+    token_streams: Vec<Vec<TokenOccurrence>>,
+    /// Physical documents grouped by the logical occurrence key (subject, language).
+    occurrence_order: Vec<u32>,
     /// Distinct pre-stem words and bounded punctuation-bearing spans.
     surface: SurfaceIndex,
     /// Source-aligned Han unigram and bigram occurrences for the independent producer.
@@ -766,6 +770,54 @@ impl TextIndex {
             &self.field_populations[at],
             workspace,
         )
+    }
+
+    /// Original token stream. Projection consumers must keep these positions.
+    pub fn token_occurrences(&self, document: u32) -> Option<&[TokenOccurrence]> {
+        self.token_streams.get(document as usize).map(Vec::as_slice)
+    }
+    /// Bound all consecutive positional derivations, including graph aliases.
+    /// Each start contributes the product of physical choices through the rest
+    /// of its contiguous run. Any one nonempty phrase selects a subset of those
+    /// choices; empty phrases emit nothing. A run without aliases costs one row
+    /// per start. Saturation denotes a genuinely unrepresentable worst-case bag.
+    pub(crate) fn phrase_row_bound(&self) -> u64 {
+        let mut positions = std::collections::BTreeMap::new();
+        for (document, stream) in self.documents.iter().zip(&self.token_streams) {
+            for token in stream {
+                let count = positions
+                    .entry((
+                        &document.subject,
+                        document.language.as_deref(),
+                        token.position,
+                    ))
+                    .or_insert(0_u64);
+                *count = count.saturating_add(1);
+            }
+        }
+        let mut next: Option<(&TermValue, Option<&str>, u32)> = None;
+        let mut suffix = 1_u64;
+        let mut bound = 0_u64;
+        for ((subject, language, position), count) in positions.into_iter().rev() {
+            if !next.is_some_and(|(next_subject, next_language, next_position)| {
+                subject == next_subject
+                    && language == next_language
+                    && position.checked_add(1) == Some(next_position)
+            }) {
+                suffix = 1;
+            }
+            suffix = suffix.saturating_mul(count);
+            bound = bound.saturating_add(suffix);
+            next = Some((subject, language, position));
+        }
+        bound
+    }
+    /// The sole normalized dictionary spelling of an occurrence's term.
+    pub fn occurrence_term(&self, term: u32) -> Option<&str> {
+        self.terms.get(term as usize).map(|term| term.term.as_str())
+    }
+    pub(crate) fn occurrence_order(&self) -> &[u32] {
+        &self.occurrence_order
     }
 
     /// A document's field lengths, in ranking field order.
@@ -1188,18 +1240,55 @@ impl TextIndex {
     /// document — a caller that needs to tell those apart asks
     /// [`Self::document`] first.
     pub fn term_frequency(&self, id: u32, term: &str) -> u64 {
-        let Some(document) = self.documents.get(id as usize) else {
-            return 0;
-        };
-        let Some(entry) = self.term_entry(term) else {
-            return 0;
-        };
+        self.document_posting(id, term)
+            .map_or(0, |posting| posting.positions.len() as u64)
+    }
+
+    /// Query-time membership of a token in a caller-declared predicate field.
+    ///
+    /// This reads retained predicate facts, never a ranking weight or a field id
+    /// stored in postings. A predicate absent from the selected index configuration
+    /// is a configuration error; a declared predicate with no matching occurrence
+    /// has frequency zero.
+    ///
+    /// # Errors
+    /// Refuses a predicate this index was not configured to carry.
+    pub fn term_frequency_in_predicate(
+        &self,
+        id: u32,
+        term: &str,
+        predicate: &TermValue,
+    ) -> Result<u64, TextError> {
+        let ordinal = self
+            .config
+            .predicates
+            .binary_search(predicate)
+            .map_err(|_| {
+                TextError::config("field scope predicate is not selected by this text index")
+            })?;
+        let ordinal = u32::try_from(ordinal).map_err(|_| {
+            TextError::overflow("field scope predicate ordinal exceeds index representation")
+        })?;
+        Ok(self
+            .document_posting(id, term)
+            .and_then(|posting| {
+                posting
+                    .predicate_frequencies
+                    .binary_search_by_key(&ordinal, |entry| entry.0)
+                    .ok()
+                    .map(|at| posting.predicate_frequencies[at].1)
+            })
+            .unwrap_or(0))
+    }
+
+    fn document_posting(&self, id: u32, term: &str) -> Option<&Posting> {
+        let document = self.documents.get(id as usize)?;
+        let entry = self.term_entry(term)?;
         let postings = span_slice(entry, document.partition);
         postings
             .binary_search_by_key(&id, |posting| posting.document)
             .ok()
             .and_then(|at| postings.get(at))
-            .map_or(0, |posting| posting.positions.len() as u64)
     }
 
     /// The digest of everything about this index that can change an answer.
@@ -1316,7 +1405,16 @@ impl TextIndex {
                 partition: partition_of[&document.key],
             })
             .collect();
-        let terms = build_terms(&documents, dictionary, &table);
+        let (terms, token_streams) = build_terms(&documents, dictionary, &table);
+        let mut occurrence_order: Vec<u32> = (0..table.len()).map(|id| id as u32).collect();
+        occurrence_order.sort_unstable_by(|&a, &b| {
+            let a = &table[a as usize];
+            let b = &table[b as usize];
+            a.subject
+                .cmp(&b.subject)
+                .then_with(|| a.language.cmp(&b.language))
+                .then_with(|| a.partition.cmp(&b.partition))
+        });
         let subject_order = build_subject_order(&table);
         let mut analyses = Vec::new();
         let mut han_occurrences = Vec::new();
@@ -1350,6 +1448,8 @@ impl TextIndex {
             subject_order,
             partitions,
             terms,
+            token_streams,
+            occurrence_order,
             surface,
             han_occurrences,
             fingerprint: [0; FINGERPRINT_BYTES],
@@ -1543,6 +1643,20 @@ struct DocumentKey {
     subject: TermValue,
     /// The language tag, `None` for untagged literals.
     language: Option<String>,
+}
+
+/// A retained token occurrence in original analyzed position coordinates.
+/// This is a derived index view; strings remain in the sole term dictionary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenOccurrence {
+    /// Sorted term dictionary ordinal.
+    pub term: u32,
+    /// Original token position, including gaps removed by predicate projection.
+    pub position: u32,
+    /// Original configured predicate ordinal.
+    pub predicate: u32,
+    /// Original occurrence ordinal within the physical document.
+    pub ordinal: usize,
 }
 
 /// A document with its analyzed token stream, before ids are assigned.
@@ -1935,7 +2049,7 @@ fn build_terms(
     documents: &[AnalyzedDocument],
     dictionary: &[String],
     table: &[Document],
-) -> Vec<TermEntry> {
+) -> (Vec<TermEntry>, Vec<Vec<TokenOccurrence>>) {
     let mut order: Vec<u32> = (0..dictionary.len() as u32).collect();
     order.sort_by(|&left, &right| dictionary[left as usize].cmp(&dictionary[right as usize]));
     let mut rank = vec![0_u32; dictionary.len()];
@@ -1943,6 +2057,22 @@ fn build_terms(
         rank[interned as usize] = sorted as u32;
     }
 
+    let token_streams = documents
+        .iter()
+        .map(|document| {
+            document
+                .tokens
+                .iter()
+                .enumerate()
+                .map(|(ordinal, &(term, position, predicate))| TokenOccurrence {
+                    term: rank[term as usize],
+                    position,
+                    predicate,
+                    ordinal,
+                })
+                .collect()
+        })
+        .collect();
     let mut postings: Vec<Vec<Posting>> = vec![Vec::new(); dictionary.len()];
     for (id, document) in documents.iter().enumerate() {
         let mut tokens: Vec<(u32, u32, u32)> = document
@@ -2005,7 +2135,7 @@ fn build_terms(
             spans,
         });
     }
-    entries
+    (entries, token_streams)
 }
 
 // ---------------------------------------------------------------------------

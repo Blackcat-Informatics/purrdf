@@ -98,9 +98,8 @@ use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::property_fn::{
-    PfArgs, PfArity, PfAttestation, PfCursor, PropertyFunction, ServiceLevel, generation_contained,
-    next_contained, next_with_workspace_contained, open_contained, open_with_workspace_contained,
-    service_level_contained, take_work_contained,
+    PfArgs, PfArity, PfAttestation, PfCursor, PropertyFunction, ServiceLevel,
+    next_with_workspace_contained, open_with_workspace_contained,
 };
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{SolutionSeq, VarSchema};
@@ -208,6 +207,8 @@ impl purrdf_lex::walk::DismantleTree for Arg {
 /// the data.
 #[derive(Debug)]
 struct CallPlan {
+    /// Original authored IRI, including its intrinsic lexical owner.
+    iri: purrdf_lex::allocation::SharedText,
     /// The flattened argument positions, subject side then object side.
     args: Vec<Arg>,
     /// The declared subject-side width, so [`PfArgs`] can be split at it.
@@ -237,9 +238,6 @@ struct CallPlan {
 
 impl CallPlan {
     /// Compile `call` against the schema of the rows it will be driven over.
-    fn compile(call: &PropertyFunctionCall, input: &VarSchema) -> Result<Self, EvalError> {
-        Self::compile_admitted(call, input, &crate::WorkspaceCapability::resident())
-    }
     fn compile_admitted(
         call: &PropertyFunctionCall,
         input: &VarSchema,
@@ -277,6 +275,7 @@ impl CallPlan {
         drop(slots);
         let schema = schema.shared_admitted(workspace)?;
         Ok(Self {
+            iri: workspace.authored_text(&call.iri)?,
             args,
             subject_len: call.subject_args.len(),
             slot_cols,
@@ -757,6 +756,102 @@ fn unobserved_positions(args: &[Arg], cols: &[Option<usize>], seed: &[Option<usi
 /// stopping at `k` of them yields the first `k` — a genuine positional prefix.
 ///
 /// Returns the output bag together with the governor that stopped it, if one did.
+fn seed_call<D: DatasetView + Sync>(
+    plan: &CallPlan,
+    row: &crate::solution::RetainedRow<D::Id>,
+    seed: &mut crate::AdmittedVec<Option<crate::WorkspaceTerm>>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
+    for (slot, column) in plan.slot_seed.iter().enumerate() {
+        seed.as_mut_slice()[slot] = column
+            .and_then(|column| row.get(column).copied().flatten())
+            .map(|term| crate::expr::owned_value_of(ctx, term))
+            .transpose()?;
+    }
+    Ok(())
+}
+
+/// The one projection of a unified native producer row. Both ordinary cursors
+/// and certified expanded occurrence paths use this existing publication law.
+fn publish_unified<D: DatasetView + Sync>(
+    plan: &CallPlan,
+    values: &[Option<crate::WorkspaceTerm>],
+    input: &crate::solution::RetainedRow<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<crate::solution::RetainedRow<D::Id>, EvalError> {
+    let growth = ctx.growth.clone();
+    let row = crate::solution::RetainedRow::try_build(plan.schema.len(), &growth, |row| {
+        row[..input.len()].copy_from_slice(input);
+        for &(slot, column) in &plan.bound_cols {
+            let value = values[slot]
+                .as_ref()
+                .ok_or_else(|| unbound_slot_admitted(plan.iri.as_str(), &growth))?;
+            row[column] = ctx.intern_workspace_term(growth.clone_term(value)?)?;
+        }
+        Ok(())
+    })?;
+    row.with_evidence_from(input, &ctx.growth)
+}
+
+/// Original CallPlans retained for an exact expanded positional join. There is
+/// no second unifier, native identity map, or row publication implementation.
+pub(crate) struct OccurrenceCallPlans {
+    plans: crate::AdmittedVec<CallPlan>,
+    pub(crate) schema: crate::solution::SharedSchema,
+}
+impl OccurrenceCallPlans {
+    pub(crate) fn compile(
+        calls: &[&PropertyFunctionCall],
+        input: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut schema = input.clone().shared_admitted(workspace)?;
+        let mut plans = crate::AdmittedVec::with_capacity(calls.len(), workspace)?;
+        for call in calls {
+            let plan = CallPlan::compile_admitted(call, &schema, workspace)?;
+            schema = plan.schema.clone();
+            plans.push(plan)?;
+        }
+        Ok(Self { plans, schema })
+    }
+    pub(crate) fn bind<D: DatasetView + Sync>(
+        &self,
+        input: &crate::solution::RetainedRow<D::Id>,
+        rows: &[crate::AdmittedPfRow],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Option<crate::solution::RetainedRow<D::Id>>, EvalError> {
+        if rows.len() != self.plans.len() {
+            return Err(EvalError::WorkspaceBoundOverflow);
+        }
+        let mut row = input.clone_admitted(&ctx.growth)?;
+        for (plan, emitted) in self.plans.iter().zip(rows) {
+            if emitted.cells().len() != plan.args.len() {
+                return Err(EvalError::WorkspaceBoundOverflow);
+            }
+            let mut values = crate::AdmittedVec::with_capacity(plan.slot_count(), &ctx.growth)?;
+            for _ in 0..plan.slot_count() {
+                values.push(None)?;
+            }
+            seed_call(plan, &row, &mut values, ctx)?;
+            if !unify_row_admitted(
+                &plan.args,
+                emitted.cells(),
+                values.as_mut_slice(),
+                &ctx.growth,
+            )? {
+                return Ok(None);
+            }
+            let evidence = row.evidence().combine(
+                emitted.evidence(),
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+            row =
+                publish_unified(plan, &values, &row, ctx)?.with_evidence(evidence, &ctx.growth)?;
+        }
+        Ok(Some(row))
+    }
+}
+
 fn eval_call_over<D: DatasetView + Sync>(
     call: &PropertyFunctionCall,
     input: &SolutionSeq<D::Id>,
@@ -802,7 +897,18 @@ fn eval_call_over<D: DatasetView + Sync>(
     )??;
 
     let width = plan.schema.len();
-    let left_len = input.schema.len();
+    let registry = ctx.property_functions;
+    let producer_loss = if ctx.evidence_input.is_some() {
+        registry
+            .ranked_declaration(&call.iri)
+            .and_then(|declaration| match &declaration.fidelity.completeness {
+                crate::property_fn::Completeness::Complete => None,
+                crate::property_fn::Completeness::Lossy { evidence } => Some(evidence.as_ref()),
+            })
+    } else {
+        None
+    };
+    let mut producer_evidence = None;
     // A call's own per-row point. It rides the shared governed ingest core exactly as
     // `SERVICE`'s does, because a relation's output is the other bag in this evaluator
     // whose size an outside party picks: the generic per-node accounting every algebra
@@ -810,6 +916,9 @@ fn eval_call_over<D: DatasetView + Sync>(
     // exactly as it prices one that emits ten.
     let ingest = GovernedRowIngest::new(ctx, width, Some(ChargePoint::PropertyFunctionRow));
     let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+    let mut native_search =
+        (!input.rows.search_evidence().is_virtual()).then(|| input.rows.search_evidence().clone());
+    let mut established = 0usize;
     let mut tripped: Option<TrippedGovernor> = None;
 
     let mut seed = crate::AdmittedVec::with_capacity(plan.slot_count(), &ctx.growth)?;
@@ -827,20 +936,51 @@ fn eval_call_over<D: DatasetView + Sync>(
         args.push(None)?;
     }
 
-    'input: for mu in &input.rows {
-        // The invocation's inputs, read straight off this row: a slot seeded from the
-        // input schema is BOUND whatever term kind it carries.
-        for (slot, column) in plan.slot_seed.iter().enumerate() {
-            seed.as_mut_slice()[slot] = column
-                .and_then(|column| mu.get(column).copied().flatten())
-                .map(|term| {
-                    ctx.scratch
-                        .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
-                            ctx.workspace.source_error(error)
-                        })
-                })
-                .transpose()?;
+    let capability = if ctx.options.disable_shapes || ctx.candidate_scope.is_some() {
+        None
+    } else {
+        crate::contain::declaration_contained_admitted(
+            "property function",
+            &call.iri,
+            "dictionary capability",
+            || relation.dictionary_shape(),
+            &ctx.growth,
+        )?
+    };
+    let mut dictionary_inputs = crate::AdmittedVec::new(&ctx.growth);
+    let mut dictionary = None;
+    let mut dictionary_prepared = false;
+
+    'input: for (input_ordinal, mu) in input.rows.iter().enumerate() {
+        // Read the registered search declaration only for a reached invocation.
+        // An operational EndIncomplete remains on its original hard channel.
+        if producer_evidence.is_none()
+            && let (Some(input), Some(loss)) = (&ctx.evidence_input, producer_loss)
+        {
+            let evidence = input.lossy_producer_evidence(&call.iri, loss, &ctx.growth)?;
+            let search = ctx
+                .evidence_search
+                .as_mut()
+                .and_then(|frames| frames.as_mut_slice().last_mut())
+                .ok_or_else(|| {
+                    EvalError::internal("lossy producer has no original invocation search scope")
+                })?;
+            *search = search.combine(
+                &evidence,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+            producer_evidence = Some(evidence);
         }
+        let driving_evidence = producer_evidence.as_ref().map_or_else(
+            || Ok(mu.evidence().clone()),
+            |producer| {
+                mu.evidence().combine(
+                    producer,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )
+            },
+        )?;
+        seed_call(&plan, mu, &mut seed, ctx)?;
         for (dst, arg) in args.as_mut_slice().iter_mut().zip(&plan.args) {
             *dst = arg_value_admitted(arg, &seed, &ctx.growth)?;
         }
@@ -859,6 +999,9 @@ fn eval_call_over<D: DatasetView + Sync>(
         }
         let (subject, object) = refs.split_at(plan.subject_len);
         let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
+        let pf_args = ctx
+            .candidate_scope
+            .map_or(pf_args, |scope| pf_args.with_candidate_scope(scope));
         let mode = pf_args.mode();
         admit_mode_admitted(&modes, &call.iri, mode, &ctx.growth)?;
 
@@ -879,6 +1022,64 @@ fn eval_call_over<D: DatasetView + Sync>(
             tripped = Some(governor);
             break 'input;
         }
+        // Enter the actual first invocation before compilation/source traversal.
+        // A zero-fuel/stop refusal therefore reaches no native producer. Future
+        // unsupported modes/lexical inputs decline the whole physical offer and
+        // are refused only at their original reached invocation, not eagerly.
+        if capability.is_some() && !dictionary_prepared {
+            dictionary_prepared = true;
+            let mut feasible = true;
+            for mu in &input.rows {
+                seed_call(&plan, mu, &mut seed, ctx)?;
+                let mut arguments =
+                    crate::AdmittedVec::with_capacity(plan.args.len(), &ctx.growth)?;
+                for arg in &plan.args {
+                    arguments.push(arg_value_admitted(arg, &seed, &ctx.growth)?)?;
+                }
+                let mut refs = crate::AdmittedVec::with_capacity(arguments.len(), &ctx.growth)?;
+                for value in &arguments {
+                    refs.push(value.as_deref())?;
+                }
+                let (subject, object) = refs.split_at(plan.subject_len);
+                let mode = PfArgs::new(subject, object).mode();
+                feasible &= modes.iter().any(|candidate| candidate.subsumes(mode));
+                drop(refs);
+                let mut identity = crate::AdmittedVec::with_capacity(mu.len(), &ctx.growth)?;
+                for cell in mu {
+                    identity.push(
+                        cell.map(|cell| crate::expr::owned_value_of(ctx, cell))
+                            .transpose()?,
+                    )?;
+                }
+                dictionary_inputs.push(crate::property_fn::BatchInvocation {
+                    arguments,
+                    subject_len: plan.subject_len,
+                    identity,
+                })?;
+            }
+            if feasible {
+                dictionary = crate::contain::call_contained_admitted(
+                    "property function",
+                    &call.iri,
+                    "prepare dictionary",
+                    || relation.prepare_dictionary(&dictionary_inputs, &ctx.growth),
+                    &ctx.growth,
+                )?;
+            }
+            if let Some(dictionary) = &dictionary {
+                let work = crate::contain::declaration_contained_admitted(
+                    "property function",
+                    &call.iri,
+                    "dictionary work",
+                    || dictionary.work(),
+                    &ctx.growth,
+                )?;
+                ctx.shape_state
+                    .work
+                    .add(work.source_visits, work.transitions)?;
+            }
+            seed_call(&plan, mu, &mut seed, ctx)?;
+        }
         // The relation's own licence to stop early: what is LEFT of the node's ceiling
         // once the invocations already driven have contributed. Remaining rather than the
         // whole ceiling because the accumulated bag is the node's output — the tightest
@@ -890,13 +1091,36 @@ fn eval_call_over<D: DatasetView + Sync>(
         // [`args_are_admission_transparent`].
         let invocation_ceiling = ceiling
             .filter(|_| plan.ceiling_is_offerable)
-            .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
-        let mut cursor = open_with_workspace_contained(
-            relation.as_ref(),
+            .map(|ceiling| {
+                let selected = if ctx.candidate_scope.is_some() {
+                    established
+                } else {
+                    rows.len()
+                };
+                u64::try_from(ceiling.saturating_sub(selected)).unwrap_or(u64::MAX)
+            });
+        let mut cursor = match &dictionary {
+            Some(dictionary) => crate::contain::call_contained_admitted(
+                "property function",
+                &call.iri,
+                "open dictionary invocation",
+                || dictionary.open(input_ordinal, &pf_args, invocation_ceiling, &ctx.growth),
+                &ctx.growth,
+            )?,
+            None => open_with_workspace_contained(
+                relation.as_ref(),
+                &call.iri,
+                &pf_args,
+                invocation_ceiling,
+                &ctx.growth,
+            )?,
+        };
+        let mut invocation_search = None;
+        let native_evidence = crate::property_fn::retain_search_evidence_contained_admitted(
+            &*cursor,
             &call.iri,
-            &pf_args,
-            invocation_ceiling,
             &ctx.growth,
+            &mut invocation_search,
         )?;
         // The generation, read HERE and once: an index-backed relation pins its snapshot
         // when it opens, so this is the instant at which "which version is answering" is
@@ -943,7 +1167,8 @@ fn eval_call_over<D: DatasetView + Sync>(
             // The semantic ceiling: rows past it cannot reach the query's answer, so
             // this node stops producing. It is a plan licence, not a governor, so it
             // ends the work without certifying a truncation.
-            if ceiling.is_some_and(|ceiling| rows.len() >= ceiling) {
+            if ctx.candidate_scope.is_none() && ceiling.is_some_and(|ceiling| rows.len() >= ceiling)
+            {
                 stop_input = true;
                 break;
             }
@@ -960,6 +1185,14 @@ fn eval_call_over<D: DatasetView + Sync>(
                 &call.iri,
                 &ctx.growth,
             )?;
+            if native_evidence {
+                crate::property_fn::retain_search_evidence_contained_admitted(
+                    &*cursor,
+                    &call.iri,
+                    &ctx.growth,
+                    &mut invocation_search,
+                )?;
+            }
             if let Err(governor) = ctx.charge_occurrences(ChargePoint::PropertyFunctionWork, work) {
                 tripped = Some(governor);
                 stop_input = true;
@@ -1001,26 +1234,17 @@ fn eval_call_over<D: DatasetView + Sync>(
                 }
                 IngestVerdict::Admitted => {}
             }
-            let growth = ctx.growth.clone();
-            let row = crate::solution::RetainedRow::try_build(width, &growth, |row| {
-                row[..left_len].copy_from_slice(mu);
-                for &(slot, column) in &plan.bound_cols {
-                    let value = values[slot]
-                        .as_ref()
-                        .ok_or_else(|| unbound_slot_admitted(&call.iri, &growth))?;
-                    let copied = growth.clone_term(value)?;
-                    // THE property-function seam: `PropertyFunction::eval` is a
-                    // third-party trait whose emitted rows carry arbitrary
-                    // `TermValue`s. A cell the interner refuses stays unbound rather
-                    // than becoming a term no results writer can spell — the same
-                    // answer `unify_row` above gives a row that disagrees, and the
-                    // same one `RowIngest::intern_row` documents for a producer that
-                    // miscounts its own columns.
-                    row[column] = ctx.intern_workspace_term(copied)?;
-                }
-                Ok(())
-            })?;
-            rows.push_row(row)?;
+            let row = publish_unified(&plan, &values, mu, ctx)?;
+            let evidence = driving_evidence.combine(
+                &emitted.evidence(),
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+            if ctx.candidate_scope.is_some() && !evidence.is_undecided() {
+                established = established
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            }
+            rows.push_row(row.with_evidence(evidence, &ctx.growth)?)?;
         }
 
         // The invocation has ENDED — drained, or stopped by this engine at a ceiling, a
@@ -1030,6 +1254,32 @@ fn eval_call_over<D: DatasetView + Sync>(
         // that a shortfall discovered late still has a channel.
         let service =
             crate::property_fn::service_level_contained_admitted(&*cursor, &call.iri, &ctx.growth)?;
+        if !driving_evidence.is_virtual() {
+            native_search = Some(match native_search {
+                Some(previous) => previous.combine(
+                    &driving_evidence,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?,
+                None => driving_evidence.clone(),
+            });
+        }
+        if native_evidence {
+            crate::property_fn::retain_search_evidence_contained_admitted(
+                &*cursor,
+                &call.iri,
+                &ctx.growth,
+                &mut invocation_search,
+            )?;
+        }
+        if let Some(search) = invocation_search {
+            native_search = Some(match native_search {
+                Some(previous) => previous.combine(
+                    &search,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?,
+                None => search,
+            });
+        }
         // Witnessed or fatal. An entry point that carries a `RelationWitness` labels the
         // short bag and hands it back; one that does not cannot, so it refuses rather
         // than return rows indistinguishable from a complete answer. See
@@ -1069,10 +1319,14 @@ fn eval_call_over<D: DatasetView + Sync>(
     if tripped.is_none() {
         tripped = ctx.observe_cells(rows.len(), width).err();
     }
+    let mut rows = rows.finish()?;
+    if let Some(search) = native_search {
+        rows.retain_search_evidence(search);
+    }
     Ok((
         SolutionSeq {
             schema: plan.schema,
-            rows: rows.finish()?,
+            rows,
         },
         tripped,
     ))
@@ -1122,9 +1376,6 @@ fn resolve<D: DatasetView + Sync>(
 /// contained, before the row loop starts. This is the same lattice rule
 /// [`PropertyFunction::admits`] states; it is restated here rather than called because
 /// the cached list, not a live relation reference, is what this check has to hand.
-fn admit_mode(modes: &[BindingPattern], iri: &str, mode: BindingPattern) -> Result<(), EvalError> {
-    admit_mode_admitted(modes, iri, mode, &crate::WorkspaceCapability::resident())
-}
 fn admit_mode_admitted(
     modes: &[BindingPattern],
     iri: &str,
@@ -1220,6 +1471,7 @@ fn arg_value_admitted(
     Ok(built.pop())
 }
 
+#[cfg(test)]
 fn arg_value(arg: &Arg, seed: &[Option<TermValue>]) -> Option<TermValue> {
     let workspace = crate::WorkspaceCapability::resident();
     let mut owned = crate::AdmittedVec::new(&workspace);
@@ -1275,13 +1527,13 @@ fn unify_term_admitted(
     while let Some((arg, value)) = pending.pop() {
         match arg {
             Arg::Constant(constant) => {
-                if constant != value {
+                if !workspace.terms_equal(constant, value)? {
                     return Ok(false);
                 }
             }
             Arg::Slot(slot) => match &values[*slot] {
                 Some(existing) => {
-                    if &**existing != value {
+                    if !workspace.terms_equal(existing, value)? {
                         return Ok(false);
                     }
                 }
@@ -1300,6 +1552,7 @@ fn unify_term_admitted(
     Ok(true)
 }
 
+#[cfg(test)]
 fn unify_row(args: &[Arg], emitted: &[TermValue], values: &mut [Option<TermValue>]) -> bool {
     let workspace = crate::WorkspaceCapability::resident();
     let mut owned = crate::AdmittedVec::new(&workspace);
@@ -1389,28 +1642,58 @@ pub struct CallCursor {
     plan: CallPlan,
     /// The relation's declared arity, which every emitted row is checked against.
     declared: PfArity,
+    /// The actual invocation's physical bound, including scoped unknown rows.
+    physical_row_bound: u64,
     /// The open invocation.
     cursor: Box<dyn PfCursor>,
     /// What the invocation attested the instant it opened.
     opened: PfAttestation,
+    /// Original whole-search declaration, independent of candidate membership.
+    search: crate::RowEvidence,
+    /// Original driving/source declaration applied to each emitted row.
+    binding_evidence: crate::RowEvidence,
+    native_evidence: bool,
     /// The projected variable names, in projection order.
     variables: Vec<String>,
     /// For each projected variable, the call slot it reads, or `None` for a projected
     /// variable the call never binds.
     columns: Vec<Option<usize>>,
     /// The per-row unification buffer, re-seeded (all free) before every row.
-    values: Vec<Option<TermValue>>,
+    values: crate::AdmittedVec<Option<crate::WorkspaceTerm>>,
     /// Every operator between the call and the answer that decides which of the call's
     /// rows reach the answer — each `LIMIT` and each `FILTER` — innermost first.
     stages: Vec<ReadStage>,
     /// What a `FILTER` stage evaluates in; `None` exactly when there is no `FILTER`.
     filtering: Option<FilterContext>,
+    /// Scoped unknown rows remain enumerable beyond the established prefix.
+    scoped: bool,
     /// Solutions yielded so far.
     yielded: usize,
     /// The work the relation has reported, summed over every pull.
     work: u64,
     /// Whether the invocation has ended — drained, or stopped at a `LIMIT`.
     ended: bool,
+    // All cursor payloads above die before their original operation's owners.
+    workspace: crate::WorkspaceCapability,
+    _frame: crate::workspace::LexicalFrame,
+}
+
+/// One delivered property solution with its inseparable original declaration.
+#[derive(Debug)]
+pub struct EvidencedPropertyRow {
+    /// Original projected cells in the call's declared column order.
+    pub cells: Vec<Option<TermValue>>,
+    /// Native query-owned evidence, independent of cells and producer rank.
+    pub evidence: crate::RowEvidence,
+}
+
+/// One original delivered solution whose physical cells remain admitted.
+#[derive(Debug)]
+pub struct AdmittedPropertyRow {
+    /// Original projected cells with their inseparable physical owners.
+    pub cells: crate::AdmittedVec<Option<crate::WorkspaceTerm>>,
+    /// Original native query-owned declaration, retained without reconstruction.
+    pub evidence: crate::RowEvidence,
 }
 
 purrdf_hash::debug_non_exhaustive!(
@@ -1437,7 +1720,7 @@ enum ReadStage {
     Filter {
         /// The predicate, compiled from what the query wrote. It reaches no `EXISTS`:
         /// [`CallReadShape`] admits no predicate that does.
-        program: Arc<crate::vm::ExprProgram>,
+        program: crate::workspace::SharedWorkspace<crate::vm::ExprProgram>,
         /// The names visible to the predicate, in the order `slots` reads them.
         schema: VarSchema,
         /// For each name in `schema`, the call slot it reads, or `None` for a name
@@ -1489,10 +1772,14 @@ pub(crate) struct FilterContext {
 
 impl FilterContext {
     /// A context over `dataset` configured as the materialised lane configures its own.
-    fn context<'d, D: DatasetView + Sync>(&self, dataset: &'d D) -> EvalCtx<'d, D> {
+    fn context<'d, D: DatasetView + Sync>(
+        &self,
+        dataset: &'d D,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<EvalCtx<'d, D>, EvalError> {
         // The seed is never read: the shape admits no predicate that reaches a
         // builtin drawing on it (`crate::parallel::function_is_builtin_stateful`).
-        let mut ctx = EvalCtx::at(dataset, self.now.clone(), 0)
+        let mut ctx = EvalCtx::at_admitted(dataset, self.now.clone(), 0, workspace)?
             .with_eval_options(self.options)
             .with_disjoint_language_strings(self.disjoint_language_strings);
         ctx.xpath_regex = self.xpath_regex;
@@ -1503,7 +1790,7 @@ impl FilterContext {
             ctx = ctx.with_shared_loss_vocabulary(Arc::clone(vocabulary));
         }
         ctx.base_iri.clone_from(&self.base_iri);
-        ctx
+        Ok(ctx)
     }
 }
 
@@ -3337,6 +3624,8 @@ pub(crate) fn open_call_cursor(
     shape: &CallReadShape<'_>,
     registry: &crate::property_fn::PropertyFunctionRegistry,
     filtering: FilterContext,
+    candidate_scope: Option<&dyn crate::CandidateScope>,
+    workspace: &crate::WorkspaceCapability,
 ) -> Result<CallCursor, EvalError> {
     let read = shape
         .read
@@ -3344,35 +3633,70 @@ pub(crate) fn open_call_cursor(
         .map_err(|reason| EvalError::unsupported(reason.clone()))?;
     let call = read.call;
     let relation = registry.resolve(&call.iri).map(Arc::clone).ok_or_else(|| {
-        EvalError::function(format!(
-            "no property function is registered for <{}>",
-            call.iri
-        ))
+        crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::Function,
+            format_args!("no property function is registered for <{}>", call.iri),
+            workspace,
+        )
     })?;
-    let plan = CallPlan::compile(call, &VarSchema::default())?;
-    let declared =
-        crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
+    let plan = CallPlan::compile_admitted(call, &VarSchema::default(), workspace)?;
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let declared = crate::property_fn::declaration_contained_admitted(
+        &call.iri,
+        "arity",
+        || relation.arity(),
+        workspace,
+    )?;
     let supplied = PfArity::new(plan.subject_len, plan.args.len() - plan.subject_len);
     if declared != supplied {
-        return Err(EvalError::function(format!(
-            "property function <{}> is declared with {declared} argument(s); the call site \
+        return Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::Function,
+            format_args!(
+                "property function <{}> is declared with {declared} argument(s); the call site \
              supplies {supplied}",
-            call.iri
-        )));
+                call.iri
+            ),
+            workspace,
+        ));
     }
-    let modes = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
-        relation.modes().to_vec()
-    })?;
+    let modes = crate::property_fn::declaration_contained_admitted(
+        &call.iri,
+        "declared modes",
+        || relation.modes(),
+        workspace,
+    )?;
     // No driving row: every slot is free, so a position is bound exactly when the call
     // site wrote a constant there — the invocation the governed lane makes for a call
     // with nothing before it in its group.
-    let free: Vec<Option<TermValue>> = vec![None; plan.slot_count()];
-    let args: Vec<Option<TermValue>> = plan.args.iter().map(|arg| arg_value(arg, &free)).collect();
-    let refs: purrdf_core::SmallVec<[Option<&TermValue>; 4]> =
-        args.iter().map(Option::as_ref).collect();
+    let mut free = crate::AdmittedVec::with_capacity(plan.slot_count(), workspace)?;
+    for _ in 0..plan.slot_count() {
+        free.push(None)?;
+    }
+    let mut args = crate::AdmittedVec::with_capacity(plan.args.len(), workspace)?;
+    for arg in &plan.args {
+        args.push(arg_value_admitted(arg, &free, workspace)?)?;
+    }
+    let mut refs = crate::AdmittedVec::with_capacity(args.len(), workspace)?;
+    for arg in &args {
+        refs.push(arg.as_deref())?;
+    }
     let (subject, object) = refs.split_at(plan.subject_len);
     let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
-    admit_mode(&modes, &call.iri, pf_args.mode())?;
+    let pf_args = candidate_scope.map_or(pf_args, |scope| pf_args.with_candidate_scope(scope));
+    admit_mode_admitted(modes, &call.iri, pf_args.mode(), workspace)?;
+    let physical_row_bound = crate::property_fn::declaration_contained_admitted(
+        &call.iri,
+        "physical rows per invocation",
+        || {
+            if candidate_scope.is_some() {
+                relation.scoped_rows_per_invocation(pf_args.mode())
+            } else {
+                relation.rows_per_invocation(pf_args.mode())
+            }
+        },
+        workspace,
+    )?;
     // Carry the call's variables out through the operators, innermost first: each
     // visible name is bound to the call slot it reads, and a name no slot reaches is
     // seen unbound — by a `FILTER` and in the answer — exactly as the materialising
@@ -3384,14 +3708,8 @@ pub(crate) fn open_call_cursor(
         })
     };
     let mut visible: Vec<(&Variable, Option<usize>)> = Vec::new();
-    for term in call.subject_args.iter().chain(&call.object_args) {
-        let mut found = Vec::new();
-        call_variables(term, &mut found);
-        for (variable, _) in found {
-            if !visible.iter().any(|(name, _)| *name == variable) {
-                visible.push((variable, slot_of(variable)));
-            }
-        }
+    for variable in plan.schema.vars() {
+        call_push(&mut visible, (variable, slot_of(variable)), &mut memory)?;
     }
     let lookup = |visible: &[(&Variable, Option<usize>)], variable: &Variable| {
         visible
@@ -3416,34 +3734,58 @@ pub(crate) fn open_call_cursor(
                 ..
             } => {
                 let slot = lookup(&visible, source);
-                visible.push((variable, slot));
+                call_push(&mut visible, (variable, slot), &mut memory)?;
             }
             GraphPattern::Project { variables, .. } => {
-                let projected: Vec<(&Variable, Option<usize>)> = variables
-                    .iter()
-                    .map(|variable| (variable, lookup(&visible, variable)))
-                    .collect();
-                visible.clone_from(&projected);
-                projection = projected;
+                projection.clear();
+                for variable in variables {
+                    call_push(
+                        &mut projection,
+                        (variable, lookup(&visible, variable)),
+                        &mut memory,
+                    )?;
+                }
+                visible.clear();
+                for entry in &projection {
+                    call_push(&mut visible, *entry, &mut memory)?;
+                }
             }
             GraphPattern::Slice {
                 length: Some(length),
                 ..
             } => {
-                stages.push(ReadStage::Limit {
-                    length: *length,
-                    passed: 0,
-                });
+                call_push(
+                    &mut stages,
+                    ReadStage::Limit {
+                        length: *length,
+                        passed: 0,
+                    },
+                    &mut memory,
+                )?;
                 if !filtered_beneath {
                     ceiling = Some(ceiling.map_or(*length, |ceiling| ceiling.min(*length)));
                 }
             }
             GraphPattern::Filter { expr, .. } => {
-                stages.push(ReadStage::Filter {
-                    program: Arc::new(crate::vm::ExprProgram::compile(expr)),
-                    schema: VarSchema::from_vars(visible.iter().map(|(name, _)| (*name).clone())),
-                    slots: visible.iter().map(|(_, slot)| *slot).collect(),
-                });
+                let program = crate::vm::ExprProgram::compile_admitted(expr, workspace)?;
+                let program = crate::workspace::SharedWorkspace::new_admitted(program, workspace)?;
+                let schema = VarSchema::from_vars_admitted(
+                    visible.iter().map(|(name, _)| (*name).clone()),
+                    workspace,
+                )?;
+                let mut slots = Vec::new();
+                for (_, slot) in &visible {
+                    call_push(&mut slots, *slot, &mut memory)?;
+                }
+                call_push(
+                    &mut stages,
+                    ReadStage::Filter {
+                        program,
+                        schema,
+                        slots,
+                    },
+                    &mut memory,
+                )?;
                 filtered_beneath = true;
             }
             // An `OFFSET`-free slice with no `LIMIT` passes every row; the shape admits
@@ -3454,38 +3796,103 @@ pub(crate) fn open_call_cursor(
     let ceiling = ceiling
         .filter(|_| plan.ceiling_is_offerable)
         .map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
-    let cursor = open_contained(relation.as_ref(), &call.iri, &pf_args, ceiling)?;
+    let cursor =
+        open_with_workspace_contained(relation.as_ref(), &call.iri, &pf_args, ceiling, workspace)?;
     // Both facts read the instant the cursor opens: the generation because that is the
     // instant it is true of every row to come, and the service level because the
     // consumer is told it before its first row. `settle` reads both again at the stop.
     let opened = PfAttestation {
-        generation: generation_contained(&*cursor, &call.iri)?,
-        service: service_level_contained(&*cursor, &call.iri)?,
+        generation: crate::property_fn::generation_contained_admitted(
+            &*cursor, &call.iri, workspace,
+        )?,
+        service: crate::property_fn::service_level_contained_admitted(
+            &*cursor, &call.iri, workspace,
+        )?,
     };
+    let (native_evidence, search) =
+        crate::property_fn::search_evidence_contained_admitted(&*cursor, &call.iri, workspace)?;
     let filters = stages
         .iter()
         .any(|stage| matches!(stage, ReadStage::Filter { .. }));
+    let mut variables = Vec::new();
+    let mut columns = Vec::new();
+    for (variable, slot) in &projection {
+        let name = memory.string(variable.as_str()).map_err(call_storage)?;
+        call_push(&mut variables, name, &mut memory)?;
+        call_push(&mut columns, *slot, &mut memory)?;
+    }
+    let iri = memory.string(&call.iri).map_err(call_storage)?;
+    drop(projection);
+    drop(visible);
     Ok(CallCursor {
-        iri: call.iri.clone(),
+        iri,
         declared,
+        physical_row_bound,
         cursor,
         opened,
-        variables: projection
-            .iter()
-            .map(|(variable, _)| variable.as_str().to_owned())
-            .collect(),
-        columns: projection.iter().map(|(_, slot)| *slot).collect(),
+        search: search.unwrap_or_default(),
+        binding_evidence: crate::RowEvidence::default(),
+        native_evidence,
+        variables,
+        columns,
         values: free,
         stages,
         filtering: filters.then_some(filtering),
+        scoped: candidate_scope.is_some(),
         yielded: 0,
         work: 0,
         ended: false,
         plan,
+        workspace: workspace.clone(),
+        _frame: frame,
     })
 }
 
 impl CallCursor {
+    pub(crate) fn bind_search_evidence<I: purrdf_core::ViewTermId>(
+        &mut self,
+        source: &dyn crate::EvidenceSource<I>,
+        registry: &crate::PropertyFunctionRegistry,
+        scope: Option<&dyn crate::CandidateScope>,
+    ) -> Result<(), EvalError> {
+        let input = crate::evidence_exec::EvidenceInput::new(
+            source,
+            &self.workspace,
+            scope
+                .and_then(crate::CandidateScope::evidence_owner)
+                .cloned(),
+        )?;
+        let mut search = input.scope_evidence(
+            &crate::RowEvidence::default(),
+            purrdf_core::GraphMatch::Default,
+            &self.workspace,
+        )?;
+        if let Some(declaration) = registry.ranked_declaration(&self.iri)
+            && let crate::Completeness::Lossy { evidence } = &declaration.fidelity.completeness
+        {
+            let loss = input.lossy_producer_evidence(&self.iri, evidence, &self.workspace)?;
+            search = search.combine(
+                &loss,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?;
+        }
+        self.search = self.search.combine(
+            &search,
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        )?;
+        self.binding_evidence = self.binding_evidence.combine(
+            &search,
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        )?;
+        Ok(())
+    }
+
+    /// Borrow the original whole-search declaration, even for an empty cursor.
+    #[must_use]
+    pub const fn search_evidence(&self) -> &crate::RowEvidence {
+        &self.search
+    }
+
     /// The projected variable names, in projection order — the columns every row
     /// [`Self::next_row`] yields is laid out in.
     #[must_use]
@@ -3501,6 +3908,14 @@ impl CallCursor {
     #[must_use]
     pub const fn opened(&self) -> &PfAttestation {
         &self.opened
+    }
+
+    /// Physical rows admitted by the actual opened producer mode, including
+    /// undecided candidates when scope is declared. This is independent of the
+    /// established depth and remains the original producer's declaration.
+    #[must_use]
+    pub const fn physical_row_bound(&self) -> u64 {
+        self.physical_row_bound
     }
 
     /// The work the relation has reported so far, summed over every pull
@@ -3533,49 +3948,156 @@ impl CallCursor {
         &mut self,
         dataset: &D,
     ) -> Result<Option<Vec<Option<TermValue>>>, EvalError> {
+        self.next_evidenced_row(dataset)?
+            .map(|row| {
+                if row.evidence.is_default() {
+                    Ok(row.cells)
+                } else {
+                    Err(EvalError::WorkspaceUnpriced(
+                        "a raw property read cannot discard original row evidence",
+                    ))
+                }
+            })
+            .transpose()
+    }
+
+    /// Read the same original delivered solution and its retained declaration.
+    /// Filtering, projection and limits use the original production path; the
+    /// evidence handle retains its native query owner without copying records.
+    ///
+    /// # Errors
+    /// Returns the original producer, declaration, filtering or allocation failure.
+    pub fn next_evidenced_row<D: DatasetView + Sync>(
+        &mut self,
+        dataset: &D,
+    ) -> Result<Option<EvidencedPropertyRow>, EvalError> {
+        if self.workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced(
+                "a resident property read cannot discard admitted cell owners",
+            ));
+        }
+        self.next_admitted_row(dataset)?
+            .map(|row| {
+                let cells = row.cells.try_into_resident().map_err(|_| {
+                    EvalError::WorkspaceUnpriced(
+                        "a resident property read cannot discard admitted row storage",
+                    )
+                })?;
+                let cells =
+                    cells
+                        .into_iter()
+                        .map(|cell| {
+                            cell.map(|value| {
+                                value.into_resident().map_err(|_| EvalError::WorkspaceUnpriced(
+                    "a resident property read cannot discard admitted term storage",
+                ))
+                            })
+                            .transpose()
+                        })
+                        .collect::<Result<_, _>>()?;
+                Ok(EvidencedPropertyRow {
+                    cells,
+                    evidence: row.evidence,
+                })
+            })
+            .transpose()
+    }
+
+    /// Pull one original projected row without detaching its physical owners.
+    ///
+    /// # Errors
+    /// Returns the original producer, filtering or workspace admission failure.
+    pub fn next_admitted_row<D: DatasetView + Sync>(
+        &mut self,
+        dataset: &D,
+    ) -> Result<Option<AdmittedPropertyRow>, EvalError> {
+        let result = self.pull_admitted_row(dataset);
+        if result.is_err() {
+            self.ended = true;
+        }
+        result
+    }
+
+    fn pull_admitted_row<D: DatasetView + Sync>(
+        &mut self,
+        dataset: &D,
+    ) -> Result<Option<AdmittedPropertyRow>, EvalError> {
         // Built at most once per call, at the first `FILTER` a row reaches, and reused
         // for every row this call pulls past.
         let mut context: Option<EvalCtx<'_, D>> = None;
         // Each `FILTER` stage's program, linked to its schema at the first row that
         // reaches it and reused for every row this call pulls past.
-        let mut links: Vec<Option<crate::vm::Linked<'static, D::Id>>> = Vec::new();
-        links.resize_with(self.stages.len(), || None);
+        let mut links =
+            crate::AdmittedVec::<Option<crate::vm::Linked<'static, D::Id>>>::with_capacity(
+                self.stages.len(),
+                &self.workspace,
+            )?;
+        for _ in 0..self.stages.len() {
+            links.push(None)?;
+        }
         'pull: loop {
             if self.ended {
                 return Ok(None);
             }
-            if self.stages.iter().any(ReadStage::is_full) {
+            if !self.scoped && self.stages.iter().any(ReadStage::is_full) {
                 self.ended = true;
                 return Ok(None);
             }
-            let pulled = next_contained(&mut *self.cursor, &self.iri)?;
+            let pulled =
+                next_with_workspace_contained(&mut *self.cursor, &self.iri, &self.workspace)?;
             // After every pull, the terminating one included, as the governed lane
             // reads it — so a relation that searched lazily on its first pull and one
             // that searched eagerly in `open` report the same total.
-            let work = take_work_contained(&mut *self.cursor, &self.iri)?;
+            let work = crate::property_fn::take_work_contained_admitted(
+                &mut *self.cursor,
+                &self.iri,
+                &self.workspace,
+            )?;
             self.work = self.work.saturating_add(work);
+            if self.native_evidence {
+                self.search = self.settled_search_evidence()?;
+            }
             let Some(emitted) = pulled else {
                 self.ended = true;
                 return Ok(None);
             };
             if emitted.len() != self.declared.total() {
                 self.ended = true;
-                return Err(EvalError::function_operational(format!(
-                    "property function <{}> emitted a row of {} value(s); its declared arity \
+                return Err(crate::error::NativeDiagnostic::error(
+                    crate::error::NativeDiagnosticKind::FunctionOperational,
+                    format_args!(
+                        "property function <{}> emitted a row of {} value(s); its declared arity \
                      ({}) requires {}",
-                    self.iri,
-                    emitted.len(),
-                    self.declared,
-                    self.declared.total()
-                )));
+                        self.iri,
+                        emitted.len(),
+                        self.declared,
+                        self.declared.total()
+                    ),
+                    &self.workspace,
+                ));
             }
-            self.values.fill(None);
-            if !unify_row(&self.plan.args, &emitted, &mut self.values) {
+            self.values.as_mut_slice().fill_with(|| None);
+            if !unify_row_admitted(
+                &self.plan.args,
+                &emitted,
+                self.values.as_mut_slice(),
+                &self.workspace,
+            )? {
                 continue;
             }
-            for (stage, link) in self.stages.iter_mut().zip(links.iter_mut()) {
+            let undecided = self.scoped && emitted.evidence().is_undecided();
+            for (stage, link) in self.stages.iter_mut().zip(links.as_mut_slice().iter_mut()) {
                 match stage {
-                    ReadStage::Limit { passed, .. } => *passed += 1,
+                    ReadStage::Limit { length, passed } => {
+                        if !undecided {
+                            if *passed >= *length {
+                                continue 'pull;
+                            }
+                            *passed = passed
+                                .checked_add(1)
+                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                        }
+                    }
                     ReadStage::Filter {
                         program,
                         schema,
@@ -3583,32 +4105,37 @@ impl CallCursor {
                     } => {
                         let Some(filtering) = &self.filtering else {
                             self.ended = true;
-                            return Err(EvalError::function_operational(format!(
-                                "an on-demand read of <{}> reached a FILTER it was opened \
+                            return Err(crate::error::NativeDiagnostic::error(
+                                crate::error::NativeDiagnosticKind::FunctionOperational,
+                                format_args!(
+                                    "an on-demand read of <{}> reached a FILTER it was opened \
                                  without a context for",
-                                self.iri
-                            )));
+                                    self.iri
+                                ),
+                                &self.workspace,
+                            ));
                         };
-                        let ctx = context.get_or_insert_with(|| filtering.context(dataset));
-                        let row = slots
-                            .iter()
-                            .map(|slot| {
-                                slot.and_then(|slot| self.values[slot].clone())
-                                    .map(|value| {
-                                        ctx.scratch.try_intern_checked_admitted(
-                                            ctx.dataset,
-                                            value,
-                                            &ctx.growth,
-                                        )
-                                    })
-                                    .transpose()
-                                    .map(Option::flatten)
-                            })
-                            .collect::<Result<Vec<Option<crate::scratch::SolutionTerm<D::Id>>>, _>>(
-                            )?;
+                        if context.is_none() {
+                            context = Some(filtering.context(dataset, &self.workspace)?);
+                        }
+                        let ctx = context
+                            .as_mut()
+                            .expect("the admitted context was initialized");
+                        let mut row =
+                            crate::AdmittedVec::with_capacity(slots.len(), &self.workspace)?;
+                        for slot in slots.iter() {
+                            let cell = slot.and_then(|slot| self.values[slot].as_ref());
+                            let value = if let Some(cell) = cell {
+                                let owned = self.workspace.clone_term(cell)?;
+                                ctx.intern_workspace_term(owned)?
+                            } else {
+                                None
+                            };
+                            row.push(value)?;
+                        }
                         if link.is_none() {
                             *link = Some(crate::vm::Linked::link_without_exists_admitted(
-                                Arc::clone(program),
+                                program.clone(),
                                 schema,
                                 ctx,
                             )?);
@@ -3620,17 +4147,28 @@ impl CallCursor {
                     }
                 }
             }
-            self.yielded += 1;
-            let values = &self.values;
-            return Ok(Some(
-                self.columns
-                    .iter()
-                    .map(|slot| {
-                        slot.and_then(|slot| values[slot].clone())
-                            .filter(crate::scratch::language_tags_well_formed)
-                    })
-                    .collect(),
-            ));
+            self.yielded = self
+                .yielded
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let mut cells = crate::AdmittedVec::with_capacity(self.columns.len(), &self.workspace)?;
+            for slot in &self.columns {
+                let value = slot
+                    .and_then(|slot| self.values[slot].as_ref())
+                    .filter(|value| crate::scratch::language_tags_well_formed(value));
+                cells.push(
+                    value
+                        .map(|value| self.workspace.clone_term(value))
+                        .transpose()?,
+                )?;
+            }
+            return Ok(Some(AdmittedPropertyRow {
+                cells,
+                evidence: emitted.evidence().combine(
+                    &self.binding_evidence,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?,
+            }));
         }
     }
 
@@ -3648,7 +4186,31 @@ impl CallCursor {
     ///
     /// A relation whose generation or service-level declaration panics.
     pub fn settle(&self) -> Result<RelationWitness, EvalError> {
-        self.settle_admitted(&crate::workspace::WorkspaceCapability::resident())
+        self.settle_admitted(&self.workspace)
+    }
+
+    /// Read the original whole-search declaration at this consumer's stop.
+    /// The returned handle preserves its original query owner and closure;
+    /// late declarations are conjoined with the opened search, never rebuilt.
+    ///
+    /// # Errors
+    /// Preserves contained producer faults and native evidence admission errors.
+    pub fn settled_search_evidence(&self) -> Result<crate::RowEvidence, EvalError> {
+        if !self.native_evidence {
+            return Ok(self.search.clone());
+        }
+        let (_, current) = crate::property_fn::search_evidence_contained_admitted(
+            &*self.cursor,
+            &self.iri,
+            &self.workspace,
+        )?;
+        match current {
+            Some(current) => self.search.combine(
+                &current,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            ),
+            None => Ok(self.search.clone()),
+        }
     }
 
     /// Settle a bounded invocation under the original operation's admission.
@@ -3659,8 +4221,13 @@ impl CallCursor {
         &self,
         workspace: &crate::workspace::WorkspaceCapability,
     ) -> Result<RelationWitness, EvalError> {
-        let generation = generation_contained(&*self.cursor, &self.iri)?;
-        let service = service_level_contained(&*self.cursor, &self.iri)?;
+        let generation =
+            crate::property_fn::generation_contained_admitted(&*self.cursor, &self.iri, workspace)?;
+        let service = crate::property_fn::service_level_contained_admitted(
+            &*self.cursor,
+            &self.iri,
+            workspace,
+        )?;
         let mut witness = RelationWitness::default();
         witness.try_record(&self.iri, &self.opened.generation, &service, workspace)?;
         if generation != self.opened.generation {

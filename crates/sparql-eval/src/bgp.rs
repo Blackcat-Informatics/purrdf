@@ -52,6 +52,7 @@ use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 use std::sync::Arc;
 
 mod positive;
+mod window;
 pub(crate) use positive::PositivePlan;
 
 /// A selected BGP order carrying its original native array/control admission.
@@ -381,7 +382,13 @@ pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     }
     let schema = input.as_ref().map(|input| input.rows().schema.as_ref());
     let compiled = compile_bgp(patterns, schema, false, ctx)?;
-    eval_compiled_bgp(&compiled, input, selected_order, ctx)
+    let window = input
+        .is_none()
+        .then_some(ctx.window_bgp.as_ref())
+        .flatten()
+        .filter(|(address, _)| *address == patterns.as_ptr() as usize)
+        .map(|(_, spec)| spec);
+    eval_compiled_bgp(&compiled, input, selected_order, window, ctx)
 }
 
 /// Prepare a seeded OPTIONAL leaf lazily inside its normal node checkpoint, then
@@ -409,7 +416,7 @@ pub(crate) fn eval_bgp_seeded_cached<D: DatasetView + Sync>(
         input.rows().schema.vars(),
         "repeated BGP occurrences retain the same input column layout"
     );
-    eval_compiled_bgp(compiled, Some(input), None, ctx)
+    eval_compiled_bgp(compiled, Some(input), None, None, ctx)
 }
 
 fn compile_bgp<D: DatasetView + Sync>(
@@ -456,6 +463,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     program: &CompiledBgp<D::Id>,
     input: Option<crate::eval::PositiveInput<'_, D::Id>>,
     selected_order: Option<BgpOrder>,
+    window: Option<&crate::shapes::window::WindowSpec>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     let working = &program.working;
@@ -532,6 +540,24 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
         ctx.term_id_by_value(reifies_value)?
     };
 
+    let window = window
+        .map(|spec| {
+            window::PreparedWindow::new(compiled, working, &order, &scope, spec, reifies_id, ctx)
+        })
+        .transpose()?;
+    if let Some(window) = &window {
+        ctx.shape_state.work.add(window.visits, 0)?;
+        if ctx
+            .charge_occurrences(
+                crate::governor::ChargePoint::BgpCandidateQuad,
+                window.visits,
+            )
+            .is_err()
+        {
+            return program.empty(&ctx.growth);
+        }
+    }
+
     // Whether this execution charges fuel at all. Read once, outside the pattern loop:
     // an ungoverned run (and a run whose caller set only a deadline or only an answer
     // cap) answers `false` here and allocates no charge ledger, so the index-nested-loop
@@ -579,11 +605,14 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     match input {
         Some(input) => {
             for row in input.into_rows() {
-                seed.push(RetainedRow::from_cells(
-                    working.len(),
-                    (0..working.len()).map(|column| row.get(column).copied().flatten()),
-                    &ctx.growth,
-                )?)?;
+                seed.push(
+                    RetainedRow::from_cells(
+                        working.len(),
+                        (0..working.len()).map(|column| row.get(column).copied().flatten()),
+                        &ctx.growth,
+                    )?
+                    .with_evidence_from(&row, &ctx.growth)?,
+                )?;
             }
         }
         None => seed.push(RetainedRow::from_cells(
@@ -598,6 +627,12 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
+        // All driving ordinals are ordered once, then swept against the native
+        // partition. Publication still follows the original input-row order.
+        let sweep = window
+            .as_ref()
+            .map(|window| window.prepare_stage(i, cp, &rows, ctx))
+            .transpose()?;
         // Ordinary unit-driven BGPs have a uniform binding mask. A UNION seed
         // can omit different variables in each row, so choose its probe per row.
         let plan: Option<D::ProbePlan> = if unit_driven {
@@ -638,6 +673,33 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
             let o = query_id(&cp.o, row);
+            if let (Some(window), Some(sweep)) = (&window, &sweep) {
+                let candidates = match window.candidates(sweep, i, cp, row, ctx) {
+                    Ok(candidates) => candidates,
+                    Err(error) => {
+                        acc.fail(error);
+                        return;
+                    }
+                };
+                for quad in candidates {
+                    if ctx.stop_check().is_some() {
+                        return;
+                    }
+                    *fuel = fuel.saturating_add(1);
+                    match bind_row(row, cp, &quad, ctx) {
+                        Ok(Some(extended)) => acc.push(extended),
+                        Ok(None) => {}
+                        Err(error) => {
+                            acc.fail(error);
+                            return;
+                        }
+                    }
+                    if acc.is_full() {
+                        return;
+                    }
+                }
+                return;
+            }
             match &scope {
                 // Single-graph scope (store default / a named graph): the indexed
                 // partition_point read, unchanged — no de-dup overhead.
@@ -656,7 +718,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                         // evaluator — a highly selective pattern scanned over a large
                         // index — cost nothing at all.
                         *fuel = fuel.saturating_add(1);
-                        match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+                        match bind_row(row, cp, &quad, ctx) {
                             Ok(Some(extended)) => acc.push(extended),
                             Ok(None) => {}
                             Err(error) => {
@@ -683,7 +745,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                             return;
                         }
                         *fuel = fuel.saturating_add(1);
-                        match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+                        match bind_row(row, cp, &quad, ctx) {
                             Ok(Some(extended)) => acc.push(extended),
                             Ok(None) => {}
                             Err(error) => {
@@ -715,7 +777,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                                 acc.fail(error);
                                 return;
                             }
-                            match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+                            match bind_row(row, cp, &quad, ctx) {
                                 Ok(Some(extended)) => acc.push(extended),
                                 Ok(None) => {}
                                 Err(error) => {
@@ -836,6 +898,9 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
         }
     }
 
+    if let Some(window) = &window {
+        ctx.shape_state.work.add(0, window.comparisons())?;
+    }
     program.project(rows, &ctx.growth)
 }
 
@@ -1252,14 +1317,11 @@ fn cost_base<D: DatasetView>(
         let mut rows = 0_u64;
         let mut work = 0_u128;
         let mut cardinality_only = true;
-        let mut add_graph = |g| {
-            let probe = purrdf_core::ProbePattern { s, p, o, g };
-            let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
-            let cost = dataset.cost(probe, &plan);
+        visit_access_costs(pattern, dataset, scope, &mut |probe, cost| {
             cardinality_only &= cost.cardinality_fallback().is_some();
             let cardinality = cost
                 .cardinality_fallback()
-                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
+                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g));
             // Preserve the existing cardinality sum, including its profile's
             // overflow behavior. Host work is a separate statistic: every
             // physically representable graph slice on 32/64-bit targets has
@@ -1268,15 +1330,7 @@ fn cost_base<D: DatasetView>(
             work = work
                 .checked_add(u128::from(cost.work()))
                 .expect("physically representable graph work sum fits u128");
-        };
-        match scope {
-            GraphScope::One(g) => add_graph(*g),
-            GraphScope::Merge(graphs) => {
-                for &graph in graphs {
-                    add_graph(GraphMatch::Named(graph));
-                }
-            }
-        }
+        });
         base.push_reserved(PatternCost {
             rows: rows as f64,
             cardinality_only,
@@ -1288,6 +1342,52 @@ fn cost_base<D: DatasetView>(
         });
     }
     Ok(base)
+}
+
+fn visit_access_costs<D: DatasetView>(
+    pattern: &CompiledPattern<D::Id>,
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    visit: &mut dyn FnMut(purrdf_core::ProbePattern<D::Id>, purrdf_core::AccessCost),
+) {
+    let s = constant_of(&pattern.s);
+    let p = constant_of(&pattern.p);
+    let o = constant_of(&pattern.o);
+    let mut graph = |g| {
+        let probe = purrdf_core::ProbePattern { s, p, o, g };
+        let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        visit(probe, dataset.cost(probe, &plan));
+    };
+    match scope {
+        GraphScope::One(g) => graph(*g),
+        GraphScope::Merge(graphs) => {
+            for &g in graphs {
+                graph(GraphMatch::Named(g));
+            }
+        }
+    }
+}
+
+pub(crate) fn visit_shape_cost<D: DatasetView + Sync>(
+    pattern: &TriplePattern,
+    ctx: &EvalCtx<'_, D>,
+    visit: &mut dyn FnMut(purrdf_core::AccessCost),
+) -> Result<(), EvalError> {
+    let working = collect_slots_admitted(std::slice::from_ref(pattern), None, &ctx.growth)?;
+    let pattern =
+        compile_pattern_admitted(pattern, &working, ctx.dataset, &ctx.growth, &|value| {
+            ctx.term_id_by_value(value)
+        })?;
+    match pattern {
+        Some(pattern) => visit_access_costs(
+            &pattern,
+            ctx.dataset,
+            &ctx.active_dataset.scope_for(ctx.active_graph),
+            &mut |_, cost| visit(cost),
+        ),
+        None => visit(purrdf_core::AccessCost::from_cardinality(0)),
+    }
+    Ok(())
 }
 
 fn statistic_f64(value: u128) -> f64 {
@@ -2338,13 +2438,14 @@ fn query_id<I: ViewTermId>(pos: &Pos<I>, row: &Solution<I>) -> Option<I> {
 /// quoted-triple position fails to unify, or if a ground constant disagrees (the
 /// virtual reification candidates are NOT pre-filtered by `quads_for_pattern`, so a
 /// `Pos::Bound` mismatch must be rejected here).
-fn bind_row<D: DatasetView>(
-    row: &Solution<D::Id>,
+fn bind_row<D: DatasetView + Sync>(
+    row: &RetainedRow<D::Id>,
     cp: &CompiledPattern<D::Id>,
     quad: &QuadIds<D::Id>,
-    dataset: &D,
-    workspace: &crate::WorkspaceCapability,
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<Option<RetainedRow<D::Id>>, EvalError> {
+    let dataset = ctx.dataset;
+    let workspace = &ctx.growth;
     // Reject what can be rejected WITHOUT the row copy first. A row wider than the
     // inline capacity spills to the heap, so a copy made before the test is an
     // allocation spent on a candidate that was never going to survive.
@@ -2383,7 +2484,26 @@ fn bind_row<D: DatasetView>(
         }
         Ok(())
     })?;
-    Ok(matched.then_some(out))
+    if !matched {
+        return Ok(None);
+    }
+    // The physical ordinary row has neither metadata nor a dictionary whose
+    // fallible combination must be observed. Keep tracked ranks/owners on the
+    // complete original combination path below, including default records.
+    if ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
+        return Ok(Some(out));
+    }
+    let claim = match &ctx.evidence_input {
+        // Linear property paths are lowered to this same claim matcher. A found
+        // edge is complete; the driving row still contributes its own gaps below.
+        Some(source) => source.found_witness(&source.claim(quad, workspace)?, workspace)?,
+        None => crate::evidence_exec::RowEvidence::default(),
+    };
+    let evidence = row.evidence().combine(
+        &claim,
+        purrdf_core::evidence::EvidenceCombination::Conjunction,
+    )?;
+    Ok(Some(out.with_evidence(evidence, &ctx.growth)?))
 }
 
 /// [`bind_pos`]'s work list: positions still to unify, each with its candidate id.
@@ -3547,8 +3667,12 @@ impl BgpProjection {
         let rows = if self.has_blanks {
             let mut projected = RowsBuilder::new(workspace);
             for row in rows {
-                projected
-                    .push_cells(self.keep.len(), self.keep.iter().map(|&column| row[column]))?;
+                let visible = RetainedRow::from_cells(
+                    self.keep.len(),
+                    self.keep.iter().map(|&column| row[column]),
+                    workspace,
+                )?;
+                projected.push_row(visible.with_evidence_from(&row, workspace)?)?;
             }
             projected.finish()?
         } else {

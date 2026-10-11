@@ -137,6 +137,7 @@ fn baseline() -> Plan {
     );
 
     Plan {
+        constraints: Vec::new(),
         version: Plan::VERSION,
         read_bound: ReadBound::Bounded(TopK::new(25)),
         request_terms: vec![
@@ -2309,6 +2310,7 @@ fn pinned_plan() -> Plan {
     );
 
     Plan {
+        constraints: Vec::new(),
         version: Plan::VERSION,
         request_terms: vec![RequestTerm::Lexical {
             text: "q".to_owned(),
@@ -2564,6 +2566,7 @@ fn the_pinned_literal_begins_with_this_builds_plan_version() {
 /// search.
 fn statistics_only_plan(measured: Option<u64>) -> Plan {
     Plan {
+        constraints: Vec::new(),
         version: Plan::VERSION,
         request_terms: Vec::new(),
         read_bound: ReadBound::Complete,
@@ -2982,4 +2985,42 @@ fn the_insertion_orders_enumerated_are_every_permutation_exactly_once() {
         vec![4, 3, 2, 1, 0],
         "and the last is descending, which is the adversarial one"
     );
+}
+
+#[test]
+fn hard_constraints_round_trip_as_identity_bearing_scope_separate_from_rank_terms() {
+    let original = baseline();
+    let original_bytes = original.canonical_bytes();
+    let mut scoped = original.clone();
+    scoped.constraints = vec![
+        RequestTerm::Temporal {
+            predicate: iri("https://example.org/when"),
+            lower: Some("2026-10-10T00:00:00Z".to_owned()),
+            upper: Some("2026-10-11T00:00:00Z".to_owned()),
+        },
+        RequestTerm::EntitySeed {
+            entity: Term::new("<https://example.org/entity>"),
+        },
+    ];
+    assert_eq!(scoped.request_terms, original.request_terms);
+    assert_eq!(scoped.stratum_depths, original.stratum_depths);
+    assert_ne!(scoped.id(), original.id());
+    assert_eq!(
+        Plan::from_canonical_bytes(&scoped.canonical_bytes()).unwrap(),
+        scoped
+    );
+    assert_eq!(Plan::from_json(&scoped.to_json()).unwrap(), scoped);
+    let ordered_scope_id = scoped.id();
+    scoped.constraints.reverse();
+    assert_ne!(
+        Plan::from_json(&scoped.to_json()).unwrap().id(),
+        ordered_scope_id
+    );
+    scoped.constraints.clear();
+    assert_eq!(scoped.canonical_bytes(), original_bytes);
+    assert_eq!(scoped.to_json(), original.to_json());
+    let mut empty_extension = original_bytes;
+    empty_extension.push(0x53);
+    empty_extension.extend_from_slice(&0u64.to_le_bytes());
+    assert!(Plan::from_canonical_bytes(&empty_extension).is_err());
 }

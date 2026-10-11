@@ -13,8 +13,8 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 use purrdf_text::{
-    Analyzer, Constraint, Fixed, GraphSelector, PartitionFilter, PartitionKey, Scored, TextError,
-    TextIndex, TextIndexConfig, explain, rank_partition, select,
+    Analyzer, Constraint, Fixed, GraphSelector, PartitionFilter, PartitionKey, ScopedTerm, Scored,
+    TextError, TextIndex, TextIndexConfig, explain, rank_partition, select, select_scoped,
 };
 
 #[path = "support/index.rs"]
@@ -55,6 +55,128 @@ fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
 /// A filter that admits every partition.
 fn everything() -> PartitionFilter {
     PartitionFilter::unconstrained()
+}
+
+#[test]
+fn predicate_scope_precedes_depth_without_changing_score_weights() {
+    let from = "https://example.org/from";
+    let mut builder = RdfDatasetBuilder::new();
+    let note_id = builder.intern_iri(NOTE);
+    let from_id = builder.intern_iri(from);
+    let a = builder.intern_iri("https://example.org/a");
+    let b = builder.intern_iri("https://example.org/b");
+    let a_text = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
+    let b_text = builder.intern_literal(RdfLiteral::simple(
+        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    ));
+    let b_from = builder.intern_literal(RdfLiteral::simple("alpha"));
+    builder.push_quad(a, note_id, a_text, None);
+    builder.push_quad(b, note_id, b_text, None);
+    builder.push_quad(b, from_id, b_from, None);
+    let dataset = builder.freeze().unwrap();
+    let predicate = TermValue::iri(from);
+    let index = TextIndex::from_dataset(
+        &*dataset,
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE), predicate.clone()],
+            GraphSelector::Any,
+            Analyzer::empty_lexicon(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let needle = ["alpha".to_owned()];
+    let all = select(&index, &needle, &everything(), None, None).unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].document, 0);
+    let cut = select(&index, &needle, &everything(), Some(1), None).unwrap();
+    assert_eq!(cut[0].document, 0);
+    let scoped = select_scoped(
+        &index,
+        &needle,
+        &everything(),
+        &[ScopedTerm {
+            term: "alpha",
+            predicate: &predicate,
+        }],
+        Some(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].document, 1);
+    assert_eq!(scoped[0].score, all[1].score);
+    assert_eq!(scoped[0].partition_rank, 1);
+    assert_eq!(
+        index.term_frequency_in_predicate(0, "alpha", &predicate),
+        Ok(0)
+    );
+    assert_eq!(
+        index.term_frequency_in_predicate(1, "alpha", &predicate),
+        Ok(1)
+    );
+    assert!(
+        select_scoped(
+            &index,
+            &needle,
+            &everything(),
+            &[ScopedTerm {
+                term: "alpha",
+                predicate: &TermValue::iri("https://example.org/undeclared")
+            }],
+            Some(1),
+            None
+        )
+        .is_err()
+    );
+    // The actual six-cell producer receives the same scope before its ceiling;
+    // the higher-scoring out-of-field candidate cannot consume that ceiling.
+    use purrdf_core::query_scope::LexicalQuery;
+    use purrdf_sparql_eval::{PfArgs, PropertyFunction};
+    let relation = purrdf_text::TextSearchRelation::new(Arc::new(index));
+    let argument =
+        LexicalQuery::encode(TermValue::simple_literal("alpha"), Some(predicate)).unwrap();
+    let subject = [None];
+    let object = [Some(&argument), None, None, None, None];
+    let mut cursor = relation
+        .open(&PfArgs::new(&subject, &object), Some(1))
+        .unwrap();
+    let row = cursor.next().unwrap().unwrap();
+    assert_eq!(row.len(), 6);
+    assert_eq!(row[0], TermValue::iri("https://example.org/b"));
+    assert_eq!(row[1], argument);
+    assert_eq!(row[3], TermValue::integer(1));
+    assert!(cursor.next().unwrap().is_none());
+    let excluded = TermValue::iri("https://example.org/a");
+    let subject = [Some(&excluded)];
+    assert!(
+        relation
+            .open(&PfArgs::new(&subject, &object), None)
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
+    let admitted = TermValue::iri("https://example.org/b");
+    let subject = [Some(&admitted)];
+    let point = relation
+        .open(&PfArgs::new(&subject, &object), None)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(point, row);
+    let observed = relation.observations();
+    let rankings = observed.rankings();
+    let scorings = observed.point_scorings();
+    let unobserved = [false, false, false, true, false, false];
+    let args = PfArgs::new(&subject, &object).with_unobserved(&unobserved);
+    let point = relation.open(&args, None).unwrap().next().unwrap().unwrap();
+    assert_eq!(point[0], row[0]);
+    assert_eq!(point[2], row[2]);
+    assert_eq!(point[5], row[5]);
+    assert_eq!(observed.rankings(), rankings);
+    assert_eq!(observed.point_scorings(), scorings + 1);
 }
 
 /// The golden fixture: four documents of four tokens each, so `avgdl` is exactly
