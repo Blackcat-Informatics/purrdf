@@ -1832,10 +1832,7 @@ fn function_body_evidence<D: DatasetView + Sync>(
         };
     };
     if !child.may_have_evidence()
-        && !rows
-            .rows
-            .iter()
-            .any(crate::solution::RetainedRow::has_evidence_attachment)
+        && !rows.rows.may_have_evidence_attachment()
         && rows.rows.search_evidence().is_virtual()
     {
         return Ok(None);

@@ -3268,6 +3268,10 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
                 retained
                     .retain_search(self.cursor.search_evidence())
                     .map_err(ReadFault::Native)?;
+            } else if !self.cursor.search_evidence().is_virtual() {
+                return Err(invalidated(
+                    "an unscoped ranked read cannot discard original search evidence".to_owned(),
+                ));
             }
             let Some(row) = row else {
                 // Ran out. A caller's own text is the stopper nobody observed past, and
@@ -3313,7 +3317,7 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
                 });
             }
             let unknown = row.evidence.is_undecided();
-            if self.retained.is_none() && !row.evidence.is_default() {
+            if self.retained.is_none() && !row.evidence.is_virtual() {
                 return Err(invalidated(
                     "an unscoped ranked read cannot discard original row evidence".to_owned(),
                 ));
@@ -3401,12 +3405,18 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
             .cursor
             .settle()
             .map_err(|error| ReadFault::invocation(error, self.retained.is_some()))?;
+        let search = self
+            .cursor
+            .settled_search_evidence()
+            .map_err(ReadFault::Native)?;
         if let Some(retained) = &self.retained {
-            let search = self
-                .cursor
-                .settled_search_evidence()
-                .map_err(ReadFault::Native)?;
             retained.retain_search(&search).map_err(ReadFault::Native)?;
+        } else if !search.is_virtual() {
+            return Err(ReadFault::Producer {
+                reason: "an unscoped ranked read cannot discard original search evidence"
+                    .to_owned(),
+                whole_run: true,
+            });
         }
         let attested = sole_attestation(&witness).map_err(|reason| ReadFault::Producer {
             reason,

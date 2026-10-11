@@ -91,7 +91,7 @@ impl<K: Ord> AdmittedOrderedSet<K> {
 
 impl<K: PartialEq> PartialEq for AdmittedOrderedSet<K> {
     fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.iter().eq(other.iter())
+        self.entries == other.entries
     }
 }
 impl<K: Eq> Eq for AdmittedOrderedSet<K> {}

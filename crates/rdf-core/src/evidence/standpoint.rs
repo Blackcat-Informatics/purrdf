@@ -27,17 +27,10 @@ pub enum StandpointError<K> {
     Storage(StorageError),
 }
 
-impl<K> From<StorageError> for StandpointError<K> {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
-
-impl<K> From<GraphError> for StandpointError<K> {
-    fn from(error: GraphError) -> Self {
-        Self::Graph(error)
-    }
-}
+purrdf_lex::variant_from!(impl<K> StandpointError<K> {
+    Storage(StorageError),
+    Graph(GraphError),
+});
 
 impl<K: core::fmt::Debug> core::fmt::Display for StandpointError<K> {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

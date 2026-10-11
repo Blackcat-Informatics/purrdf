@@ -199,6 +199,33 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     })
 }
 
+// Specialize the one projection row loop after the whole-bag physical proof.
+// Ordinary rows use the original cell builder; tracked rows retain each exact
+// owner and column projection before publication.
+macro_rules! eval_project_rows {
+    ($seq:expr, $src:expr, $rows:expr, $workspace:expr, $columns:expr, $tracking:literal) => {{
+        for row in $seq.rows.iter() {
+            let cells = row.as_slice();
+            if $tracking {
+                let evidence = row.evidence().project_columns($columns)?;
+                let projected = RetainedRow::from_cells(
+                    $src.len(),
+                    $src.iter()
+                        .map(|source| source.and_then(|column| cells[column])),
+                    $workspace,
+                )?;
+                $rows.push_row(projected.with_evidence(evidence, $workspace)?)?;
+            } else {
+                $rows.push_cells(
+                    $src.len(),
+                    $src.iter()
+                        .map(|source| source.and_then(|column| cells[column])),
+                )?;
+            }
+        }
+    }};
+}
+
 // One authored projection kernel with caller-local iterator identities: sharing
 // one generic closure made its outer bulk specialization a two-use outlined call.
 // Bind each input once, in argument order, while retaining the safe container homes.
@@ -207,7 +234,7 @@ macro_rules! eval_project_sequence {
         let seq = $seq;
         let out = $out;
         let workspace = $workspace;
-        let tracking = $tracking || seq.rows.iter().any(RetainedRow::has_evidence_attachment);
+        let tracking = $tracking || seq.rows.may_have_evidence_attachment();
         let mut evidence_columns = AdmittedVec::new(workspace);
         if tracking {
             for variable in out.vars() {
@@ -225,25 +252,10 @@ macro_rules! eval_project_sequence {
         // Reserve the exact row count, then use Vec's bulk extension so row capacity
         // and final length publication stay outside the per-row projection work.
         let mut rows = RowsBuilder::new(workspace);
-        for row in seq.rows.iter() {
-            let evidence = if tracking {
-                Some(row.evidence().project_columns(&evidence_columns)?)
-            } else {
-                None
-            };
-            let cells = row.as_slice();
-            // Use SmallVec's reserved-slot bulk loop without a FromIterator wrapper
-            // or repeated push capacity/tag/length work for each projected cell.
-            let projected = RetainedRow::from_cells(
-                src.len(),
-                src.iter()
-                    .map(|source| source.and_then(|column| cells[column])),
-                workspace,
-            )?;
-            rows.push_row(match evidence {
-                Some(evidence) => projected.with_evidence(evidence, workspace)?,
-                None => projected.with_evidence_from(row, workspace)?,
-            })?;
+        if tracking {
+            eval_project_rows!(seq, src, rows, workspace, &evidence_columns, true);
+        } else {
+            eval_project_rows!(seq, src, rows, workspace, &evidence_columns, false);
         }
         SolutionSeq {
             schema: out,
@@ -437,7 +449,7 @@ fn dedup<I: ViewTermId, const ADJACENT: bool>(
     workspace: &crate::WorkspaceCapability,
     coalesce: bool,
 ) -> Result<SolutionSeq<I>, EvalError> {
-    if coalesce || seq.rows.iter().any(RetainedRow::has_evidence_attachment) {
+    if coalesce || seq.rows.may_have_evidence_attachment() {
         let mut state = DedupState::<(RetainedRow<I>, usize), ADJACENT>::new(workspace);
         dedup_with_state(seq, &mut state, workspace)
     } else {
@@ -2102,7 +2114,9 @@ fn aggregate_evidence<D: DatasetView + Sync>(
         Some(input) => {
             input.aggregate_evidence(evidence, aggregates, ctx.active_graph, &ctx.growth)
         }
-        None => evidence.native_aggregate(aggregates, &ctx.growth),
+        None => evidence.native_aggregate(aggregates, &ctx.growth, || {
+            ctx.evidence_owner()?.query_owner(&ctx.growth)
+        }),
     }
 }
 
@@ -2170,6 +2184,12 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
     };
     let in_schema = seq.schema.clone();
     let search_evidence = seq.rows.search_evidence().clone();
+    // Inspect physical attachments once in input order. Ordinary groups need
+    // no per-group dictionary scan or aggregate evidence publication; an
+    // original search owner, rank or declaration always retains that path.
+    let group_tracking = ctx.evidence_input.is_some()
+        || !search_evidence.is_virtual()
+        || seq.rows.may_have_evidence_attachment();
     // Redundant GROUP BY keys do not create extra output columns. Derive both
     // partition keys and row offsets from the same first-seen schema, so adding
     // an aggregate after a repeated key cannot index past the output row.
@@ -2278,18 +2298,20 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                     row[var_count + j] =
                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, child)?;
                 }
-                acc.push(crate::parallel::minted_row(
-                    &child.scratch,
-                    base,
-                    RetainedRow::from_resident(row).with_evidence(
+                let row = RetainedRow::from_resident(row);
+                let row = if group_tracking {
+                    row.with_evidence(
                         aggregate_evidence(
                             &group_evidence(idxs, &seq.rows, child)?,
                             aggregates,
                             child,
                         )?,
                         &child.growth,
-                    )?,
-                )?);
+                    )?
+                } else {
+                    row
+                };
+                acc.push(crate::parallel::minted_row(&child.scratch, base, row)?);
                 ledger.settle(1, child);
                 Ok(())
             },
@@ -2348,10 +2370,19 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                         ctx,
                     )?;
                 }
-                rows.push(RetainedRow::from_resident(row).with_evidence(
-                    aggregate_evidence(&group_evidence(idxs, &seq.rows, ctx)?, aggregates, ctx)?,
-                    &ctx.growth,
-                )?);
+                let row = RetainedRow::from_resident(row);
+                rows.push(if group_tracking {
+                    row.with_evidence(
+                        aggregate_evidence(
+                            &group_evidence(idxs, &seq.rows, ctx)?,
+                            aggregates,
+                            ctx,
+                        )?,
+                        &ctx.growth,
+                    )?
+                } else {
+                    row
+                });
             }
         }
         RowsBuilder::from_storage(
@@ -2383,10 +2414,14 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                 }
                 Ok(())
             })?;
-            rows.push_row(row.with_evidence(
-                aggregate_evidence(&group_evidence(idxs, &seq.rows, ctx)?, aggregates, ctx)?,
-                &growth,
-            )?)?;
+            rows.push_row(if group_tracking {
+                row.with_evidence(
+                    aggregate_evidence(&group_evidence(idxs, &seq.rows, ctx)?, aggregates, ctx)?,
+                    &growth,
+                )?
+            } else {
+                row
+            })?;
         }
         rows.finish()?
     };
@@ -3116,6 +3151,8 @@ struct AggregateSurvivors {
     values: AdmittedVec<TermValue>,
     // Original term owners outlive all of the values and the values' vector.
     grants: AdmittedVec<crate::WorkspaceAllocation>,
+    // Bounded term creation must pre-admit both destination arrays.
+    bounded: bool,
 }
 
 struct AggregateSurvivorOwners {
@@ -3145,20 +3182,31 @@ impl AggregateSurvivors {
         Self {
             values: AdmittedVec::new(workspace),
             grants: AdmittedVec::new(workspace),
+            bounded: workspace.is_bounded(),
         }
     }
 
     fn reserve_next(&mut self) -> Result<(), EvalError> {
         self.values.reserve_next()?;
-        self.grants.reserve_next()
+        if self.bounded {
+            self.grants.reserve_next()?;
+        }
+        Ok(())
     }
 
     fn push(&mut self, value: crate::WorkspaceTerm) -> Result<(), EvalError> {
-        self.reserve_next()?;
+        // Callers pre-admit the destinations before cloning the value.
+        // A foreign original owner must still survive even in a resident group.
+        let retained_owner = value.has_admission();
+        if retained_owner {
+            self.grants.reserve_next()?;
+        }
         let (value, allocation) = value.into_parts();
-        // Both destinations were admitted before moving the original payload.
+        // Only real owners need a retained slot; an empty allocation owns nothing.
         self.values.push_reserved(value);
-        self.grants.push_reserved(allocation);
+        if retained_owner {
+            self.grants.push_reserved(allocation);
+        }
         Ok(())
     }
 }
@@ -5623,7 +5671,7 @@ mod tests {
                 targets: vec![NamedNodePattern::NamedNode(
                     NamedNode::new("https://example.org/document").unwrap(),
                 )],
-                pattern: pattern.clone(),
+                pattern,
                 dataset: purrdf_sparql_algebra::QueryDataset::default(),
                 base_iri: None,
                 version: None,
@@ -5927,6 +5975,65 @@ mod tests {
                 })
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn native_groups_from_ownerless_search_share_the_original_query() {
+        use purrdf_core::evidence::{
+            AggregateBound, EvidenceCombination, aggregate_column_identity,
+        };
+        let dataset = ages();
+        let context = EvalCtx::new(&dataset);
+        let search = crate::RowEvidence::default().with_unclosed_search(true);
+        let aggregates = [(
+            Variable::new("count"),
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .unwrap(),
+        )];
+        let mut combined = crate::RowEvidence::default();
+        for count in [0, 1, 2] {
+            let mut rows = RowsBuilder::new(&context.growth);
+            for _ in 0..count {
+                rows.push_row(
+                    RetainedRow::from_cells(0, std::iter::empty(), &context.growth).unwrap(),
+                )
+                .unwrap();
+            }
+            let mut rows = rows.finish().unwrap();
+            rows.retain_search_evidence(search.clone());
+            let members: Vec<_> = (0..count).collect();
+            let evidence = group_evidence(&members, &rows, &context).unwrap();
+            let aggregate = aggregate_evidence(&evidence, &aggregates, &context).unwrap();
+            assert!(!aggregate.permits_closed_absence());
+            aggregate
+                .with_record(|record| {
+                    assert_eq!(
+                        record.aggregate_bounds(),
+                        &[(aggregate_column_identity("count"), AggregateBound::Lower)]
+                    );
+                })
+                .unwrap();
+            combined = combined
+                .combine(&aggregate, EvidenceCombination::Alternatives)
+                .unwrap();
+        }
+        // An already admitted native owner survives a child even without a
+        // registry: original row/search carriers can reach the grouped path.
+        let worker = context.fork_for_worker().unwrap();
+        let next = aggregate_evidence(&search, &aggregates, &worker).unwrap();
+        drop(worker);
+        drop(context);
+        assert!(
+            combined
+                .combine(&next, EvidenceCombination::Alternatives)
+                .is_ok()
+        );
     }
 
     #[test]

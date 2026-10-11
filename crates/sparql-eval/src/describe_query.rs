@@ -141,10 +141,7 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
     let graph = frame.finish_dataset(&mut Some(graph))?;
     let result = crate::construct::commit_answer_triples(graph, certificate, &where_rows, ctx)?;
     if ctx.evidence_input.is_some()
-        || where_rows
-            .rows
-            .iter()
-            .any(crate::solution::RetainedRow::has_evidence_attachment)
+        || where_rows.rows.may_have_evidence_attachment()
         || !where_rows.rows.search_evidence().is_virtual()
     {
         ctx.evidence_answer = Some(where_rows);

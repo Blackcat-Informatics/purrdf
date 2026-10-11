@@ -236,6 +236,18 @@ fn empty(path: &Path) -> IoResult<bool> {
     }
 }
 fn validate_request(request: &Request) -> IoResult<()> {
+    validate_request_fields(request)?;
+    if !Path::new(&request.directory).starts_with("/opt") {
+        return Err(invalid(
+            "arm execution requires a task-owned /opt disk path",
+        ));
+    }
+    Ok(())
+}
+
+// Receipt structure and identity do not grant permission to execute an arm.
+// The execution door above separately admits its fixed disk location before IO.
+fn validate_request_fields(request: &Request) -> IoResult<()> {
     lane_command(&request.lane)?;
     if request.jobs == 0 || request.test_threads == 0 || request.jobs > 8 {
         return Err(invalid(
@@ -263,13 +275,12 @@ fn validate_request(request: &Request) -> IoResult<()> {
     }
     let directory = Path::new(&request.directory);
     if !directory.is_absolute()
-        || !directory.starts_with("/opt")
         || directory
             .components()
             .any(|part| matches!(part, std::path::Component::ParentDir))
     {
         return Err(invalid(
-            "arm directory must be a task-owned absolute /opt disk path without parent components",
+            "arm directory must be an absolute path without parent components",
         ));
     }
     if !Path::new(&request.root).is_absolute() || !Path::new(&request.cargo).is_absolute() {
@@ -1107,7 +1118,7 @@ fn unchanged_warm(prior: &Value, identity: &Value, request: &Value) -> IoResult<
     Ok(())
 }
 
-/// Admit both completed warmth receipts through the same request and proof homes.
+/// Validate completed receipt fields and proof against the caller's admitted case.
 pub(crate) fn completed_pair(
     cold: &Value,
     warm: &Value,
@@ -1119,7 +1130,7 @@ pub(crate) fn completed_pair(
             .pointer("/context/request")
             .ok_or_else(|| invalid("completed request missing"))?;
         let request = Request::from_json(value).map_err(|error| invalid(error.to_string()))?;
-        validate_request(&request)?;
+        validate_request_fields(&request)?;
         if Path::new(&request.directory) != directory
             || request.lane != lane
             || request.warmth != warmth
@@ -1930,19 +1941,20 @@ pub(crate) mod tests {
         // inject configuration. These subprocesses query only; none compiles.
         let cargo = sdk_cargo();
         // env_clear/CARGO_HOME do not disable Cargo's ancestor configuration
-        // discovery; keep the absence probe outside the developer's home tree.
-        let holder = purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
+        // discovery. Query absence at the filesystem root without writing there;
+        // all fixture files and the isolated Cargo home stay in the owned tree.
+        let holder = purrdf_testkit::temp_dir!().unwrap();
         let root = holder.path();
-        let query = || {
+        let query = |directory: &Path| {
             query_configuration(
                 Command::new(&cargo)
                     .env_clear()
                     .env("CARGO_HOME", root.join("cargo-home"))
                     .env("PATH", cargo.parent().unwrap())
-                    .current_dir(root),
+                    .current_dir(directory),
             )
         };
-        let absent = query().unwrap();
+        let absent = query(Path::new(std::path::MAIN_SEPARATOR_STR)).unwrap();
         assert_eq!(
             absent.pointer("/build/state").and_then(Value::as_str),
             Some("absent")
@@ -1950,7 +1962,7 @@ pub(crate) mod tests {
         std::fs::create_dir(root.join(".cargo")).unwrap();
         let config = root.join(".cargo/config.toml");
         std::fs::write(&config, "[build]\njobs=4\n[profile.dev]\nopt-level=3\n[target.x86_64-unknown-linux-gnu]\nrustflags=['-Ctarget-cpu=x86-64']\n[registries.private]\ntoken='DO_NOT_PERSIST'\n").unwrap();
-        let configured = query().unwrap();
+        let configured = query(root).unwrap();
         assert_eq!(
             configured
                 .pointer("/build/value/jobs")
@@ -1959,7 +1971,7 @@ pub(crate) mod tests {
         );
         assert!(!json::write_compact(&configured).contains("DO_NOT_PERSIST"));
         std::fs::write(config, "DO_NOT_PERSIST = [ malformed private config").unwrap();
-        let error = query().unwrap_err().to_string();
+        let error = query(root).unwrap_err().to_string();
         assert!(error.contains("Cargo config get --format json-value failed"));
         assert!(error.contains("supported nightly Cargo and valid configuration"));
         assert!(!error.contains("DO_NOT_PERSIST"));
@@ -2662,7 +2674,10 @@ pub(crate) mod tests {
         request.directory = "/opt/task/../shared".to_owned();
         assert!(validate_request(&request).is_err());
         request.directory = "/tmp/arm".to_owned();
+        validate_request_fields(&request).unwrap();
         assert!(validate_request(&request).is_err());
+        request.directory = holder.path().join("arm").display().to_string();
+        validate_request_fields(&request).unwrap();
     }
 
     #[test]

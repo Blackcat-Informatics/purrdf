@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 14
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 15
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -524,7 +524,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `14` |
+| `GOVERNOR_PROFILE_VERSION` | `15` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -541,7 +541,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n14\n'
+{ printf 'purrdf-sparql-governors\n15\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -550,7 +550,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work
 } | sha256sum
-# ff3c6111c41cf43077cdf0937a9657e5cb8b0457d2aca19e40328815b3752e06
+# 34f3ed243e70e82eb473de8a264af5a712ccab053c48bc4be286f1c7293071a1
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -690,12 +690,23 @@ increment it. That restraint is what makes the number worth pinning.
 
 | **14** | The schedule is unchanged. Exact arithmetic uses the workspace's shared binary `u64` integer engine. Numeric costs account for eight-byte limbs, multiplication and division working storage, and the decimal parsing/rendering base conversions. Admission reads constant-time binary size bounds; an uncertain decimal digit bound cannot trigger an exact-exponent shortcut. Machine-word dispatch and its inline `i128` operations remain unchanged. Remeasure arbitrary-precision fuel and scratch ceilings against the regenerated corpus. |
 
+Version **15** keeps the charge schedule unchanged. Evidence-bearing
+`EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative
+witness and algebra nodes whose normalization could discard declarations. It
+does not enter the ordinary definition path's synthetic first-witness `Slice`;
+node-entry and output charges describe the body actually executed. In the two
+pinned empty property-function cases, the answer, provider invocation, scratch
+and output charges stay unchanged, while fuel falls from 11 to 10 because one
+synthetic node is no longer entered. An installed but unused relation registry
+does not select this execution path. Remeasure evidence-bearing queries' fuel
+ceilings and stop cut points.
+
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `14` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `15` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
@@ -733,7 +744,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `14` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `15` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

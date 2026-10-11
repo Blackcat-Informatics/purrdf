@@ -841,12 +841,16 @@ impl OccurrenceCallPlans {
             )? {
                 return Ok(None);
             }
-            let evidence = row.evidence().combine(
-                emitted.evidence(),
-                purrdf_core::evidence::EvidenceCombination::Conjunction,
-            )?;
-            row =
-                publish_unified(plan, &values, &row, ctx)?.with_evidence(evidence, &ctx.growth)?;
+            let evidence = if !row.has_evidence_attachment() && emitted.evidence().is_virtual() {
+                None
+            } else {
+                Some(row.evidence().combine(
+                    emitted.evidence(),
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?)
+            };
+            row = publish_unified(plan, &values, &row, ctx)?
+                .with_optional_evidence(evidence, &ctx.growth)?;
         }
         Ok(Some(row))
     }
@@ -971,15 +975,14 @@ fn eval_call_over<D: DatasetView + Sync>(
             )?;
             producer_evidence = Some(evidence);
         }
-        let driving_evidence = producer_evidence.as_ref().map_or_else(
-            || Ok(mu.evidence().clone()),
-            |producer| {
-                mu.evidence().combine(
-                    producer,
-                    purrdf_core::evidence::EvidenceCombination::Conjunction,
-                )
-            },
-        )?;
+        let driving = ctx.bind_native_evidence(mu.evidence())?;
+        let driving_evidence = match producer_evidence.as_ref() {
+            None => driving,
+            Some(producer) => driving.combine(
+                producer,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )?,
+        };
         seed_call(&plan, mu, &mut seed, ctx)?;
         for (dst, arg) in args.as_mut_slice().iter_mut().zip(&plan.args) {
             *dst = arg_value_admitted(arg, &seed, &ctx.growth)?;
@@ -1235,16 +1238,26 @@ fn eval_call_over<D: DatasetView + Sync>(
                 IngestVerdict::Admitted => {}
             }
             let row = publish_unified(&plan, &values, mu, ctx)?;
-            let evidence = driving_evidence.combine(
-                &emitted.evidence(),
-                purrdf_core::evidence::EvidenceCombination::Conjunction,
-            )?;
-            if ctx.candidate_scope.is_some() && !evidence.is_undecided() {
+            let emitted_evidence = emitted.evidence();
+            let emitted_evidence = ctx.bind_native_evidence(&emitted_evidence)?;
+            let evidence = if driving_evidence.is_virtual() && emitted_evidence.is_virtual() {
+                None
+            } else {
+                Some(driving_evidence.combine(
+                    &emitted_evidence,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?)
+            };
+            if ctx.candidate_scope.is_some()
+                && !evidence
+                    .as_ref()
+                    .is_some_and(crate::RowEvidence::is_undecided)
+            {
                 established = established
                     .checked_add(1)
                     .ok_or(EvalError::WorkspaceBoundOverflow)?;
             }
-            rows.push_row(row.with_evidence(evidence, &ctx.growth)?)?;
+            rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
         }
 
         // The invocation has ENDED — drained, or stopped by this engine at a ceiling, a
@@ -1260,7 +1273,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                     &driving_evidence,
                     purrdf_core::evidence::EvidenceCombination::Conjunction,
                 )?,
-                None => driving_evidence.clone(),
+                None => driving_evidence,
             });
         }
         if native_evidence {
@@ -1272,6 +1285,7 @@ fn eval_call_over<D: DatasetView + Sync>(
             )?;
         }
         if let Some(search) = invocation_search {
+            let search = ctx.bind_native_evidence(&search)?;
             native_search = Some(match native_search {
                 Some(previous) => previous.combine(
                     &search,
@@ -1652,6 +1666,9 @@ pub struct CallCursor {
     search: crate::RowEvidence,
     /// Original driving/source declaration applied to each emitted row.
     binding_evidence: crate::RowEvidence,
+    /// Dictionary already admitted by an external scope, if any. Ordinary
+    /// cursors retain no additional evidence owner.
+    binding_owner: Option<crate::QueryEvidence>,
     native_evidence: bool,
     /// The projected variable names, in projection order.
     variables: Vec<String>,
@@ -3832,6 +3849,7 @@ pub(crate) fn open_call_cursor(
         opened,
         search: search.unwrap_or_default(),
         binding_evidence: crate::RowEvidence::default(),
+        binding_owner: None,
         native_evidence,
         variables,
         columns,
@@ -3862,6 +3880,9 @@ impl CallCursor {
                 .and_then(crate::CandidateScope::evidence_owner)
                 .cloned(),
         )?;
+        self.search = input
+            .owner
+            .bind_native_evidence(&self.search, &self.workspace)?;
         let mut search = input.scope_evidence(
             &crate::RowEvidence::default(),
             purrdf_core::GraphMatch::Default,
@@ -3884,6 +3905,7 @@ impl CallCursor {
             &search,
             purrdf_core::evidence::EvidenceCombination::Conjunction,
         )?;
+        self.binding_owner = input.owner.retained_owner(&self.workspace)?;
         Ok(())
     }
 
@@ -3950,7 +3972,7 @@ impl CallCursor {
     ) -> Result<Option<Vec<Option<TermValue>>>, EvalError> {
         self.next_evidenced_row(dataset)?
             .map(|row| {
-                if row.evidence.is_default() {
+                if row.evidence.is_virtual() {
                     Ok(row.cells)
                 } else {
                     Err(EvalError::WorkspaceUnpriced(
@@ -4164,7 +4186,11 @@ impl CallCursor {
             }
             return Ok(Some(AdmittedPropertyRow {
                 cells,
-                evidence: emitted.evidence().combine(
+                evidence: match &self.binding_owner {
+                    Some(owner) => owner.import(&emitted.evidence())?,
+                    None => emitted.evidence(),
+                }
+                .combine(
                     &self.binding_evidence,
                     purrdf_core::evidence::EvidenceCombination::Conjunction,
                 )?,
@@ -4206,7 +4232,10 @@ impl CallCursor {
         )?;
         match current {
             Some(current) => self.search.combine(
-                &current,
+                &match &self.binding_owner {
+                    Some(owner) => owner.import(&current)?,
+                    None => current,
+                },
                 purrdf_core::evidence::EvidenceCombination::Conjunction,
             ),
             None => Ok(self.search.clone()),

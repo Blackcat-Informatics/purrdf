@@ -313,13 +313,7 @@ impl<'a, N: LedgerNodes> Iterator for RowStatements<'a, N> {
     type Item = Result<LedgerStatement<'a>, LedgerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.pull() {
-            Ok(statement) => statement.map(Ok),
-            Err(error) => {
-                self.phase = 8;
-                Some(Err(error))
-            }
-        }
+        super::next_statement(self.pull(), &mut self.phase, 8)
     }
 }
 

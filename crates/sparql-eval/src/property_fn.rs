@@ -2258,7 +2258,7 @@ impl AdmittedPfRow {
     /// # Errors
     /// Refuses evidence erasure or releasing a bounded allocation's admission.
     pub fn try_into_resident(self) -> Result<PfRow, EvalError> {
-        if !self.evidence.is_default() {
+        if !self.evidence.is_virtual() {
             Err(EvalError::WorkspaceUnpriced(
                 "raw property-function cells cannot transport original row evidence",
             ))

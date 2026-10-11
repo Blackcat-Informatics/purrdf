@@ -212,10 +212,91 @@ pub trait EvidenceSource<I: purrdf_core::ViewTermId>: Sync {
     }
 }
 
+/// One original query dictionary admission, shared before worker contexts fork.
+/// Native producers and explicit source declarations use the same adoption home.
+#[derive(Clone)]
+pub(crate) struct EvidenceOwner {
+    state: SharedWorkspace<Mutex<Option<QueryEvidence>>>,
+}
+
+impl EvidenceOwner {
+    pub(crate) fn new(
+        owner: Option<QueryEvidence>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self {
+            state: SharedWorkspace::new_admitted(Mutex::new(owner), workspace)?,
+        })
+    }
+
+    pub(crate) fn query_owner(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<QueryEvidence, EvalError> {
+        let mut owner = self.state.lock().map_err(|_| {
+            NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                "poisoned original evidence input",
+                workspace,
+            )
+        })?;
+        if owner.is_none() {
+            *owner = Some(QueryEvidence::new(workspace)?);
+        }
+        Ok(owner
+            .as_ref()
+            .expect("native query owner constructed above")
+            .clone())
+    }
+
+    /// Bind original native declarations to the answer's admitted dictionary.
+    /// An input with no declarations adopts the producer's actual owner; an
+    /// already admitted input imports through the canonical evidence home.
+    pub(crate) fn bind_native_evidence(
+        &self,
+        row: &RowEvidence,
+        workspace: &WorkspaceCapability,
+    ) -> Result<RowEvidence, EvalError> {
+        if row.is_virtual() {
+            return Ok(row.clone());
+        }
+        let query = {
+            let mut owner = self.state.lock().map_err(|_| {
+                NativeDiagnostic::error(
+                    NativeDiagnosticKind::Internal,
+                    "poisoned original evidence input",
+                    workspace,
+                )
+            })?;
+            if owner.is_none() {
+                (*owner).clone_from(&row.owner);
+            }
+            owner.clone()
+        };
+        match query {
+            Some(query) => query.import(row),
+            None => Ok(row.clone()),
+        }
+    }
+
+    pub(crate) fn retained_owner(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<QueryEvidence>, EvalError> {
+        self.state.lock().map(|owner| owner.clone()).map_err(|_| {
+            NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                "poisoned original evidence input",
+                workspace,
+            )
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct EvidenceInput<'d, I: purrdf_core::ViewTermId> {
     source: &'d dyn EvidenceSource<I>,
-    owner: SharedWorkspace<Mutex<Option<QueryEvidence>>>,
+    pub(crate) owner: EvidenceOwner,
 }
 
 impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
@@ -226,7 +307,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
     ) -> Result<Self, EvalError> {
         Ok(Self {
             source,
-            owner: SharedWorkspace::new_admitted(Mutex::new(owner), workspace)?,
+            owner: EvidenceOwner::new(owner, workspace)?,
         })
     }
 
@@ -265,7 +346,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         } else {
             None
         };
-        let query = self.query_owner(workspace)?;
+        let query = self.owner.query_owner(workspace)?;
         for &id in record.reasons() {
             query.retain_reason(id, || self.source.reason(id))?;
         }
@@ -309,23 +390,6 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
             .map(|row| row.with_unclosed_search(!scope.closure_declared))
     }
 
-    fn query_owner(&self, workspace: &WorkspaceCapability) -> Result<QueryEvidence, EvalError> {
-        let mut owner = self.owner.lock().map_err(|_| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Internal,
-                "poisoned original evidence input",
-                workspace,
-            )
-        })?;
-        if owner.is_none() {
-            *owner = Some(QueryEvidence::new(workspace)?);
-        }
-        Ok(owner
-            .as_ref()
-            .expect("native query owner constructed above")
-            .clone())
-    }
-
     /// A matched claim or path derivation establishes its witness independently
     /// of missing edges elsewhere. Keep polarity, reasons and frame unchanged.
     pub(crate) fn found_witness(
@@ -336,8 +400,11 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         if row.with_record(EvidenceRecord::completeness)? == SearchCompleteness::Complete {
             return Ok(row.clone());
         }
-        self.query_owner(workspace)?
-            .with_completeness(row, SearchCompleteness::Complete, None)
+        self.owner.query_owner(workspace)?.with_completeness(
+            row,
+            SearchCompleteness::Complete,
+            None,
+        )
     }
 
     pub(crate) fn scope_evidence(
@@ -358,7 +425,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         if scope.completeness == SearchCompleteness::Complete && scope.missing_reason.is_none() {
             return Ok(row.clone());
         }
-        let query = self.query_owner(workspace)?;
+        let query = self.owner.query_owner(workspace)?;
         if let Some(id) = scope.missing_reason {
             query.retain_reason(id, || self.source.reason(id))?;
         }
@@ -387,7 +454,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
                     workspace,
                 )
             })?;
-        let query = self.query_owner(workspace)?;
+        let query = self.owner.query_owner(workspace)?;
         query.retain_reason(reason, || self.source.reason(reason))?;
         query.with_completeness(
             &RowEvidence::default(),
@@ -410,10 +477,12 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         if aggregates.is_empty() {
             return Ok(row);
         }
-        self.query_owner(workspace)?
-            .aggregate_evidence(&row, aggregates, workspace, |aggregate| {
-                self.source.sum_nonnegative(aggregate, graph)
-            })
+        self.owner.query_owner(workspace)?.aggregate_evidence(
+            &row,
+            aggregates,
+            workspace,
+            |aggregate| self.source.sum_nonnegative(aggregate, graph),
+        )
     }
 
     pub(crate) fn expression_evidence(
@@ -430,7 +499,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         else {
             return Ok(None);
         };
-        let query = self.query_owner(workspace)?;
+        let query = self.owner.query_owner(workspace)?;
         query.retain_reason(reason, || self.source.reason(reason))?;
         let completeness = row.evidence().with_record(|record| {
             record
@@ -455,7 +524,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         {
             return Ok(row.clone());
         }
-        let query = self.query_owner(workspace)?;
+        let query = self.owner.query_owner(workspace)?;
         if let Some(reason) = scope.missing_reason {
             query.retain_reason(reason, || self.source.reason(reason))?;
         }
@@ -484,12 +553,13 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         if guarded.is_undecided() || complete != SearchCompleteness::Complete {
             return Ok(guarded.with_undecided(true));
         }
-        self.query_owner(workspace)?
+        self.owner
+            .query_owner(workspace)?
             .transform(&guarded, EvidenceRecord::negated)
     }
 
     /// Retain an existential witness bag using the original query dictionary.
-    /// The empty bag has no polarity witness; closing its search is separate.
+    /// Only a completed, closed empty search opposes the existential predicate.
     pub(crate) fn existential_evidence<'r>(
         &self,
         witnesses: impl IntoIterator<Item = &'r RowEvidence>,
@@ -500,8 +570,10 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         if let Some(combined) = RowEvidence::existential_witnesses(witnesses, search)? {
             return Ok(combined);
         }
-        let empty = self.query_owner(workspace)?.empty_existential(search)?;
-        self.absence_evidence(&empty, graph, workspace)
+        let search = self.absence_evidence(search, graph, workspace)?;
+        self.owner
+            .query_owner(workspace)?
+            .empty_existential(&search)
     }
 
     /// Admit the caller's question against the source's explicit whole scope.
@@ -600,7 +672,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
                 workspace,
             ));
         }
-        let owner = self.query_owner(workspace)?;
+        let owner = self.owner.query_owner(workspace)?;
         let records = owner
             .state
             .records
@@ -698,7 +770,7 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         workspace: &WorkspaceCapability,
         visit: impl FnOnce(AcceptedAnswerRows<'_, I>) -> R,
     ) -> Result<R, EvalError> {
-        let owner = self.query_owner(workspace)?;
+        let owner = self.owner.query_owner(workspace)?;
         owner.with_accepted_payloads(
             &rows.rows,
             crate::solution::RetainedRow::evidence,
@@ -726,6 +798,10 @@ impl QueryEvidence {
                 })??;
             }
             self.retain(record).map(|imported| {
+                let mut imported = imported;
+                if row.owner.is_some() {
+                    imported.owner = Some(self.clone());
+                }
                 imported
                     .with_undecided(row.undecided)
                     .with_unclosed_search(row.unclosed_search)
@@ -1023,8 +1099,8 @@ impl QueryEvidence {
         }
     }
 
-    fn row(&self, id: EvidenceId) -> RowEvidence {
-        if id.is_default() {
+    fn row(&self, id: EvidenceId, retain_owner: bool) -> RowEvidence {
+        if id.is_default() && !retain_owner {
             RowEvidence::default()
         } else {
             RowEvidence {
@@ -1091,7 +1167,7 @@ impl QueryEvidence {
                     record
                 })
             })
-            .map(|id| self.row(id).with_undecided(true))
+            .map(|id| self.row(id, false).with_undecided(true))
             .map_err(|error| self.failure(error))
     }
 
@@ -1125,7 +1201,7 @@ impl QueryEvidence {
                     )
                     .map_err(EvidenceRecordError::Storage)
             })
-            .map(|id| self.row(id))
+            .map(|id| self.row(id, false))
             .map_err(|error| self.failure(error))
     }
 
@@ -1284,7 +1360,10 @@ impl QueryEvidence {
             .map_err(|_| self.invariant("poisoned query evidence dictionary"))?;
         table
             .combine(left.id, right.id, law)
-            .map(|id| self.row(id).with_membership_of(left, right, law))
+            .map(|id| {
+                self.row(id, left.owner.is_some() || right.owner.is_some())
+                    .with_membership_of(left, right, law)
+            })
             .map_err(|error| self.failure(error))
     }
 
@@ -1308,11 +1387,20 @@ impl QueryEvidence {
     }
 
     fn empty_existential(&self, search: &RowEvidence) -> Result<RowEvidence, EvalError> {
+        // This is the predicate over an actually empty invocation, not a bag
+        // summary. Its completed closed search proves EXISTS false; an open or
+        // incomplete search supplies no polarity witness.
+        let closed = !search.is_undecided()
+            && search.permits_closed_absence()
+            && search.with_record(EvidenceRecord::completeness)? == SearchCompleteness::Complete;
+        let information = if closed {
+            purrdf_core::evidence::Information::Opposed
+        } else {
+            purrdf_core::evidence::Information::Neither
+        };
         let empty = self.transform(&RowEvidence::default(), |record, memory| {
             EvidenceRecord::from_parts(
-                &purrdf_core::evidence::InformationMap::uniform(
-                    purrdf_core::evidence::Information::Neither,
-                ),
+                &purrdf_core::evidence::InformationMap::uniform(information),
                 record.completeness(),
                 record.frame(),
                 record.reasons(),
@@ -1320,7 +1408,9 @@ impl QueryEvidence {
                 memory,
             )
         })?;
-        empty.combine(search, EvidenceCombination::Conjunction)
+        empty
+            .combine(search, EvidenceCombination::Conjunction)
+            .map(|row| row.with_undecided(!closed))
     }
 
     fn aggregate_evidence(
@@ -1392,7 +1482,7 @@ impl QueryEvidence {
         table
             .transform(row.id, update)
             .map(|id| {
-                self.row(id)
+                self.row(id, row.owner.is_some())
                     .with_undecided(row.undecided)
                     .with_unclosed_search(row.unclosed_search)
                     .with_rank_of(row)
@@ -1419,13 +1509,13 @@ pub struct RowEvidence {
 pub(crate) static VIRTUAL_ROW_EVIDENCE: RowEvidence = RowEvidence::VIRTUAL;
 
 impl RowEvidence {
-    /// Native witnesses carry their own owner and completeness. An empty bag
-    /// has no positive witness; retain its search declaration without inventing
-    /// an external scope or reason.
+    /// Native witnesses carry their own owner and completeness. A completed,
+    /// closed empty invocation opposes EXISTS; other empty searches retain their
+    /// original uncertainty without inventing an external scope or reason.
     pub(crate) fn native_existential<'r>(
         witnesses: impl IntoIterator<Item = &'r Self>,
         search: &Self,
-        workspace: &WorkspaceCapability,
+        fallback_owner: impl FnOnce() -> Result<QueryEvidence, EvalError>,
     ) -> Result<Self, EvalError> {
         if let Some(record) = Self::existential_witnesses(witnesses, search)? {
             return Ok(record);
@@ -1434,7 +1524,7 @@ impl RowEvidence {
         let owner = match &search.owner {
             Some(owner) => owner,
             None => {
-                fallback = QueryEvidence::new(workspace)?;
+                fallback = fallback_owner()?;
                 &fallback
             }
         };
@@ -1445,7 +1535,7 @@ impl RowEvidence {
     /// An incomplete declaration remains a membership gap, with its owner intact.
     pub(crate) fn native_negative(
         &self,
-        workspace: &WorkspaceCapability,
+        fallback_owner: impl FnOnce() -> Result<QueryEvidence, EvalError>,
     ) -> Result<Self, EvalError> {
         if self.is_undecided()
             || !self.permits_closed_absence()
@@ -1457,7 +1547,7 @@ impl RowEvidence {
         let owner = match &self.owner {
             Some(owner) => owner,
             None => {
-                fallback = QueryEvidence::new(workspace)?;
+                fallback = fallback_owner()?;
                 &fallback
             }
         };
@@ -1479,21 +1569,19 @@ impl RowEvidence {
             purrdf_sparql_algebra::AggregateExpression,
         )],
         workspace: &WorkspaceCapability,
+        fallback_owner: impl FnOnce() -> Result<QueryEvidence, EvalError>,
     ) -> Result<Self, EvalError> {
-        if self.is_virtual() {
+        if self.is_virtual() || aggregates.is_empty() {
             return Ok(self.clone());
         }
         let fallback;
         let owner = match &self.owner {
             Some(owner) => owner,
             None => {
-                fallback = QueryEvidence::new(workspace)?;
+                fallback = fallback_owner()?;
                 &fallback
             }
         };
-        if aggregates.is_empty() {
-            return Ok(self.clone());
-        }
         owner.aggregate_evidence(self, aggregates, workspace, |_| Ok(false))
     }
 
@@ -1546,8 +1634,10 @@ impl RowEvidence {
         original_rank: None,
     };
 
-    /// Physical elision is stronger than the public supported-record law.
-    pub(crate) fn is_virtual(&self) -> bool {
+    /// Whether no original query owner, rank or non-default declaration needs
+    /// transport. This physical law is stronger than semantic [`Self::is_default`].
+    #[must_use]
+    pub fn is_virtual(&self) -> bool {
         self.is_default() && self.owner.is_none() && self.original_rank.is_none()
     }
 
@@ -1566,13 +1656,6 @@ impl RowEvidence {
             }
     }
 
-    /// Canonical query-local equality without borrowing either dictionary lock.
-    pub(crate) fn same_query_record(&self, other: &Self) -> bool {
-        if self.is_default() && other.is_default() {
-            return true;
-        }
-        self.same_attachment(other)
-    }
     fn with_undecided(mut self, undecided: bool) -> Self {
         self.undecided = undecided;
         self
@@ -1780,7 +1863,7 @@ mod tests {
         assert!(virtual_search.is_virtual());
         assert!(
             virtual_search
-                .native_aggregate(&aggregates, &workspace)
+                .native_aggregate(&aggregates, &workspace, || Ok(query.clone()))
                 .unwrap()
                 .is_virtual()
         );
@@ -1804,17 +1887,27 @@ mod tests {
                 .with_unclosed_search(unclosed);
             assert!(!search.is_virtual());
             let witness =
-                RowEvidence::native_existential(std::iter::empty(), &search, &workspace).unwrap();
+                RowEvidence::native_existential(std::iter::empty(), &search, || Ok(query.clone()))
+                    .unwrap();
             assert!(query.owns(&witness));
             assert_eq!(witness.permits_closed_absence(), !unclosed);
+            assert_eq!(witness.is_undecided(), incomplete || unclosed);
             witness
                 .with_record(|retained| {
-                    assert_eq!(retained.information().fallback(), Information::Neither);
+                    assert_eq!(
+                        retained.information().fallback(),
+                        if incomplete || unclosed {
+                            Information::Neither
+                        } else {
+                            Information::Opposed
+                        }
+                    );
                     assert_eq!(retained.completeness(), record.completeness());
                 })
                 .unwrap();
             let found =
-                RowEvidence::native_existential([&virtual_search], &search, &workspace).unwrap();
+                RowEvidence::native_existential([&virtual_search], &search, || Ok(query.clone()))
+                    .unwrap();
             assert!(query.owns(&found));
             found
                 .with_record(|retained| {
@@ -1824,10 +1917,15 @@ mod tests {
                 .unwrap();
             assert_eq!(found.permits_closed_absence(), !(incomplete || unclosed));
             assert_eq!(
-                found.native_negative(&workspace).unwrap().is_undecided(),
+                found
+                    .native_negative(|| Ok(query.clone()))
+                    .unwrap()
+                    .is_undecided(),
                 incomplete || unclosed,
             );
-            let bounds = search.native_aggregate(&aggregates, &workspace).unwrap();
+            let bounds = search
+                .native_aggregate(&aggregates, &workspace, || Ok(query.clone()))
+                .unwrap();
             bounds
                 .with_record(|retained| {
                     assert_eq!(
@@ -1845,7 +1943,9 @@ mod tests {
                 .unwrap();
         }
         let ownerless = RowEvidence::default().with_unclosed_search(true);
-        let bounds = ownerless.native_aggregate(&aggregates, &workspace).unwrap();
+        let bounds = ownerless
+            .native_aggregate(&aggregates, &workspace, || Ok(query.clone()))
+            .unwrap();
         assert!(!bounds.permits_closed_absence());
         bounds
             .with_record(|record| {
@@ -1930,8 +2030,46 @@ mod tests {
             .expect("cell transport preserves its original evidence owner");
 
         let owner = QueryEvidence::new(&workspace).expect("default record's explicit owner");
-        let mut declared = owner.row(EvidenceId::DEFAULT);
-        declared.owner = Some(owner.clone());
+        let declared = owner
+            .with_completeness(
+                &owner.retain(&incomplete_record()).unwrap(),
+                SearchCompleteness::Complete,
+                None,
+            )
+            .unwrap();
+        assert!(declared.is_default());
+        assert!(!declared.is_virtual());
+        assert!(owner.owns(&declared));
+        let combined = declared
+            .combine(&RowEvidence::default(), EvidenceCombination::Conjunction)
+            .unwrap();
+        assert!(owner.owns(&combined));
+        assert!(!combined.is_virtual());
+        let destination = QueryEvidence::new(&workspace).unwrap();
+        let imported = destination.import(&declared).unwrap();
+        assert!(imported.is_default());
+        assert!(!imported.is_virtual());
+        assert!(destination.owns(&imported));
+        assert!(!owner.owns(&imported));
+        for attachment in [
+            declared.clone(),
+            RowEvidence::default().with_original_rank(core::num::NonZeroU64::new(1).unwrap()),
+        ] {
+            let raw = crate::AdmittedPfRow::new(Vec::new(), workspace.charge(0).unwrap())
+                .with_evidence(attachment);
+            assert!(matches!(
+                raw.try_into_resident(),
+                Err(EvalError::WorkspaceUnpriced(
+                    "raw property-function cells cannot transport original row evidence"
+                ))
+            ));
+        }
+        assert_eq!(
+            crate::AdmittedPfRow::new(Vec::new(), workspace.charge(0).unwrap())
+                .try_into_resident()
+                .unwrap(),
+            []
+        );
         let declared = declared.with_original_rank(core::num::NonZeroU64::new(1).unwrap());
         let row = crate::solution::RetainedRow::<purrdf_core::TermId>::from_resident(
             crate::solution::Solution::new(),

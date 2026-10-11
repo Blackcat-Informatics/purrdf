@@ -1815,7 +1815,18 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// decimal base conversion. Constant-time shape bounds are conservative and
 /// cannot take exact-decimal exponent shortcuts. Machine-word dispatch remains
 /// unchanged. Consumers must remeasure numeric fuel and scratch ceilings.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
+///
+/// # v15
+///
+/// The schedule stays unchanged. Evidence-bearing `EXISTS`/`NOT EXISTS` evaluates
+/// the original body and retains every alternative witness instead of entering
+/// the ordinary definition path's synthetic first-witness `Slice`. Its node-entry
+/// and output charges therefore describe the body actually executed; an empty
+/// property-function body charges one fewer node entry. Evidence preservation
+/// also retains algebra nodes whose normalization could discard declarations.
+/// An unused relation registry does not select this execution path. Consumers
+/// must remeasure fuel ceilings and stop cut points for evidence-bearing queries.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 15;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2849,7 +2860,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 14);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 15);
         assert_eq!(
             schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
             "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
@@ -2859,6 +2870,11 @@ mod tests {
             schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
             pinned,
             "binary-limb charging cannot reuse the v13 receipt identity"
+        );
+        assert_ne!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 14, &CHARGE_SCHEDULE),
+            pinned,
+            "evidence-preserving EXISTS cannot reuse the v14 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

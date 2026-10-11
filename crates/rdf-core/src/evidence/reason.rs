@@ -40,11 +40,7 @@ pub enum ReasonError {
     Storage(StorageError),
 }
 
-impl From<StorageError> for ReasonError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(ReasonError { Storage(StorageError) });
 
 impl fmt::Display for ReasonError {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -343,8 +339,7 @@ impl<F: FnMut(&[u8]) -> Result<(), StorageError>> TextOut for IdentitySink<F> {
     }
 
     fn push(&mut self, ch: char) {
-        let mut encoded = [0; 4];
-        let _ = self.write_str(ch.encode_utf8(&mut encoded));
+        let _ = self.write_char(ch);
     }
 
     fn failed(&self) -> bool {

@@ -226,6 +226,17 @@ impl Clone for Query {
 }
 
 impl Query {
+    /// An ASK over the original pattern, with no dataset clause, base or version.
+    #[must_use]
+    pub fn ask(pattern: GraphPattern) -> Self {
+        Self::Ask {
+            pattern,
+            dataset: QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        }
+    }
+
     /// Clone the full parsed query through its original native storage account.
     ///
     /// Templates, target/dataset arrays and an unknown VERSION spelling are

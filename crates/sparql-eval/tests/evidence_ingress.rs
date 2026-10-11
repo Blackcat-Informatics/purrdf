@@ -390,12 +390,8 @@ impl EvidenceSource<TermId> for ServiceClaims {
         Ok(None)
     }
 
-    fn scope(&self, _: GraphMatch<TermId>) -> Result<EvidenceScope, EvalError> {
-        Ok(EvidenceScope {
-            completeness: SearchCompleteness::Complete,
-            closure_declared: true,
-            missing_reason: None,
-        })
+    fn scope(&self, graph: GraphMatch<TermId>) -> Result<EvidenceScope, EvalError> {
+        self.gaps.scope(graph)
     }
 
     fn reason(&self, id: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
@@ -2169,6 +2165,24 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
         let query = format!(
             "SELECT ?s WHERE {{ BIND(<https://example.org/a> AS ?s) ?s {path} <https://example.org/end> }}"
         );
+        // The same cyclic/duplicate derivations without a declaration must
+        // retain their original bag cardinality through the ordinary path.
+        engine
+            .query_interned_view(
+                &dataset,
+                request(&query),
+                QueryOptions::default(),
+                |outcome| {
+                    let InternedOutcome::Solutions(rows) = outcome else {
+                        panic!("ordinary path SELECT");
+                    };
+                    assert_eq!(rows.len(), expected.len(), "ordinary {path}");
+                    for row in rows.rows() {
+                        assert!(row.evidence().is_default());
+                    }
+                },
+            )
+            .expect("ordinary path family");
         engine
             .query_interned_evidence_view(
                 &dataset,
@@ -2201,6 +2215,39 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
             )
             .expect("native path family");
     }
+    let owned_source = Claims {
+        negative: b,
+        record: EvidenceRecord::from_parts(
+            &InformationMap::default(),
+            SearchCompleteness::Undetermined,
+            &Frame::actual(),
+            &[],
+            &[],
+            &mut Memory::new(&mut Resident),
+        )
+        .unwrap(),
+        fail: false,
+        completeness: SearchCompleteness::Undetermined,
+        sum_nonnegative: false,
+        closure_declared: false,
+    };
+    for path in [
+        "<https://example.org/p>/<https://example.org/q>",
+        "<https://example.org/p>+",
+        "<https://example.org/p>{3,3}",
+    ] {
+        engine.query_interned_evidence_view(&dataset, request(&format!(
+            "SELECT ?s WHERE {{ BIND(<https://example.org/a> AS ?s) ?s {path} <https://example.org/end> }}"
+        )), QueryOptions::default(), &owned_source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else { panic!("owned default path"); };
+            assert!(!rows.is_empty());
+            assert!(rows.rows().iter().any(|row| !row.evidence().is_virtual()));
+            for row in rows.rows() {
+                assert!(row.evidence().is_default());
+                row.evidence().with_record(|record| assert_eq!(record, &EvidenceRecord::default())).unwrap();
+            }
+        }).expect("original complete default owner survives path derivations");
+    }
     let mut refusing = source;
     refusing.fail = true;
     let mut published = false;
@@ -2225,16 +2272,27 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
     };
     use std::sync::Arc;
 
+    #[derive(Clone, Copy)]
+    enum SearchVisibility {
+        Opening,
+        AfterPull,
+        OpeningOnly,
+    }
+    #[derive(Clone, Copy)]
+    enum Membership {
+        Established,
+        Undecided,
+        OwnedComplete,
+    }
     struct DeclaredRelation {
         inner: MemoryRelation,
         record: EvidenceRecord,
         rank: Option<core::num::NonZeroU64>,
-        undecided: bool,
+        membership: Membership,
         alternative: Option<EvidenceRecord>,
         search: Option<EvidenceRecord>,
         fail_search: bool,
-        late_search: bool,
-        clear_search: bool,
+        visibility: SearchVisibility,
         unclosed_search: bool,
         query: Arc<std::sync::Mutex<Option<QueryEvidence>>>,
     }
@@ -2243,8 +2301,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         alternative: Option<AdmittedPfRow>,
         search: Option<purrdf_sparql_eval::RowEvidence>,
         fail_search: bool,
-        late_search: bool,
-        clear_search: bool,
+        visibility: SearchVisibility,
         _allocation: purrdf_sparql_eval::WorkspaceAllocation,
     }
     impl PfCursor for DeclaredCursor {
@@ -2252,16 +2309,20 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             true
         }
         fn search_evidence(&self) -> Result<Option<&purrdf_sparql_eval::RowEvidence>, EvalError> {
-            if self.fail_search && (!self.clear_search || self.row.is_some()) {
+            if self.fail_search
+                && (!matches!(self.visibility, SearchVisibility::OpeningOnly) || self.row.is_some())
+            {
                 return Err(EvalError::AllocationFailed {
                     construct: "original native search declaration",
                 });
             }
-            Ok(if self.late_search && self.row.is_some() {
-                None
-            } else {
-                self.search.as_ref()
-            })
+            Ok(
+                if matches!(self.visibility, SearchVisibility::AfterPull) && self.row.is_some() {
+                    None
+                } else {
+                    self.search.as_ref()
+                },
+            )
         }
         fn next(&mut self) -> Result<Option<Vec<TermValue>>, EvalError> {
             Err(EvalError::WorkspaceUnpriced(
@@ -2270,7 +2331,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         }
         fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
             let row = self.row.take().or_else(|| self.alternative.take());
-            if self.clear_search {
+            if matches!(self.visibility, SearchVisibility::OpeningOnly) {
                 self.search = None;
             }
             Ok(row)
@@ -2312,10 +2373,14 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                 }
                 retained.as_ref().expect("admitted query owner").clone()
             };
-            let evidence = if self.undecided {
-                query.retain_undecided(&self.record)?
-            } else {
-                query.retain(&self.record)?
+            let evidence = match self.membership {
+                Membership::Undecided => query.retain_undecided(&self.record)?,
+                Membership::Established => query.retain(&self.record)?,
+                Membership::OwnedComplete => query.with_completeness(
+                    &query.retain(&self.record)?,
+                    SearchCompleteness::Complete,
+                    None,
+                )?,
             };
             let evidence = self.rank.map_or_else(
                 || evidence.clone(),
@@ -2355,8 +2420,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                     })
                     .transpose()?,
                 fail_search: self.fail_search,
-                late_search: self.late_search,
-                clear_search: self.clear_search,
+                visibility: self.visibility,
                 _allocation: allocation,
             })
             .map_err(|_| EvalError::AllocationFailed {
@@ -2395,12 +2459,11 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             .unwrap(),
             record,
             rank: None,
-            undecided: false,
+            membership: Membership::Established,
             alternative: None,
             search: None,
             fail_search: false,
-            late_search: false,
-            clear_search: false,
+            visibility: SearchVisibility::Opening,
             unclosed_search: false,
             query: Arc::clone(&native_owner),
         }),
@@ -2417,7 +2480,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             rows.rows()[0].evidence().with_record(|record| {
                 assert_eq!(record.information().fallback(), Information::Opposed);
                 assert_eq!(record.completeness(), SearchCompleteness::Complete);
-                assert!(record.aggregate_bounds().is_empty());
+                assert_eq!(record.aggregate_bounds(), []);
             }).unwrap();
         },
     ).expect("original producer envelope reaches normal row operators");
@@ -2454,12 +2517,11 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             )
             .unwrap(),
             rank: None,
-            undecided: true,
+            membership: Membership::Undecided,
             alternative: Some(EvidenceRecord::default()),
             search: None,
             fail_search: false,
-            late_search: false,
-            clear_search: false,
+            visibility: SearchVisibility::Opening,
             unclosed_search: false,
             query: Arc::clone(&native_owner),
         }),
@@ -2620,13 +2682,133 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                     rows.rows()[0]
                         .evidence()
                         .with_record(|record| {
-                            assert_eq!(record.information().fallback(), Information::Neither);
+                            assert_eq!(record.information().fallback(), Information::Opposed);
                             assert_eq!(record.completeness(), SearchCompleteness::Complete);
                         })
                         .unwrap();
                 },
             )
             .expect("empty native ASK and direct EXISTS share the absence witness law");
+    }
+
+    // Exercise the actual native producer even when it emits no row. Complete
+    // closed absence is a false EXISTS witness and a true NOT EXISTS witness;
+    // neither an open producer nor an open external scope grants that polarity.
+    let mut scope_terms = RdfDatasetBuilder::new();
+    let unused_claim = scope_terms.intern_iri("https://example.org/unused-claim");
+    for (completeness, unclosed_search) in [
+        (SearchCompleteness::Complete, false),
+        (SearchCompleteness::Complete, true),
+        (SearchCompleteness::Undetermined, false),
+    ] {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            "https://example.org/declared",
+            Arc::new(DeclaredRelation {
+                inner: MemoryRelation::new(1, 1, Vec::new()).unwrap(),
+                record: EvidenceRecord::default(),
+                rank: None,
+                membership: Membership::Established,
+                alternative: None,
+                search: Some(
+                    EvidenceRecord::from_parts(
+                        &InformationMap::default(),
+                        completeness,
+                        &Frame::actual(),
+                        &[],
+                        &[],
+                        &mut Memory::new(&mut Resident),
+                    )
+                    .unwrap(),
+                ),
+                fail_search: false,
+                visibility: SearchVisibility::Opening,
+                unclosed_search,
+                query: Arc::clone(&native_owner),
+            }),
+        );
+        let env = ExtensionEnv::over_relations(registry).unwrap();
+        for scope in [
+            None,
+            Some((SearchCompleteness::Complete, true)),
+            Some((SearchCompleteness::Complete, false)),
+            Some((SearchCompleteness::Undetermined, true)),
+        ] {
+            let (scope_completeness, closure_declared) =
+                scope.unwrap_or((SearchCompleteness::Complete, true));
+            let source = Claims {
+                negative: unused_claim,
+                record: EvidenceRecord::default(),
+                fail: false,
+                completeness: scope_completeness,
+                sum_nonnegative: false,
+                closure_declared,
+            };
+            let closed = completeness == SearchCompleteness::Complete
+                && !unclosed_search
+                && scope_completeness == SearchCompleteness::Complete
+                && closure_declared;
+            for (body, drops_closed) in [
+                (
+                    "FILTER EXISTS { ?doc <https://example.org/declared> \"needle\" }",
+                    true,
+                ),
+                (
+                    "FILTER NOT EXISTS { ?doc <https://example.org/declared> \"needle\" }",
+                    false,
+                ),
+                (
+                    "MINUS { VALUES ?s { 1 2 } FILTER NOT EXISTS { ?doc <https://example.org/declared> \"needle\" } }",
+                    true,
+                ),
+            ] {
+                let query = format!("SELECT ?s WHERE {{ VALUES ?s {{ 1 2 }} {body} }}");
+                let check = |outcome: InternedOutcome<'_, '_, _>| {
+                    let InternedOutcome::Solutions(rows) = outcome else {
+                        panic!("nested native absence");
+                    };
+                    assert_eq!(
+                        rows.len(),
+                        if drops_closed && closed { 0 } else { 2 },
+                        "{query}; closed={closed}"
+                    );
+                    for row in rows.rows() {
+                        assert_eq!(row.evidence().is_undecided(), !closed);
+                        if closed {
+                            row.evidence()
+                                .with_record(|record| {
+                                    assert_eq!(
+                                        record.information().fallback(),
+                                        Information::Supported
+                                    );
+                                })
+                                .unwrap();
+                        }
+                    }
+                };
+                native_owner.lock().unwrap().take();
+                let options = QueryOptions::default().with_env(&env);
+                if scope.is_some() {
+                    engine
+                        .query_interned_evidence_view(
+                            &dataset,
+                            request(&query),
+                            options,
+                            &source,
+                            check,
+                        )
+                        .unwrap();
+                } else {
+                    engine
+                        .query_interned_view(&dataset, request(&query), options, check)
+                        .unwrap();
+                }
+                assert!(
+                    native_owner.lock().unwrap().is_some(),
+                    "the declared producer actually ran"
+                );
+            }
+        }
     }
 
     // Cross the production worker threshold with original native search attached.
@@ -2674,12 +2856,17 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                     .unwrap(),
                     record: EvidenceRecord::default(),
                     rank: None,
-                    undecided: false,
+                    membership: Membership::Established,
                     alternative: None,
                     search: Some(search_record),
                     fail_search: false,
-                    late_search: emitted && !clear_search,
-                    clear_search,
+                    visibility: if clear_search {
+                        SearchVisibility::OpeningOnly
+                    } else if emitted {
+                        SearchVisibility::AfterPull
+                    } else {
+                        SearchVisibility::Opening
+                    },
                     unclosed_search,
                     query: Arc::clone(&native_owner),
                 });
@@ -2910,12 +3097,15 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                 .unwrap(),
                 record: EvidenceRecord::default(),
                 rank: None,
-                undecided: false,
+                membership: Membership::Established,
                 alternative: None,
                 search: Some(search_record),
                 fail_search: true,
-                late_search: false,
-                clear_search,
+                visibility: if clear_search {
+                    SearchVisibility::OpeningOnly
+                } else {
+                    SearchVisibility::Opening
+                },
                 unclosed_search: false,
                 query: Arc::clone(&native_owner),
             }),
@@ -2960,9 +3150,15 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
     }
 
     let (dataset, source) = gap_dataset();
-    for ordinal in [1, 2] {
+    for (ordinal, owned) in [
+        (Some(1), false),
+        (Some(2), false),
+        (Some(1), true),
+        (Some(2), true),
+        (None, true),
+    ] {
         native_owner.lock().unwrap().take();
-        let rank = core::num::NonZeroU64::new(ordinal).unwrap();
+        let rank = ordinal.map(|ordinal| core::num::NonZeroU64::new(ordinal).unwrap());
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             "https://example.org/declared",
@@ -2976,34 +3172,84 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                     ]],
                 )
                 .unwrap(),
-                record: EvidenceRecord::default(),
-                rank: Some(rank),
-                undecided: false,
+                record: if owned {
+                    EvidenceRecord::from_parts(
+                        &InformationMap::default(),
+                        SearchCompleteness::Undetermined,
+                        &Frame::actual(),
+                        &[],
+                        &[],
+                        &mut Memory::new(&mut Resident),
+                    )
+                    .unwrap()
+                } else {
+                    EvidenceRecord::default()
+                },
+                rank,
+                membership: if owned {
+                    Membership::OwnedComplete
+                } else {
+                    Membership::Established
+                },
                 alternative: None,
                 search: None,
                 fail_search: false,
-                late_search: false,
-                clear_search: false,
+                visibility: SearchVisibility::Opening,
                 unclosed_search: false,
                 query: Arc::clone(&native_owner),
             }),
         );
         let env = ExtensionEnv::over_relations(registry).unwrap();
+        // The raw production cursor must refuse even semantically ordinary
+        // evidence when its original owner or rank still needs transport.
+        let engine = NativeSparqlEngine::new();
+        let options = QueryOptions::default().with_env(&env);
+        let prepared = engine
+            .prepare_query_with_options(
+                "SELECT ?doc WHERE { ?doc <https://example.org/declared> \"needle\" }",
+                None,
+                options,
+            )
+            .unwrap();
+        let mut raw = engine.open_call_cursor(&prepared, options).unwrap();
+        assert!(matches!(
+            raw.next_row(&dataset),
+            Err(EvalError::WorkspaceUnpriced(
+                "a raw property read cannot discard original row evidence"
+            ))
+        ));
+        drop(raw);
+        native_owner.lock().unwrap().take();
         NativeSparqlEngine::new().query_interned_view(
             &dataset,
-            request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) ?other <https://example.org/value> ?value FILTER(?kept) } ORDER BY ?kept"),
+            request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) ?other <https://example.org/value> ?value FILTER(?kept) OPTIONAL { ?doc <https://example.org/missing> ?absent FILTER(true) } } ORDER BY ?kept"),
             QueryOptions::default().with_env(&env),
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else { panic!("ordinary API ranked SELECT"); };
                 assert_eq!(rows.len(), 1);
                 assert!(rows.rows()[0].evidence().is_default());
-                assert_eq!(rows.rows()[0].evidence().original_rank(), Some(rank));
+                assert_eq!(rows.rows()[0].evidence().original_rank(), rank);
+                assert!(!rows.rows()[0].evidence().is_virtual());
+                if owned {
+                    let query = native_owner.lock().unwrap().as_ref().unwrap().clone();
+                    let transported = query.with_completeness(rows.rows()[0].evidence(),
+                        SearchCompleteness::Complete, None).unwrap();
+                    assert!(transported.is_default());
+                    assert!(!transported.is_virtual());
+                    assert_eq!(transported.original_rank(), rank);
+                }
+                let workspace = WorkspaceCapability::resident();
+                let raw = AdmittedPfRow::new(Vec::new(), workspace.charge(0).unwrap())
+                    .with_evidence(rows.rows()[0].evidence().clone());
+                assert!(matches!(raw.try_into_resident(), Err(EvalError::WorkspaceUnpriced(
+                    "raw property-function cells cannot transport original row evidence"
+                ))));
             },
         ).expect("physical rank attachment survives ordinary BGP, BIND and projection");
         native_owner.lock().unwrap().take();
         NativeSparqlEngine::new().query_interned_evidence_view(
             &dataset,
-            request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) FILTER(?kept) } ORDER BY ?kept"),
+            request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) FILTER(?kept) OPTIONAL { ?doc <https://example.org/missing> ?absent FILTER(true) } } ORDER BY ?kept"),
             QueryOptions::default().with_env(&env),
             &source,
             |outcome| {
@@ -3011,16 +3257,52 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                 assert_eq!(rows.len(), 1);
                 let clone = rows.rows()[0].clone();
                 assert!(clone.evidence().is_default());
-                assert_eq!(clone.evidence().original_rank(), Some(rank));
+                assert_eq!(clone.evidence().original_rank(), rank);
                 rows.with_accepted_rows(&[], |merged| {
                     let merged: Vec<_> = merged.map(|row| row.expect("original accepted merge")).collect();
                     assert_eq!(merged.len(), 1);
                     assert!(std::ptr::eq(merged[0].row, &raw const rows.rows()[0]));
                     assert!(!merged[0].is_accepted());
-                    assert_eq!(merged[0].row.evidence().original_rank(), Some(rank));
+                    assert_eq!(merged[0].row.evidence().original_rank(), rank);
                 }).expect("original supported rank survives operators and acceptance");
             },
         ).expect("default-record rank uses the actual producer and operators");
+        if owned {
+            native_owner.lock().unwrap().take();
+            let claims = Claims {
+                negative: dataset
+                    .term_id_by_value(&TermValue::iri("https://example.org/two"))
+                    .unwrap(),
+                record: EvidenceRecord::from_parts(
+                    &InformationMap::uniform(Information::Opposed),
+                    SearchCompleteness::Complete,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    &mut Memory::new(&mut Resident),
+                )
+                .unwrap(),
+                fail: false,
+                completeness: SearchCompleteness::Complete,
+                sum_nonnegative: false,
+                closure_declared: true,
+            };
+            NativeSparqlEngine::new().query_interned_evidence_view(&dataset,
+                request("SELECT ?doc WHERE { ?other <https://example.org/value> ?value . ?doc <https://example.org/declared> \"needle\" }"),
+                QueryOptions::default().with_env(&env), &claims, |outcome| {
+                    let InternedOutcome::Solutions(rows) = outcome else { panic!("native declaration over admitted claims"); };
+                    assert_eq!(rows.len(), 1);
+                    assert_eq!(rows.rows()[0].evidence().original_rank(), rank);
+                    rows.rows()[0].evidence().with_record(|record| {
+                        assert_eq!(record.information().fallback(), Information::Opposed);
+                    }).unwrap();
+                    rows.with_accepted_rows(&[], |merged| {
+                        let merged: Vec<_> = merged.map(|row| row.unwrap()).collect();
+                        assert_eq!(merged.len(), 1);
+                        assert_eq!(merged[0].row.evidence().original_rank(), rank);
+                    }).unwrap();
+                }).expect("native ownership binds to already admitted original claims");
+        }
     }
 }
 

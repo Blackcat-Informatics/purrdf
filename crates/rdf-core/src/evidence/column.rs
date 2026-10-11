@@ -27,11 +27,7 @@ impl core::fmt::Display for EvidenceColumnError {
 
 impl std::error::Error for EvidenceColumnError {}
 
-impl From<StorageError> for EvidenceColumnError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(EvidenceColumnError { Storage(StorageError) });
 
 /// One id per row, with allocation-free uniform default representation.
 ///

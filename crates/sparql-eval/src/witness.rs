@@ -324,7 +324,7 @@ fn mutable_witness_array<'a, T: Clone>(
 ) -> Result<&'a mut crate::workspace::AdmittedVec<T>, crate::EvalError> {
     let unique = storage
         .as_mut()
-        .is_some_and(|values| values.unique_mut().is_some());
+        .is_some_and(|values| values.get_mut().is_some());
     if !unique {
         let count = storage.as_ref().map_or(0, |values| values.len());
         let mut replacement = crate::workspace::AdmittedVec::with_capacity(count, workspace)?;
@@ -341,7 +341,7 @@ fn mutable_witness_array<'a, T: Clone>(
     Ok(storage
         .as_mut()
         .expect("the original array was installed")
-        .unique_mut()
+        .get_mut()
         .expect("the original array is unique"))
 }
 

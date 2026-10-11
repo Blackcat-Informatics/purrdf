@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
 };
-use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+use purrdf_sparql_algebra::{GraphPattern, Query};
 use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
 
 /// A frozen dataset holding nothing.
@@ -83,12 +83,7 @@ pub fn with_env(env: &ExtensionEnv) -> QueryOptions<'_> {
 
 /// An `ASK` over `pattern`, with no dataset clause, base or version.
 pub fn ask(pattern: GraphPattern) -> Query {
-    Query::Ask {
-        pattern,
-        dataset: QueryDataset::default(),
-        base_iri: None,
-        version: None,
-    }
+    Query::ask(pattern)
 }
 
 // ── datasets ────────────────────────────────────────────────────────────────

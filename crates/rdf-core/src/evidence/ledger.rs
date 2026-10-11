@@ -8,6 +8,18 @@ use purrdf_lex::allocation::{Admission, Memory};
 
 use super::{ReasonDescription, ReasonError, ReasonId};
 
+/// Fuse a borrowed statement cursor at its own terminal phase after refusal.
+fn next_statement<'a>(
+    statement: Result<Option<LedgerStatement<'a>>, LedgerError>,
+    phase: &mut u8,
+    terminal: u8,
+) -> Option<Result<LedgerStatement<'a>, LedgerError>> {
+    if statement.is_err() {
+        *phase = terminal;
+    }
+    statement.transpose()
+}
+
 mod row;
 pub use row::{AnnotationStatements, LedgerNodeKey, LedgerNodes, RowStatements, RowVocabulary};
 mod frame;

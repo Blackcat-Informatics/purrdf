@@ -202,23 +202,35 @@ impl<I: ViewTermId> PathSet<I> {
         set
     }
     fn insert(&mut self, value: I) -> bool {
-        self.insert_evidence(value, crate::evidence_exec::RowEvidence::default())
+        self.insert_record(value, None)
     }
     fn insert_evidence(&mut self, value: I, evidence: crate::evidence_exec::RowEvidence) -> bool {
+        self.insert_record(value, Some(evidence))
+    }
+    fn insert_record(
+        &mut self,
+        value: I,
+        evidence: Option<crate::evidence_exec::RowEvidence>,
+    ) -> bool {
         if self.values.storage.failed.get() {
             return false;
         }
         let Err(index) = self.values.binary_search(&value) else {
-            if evidence.is_default() && self.evidence.is_empty() {
+            if self.evidence.is_empty()
+                && evidence
+                    .as_ref()
+                    .is_none_or(crate::evidence_exec::RowEvidence::is_virtual)
+            {
                 return false;
             }
+            let evidence = evidence.unwrap_or_default();
             let original = self.evidence_of(value);
             match original.combine(
                 &evidence,
                 purrdf_core::evidence::EvidenceCombination::Alternatives,
             ) {
                 Ok(merged) => {
-                    let changed = !original.same_query_record(&merged);
+                    let changed = !original.same_attachment(&merged);
                     self.retain_evidence(value, merged);
                     return changed && !self.values.storage.failed.get();
                 }
@@ -231,14 +243,21 @@ impl<I: ViewTermId> PathSet<I> {
             return false;
         }
         self.values[index..].rotate_right(1);
-        self.retain_evidence(value, evidence);
+        if let Some(evidence) = evidence {
+            self.retain_evidence(value, evidence);
+        }
         !self.values.storage.failed.get()
     }
     fn evidence_of(&self, value: I) -> crate::evidence_exec::RowEvidence {
         self.evidence.get(&value).cloned().unwrap_or_default()
     }
     fn retain_evidence(&mut self, value: I, evidence: crate::evidence_exec::RowEvidence) {
-        if evidence.is_default() {
+        // An ordinary path has no dictionary entries to remove. Do not route
+        // each unannotated edge through the evidence table.
+        if evidence.is_virtual() && self.evidence.is_empty() {
+            return;
+        }
+        if evidence.is_virtual() {
             self.evidence.remove(&value);
         } else if let Err(error) =
             self.evidence
@@ -248,6 +267,10 @@ impl<I: ViewTermId> PathSet<I> {
         }
     }
     fn extend_witnesses(&mut self, other: &Self) {
+        if self.evidence.is_empty() && other.evidence.is_empty() {
+            self.extend(other.iter().copied());
+            return;
+        }
         for &value in other.iter() {
             self.insert_evidence(value, other.evidence_of(value));
             if self.values.storage.failed.get() {
@@ -261,6 +284,10 @@ impl<I: ViewTermId> PathSet<I> {
         premise: &crate::evidence_exec::RowEvidence,
         step: &Self,
     ) {
+        if premise.is_virtual() && step.evidence.is_empty() && self.evidence.is_empty() {
+            self.insert(target);
+            return;
+        }
         match premise.combine(
             &step.evidence_of(target),
             purrdf_core::evidence::EvidenceCombination::Conjunction,
@@ -793,7 +820,10 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
                     return;
                 }
             },
-            None => crate::evidence_exec::RowEvidence::default(),
+            None => {
+                out.insert(target);
+                return;
+            }
         };
         out.insert_evidence(target, evidence);
     }
@@ -947,7 +977,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             let reached = reach(ROOT_OP, node, forward, &pctx)?;
             let mut nodes = PathBag::new(&pctx.growth);
             for &node in reached.iter() {
-                nodes.push(node, reached.evidence_of(node), &pctx.growth)?;
+                nodes.push(node, reached.evidence.get(&node).cloned(), &pctx.growth)?;
             }
             Ok(nodes)
         }
@@ -966,7 +996,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                      rows: &mut crate::solution::RowsBuilder<D::Id>,
                      s_id: Option<SolutionTerm<D::Id>>,
                      o_id: Option<SolutionTerm<D::Id>>,
-                     evidence: crate::evidence_exec::RowEvidence|
+                     evidence: Option<crate::evidence_exec::RowEvidence>|
      -> Result<bool, EvalError> {
         // LIMIT / answer-cap pushdown proves rows at and beyond this point irrelevant to
         // the query and may stop exactly at its bound. A cell ceiling is inclusive and
@@ -989,10 +1019,10 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             Ok(())
         })?;
         let evidence = match &ctx.evidence_input {
-            Some(input) => input.found_witness(&evidence, &ctx.growth)?,
+            Some(input) => Some(input.found_witness(&evidence.unwrap_or_default(), &ctx.growth)?),
             None => evidence,
         };
-        rows.push_row(row.with_evidence(evidence, &ctx.growth)?)?;
+        rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
         Ok(true)
     };
 
@@ -1009,7 +1039,13 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 let reached = node_reach(sid, true)?;
                 for (position, &target) in reached.iter().enumerate() {
                     if target == oid
-                        && !push_pair(ctx, &mut rows, None, None, reached.evidence_of(position))?
+                        && !push_pair(
+                            ctx,
+                            &mut rows,
+                            None,
+                            None,
+                            reached.evidence.get(&position).cloned(),
+                        )?
                     {
                         break;
                     }
@@ -1017,7 +1053,13 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             } else {
                 let reached = reach(ROOT_OP, sid, true, &pctx)?;
                 if reached.contains(&oid) {
-                    let _ = push_pair(ctx, &mut rows, None, None, reached.evidence_of(oid))?;
+                    let _ = push_pair(
+                        ctx,
+                        &mut rows,
+                        None,
+                        None,
+                        reached.evidence.get(&oid).cloned(),
+                    )?;
                 }
             }
         }
@@ -1026,13 +1068,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // SAME term (an absent node has no edges to traverse for anything else).
         (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
             if ctx.growth.terms_equal(&sval, &oval)? && pctx.program.is_reflexive() {
-                let _ = push_pair(
-                    ctx,
-                    &mut rows,
-                    None,
-                    None,
-                    crate::evidence_exec::RowEvidence::default(),
-                )?;
+                let _ = push_pair(ctx, &mut rows, None, None, None)?;
             }
         }
         // One side present in the dataset, the other absent: they cannot be the
@@ -1049,7 +1085,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                     &mut rows,
                     Some(SolutionTerm::Existing(sid)),
                     Some(SolutionTerm::Existing(y)),
-                    reached.evidence_of(position),
+                    reached.evidence.get(&position).cloned(),
                 )? {
                     break;
                 }
@@ -1069,13 +1105,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // `purrdf_sparql_algebra`'s algebra validator on this same
                 // profile. See `ScratchInterner::intern`.
                 let term = ctx.intern_workspace_term(sval)?;
-                let _ = push_pair(
-                    ctx,
-                    &mut rows,
-                    term,
-                    term,
-                    crate::evidence_exec::RowEvidence::default(),
-                )?;
+                let _ = push_pair(ctx, &mut rows, term, term, None)?;
             }
         }
         // Object ground, subject variable: walk backward from the object.
@@ -1087,7 +1117,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                     &mut rows,
                     Some(SolutionTerm::Existing(x)),
                     Some(SolutionTerm::Existing(oid)),
-                    reached.evidence_of(position),
+                    reached.evidence.get(&position).cloned(),
                 )? {
                     break;
                 }
@@ -1098,13 +1128,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if pctx.program.is_reflexive() {
                 let term = ctx.intern_workspace_term(oval)?;
-                let _ = push_pair(
-                    ctx,
-                    &mut rows,
-                    term,
-                    term,
-                    crate::evidence_exec::RowEvidence::default(),
-                )?;
+                let _ = push_pair(ctx, &mut rows, term, term, None)?;
             }
         }
         // Both variable: enumerate the node universe (so zero-length `*`/`?`/`{0,…}`
@@ -1128,7 +1152,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(x)),
-                            crate::evidence_exec::RowEvidence::default(),
+                            None,
                         )? {
                             break;
                         }
@@ -1143,7 +1167,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                                 &mut rows,
                                 Some(SolutionTerm::Existing(x)),
                                 Some(SolutionTerm::Existing(x)),
-                                reached.evidence_of(position),
+                                reached.evidence.get(&position).cloned(),
                             )? {
                                 break 'nodes;
                             }
@@ -1161,7 +1185,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(y)),
-                            reached.evidence_of(position),
+                            reached.evidence.get(&position).cloned(),
                         )? {
                             break 'nodes;
                         }
@@ -1318,7 +1342,7 @@ fn reach<D: DatasetView + Sync>(
         let step = top.step(returned.take(), ctx);
         ctx.storage.check()?;
         match step {
-            Step::Call(frame) => frames.push(frame),
+            Step::Call(request) => frames.push(request.into_frame(&ctx.storage)),
             Step::Return(value) => {
                 let _ = frames.pop();
                 if frames.is_empty() {
@@ -1374,15 +1398,53 @@ impl<I: ViewTermId> Value<I> {
 }
 
 /// What a frame asks of the machine after one step.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the next path-machine step stays inline; boxing a frame would add a separate allocation beyond the original admitted frame array"
-)]
 enum Step<I: ViewTermId> {
-    /// Run `frame` to completion, then resume this frame with its value.
-    Call(Frame<I>),
+    /// Construct the child at the original admitted frame stack.
+    Call(FrameRequest<I>),
     /// This frame is finished with this value.
     Return(Value<I>),
+}
+
+/// Only a child request's inputs cross the stepping boundary. Suspended loop state
+/// belongs to the admitted frame stack rather than a copied return temporary.
+enum FrameRequest<I: ViewTermId> {
+    Reach(usize, I, bool),
+    Sequence(usize, I, bool),
+    Alternative(usize, I, bool),
+    Closure(usize, PathSet<I>, bool),
+    Range(usize, I, bool, u32, Option<u32>),
+    StepLevel(usize, PathSet<I>, bool),
+    ApplyPower(usize, PathSet<I>, bool, u32, PowerMemoOwner<I>),
+    PowerReach(usize, I, bool, u32, PowerMemoOwner<I>),
+}
+
+impl<I: ViewTermId> FrameRequest<I> {
+    fn into_frame(self, storage: &PathStorageOwner) -> Frame<I> {
+        match self {
+            Self::Reach(op, node, forward) => Frame::Reach(ReachFrame::new(op, node, forward)),
+            Self::Sequence(op, node, forward) => {
+                Frame::Sequence(SequenceFrame::new(op, node, forward, storage))
+            }
+            Self::Alternative(op, node, forward) => {
+                Frame::Alternative(AlternativeFrame::new(op, node, forward, storage))
+            }
+            Self::Closure(inner, seeds, forward) => {
+                Frame::Closure(ClosureFrame::new(inner, seeds, forward))
+            }
+            Self::Range(inner, node, forward, min, max) => {
+                Frame::Range(RangeFrame::new(inner, node, forward, min, max, storage))
+            }
+            Self::StepLevel(inner, current, forward) => {
+                Frame::StepLevel(StepLevelFrame::new(inner, current, forward))
+            }
+            Self::ApplyPower(inner, current, forward, bit, powers) => {
+                Frame::ApplyPower(ApplyPowerFrame::new(inner, current, forward, bit, powers))
+            }
+            Self::PowerReach(inner, node, forward, bit, powers) => {
+                Frame::PowerReach(PowerReachFrame::new(inner, node, forward, bit, powers))
+            }
+        }
+    }
 }
 
 /// One suspended operator of the reach machine, holding the loop state its
@@ -1509,43 +1571,36 @@ impl<I: ViewTermId> ReachFrame<I> {
             PathOp::Wildcard(namespace) => {
                 self.finish(step_wildcard(*namespace, self.node, self.forward, ctx), ctx)
             }
-            PathOp::Sequence(_) => Step::Call(Frame::Sequence(SequenceFrame::new(
-                self.op,
-                self.node,
-                self.forward,
-                &ctx.storage,
-            ))),
-            PathOp::Alternative(_) => Step::Call(Frame::Alternative(AlternativeFrame::new(
-                self.op,
-                self.node,
-                self.forward,
-                &ctx.storage,
-            ))),
+            PathOp::Sequence(_) => {
+                Step::Call(FrameRequest::Sequence(self.op, self.node, self.forward))
+            }
+            PathOp::Alternative(_) => {
+                Step::Call(FrameRequest::Alternative(self.op, self.node, self.forward))
+            }
             PathOp::ZeroOrOne(inner) => {
                 self.adds_node = true;
-                Step::Call(Frame::Reach(Self::new(*inner, self.node, self.forward)))
+                Step::Call(FrameRequest::Reach(*inner, self.node, self.forward))
             }
             PathOp::ZeroOrMore(inner) => {
                 self.adds_node = true;
-                Step::Call(Frame::Closure(ClosureFrame::new(
+                Step::Call(FrameRequest::Closure(
                     *inner,
                     PathSet::from_iter([self.node], &ctx.storage),
                     self.forward,
-                )))
+                ))
             }
-            PathOp::OneOrMore(inner) => Step::Call(Frame::Closure(ClosureFrame::new(
+            PathOp::OneOrMore(inner) => Step::Call(FrameRequest::Closure(
                 *inner,
                 PathSet::from_iter([self.node], &ctx.storage),
                 self.forward,
-            ))),
-            PathOp::Range { inner, min, max } => Step::Call(Frame::Range(RangeFrame::new(
+            )),
+            PathOp::Range { inner, min, max } => Step::Call(FrameRequest::Range(
                 *inner,
                 self.node,
                 self.forward,
                 *min,
                 *max,
-                &ctx.storage,
-            ))),
+            )),
             PathOp::Reverse(_) => {
                 unreachable!("every reverse at this op was resolved into the direction flag")
             }
@@ -1637,7 +1692,7 @@ impl<I: ViewTermId> SequenceFrame<I> {
                 } else {
                     elements.len() - 1 - self.k
                 }];
-                return Step::Call(Frame::Reach(ReachFrame::new(element, mid, self.forward)));
+                return Step::Call(FrameRequest::Reach(element, mid, self.forward));
             }
             self.frontier = self.next.take();
             self.pos = 0;
@@ -1678,11 +1733,7 @@ impl<I: ViewTermId> AlternativeFrame<I> {
             self.i += 1;
         }
         match elements_of(&ctx.program, self.op).get(self.i) {
-            Some(&element) => Step::Call(Frame::Reach(ReachFrame::new(
-                element,
-                self.node,
-                self.forward,
-            ))),
+            Some(&element) => Step::Call(FrameRequest::Reach(element, self.node, self.forward)),
             None => Step::Return(Value::Built(self.out.take())),
         }
     }
@@ -1746,39 +1797,55 @@ impl<I: ViewTermId> ClosureFrame<I> {
             } else {
                 self.seeds.evidence_of(self.seeds[self.seeded])
             };
-            for &next in reached.iter() {
-                let combined = premise
-                    .combine(
-                        &reached.evidence_of(next),
-                        purrdf_core::evidence::EvidenceCombination::Conjunction,
-                    )
-                    .and_then(|incoming| {
-                        let original = self.pending.get(&next).cloned().unwrap_or_default();
-                        let merged = if self.pending.get(&next).is_some()
-                            || self.visited.contains(&next)
-                            || (!incoming.is_default() && self.frontier.contains(&next))
-                        {
-                            original.combine(
-                                &incoming,
-                                purrdf_core::evidence::EvidenceCombination::Alternatives,
-                            )?
-                        } else {
-                            incoming
-                        };
-                        let changed = !original.same_query_record(&merged);
-                        if merged.is_default() {
-                            self.pending.remove(&next);
-                        } else {
-                            self.pending.insert_admitted(next, merged, &ctx.growth)?;
+            if premise.is_virtual()
+                && reached.evidence.is_empty()
+                && self.pending.is_empty()
+                && self.result.evidence.is_empty()
+            {
+                if self.walking {
+                    for &next in reached.iter() {
+                        if !self.visited.contains(&next) {
+                            self.frontier.push(next);
                         }
-                        Ok(changed)
-                    });
-                match combined {
-                    Ok(changed) if changed || !self.visited.contains(&next) => {
-                        self.frontier.push(next);
                     }
-                    Ok(_) => {}
-                    Err(error) => ctx.storage.fail(error),
+                } else {
+                    self.frontier.extend(reached.iter().copied());
+                }
+            } else {
+                for &next in reached.iter() {
+                    let combined = premise
+                        .combine(
+                            &reached.evidence_of(next),
+                            purrdf_core::evidence::EvidenceCombination::Conjunction,
+                        )
+                        .and_then(|incoming| {
+                            let original = self.pending.get(&next).cloned().unwrap_or_default();
+                            let merged = if self.pending.get(&next).is_some()
+                                || self.visited.contains(&next)
+                                || (!incoming.is_virtual() && self.frontier.contains(&next))
+                            {
+                                original.combine(
+                                    &incoming,
+                                    purrdf_core::evidence::EvidenceCombination::Alternatives,
+                                )?
+                            } else {
+                                incoming
+                            };
+                            let changed = !original.same_attachment(&merged);
+                            if merged.is_virtual() {
+                                self.pending.remove(&next);
+                            } else {
+                                self.pending.insert_admitted(next, merged, &ctx.growth)?;
+                            }
+                            Ok(changed)
+                        });
+                    match combined {
+                        Ok(changed) if changed || !self.visited.contains(&next) => {
+                            self.frontier.push(next);
+                        }
+                        Ok(_) => {}
+                        Err(error) => ctx.storage.fail(error),
+                    }
                 }
             }
             if !self.walking {
@@ -1787,17 +1854,24 @@ impl<I: ViewTermId> ClosureFrame<I> {
         }
         if !self.walking {
             if let Some(&seed) = self.seeds.get(self.seeded) {
-                return Step::Call(Frame::Reach(ReachFrame::new(
-                    self.inner,
-                    seed,
-                    self.forward,
-                )));
+                return Step::Call(FrameRequest::Reach(self.inner, seed, self.forward));
             }
             self.walking = true;
         }
         while let Some(n) = self.frontier.pop() {
+            if self.pending.is_empty() && self.result.evidence.is_empty() {
+                if !self.visited.insert(n) {
+                    continue;
+                }
+                if ctx.stopped() {
+                    break;
+                }
+                self.result.insert(n);
+                self.expanded = Some(n);
+                return Step::Call(FrameRequest::Reach(self.inner, n, self.forward));
+            }
             let evidence = self.pending.get(&n).cloned().unwrap_or_default();
-            if !self.visited.insert(n) && self.result.evidence_of(n).same_query_record(&evidence) {
+            if !self.visited.insert(n) && self.result.evidence_of(n).same_attachment(&evidence) {
                 continue;
             }
             if ctx.stopped() {
@@ -1805,7 +1879,7 @@ impl<I: ViewTermId> ClosureFrame<I> {
             }
             self.result.insert_evidence(n, evidence);
             self.expanded = Some(n);
-            return Step::Call(Frame::Reach(ReachFrame::new(self.inner, n, self.forward)));
+            return Step::Call(FrameRequest::Reach(self.inner, n, self.forward));
         }
         Step::Return(Value::Built(self.result.take()))
     }
@@ -1909,11 +1983,11 @@ impl<I: ViewTermId> RangeFrame<I> {
 
     /// One frontier advance from `current`.
     fn advance(&mut self) -> Step<I> {
-        Step::Call(Frame::StepLevel(StepLevelFrame::new(
+        Step::Call(FrameRequest::StepLevel(
             self.inner,
             self.current.take(),
             self.forward,
-        )))
+        ))
     }
 
     fn step(&mut self, returned: Option<Value<I>>) -> Step<I> {
@@ -2005,13 +2079,13 @@ impl<I: ViewTermId> RangeFrame<I> {
                         let Some(powers) = self.powers.as_ref() else {
                             return self.died();
                         };
-                        return Step::Call(Frame::ApplyPower(ApplyPowerFrame::new(
+                        return Step::Call(FrameRequest::ApplyPower(
                             self.inner,
                             self.current.take(),
                             self.forward,
                             self.bit,
                             Clone::clone(powers),
-                        )));
+                        ));
                     } else {
                         self.remaining >>= 1;
                         self.bit += 1;
@@ -2033,11 +2107,11 @@ impl<I: ViewTermId> RangeFrame<I> {
                         // since this arm always finishes.
                         None => {
                             self.phase = RangePhase::Tail;
-                            return Step::Call(Frame::Closure(ClosureFrame::new(
+                            return Step::Call(FrameRequest::Closure(
                                 self.inner,
                                 self.current.take(),
                                 self.forward,
-                            )));
+                            ));
                         }
                         Some(_) => {}
                     }
@@ -2110,7 +2184,7 @@ impl<I: ViewTermId> StepLevelFrame<I> {
             }
         }
         match self.current.get(self.pos) {
-            Some(&n) => Step::Call(Frame::Reach(ReachFrame::new(self.inner, n, self.forward))),
+            Some(&n) => Step::Call(FrameRequest::Reach(self.inner, n, self.forward)),
             None => Step::Return(Value::Level(Some(self.next.take()))),
         }
     }
@@ -2173,13 +2247,13 @@ impl<I: ViewTermId> ApplyPowerFrame<I> {
             self.pos += 1;
         }
         match self.current.get(self.pos) {
-            Some(&source) => Step::Call(Frame::PowerReach(PowerReachFrame::new(
+            Some(&source) => Step::Call(FrameRequest::PowerReach(
                 self.inner,
                 source,
                 self.forward,
                 self.bit,
                 Clone::clone(&self.powers),
-            ))),
+            )),
             None => Step::Return(Value::Level(Some(self.out.take()))),
         }
     }
@@ -2233,13 +2307,13 @@ impl<I: ViewTermId> PowerReachFrame<I> {
 
     /// The request for `inner^(2^(bit-1))` from `node`.
     fn half(&self, node: I) -> Step<I> {
-        Step::Call(Frame::PowerReach(Self::new(
+        Step::Call(FrameRequest::PowerReach(
             self.inner,
             node,
             self.forward,
             self.bit - 1,
             Clone::clone(&self.powers),
-        )))
+        ))
     }
 
     /// Return `reached`, memoized unless the budget cut it short.
@@ -2265,11 +2339,7 @@ impl<I: ViewTermId> PowerReachFrame<I> {
         note_power_expansion();
         if self.bit == 0 {
             self.phase = PowerPhase::Base;
-            return Step::Call(Frame::Reach(ReachFrame::new(
-                self.inner,
-                self.node,
-                self.forward,
-            )));
+            return Step::Call(FrameRequest::Reach(self.inner, self.node, self.forward));
         }
         self.phase = PowerPhase::First;
         self.half(self.node)
@@ -2351,10 +2421,12 @@ impl<I: ViewTermId> PathBag<I> {
             nodes: set.values.values,
             evidence: crate::AdmittedMap::default(),
         };
-        for (position, &node) in bag.nodes.iter().enumerate() {
-            if let Some(evidence) = set.evidence.get(&node) {
-                bag.evidence
-                    .insert_admitted(position, evidence.clone(), workspace)?;
+        if !set.evidence.is_empty() {
+            for (position, &node) in bag.nodes.iter().enumerate() {
+                if let Some(evidence) = set.evidence.get(&node) {
+                    bag.evidence
+                        .insert_admitted(position, evidence.clone(), workspace)?;
+                }
             }
         }
         Ok(bag)
@@ -2368,12 +2440,12 @@ impl<I: ViewTermId> PathBag<I> {
     fn push(
         &mut self,
         node: I,
-        evidence: crate::evidence_exec::RowEvidence,
+        evidence: Option<crate::evidence_exec::RowEvidence>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<(), EvalError> {
         let position = self.nodes.len();
         self.nodes.push(node)?;
-        if !evidence.is_default() {
+        if let Some(evidence) = evidence.filter(|evidence| !evidence.is_virtual()) {
             self.evidence
                 .insert_admitted(position, evidence, workspace)?;
         }
@@ -2487,12 +2559,22 @@ impl<I: ViewTermId> BagFrame<I> {
                 next,
             } => {
                 if let Some(bag) = returned {
-                    let premise = frontier.evidence_of(*pos);
+                    let premise = frontier.evidence.get(pos).cloned();
                     for (position, &node) in bag.iter().enumerate() {
-                        let evidence = premise.combine(
-                            &bag.evidence_of(position),
-                            purrdf_core::evidence::EvidenceCombination::Conjunction,
-                        )?;
+                        let evidence = if premise.is_none() && bag.evidence.get(&position).is_none()
+                        {
+                            None
+                        } else {
+                            Some(
+                                premise
+                                    .as_ref()
+                                    .unwrap_or(&crate::evidence_exec::VIRTUAL_ROW_EVIDENCE)
+                                    .combine(
+                                        &bag.evidence_of(position),
+                                        purrdf_core::evidence::EvidenceCombination::Conjunction,
+                                    )?,
+                            )
+                        };
                         next.push(node, evidence, &ctx.growth)?;
                     }
                     *pos += 1;
@@ -2534,7 +2616,7 @@ impl<I: ViewTermId> BagFrame<I> {
             } => {
                 if let Some(bag) = returned {
                     for (position, &node) in bag.iter().enumerate() {
-                        out.push(node, bag.evidence_of(position), &ctx.growth)?;
+                        out.push(node, bag.evidence.get(&position).cloned(), &ctx.growth)?;
                     }
                     *i += 1;
                 }
@@ -2582,11 +2664,7 @@ impl<I: ViewTermId> BagFrame<I> {
                         nodes: crate::AdmittedVec::with_capacity(1, &ctx.growth)?,
                         evidence: crate::AdmittedMap::default(),
                     };
-                    frontier.push(
-                        node,
-                        crate::evidence_exec::RowEvidence::default(),
-                        &ctx.growth,
-                    )?;
+                    frontier.push(node, None, &ctx.growth)?;
                     frontier
                 },
                 pos: 0,

@@ -18,7 +18,7 @@ use crate::{AdmittedMap, AdmittedVec, EvalError, WorkspaceAllocation, WorkspaceC
 use core::cmp::Ordering;
 use purrdf_core::{DatasetView, ViewTermId};
 use purrdf_lex::allocation::Memory;
-use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Query, QueryDataset, Variable};
+use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Query, Variable};
 
 #[derive(Clone)]
 struct Between {
@@ -199,14 +199,6 @@ fn dataset_only(
     Ok(true)
 }
 
-fn query(pattern: GraphPattern) -> Query {
-    Query::Ask {
-        pattern,
-        dataset: QueryDataset::default(),
-        base_iri: None,
-        version: None,
-    }
-}
 fn modify(
     expression: &mut Expression,
     keep_range: bool,
@@ -276,8 +268,8 @@ impl Plan {
                 .admission_mut()
                 .storage_error(error, "ordinal comparison child")
         })?;
-        let base = query(base);
-        let range = query(GraphPattern::Filter {
+        let base = Query::ask(base);
+        let range = Query::ask(GraphPattern::Filter {
             inner: empty,
             expr: range_expr,
         });

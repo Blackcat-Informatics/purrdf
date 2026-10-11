@@ -496,15 +496,26 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
     }
 
     /// Decide a native filter and retain its original witness/gap records.
+    /// A kept ordinary row has no replacement attachment; rejection is separate
+    /// from that physical absence so no virtual payload crosses the row loop.
     pub(crate) fn filter<D: DatasetView<Id = I> + Sync>(
         &mut self,
         expression: &Expression,
         row: &crate::solution::RetainedRow<I>,
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+    ) -> Result<(bool, Option<crate::evidence_exec::RowEvidence>), EvalError> {
         let value = self.ebv(row, schema, ctx)?;
-        helpers::filter_evidence(value, self.result_evidence()?, expression, row, schema, ctx)
+        // The completed VM owns every computed witness. With no such owner,
+        // no source declaration and no row attachment, filtering needs only
+        // its original boolean decision, including rejected rows.
+        if self.evidence.is_none() && ctx.evidence_input.is_none() && !row.has_evidence_attachment()
+        {
+            return Ok((value == Some(true), None));
+        }
+        let evidence =
+            helpers::filter_evidence(value, self.result_evidence()?, expression, row, schema, ctx)?;
+        Ok((evidence.is_some(), evidence))
     }
 
     /// The expression's value over `row`: `Ok(Some)` a term, `Ok(None)` an error or
@@ -533,7 +544,12 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         }
         let mut pc = 0;
         loop {
-            match self.advance(&mut pc, row, ctx)? {
+            let step = if self.evidence.is_some() {
+                self.advance::<true, D>(&mut pc, row, ctx)?
+            } else {
+                self.advance::<false, D>(&mut pc, row, ctx)?
+            };
+            match step {
                 VmStep::Value(value) => return Ok(value),
                 VmStep::Suspend(suspend) => {
                     let (value, record) = resolve(suspend, &self.program, row, schema, ctx)?;
@@ -569,7 +585,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
     /// keeping this frame live would charge every opcode's native owners to each
     /// nested EXISTS or SPARQL function, even when that opcode never runs there.
     #[inline(never)]
-    fn advance<'d, D: DatasetView<Id = I> + Sync>(
+    fn advance<'d, const TRACKING: bool, D: DatasetView<Id = I> + Sync>(
         &mut self,
         pc: &mut usize,
         row: &[Option<SolutionTerm<I>>],
@@ -586,19 +602,27 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
             args,
             ..
         } = self;
-        let mut records = evidence
-            .as_ref()
-            .map(|owner| owner.lock().map_err(|_| evidence_poisoned()))
-            .transpose()?;
+        let mut records = if TRACKING {
+            evidence
+                .as_ref()
+                .map(|owner| owner.lock().map_err(|_| evidence_poisoned()))
+                .transpose()?
+        } else {
+            None
+        };
         let ops = &program.ops;
         while let Some(op) = ops.get(*pc) {
             *pc += 1;
             let before = stack.len();
-            let record = records
-                .as_mut()
-                .map(|records| records.begin(*op, before, ctx))
-                .transpose()?
-                .flatten();
+            let record = if TRACKING {
+                records
+                    .as_mut()
+                    .map(|records| records.begin(*op, before, ctx))
+                    .transpose()?
+                    .flatten()
+            } else {
+                None
+            };
             match *op {
                 Op::Const(k) => {
                     let k = k as usize;

@@ -19,11 +19,7 @@ pub enum EvidenceDictionaryError {
     Storage(StorageError),
 }
 
-impl From<StorageError> for EvidenceDictionaryError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(EvidenceDictionaryError { Storage(StorageError) });
 
 impl core::fmt::Display for EvidenceDictionaryError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

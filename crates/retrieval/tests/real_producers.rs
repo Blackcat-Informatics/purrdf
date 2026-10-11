@@ -193,6 +193,7 @@ fn scoped_native_owner_refusal_precedes_original_producer_open() {
             inner,
             opened: opened.clone(),
             refuse_suffix: None,
+            attachment: None,
         }),
         declaration,
     );
@@ -2242,10 +2243,21 @@ fn empty_text_index() -> (Arc<RdfDataset>, TextIndex) {
 /// evaluator opens a relation and applies the bound afterwards, so the counter
 /// rises either way — measured, not assumed. That bound is asserted separately,
 /// against the compiled text, in [`sole_producer_answer`].
+#[derive(Clone)]
+enum NativeAttachment {
+    Row(purrdf_sparql_eval::RowEvidence),
+    Search(
+        purrdf_sparql_eval::RowEvidence,
+        Arc<std::sync::atomic::AtomicBool>,
+    ),
+    SearchFailure(Arc<std::sync::atomic::AtomicBool>),
+}
+
 struct CountingTextRelation {
     inner: TextSearchRelation,
     opened: Arc<AtomicU64>,
     refuse_suffix: Option<Arc<AtomicU64>>,
+    attachment: Option<NativeAttachment>,
 }
 
 impl PropertyFunction for CountingTextRelation {
@@ -2261,16 +2273,17 @@ impl PropertyFunction for CountingTextRelation {
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         self.opened.fetch_add(1, Ordering::Relaxed);
         let cursor = self.inner.open_admitted(args, ceiling, workspace.clone())?;
-        let Some(calls) = &self.refuse_suffix else {
+        if self.refuse_suffix.is_none() && self.attachment.is_none() {
             return Ok(cursor);
-        };
+        }
         let admission = workspace.charge(
             u64::try_from(size_of::<PrefixRefusalCursor>())
                 .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         )?;
         let cursor = purrdf_core::small::try_boxed(PrefixRefusalCursor {
             cursor,
-            calls: calls.clone(),
+            calls: self.refuse_suffix.clone(),
+            attachment: self.attachment.clone(),
             _admission: admission,
         })
         .map_err(|_| EvalError::AllocationFailed {
@@ -2309,27 +2322,49 @@ impl PropertyFunction for CountingTextRelation {
 
 struct PrefixRefusalCursor {
     cursor: Box<dyn PfCursor>,
-    calls: Arc<AtomicU64>,
+    calls: Option<Arc<AtomicU64>>,
+    attachment: Option<NativeAttachment>,
     _admission: purrdf_sparql_eval::WorkspaceAllocation,
 }
 
 impl PfCursor for PrefixRefusalCursor {
     fn carries_row_evidence(&self) -> bool {
-        self.cursor.carries_row_evidence()
+        self.attachment.is_some() || self.cursor.carries_row_evidence()
     }
     fn search_evidence(&self) -> Result<Option<&purrdf_sparql_eval::RowEvidence>, EvalError> {
-        self.cursor.search_evidence()
+        match &self.attachment {
+            Some(NativeAttachment::Search(evidence, enabled))
+                if enabled.load(Ordering::Relaxed) =>
+            {
+                Ok(Some(evidence))
+            }
+            Some(NativeAttachment::SearchFailure(enabled)) if enabled.load(Ordering::Relaxed) => {
+                Err(EvalError::AllocationFailed {
+                    construct: "original unscoped terminal search",
+                })
+            }
+            _ => self.cursor.search_evidence(),
+        }
     }
     fn next(&mut self) -> Result<Option<purrdf_sparql_eval::PfRow>, EvalError> {
         self.cursor.next()
     }
     fn next_admitted(&mut self) -> Result<Option<purrdf_sparql_eval::AdmittedPfRow>, EvalError> {
-        if self.calls.fetch_add(1, Ordering::Relaxed) >= 2 {
+        if self
+            .calls
+            .as_ref()
+            .is_some_and(|calls| calls.fetch_add(1, Ordering::Relaxed) >= 2)
+        {
             return Err(EvalError::AllocationFailed {
                 construct: "original scoped suffix",
             });
         }
-        self.cursor.next_admitted()
+        self.cursor.next_admitted().map(|row| {
+            row.map(|row| match &self.attachment {
+                Some(NativeAttachment::Row(evidence)) => row.with_evidence(evidence.clone()),
+                _ => row,
+            })
+        })
     }
     fn take_work(&mut self) -> u64 {
         self.cursor.take_work()
@@ -2364,6 +2399,7 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
             inner,
             opened: Arc::clone(&opened),
             refuse_suffix: None,
+            attachment: None,
         }),
         declaration,
     );
@@ -2996,6 +3032,169 @@ fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
         ("c", "alpha", None),
         ("d", "alpha", None),
     ]);
+    // Exercise the real unscoped ranked adapter before its raw rank/cell
+    // publication, including an owned record whose semantics became default.
+    let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+    let owner = purrdf_sparql_eval::QueryEvidence::new(&workspace).unwrap();
+    let incomplete = purrdf_core::evidence::EvidenceRecord::from_parts(
+        &purrdf_core::evidence::InformationMap::default(),
+        purrdf_core::evidence::SearchCompleteness::Undetermined,
+        &purrdf_core::evidence::Frame::actual(),
+        &[],
+        &[],
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .unwrap();
+    let owned = owner
+        .with_completeness(
+            &owner.retain(&incomplete).unwrap(),
+            purrdf_core::evidence::SearchCompleteness::Complete,
+            None,
+        )
+        .unwrap();
+    #[derive(Clone, Copy)]
+    enum Transport {
+        Row,
+        OpeningSearch,
+        EmptySearch,
+        LateSearch,
+        LateFault,
+    }
+    let empty = dataset_of(&[]);
+    for (mode, attachment) in [
+        (Transport::Row, owned.clone()),
+        (
+            Transport::Row,
+            purrdf_sparql_eval::RowEvidence::default()
+                .with_original_rank(core::num::NonZeroU64::new(1).unwrap()),
+        ),
+        (Transport::OpeningSearch, owned.clone()),
+        (Transport::EmptySearch, owned.clone()),
+        (
+            Transport::EmptySearch,
+            owner
+                .retain(&incomplete)
+                .unwrap()
+                .with_unclosed_search(true),
+        ),
+        (Transport::LateSearch, owned.clone()),
+        (Transport::LateFault, owned),
+    ] {
+        assert!(!attachment.is_virtual());
+        let actual_data = if matches!(mode, Transport::EmptySearch) {
+            &empty
+        } else {
+            &data
+        };
+        let enabled = Arc::new(std::sync::atomic::AtomicBool::new(matches!(
+            mode,
+            Transport::OpeningSearch | Transport::EmptySearch
+        )));
+        let attachment = match mode {
+            Transport::Row => NativeAttachment::Row(attachment),
+            Transport::LateFault => NativeAttachment::SearchFailure(enabled.clone()),
+            _ => NativeAttachment::Search(attachment, enabled.clone()),
+        };
+        let inner = TextSearchRelation::new(Arc::new(
+            TextIndex::from_dataset(&**actual_data, &text_config()).unwrap(),
+        ));
+        let declaration = inner
+            .ranked_declaration(
+                kernel_iri(TEXT_STRATUM),
+                Some(NOTE.to_owned()),
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            )
+            .unwrap();
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            TEXT_PF,
+            Arc::new(CountingTextRelation {
+                inner,
+                opened: Arc::new(AtomicU64::new(0)),
+                refuse_suffix: None,
+                attachment: Some(attachment),
+            }),
+            declaration,
+        );
+        let request = lexical_request("alpha");
+        let profile = profile();
+        let compiled = compile(
+            &plan(&request, &registry, &NoStatistics).unwrap(),
+            &AdmissionEnvironment {
+                registry: &registry,
+                statistics: &NoStatistics,
+                fusion_profile: Some(&profile),
+            },
+        )
+        .unwrap();
+        let execution = block_on(execute_within(
+            &compiled,
+            &registry,
+            actual_data,
+            ReadSchedule::OnDemand,
+        ))
+        .unwrap();
+        let mut read = execution.streams.into_iter().next().unwrap();
+        if matches!(mode, Transport::LateSearch | Transport::LateFault) {
+            assert!(block_on(read.stream.next()).unwrap().is_some());
+            enabled.store(true, Ordering::Relaxed);
+            let error = block_on(read.stream.settle()).unwrap_err();
+            if matches!(mode, Transport::LateFault) {
+                assert!(matches!(
+                    error,
+                    ProtocolError::NativeFailure(EvalError::AllocationFailed {
+                        construct: "original unscoped terminal search"
+                    })
+                ));
+            } else {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("cannot discard original search evidence")
+                );
+            }
+        } else {
+            let error = block_on(read.stream.next()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(if matches!(mode, Transport::Row) {
+                        "cannot discard original row evidence"
+                    } else {
+                        "cannot discard original search evidence"
+                    })
+            );
+        }
+        if matches!(mode, Transport::Row) {
+            let bindings = purrdf_retrieval::ConstraintBindings::new(&[]);
+            let scoped = block_on(purrdf_retrieval::execute_scoped_within(
+                &compiled,
+                &registry,
+                actual_data,
+                ReadSchedule::OnDemand,
+                &bindings,
+                &OriginalClosedScope,
+            ))
+            .unwrap();
+            for mut read in scoped.result.streams {
+                while block_on(read.stream.next()).unwrap().is_some() {}
+                block_on(read.stream.settle()).unwrap();
+            }
+            for receipt in scoped.scopes {
+                receipt
+                    .rows
+                    .with_rows(|rows| {
+                        assert!(!rows.is_empty());
+                        for row in rows {
+                            assert!(row.evidence.is_default());
+                            assert!(!row.evidence.is_virtual());
+                        }
+                    })
+                    .unwrap();
+            }
+        }
+    }
     let inner = TextSearchRelation::new(Arc::new(
         TextIndex::from_dataset(&*data, &text_config()).unwrap(),
     ));
@@ -3015,6 +3214,7 @@ fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
             inner,
             opened: Arc::new(AtomicU64::new(0)),
             refuse_suffix: Some(calls.clone()),
+            attachment: None,
         }),
         declaration,
     );

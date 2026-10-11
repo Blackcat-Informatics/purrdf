@@ -156,23 +156,28 @@ pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDeliver
 }
 
 // A variable alias carries the source column's aggregate certificate.
-fn extend_evidence(
-    evidence: &crate::evidence_exec::RowEvidence,
+fn extend_evidence<I: ViewTermId>(
+    row: &RetainedRow<I>,
     computed: Option<crate::evidence_exec::RowEvidence>,
     expression: &Expression,
     target: &Variable,
-) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+    if !row.has_evidence_attachment() && computed.is_none() {
+        return Ok(None);
+    }
+    let evidence = row.evidence();
     let evidence = match expression {
         Expression::Variable(source) => evidence.alias_column(source.as_str(), target.as_str()),
         _ => Ok(evidence.clone()),
     }?;
-    match computed {
+    let evidence = match computed {
         None => Ok(evidence),
         Some(computed) => evidence.combine(
             &computed,
             purrdf_core::evidence::EvidenceCombination::Conjunction,
         ),
-    }
+    }?;
+    Ok(Some(evidence))
 }
 
 pub(crate) fn filter_evidence<D: DatasetView + Sync>(
@@ -267,17 +272,11 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
                 {
                     return Ok(());
                 }
-                if let Some(evidence) = filter_evidence(
-                    linked.ebv(row, &schema, child)?,
-                    linked.result_evidence()?,
-                    expr,
-                    row,
-                    &schema,
-                    child,
-                )? {
+                let (keep, evidence) = linked.filter(expr, row, &schema, child)?;
+                if keep {
                     acc.push(
                         row.clone_admitted(&child.growth)?
-                            .with_evidence(evidence, &child.growth)?,
+                            .with_optional_evidence(evidence, &child.growth)?,
                     );
                     checkpoint.keep();
                 }
@@ -306,17 +305,11 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
                 if checkpoint.pass(ctx).is_err() {
                     break;
                 }
-                if let Some(evidence) = filter_evidence(
-                    linked.ebv(row, &schema, ctx)?,
-                    linked.result_evidence()?,
-                    expr,
-                    row,
-                    &schema,
-                    ctx,
-                )? {
+                let (keep, evidence) = linked.filter(expr, row, &schema, ctx)?;
+                if keep {
                     rows.push(
                         row.clone_admitted(&ctx.growth)?
-                            .with_evidence(evidence, &ctx.growth)?,
+                            .with_optional_evidence(evidence, &ctx.growth)?,
                     );
                 }
             }
@@ -334,15 +327,9 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
             if checkpoint.pass(ctx).is_err() {
                 break;
             }
-            if let Some(evidence) = filter_evidence(
-                linked.ebv(&row, &schema, ctx)?,
-                linked.result_evidence()?,
-                expr,
-                &row,
-                &schema,
-                ctx,
-            )? {
-                rows.push_row(row.with_evidence(evidence, &ctx.growth)?)?;
+            let (keep, evidence) = linked.filter(expr, &row, &schema, ctx)?;
+            if keep {
+                rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
             }
         }
         rows.finish()?
@@ -488,8 +475,8 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 row.resize(width, None);
                 let value = linked.term(&row, &schema, child)?;
                 row[col] = value;
-                let row = RetainedRow::from_resident(row).with_evidence(
-                    extend_evidence(in_row.evidence(), linked.result_evidence()?, expr, var)?,
+                let row = RetainedRow::from_resident(row).with_optional_evidence(
+                    extend_evidence(in_row, linked.result_evidence()?, expr, var)?,
                     &child.growth,
                 )?;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row)?);
@@ -540,8 +527,8 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                     row[col] = linked.term(row, &schema, ctx)?;
                     Ok(())
                 })?;
-                rows.push(row.with_evidence(
-                    extend_evidence(in_row.evidence(), linked.result_evidence()?, expr, var)?,
+                rows.push(row.with_optional_evidence(
+                    extend_evidence(in_row, linked.result_evidence()?, expr, var)?,
                     &growth,
                 )?);
             }
@@ -564,8 +551,8 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 row[col] = linked.term(row, &schema, ctx)?;
                 Ok(())
             })?;
-            rows.push_row(row.with_evidence(
-                extend_evidence(in_row.evidence(), linked.result_evidence()?, expr, var)?,
+            rows.push_row(row.with_optional_evidence(
+                extend_evidence(&in_row, linked.result_evidence()?, expr, var)?,
                 &growth,
             )?)?;
         }
@@ -14460,13 +14447,20 @@ impl crate::eval::PreparedExists {
             CorrelatedPattern { body, frame }
         };
         let normalized = PreparedPattern::new(original, workspace)?;
-        let mut ledger_source =
-            crate::enf::ledger_source_map_admitted(pattern, &normalized, workspace)?;
+        let source_map = |copy: &GraphPattern| {
+            if preserve_evidence {
+                let mut map = SubstitutionSourceMap::default();
+                crate::enf::map_clone_admitted(pattern, copy, &mut map, workspace)?;
+                Ok(map)
+            } else {
+                crate::enf::ledger_source_map_admitted(pattern, copy, workspace)
+            }
+        };
+        let mut ledger_source = source_map(&normalized)?;
         #[cfg(test)]
         crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(normalized.as_ref()));
         let witness_inner = CorrelatedPattern::copy(&normalized, workspace)?;
-        let witness_map =
-            crate::enf::ledger_source_map_admitted(pattern, &witness_inner, workspace)?;
+        let witness_map = source_map(&witness_inner)?;
         let root_source = ledger_source
             .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
             .map(|entry| entry.source);

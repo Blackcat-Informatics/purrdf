@@ -2339,10 +2339,15 @@ fn seeded_optional_block<D: DatasetView + Sync>(
 fn optional_evidence<D: DatasetView + Sync>(
     row: &RetainedRow<D::Id>,
     ctx: &EvalCtx<'_, D>,
-) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+    if ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
+        return Ok(None);
+    }
     match &ctx.evidence_input {
-        Some(input) => input.scope_evidence(row.evidence(), ctx.active_graph, &ctx.growth),
-        None => Ok(row.evidence().clone()),
+        Some(input) => input
+            .scope_evidence(row.evidence(), ctx.active_graph, &ctx.growth)
+            .map(Some),
+        None => Ok(Some(row.evidence().clone())),
     }
 }
 
@@ -2368,7 +2373,9 @@ fn append_seeded_optional_block<D: DatasetView + Sync>(
                 (0..schema.len()).map(|column| padding.get(column).copied().flatten()),
                 &ctx.growth,
             )
-            .and_then(|row| row.with_evidence(optional_evidence(padding, ctx)?, &ctx.growth))
+            .and_then(|row| {
+                row.with_optional_evidence(optional_evidence(padding, ctx)?, &ctx.growth)
+            })
         });
     }
     for row in block.reorder_like_admitted(schema, &ctx.growth)?.rows {
@@ -2628,9 +2635,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if let Some(evidence) = linked.filter(expr, &merged, &out, ctx)? {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             reserve_join_rows(acc, 1, usize::MAX)?;
-                            acc.push(merged.with_evidence(evidence, &ctx.growth)?);
+                            acc.push(merged.with_optional_evidence(evidence, &ctx.growth)?);
                         }
                     }
                 }
@@ -2647,9 +2655,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if let Some(evidence) = linked.filter(expr, &merged, &out, ctx)? {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             reserve_join_rows(acc, 1, usize::MAX)?;
-                            acc.push(merged.with_evidence(evidence, &ctx.growth)?);
+                            acc.push(merged.with_optional_evidence(evidence, &ctx.growth)?);
                         }
                     }
                 }
@@ -2662,7 +2671,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         (0..out_len).map(|column| lrow.get(column).copied().flatten()),
                         &ctx.growth,
                     )?
-                    .with_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
+                    .with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
                 );
             }
             Ok(())
@@ -2725,12 +2734,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if let Some(evidence) = linked.filter(expr, &merged, &out, ctx)? {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            rows.push_row(merged.with_evidence(evidence, &ctx.growth)?)?;
+                            rows.push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
                             matched = true;
                         }
                     }
@@ -2748,12 +2758,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             out_len,
                             &ctx.growth,
                         )?;
-                        if let Some(evidence) = linked.filter(expr, &merged, &out, ctx)? {
+                        let (keep, evidence) = linked.filter(expr, &merged, &out, ctx)?;
+                        if keep {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            rows.push_row(merged.with_evidence(evidence, &ctx.growth)?)?;
+                            rows.push_row(merged.with_optional_evidence(evidence, &ctx.growth)?)?;
                             matched = true;
                         }
                     }
@@ -2769,7 +2780,9 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     (0..out_len).map(|column| lrow.get(column).copied().flatten()),
                     &ctx.growth,
                 )?;
-                rows.push_row(padded.with_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?)?;
+                rows.push_row(
+                    padded.with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
+                )?;
             }
         }
         rows.finish()?
@@ -2874,7 +2887,9 @@ fn left_outer_join<D: DatasetView + Sync>(
                     (0..out_len).map(|column| lrow.get(column).copied().flatten()),
                     &ctx.growth,
                 )?;
-                rows.push_row(padded.with_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?)?;
+                rows.push_row(
+                    padded.with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
+                )?;
             }
         }
         rows.finish()?
@@ -2940,7 +2955,7 @@ fn left_outer_join<D: DatasetView + Sync>(
                             (0..out_len).map(|column| lrow.get(column).copied().flatten()),
                             &ctx.growth,
                         )?
-                        .with_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
+                        .with_optional_evidence(optional_evidence(lrow, ctx)?, &ctx.growth)?,
                     );
                 }
                 Ok(())
@@ -3000,8 +3015,7 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
         let mut removed = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
         let mut evidence = crate::AdmittedVec::new(&ctx.growth);
-        let tracking =
-            ctx.may_have_evidence() || l.rows.iter().any(RetainedRow::has_evidence_attachment);
+        let tracking = ctx.may_have_evidence() || l.rows.may_have_evidence_attachment();
         if tracking {
             for row in &l.rows {
                 evidence.push(row.evidence().clone())?;
@@ -3088,8 +3102,8 @@ fn minus_rows<D: DatasetView + Sync>(
     }
 
     if ctx.evidence_input.is_some()
-        || l.rows.iter().any(RetainedRow::has_evidence_attachment)
-        || r.rows.iter().any(RetainedRow::has_evidence_attachment)
+        || l.rows.may_have_evidence_attachment()
+        || r.rows.may_have_evidence_attachment()
         || !r.rows.search_evidence().is_virtual()
     {
         let mut rows = RowsBuilder::new(&ctx.growth);
@@ -3185,10 +3199,7 @@ fn minus_evidence<D: DatasetView + Sync>(
         right.rows.search_evidence(),
         purrdf_core::evidence::EvidenceCombination::Conjunction,
     )?;
-    let negative = match &ctx.evidence_input {
-        Some(input) => input.negative_evidence(&witnesses, ctx.active_graph, &ctx.growth)?,
-        None => witnesses.native_negative(&ctx.growth)?,
-    };
+    let negative = ctx.negative_evidence(&witnesses)?;
     // A contradiction stays visible. A scoped negative cannot remove a row in
     // other standpoints; removal requires uniformly opposed information.
     if !negative.is_undecided()

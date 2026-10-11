@@ -468,8 +468,15 @@ pub struct RetainedRow<I: ViewTermId = TermId> {
 #[derive(Clone, Debug)]
 enum RowStorage<I: ViewTermId> {
     Resident(Solution<I>),
+    // SmallVec provides one zero niche. Keep one nonresident alternative so
+    // ordinary rows retain its layout even as owned payload kinds vary.
+    Owned(RowOwner<I>),
+}
+
+#[derive(Clone, Debug)]
+enum RowOwner<I: ViewTermId> {
     Shared(purrdf_core::small::Shared<RowPayload<I>>),
-    Tracked(crate::SharedWorkspace<TrackedRow<I>>),
+    Tracked(crate::workspace::NativeSharedWorkspace<TrackedRow<I>>),
 }
 
 #[derive(Debug)]
@@ -484,7 +491,7 @@ enum RowCells<I: ViewTermId> {
 #[derive(Debug)]
 struct TrackedRow<I: ViewTermId> {
     // Cell ownership is flat and shared independently of changed metadata.
-    cells: crate::SharedWorkspace<RowCells<I>>,
+    cells: crate::workspace::NativeSharedWorkspace<RowCells<I>>,
     evidence: crate::evidence_exec::RowEvidence,
 }
 
@@ -496,11 +503,12 @@ struct RowPayload<I: ViewTermId> {
 
 impl<I: ViewTermId> std::ops::Deref for RetainedRow<I> {
     type Target = Solution<I>;
+    #[inline]
     fn deref(&self) -> &Self::Target {
         match &self.storage {
             RowStorage::Resident(cells) => cells,
-            RowStorage::Shared(payload) => &payload.cells,
-            RowStorage::Tracked(payload) => match &*payload.cells {
+            RowStorage::Owned(RowOwner::Shared(payload)) => &payload.cells,
+            RowStorage::Owned(RowOwner::Tracked(payload)) => match &*payload.cells {
                 RowCells::Resident { cells, .. } => cells,
                 RowCells::Shared(payload) => &payload.cells,
             },
@@ -508,12 +516,14 @@ impl<I: ViewTermId> std::ops::Deref for RetainedRow<I> {
     }
 }
 impl<I: ViewTermId> PartialEq for RetainedRow<I> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.as_slice() == other.as_slice()
     }
 }
 impl<I: ViewTermId> Eq for RetainedRow<I> {}
 impl<I: ViewTermId> std::hash::Hash for RetainedRow<I> {
+    #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         std::hash::Hash::hash(self.as_slice(), state);
     }
@@ -531,7 +541,7 @@ impl<I: ViewTermId> RetainedRow<I> {
     /// even when their public evidence record is default-supported.
     #[inline]
     pub(crate) fn has_evidence_attachment(&self) -> bool {
-        matches!(self.storage, RowStorage::Tracked(_))
+        matches!(self.storage, RowStorage::Owned(RowOwner::Tracked(_)))
     }
 
     /// Copy an existing attachment without materializing virtual metadata on
@@ -566,8 +576,8 @@ impl<I: ViewTermId> RetainedRow<I> {
     #[must_use]
     pub fn evidence(&self) -> &crate::evidence_exec::RowEvidence {
         match &self.storage {
-            RowStorage::Tracked(payload) => &payload.evidence,
-            RowStorage::Resident(_) | RowStorage::Shared(_) => {
+            RowStorage::Owned(RowOwner::Tracked(payload)) => &payload.evidence,
+            RowStorage::Resident(_) | RowStorage::Owned(RowOwner::Shared(_)) => {
                 &crate::evidence_exec::VIRTUAL_ROW_EVIDENCE
             }
         }
@@ -584,11 +594,25 @@ impl<I: ViewTermId> RetainedRow<I> {
         evidence: crate::evidence_exec::RowEvidence,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, crate::EvalError> {
-        if evidence.is_virtual() && !matches!(self.storage, RowStorage::Tracked(_)) {
+        if evidence.is_virtual() && !self.has_evidence_attachment() {
             return Ok(self);
         }
         self.attach_evidence(evidence, workspace)?;
         Ok(self)
+    }
+
+    /// Publish an actual optional attachment without creating a virtual record.
+    /// `None` is a caller's proof that the original row needs no replacement.
+    #[inline]
+    pub(crate) fn with_optional_evidence(
+        self,
+        evidence: Option<crate::evidence_exec::RowEvidence>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        match evidence {
+            Some(evidence) => self.with_evidence(evidence, workspace),
+            None => Ok(self),
+        }
     }
 
     fn attach_evidence(
@@ -600,8 +624,8 @@ impl<I: ViewTermId> RetainedRow<I> {
             return Ok(());
         }
         let existing_cells = match &self.storage {
-            RowStorage::Tracked(payload) => Some(payload.cells.clone()),
-            RowStorage::Resident(_) | RowStorage::Shared(_) => None,
+            RowStorage::Owned(RowOwner::Tracked(payload)) => Some(payload.cells.clone()),
+            RowStorage::Resident(_) | RowStorage::Owned(RowOwner::Shared(_)) => None,
         };
         let first_attachment = existing_cells.is_none();
         let cells = match existing_cells {
@@ -623,10 +647,12 @@ impl<I: ViewTermId> RetainedRow<I> {
                             )?,
                         )
                     }
-                    RowStorage::Resident(_) | RowStorage::Shared(_) => None,
-                    RowStorage::Tracked(_) => unreachable!("ordinary first attachment"),
+                    RowStorage::Resident(_) | RowStorage::Owned(RowOwner::Shared(_)) => None,
+                    RowStorage::Owned(RowOwner::Tracked(_)) => {
+                        unreachable!("ordinary first attachment")
+                    }
                 };
-                crate::SharedWorkspace::new_admitted(
+                crate::workspace::NativeSharedWorkspace::new_admitted(
                     RowCells::Resident {
                         cells: Solution::new(),
                         _allocation: allocation,
@@ -635,8 +661,10 @@ impl<I: ViewTermId> RetainedRow<I> {
                 )?
             }
         };
-        let mut tracked =
-            crate::SharedWorkspace::new_admitted(TrackedRow { cells, evidence }, workspace)?;
+        let mut tracked = crate::workspace::NativeSharedWorkspace::new_admitted(
+            TrackedRow { cells, evidence },
+            workspace,
+        )?;
         if first_attachment {
             // Both controls are admitted before moving the existing cell owner.
             // On refusal the original row and all its grants remain untouched.
@@ -657,11 +685,13 @@ impl<I: ViewTermId> RetainedRow<I> {
                     };
                     *cells = original;
                 }
-                RowStorage::Shared(payload) => *cells = RowCells::Shared(payload),
-                RowStorage::Tracked(_) => unreachable!("first attachment has ordinary cells"),
+                RowStorage::Owned(RowOwner::Shared(payload)) => *cells = RowCells::Shared(payload),
+                RowStorage::Owned(RowOwner::Tracked(_)) => {
+                    unreachable!("first attachment has ordinary cells")
+                }
             }
         }
-        self.storage = RowStorage::Tracked(tracked);
+        self.storage = RowStorage::Owned(RowOwner::Tracked(tracked));
         Ok(())
     }
 
@@ -689,7 +719,7 @@ impl<I: ViewTermId> RetainedRow<I> {
     pub(crate) fn into_resident_parts(
         mut self,
     ) -> Result<(Solution<I>, crate::evidence_exec::RowEvidence), Self> {
-        if let RowStorage::Tracked(payload) = &mut self.storage
+        if let RowStorage::Owned(RowOwner::Tracked(payload)) = &mut self.storage
             && let Some(payload) = payload.get_mut()
             && let Some(RowCells::Resident {
                 cells,
@@ -702,7 +732,7 @@ impl<I: ViewTermId> RetainedRow<I> {
             RowStorage::Resident(cells) => {
                 Ok((cells, crate::evidence_exec::RowEvidence::default()))
             }
-            storage @ (RowStorage::Shared(_) | RowStorage::Tracked(_)) => Err(Self { storage }),
+            storage @ RowStorage::Owned(_) => Err(Self { storage }),
         }
     }
 
@@ -713,7 +743,7 @@ impl<I: ViewTermId> RetainedRow<I> {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, crate::EvalError> {
         match &self.storage {
-            RowStorage::Shared(_) | RowStorage::Tracked(_) => Ok(self.clone()),
+            RowStorage::Owned(_) => Ok(self.clone()),
             RowStorage::Resident(cells) => {
                 Self::from_cells(cells.len(), cells.iter().copied(), workspace)
             }
@@ -789,7 +819,7 @@ impl<I: ViewTermId> RetainedRow<I> {
         );
         Ok(Self {
             storage: match allocation {
-                Some(allocation) => RowStorage::Shared(
+                Some(allocation) => RowStorage::Owned(RowOwner::Shared(
                     purrdf_core::small::Shared::try_new(RowPayload {
                         cells: row,
                         _allocation: allocation,
@@ -797,7 +827,7 @@ impl<I: ViewTermId> RetainedRow<I> {
                     .map_err(|_| crate::EvalError::AllocationFailed {
                         construct: "solution row shared owner",
                     })?,
-                ),
+                )),
                 None => RowStorage::Resident(row),
             },
         })
@@ -809,6 +839,7 @@ impl<I: ViewTermId> RetainedRow<I> {
 pub struct RowBag<I: ViewTermId = TermId> {
     storage: BagStorage<I>,
     search_evidence: crate::evidence_exec::RowEvidence,
+    may_have_row_attachments: bool,
 }
 
 impl<I: ViewTermId> PartialEq for RowBag<I> {
@@ -851,6 +882,14 @@ impl<I: ViewTermId> std::ops::Deref for RowBag<I> {
     }
 }
 impl<I: ViewTermId> RowBag<I> {
+    /// A false summary proves physical row attachments are absent. Publication
+    /// records actual tracked storage, including owned-default and ranked rows;
+    /// narrowing can conservatively retain true. Search evidence is independent.
+    #[inline]
+    pub(crate) fn may_have_evidence_attachment(&self) -> bool {
+        self.may_have_row_attachments
+    }
+
     /// The original search attestation, retained even when this bag is empty.
     #[must_use]
     pub fn search_evidence(&self) -> &crate::evidence_exec::RowEvidence {
@@ -885,6 +924,7 @@ impl<I: ViewTermId> RowBag<I> {
             storage @ BagStorage::Shared { .. } => Err(Self {
                 storage,
                 search_evidence: self.search_evidence,
+                may_have_row_attachments: self.may_have_row_attachments,
             }),
         }
     }
@@ -941,12 +981,14 @@ impl<I: ViewTermId> RowBag<I> {
                 Ok(Self {
                     storage: BagStorage::Resident(rows),
                     search_evidence: self.search_evidence,
+                    may_have_row_attachments: self.may_have_row_attachments,
                 })
             }
             storage => {
                 let source = Self {
                     storage,
                     search_evidence: self.search_evidence,
+                    may_have_row_attachments: self.may_have_row_attachments,
                 };
                 let mut rows = RowsBuilder::new(workspace);
                 for &ordinal in &order {
@@ -964,6 +1006,7 @@ impl<I: ViewTermId> From<Vec<Solution<I>>> for RowBag<I> {
     fn from(rows: Vec<Solution<I>>) -> Self {
         Self {
             search_evidence: crate::evidence_exec::RowEvidence::default(),
+            may_have_row_attachments: false,
             storage: BagStorage::Resident(
                 rows.into_iter()
                     .map(|row| RetainedRow {
@@ -979,6 +1022,7 @@ impl<I: ViewTermId> Default for RowBag<I> {
         Self {
             storage: BagStorage::Resident(Vec::new()),
             search_evidence: crate::evidence_exec::RowEvidence::default(),
+            may_have_row_attachments: false,
         }
     }
 }
@@ -1063,6 +1107,7 @@ impl<I: ViewTermId> IntoIterator for RowBag<I> {
 }
 
 pub(crate) struct RowsBuilder<I: ViewTermId> {
+    may_have_row_attachments: bool,
     rows: crate::workspace::AdmittedVec<RetainedRow<I>>,
     workspace: crate::WorkspaceCapability,
 }
@@ -1084,25 +1129,35 @@ impl<I: ViewTermId> RowsBuilder<I> {
             evidence,
             purrdf_core::evidence::EvidenceCombination::Alternatives,
             &self.workspace,
-        )
+        )?;
+        self.may_have_row_attachments |= row.has_evidence_attachment();
+        Ok(())
     }
     pub(crate) fn new(workspace: &crate::WorkspaceCapability) -> Self {
         Self {
             rows: crate::workspace::AdmittedVec::new(workspace),
             workspace: workspace.clone(),
+            may_have_row_attachments: false,
         }
     }
     pub(crate) fn from_storage(
         rows: crate::workspace::AdmittedVec<RetainedRow<I>>,
         workspace: &crate::WorkspaceCapability,
     ) -> Self {
+        // Transferred buffers may have been arbitrarily edited outside this
+        // immutable bag home; recompute the physical proof once at ingress.
+        let may_have_row_attachments = rows.iter().any(RetainedRow::has_evidence_attachment);
         Self {
             rows,
             workspace: workspace.clone(),
+            may_have_row_attachments,
         }
     }
     pub(crate) fn push_row(&mut self, row: RetainedRow<I>) -> Result<(), crate::EvalError> {
-        self.rows.push(row)
+        let attached = row.has_evidence_attachment();
+        self.rows.push(row)?;
+        self.may_have_row_attachments |= attached;
+        Ok(())
     }
     pub(crate) fn push_cells(
         &mut self,
@@ -1110,7 +1165,8 @@ impl<I: ViewTermId> RowsBuilder<I> {
         cells: impl Iterator<Item = Option<SolutionTerm<I>>>,
     ) -> Result<(), crate::EvalError> {
         let row = RetainedRow::from_cells(width, cells, &self.workspace)?;
-        self.push_row(row)
+        // This constructor publishes cells only, never evidence attachments.
+        self.rows.push(row)
     }
     pub(crate) fn finish(self) -> Result<RowBag<I>, crate::EvalError> {
         let allocation = if self.workspace.is_bounded() {
@@ -1124,6 +1180,7 @@ impl<I: ViewTermId> RowsBuilder<I> {
         let (rows, vector) = self.rows.into_parts();
         Ok(RowBag {
             search_evidence: crate::evidence_exec::RowEvidence::default(),
+            may_have_row_attachments: self.may_have_row_attachments,
             storage: match allocation {
                 Some(allocation) => {
                     let length = rows.len();
@@ -1679,9 +1736,105 @@ mod tests {
 
     #[test]
     fn unit_sequence_has_one_empty_solution() {
+        use purrdf_core::evidence::{EvidenceRecord, Frame, InformationMap, SearchCompleteness};
+        use purrdf_lex::allocation::{Memory, Resident};
+
+        assert_eq!(
+            size_of::<crate::workspace::NativeSharedWorkspace<TrackedRow<TermId>>>(),
+            size_of::<usize>(),
+            "native row controls need only the original shared pointer"
+        );
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            size_of::<RetainedRow<TermId>>(),
+            40,
+            "ordinary rows retain their original physical stride"
+        );
+
         let z = SolutionSeq::<TermId>::unit();
         assert_eq!(z.len(), 1);
         assert!(z.schema.is_empty());
         assert!(z.rows[0].is_empty());
+        assert!(!z.rows.may_have_evidence_attachment());
+
+        let workspace = crate::WorkspaceCapability::default();
+        let owner = crate::evidence_exec::QueryEvidence::new(&workspace).unwrap();
+        let incomplete = EvidenceRecord::from_parts(
+            &InformationMap::default(),
+            SearchCompleteness::Undetermined,
+            &Frame::default(),
+            &[],
+            &[],
+            &mut Memory::new(&mut Resident),
+        )
+        .unwrap();
+        let owned = owner
+            .with_completeness(
+                &owner.retain(&incomplete).unwrap(),
+                SearchCompleteness::Complete,
+                None,
+            )
+            .unwrap();
+        assert!(owned.is_default());
+        assert!(!owned.is_virtual());
+        let ranked = crate::RowEvidence::default()
+            .with_original_rank(core::num::NonZeroU64::new(1).unwrap());
+        for evidence in [owned.clone(), ranked] {
+            let mut builder = RowsBuilder::<TermId>::new(&workspace);
+            builder.push_cells(0, std::iter::empty()).unwrap();
+            builder
+                .combine_evidence(0, &crate::RowEvidence::default())
+                .unwrap();
+            assert!(!builder.may_have_row_attachments);
+            builder.combine_evidence(0, &evidence).unwrap();
+            let mut bag = builder.finish().unwrap();
+            assert!(bag.may_have_evidence_attachment());
+            assert!(bag[0].evidence().is_default());
+            assert!(!bag[0].evidence().is_virtual());
+            let clone = bag.clone();
+            assert!(clone.may_have_evidence_attachment());
+            let mut order = crate::AdmittedVec::new(&workspace);
+            order.push(0).unwrap();
+            bag = bag.ordered_admitted(order, &workspace).unwrap();
+            assert!(bag.may_have_evidence_attachment());
+            // Narrowing may keep a conservative true but cannot fabricate a
+            // false absence proof while any physical attachment survives.
+            bag.truncate(0);
+            assert!(bag.is_empty());
+            assert!(bag.may_have_evidence_attachment());
+        }
+
+        // Resident extraction permits arbitrary edits. Re-entry recomputes the
+        // summary from the actual rows instead of trusting their prior bag.
+        let (mut rows, search) = z.rows.into_resident_rows().unwrap();
+        assert!(search.is_virtual());
+        rows[0] = RetainedRow::from_resident(Solution::new())
+            .with_evidence(owned.clone(), &workspace)
+            .unwrap();
+        let storage = crate::AdmittedVec::from_parts(rows, None, &workspace);
+        let bag = RowsBuilder::from_storage(storage, &workspace)
+            .finish()
+            .unwrap();
+        assert!(bag.may_have_evidence_attachment());
+        let (mut rows, _) = bag.into_resident_rows().unwrap();
+        rows[0] = RetainedRow::from_resident(Solution::new());
+        let storage = crate::AdmittedVec::from_parts(rows, None, &workspace);
+        let mut bag = RowsBuilder::from_storage(storage, &workspace)
+            .finish()
+            .unwrap();
+        assert!(!bag.may_have_evidence_attachment());
+        bag.retain_search_evidence(owned.clone());
+        assert!(!bag.may_have_evidence_attachment());
+        assert!(!bag.search_evidence().is_virtual());
+        bag.search_evidence()
+            .combine(
+                &owned,
+                purrdf_core::evidence::EvidenceCombination::Conjunction,
+            )
+            .expect("original search and declaration keep the same query owner");
+        let mut empty = RowBag::<TermId>::default();
+        empty.retain_search_evidence(owned);
+        assert!(!empty.may_have_evidence_attachment());
+        assert!(!empty.search_evidence().is_virtual());
     }
 }

@@ -219,11 +219,7 @@ pub(super) enum TermBuildError<E> {
     Storage(StorageError),
 }
 
-impl<E> From<StorageError> for TermBuildError<E> {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(impl<E> TermBuildError<E> { Storage(StorageError) });
 
 fn intern<'a, S: Admission + ?Sized>(
     term: LedgerTerm<'a>,

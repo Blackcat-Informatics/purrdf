@@ -350,8 +350,9 @@ pub(crate) fn eval_shape<D: DatasetView + Sync>(
     let mut rows = output.finish()?;
     let mut search = crate::evidence_exec::RowEvidence::default();
     for input in &inputs {
+        let declaration = ctx.bind_native_evidence(input.rows.search_evidence())?;
         search = search.combine(
-            input.rows.search_evidence(),
+            &declaration,
             purrdf_core::evidence::EvidenceCombination::Conjunction,
         )?;
     }
@@ -442,8 +443,12 @@ impl<D: DatasetView + Sync> NativeRuntime<'_, '_, '_, D> {
             }
             cells.as_mut_slice()[column] = value;
         }
+        let evidence = evidence
+            .as_ref()
+            .map(|evidence| self.ctx.bind_native_evidence(evidence))
+            .transpose()?;
         let row = RetainedRow::from_cells(cells.len(), cells.iter().copied(), &self.ctx.growth)?
-            .with_evidence(evidence.unwrap_or_default(), &self.ctx.growth)?;
+            .with_optional_evidence(evidence, &self.ctx.growth)?;
         self.output.push_row(row)?;
         self.work.output_rows = self
             .work

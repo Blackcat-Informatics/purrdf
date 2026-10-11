@@ -17,9 +17,11 @@ mod array;
 pub use array::WorkspaceArray;
 
 fn append_capacity<T>(len: usize, capacity: usize, additional: usize) -> Result<usize, EvalError> {
-    let required = len
-        .checked_add(additional)
-        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    // This is also the already-reserved row append path. Construct the owning
+    // error only on overflow, so successful appends need no error drop glue.
+    let Some(required) = len.checked_add(additional) else {
+        return Err(EvalError::WorkspaceBoundOverflow);
+    };
     purrdf_lex::allocation::growth_capacity::<T>(capacity, required)
         .map_err(|_| EvalError::WorkspaceBoundOverflow)
 }
@@ -33,7 +35,46 @@ pub struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
 #[derive(Debug)]
 enum SharedWorkspaceStorage<T> {
     Caller(std::sync::Arc<T>),
-    Native(Shared<SharedWorkspacePayload<T>>),
+    Native(NativeSharedWorkspace<T>),
+}
+
+/// Native-only controls retain admission without a caller-ownership tag.
+#[derive(Debug)]
+pub(crate) struct NativeSharedWorkspace<T>(Shared<SharedWorkspacePayload<T>>);
+
+impl<T> Clone for NativeSharedWorkspace<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> std::ops::Deref for NativeSharedWorkspace<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0.value
+    }
+}
+
+impl<T> NativeSharedWorkspace<T> {
+    pub(crate) fn get_mut(&mut self) -> Option<&mut T> {
+        self.0.get_mut().map(|payload| &mut payload.value)
+    }
+
+    pub(crate) fn new_admitted(
+        value: T,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let bytes = fallible_shared_layout::<SharedWorkspacePayload<T>>()?;
+        let allocation = workspace.charge(bytes)?;
+        let payload = Shared::try_new(SharedWorkspacePayload {
+            value,
+            _allocation: allocation,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "shared execution control",
+        })?;
+        Ok(Self(payload))
+    }
 }
 
 #[derive(Debug)]
@@ -58,9 +99,7 @@ impl<T> SharedWorkspace<T> {
     pub fn get_mut(&mut self) -> Option<&mut T> {
         match &mut self.0 {
             SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
-            SharedWorkspaceStorage::Native(value) => {
-                value.get_mut().map(|payload| &mut payload.value)
-            }
+            SharedWorkspaceStorage::Native(value) => value.get_mut(),
         }
     }
 }
@@ -70,7 +109,7 @@ impl<T> std::ops::Deref for SharedWorkspace<T> {
     fn deref(&self) -> &T {
         match &self.0 {
             SharedWorkspaceStorage::Caller(value) => value,
-            SharedWorkspaceStorage::Native(value) => &value.value,
+            SharedWorkspaceStorage::Native(value) => value,
         }
     }
 }
@@ -121,15 +160,6 @@ impl<T> SharedWorkspace<T> {
 }
 
 impl<T> SharedWorkspace<T> {
-    pub(crate) fn unique_mut(&mut self) -> Option<&mut T> {
-        match &mut self.0 {
-            SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
-            SharedWorkspaceStorage::Native(value) => {
-                value.get_mut().map(|payload| &mut payload.value)
-            }
-        }
-    }
-
     /// Only explicitly caller-owned resident controls may be mutated. A native
     /// shared owner never exposes mutable payload ownership or its admission.
     pub(crate) fn caller_unique_mut(&mut self) -> Option<&mut T> {
@@ -157,16 +187,8 @@ impl<T> SharedWorkspace<T> {
     /// # Errors
     /// Returns the original layout, allocation or workspace admission refusal.
     pub fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
-        let bytes = fallible_shared_layout::<SharedWorkspacePayload<T>>()?;
-        let allocation = workspace.charge(bytes)?;
-        let payload = Shared::try_new(SharedWorkspacePayload {
-            value,
-            _allocation: allocation,
-        })
-        .map_err(|_| EvalError::AllocationFailed {
-            construct: "shared execution control",
-        })?;
-        Ok(Self(SharedWorkspaceStorage::Native(payload)))
+        NativeSharedWorkspace::new_admitted(value, workspace)
+            .map(|payload| Self(SharedWorkspaceStorage::Native(payload)))
     }
 }
 
@@ -2915,6 +2937,19 @@ mod owned_row_regressions {
             extracted,
             "row clone keeps one payload"
         );
+        let ranked = clone
+            .with_evidence(
+                crate::RowEvidence::default()
+                    .with_original_rank(core::num::NonZeroU64::new(1).unwrap()),
+                &capability,
+            )
+            .expect("both native attachment controls are admitted");
+        let tracked_bytes = ledger.live.load(Ordering::Relaxed);
+        assert!(tracked_bytes > extracted);
+        let clone = ranked.clone();
+        drop(ranked);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), tracked_bytes);
+        assert_eq!(clone.evidence().original_rank().unwrap().get(), 1);
         drop(clone);
         assert_eq!(
             ledger.live.load(Ordering::Relaxed),
@@ -2928,12 +2963,39 @@ mod owned_row_regressions {
             0,
             "last account releases provider reservation"
         );
+
+        let (workspace, ledger, _) = account(base);
+        let ordinary = crate::solution::RetainedRow::<TermId>::from_resident(Solution::new());
+        let refused = ordinary.with_evidence(
+            crate::RowEvidence::default()
+                .with_original_rank(core::num::NonZeroU64::new(1).unwrap()),
+            &workspace.capability(),
+        );
+        assert!(matches!(refused, Err(EvalError::WorkspaceStopped)));
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn first_owned_refusal_moves_without_clone_and_account_stays_failed() {
         let (workspace, ledger, _) = account(4096);
         let capability = workspace.capability();
+        let mut bytes = vec![7_u8];
+        let mut allocation = None;
+        let before = ledger.live.load(Ordering::Relaxed);
+        assert!(matches!(
+            capability.reserve_vec_for_append(&mut bytes, &mut allocation, usize::MAX),
+            Err(EvalError::WorkspaceBoundOverflow)
+        ));
+        assert_eq!(bytes, [7]);
+        assert!(allocation.is_none());
+        assert_eq!(ledger.live.load(Ordering::Relaxed), before);
+        assert!(
+            !workspace.has_failed(),
+            "arithmetic refusal never enters admission"
+        );
         assert!(matches!(
             capability.charge(4097),
             Err(EvalError::WorkspaceStopped)

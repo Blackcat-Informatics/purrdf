@@ -2446,6 +2446,7 @@ fn bind_row<D: DatasetView + Sync>(
 ) -> Result<Option<RetainedRow<D::Id>>, EvalError> {
     let dataset = ctx.dataset;
     let workspace = &ctx.growth;
+    let cells = row.as_slice();
     // Reject what can be rejected WITHOUT the row copy first. A row wider than the
     // inline capacity spills to the heap, so a copy made before the test is an
     // allocation spent on a candidate that was never going to survive.
@@ -2465,7 +2466,7 @@ fn bind_row<D: DatasetView + Sync>(
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
         match pos {
             Pos::Bound(want) if *want != id => return Ok(None),
-            Pos::Slot(col) => match row[*col] {
+            Pos::Slot(col) => match cells[*col] {
                 Some(existing) if existing != SolutionTerm::Existing(id) => return Ok(None),
                 _ => {}
             },
@@ -2474,8 +2475,8 @@ fn bind_row<D: DatasetView + Sync>(
     }
 
     let mut matched = true;
-    let out = RetainedRow::try_build(row.len(), workspace, |out| {
-        out.copy_from_slice(row);
+    let out = RetainedRow::try_build(cells.len(), workspace, |out| {
+        out.copy_from_slice(cells);
         for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
             if !bind_pos_admitted(out, pos, id, dataset, workspace)? {
                 matched = false;

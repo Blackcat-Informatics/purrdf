@@ -216,13 +216,7 @@ impl<'a, N: LedgerNodes> Iterator for FrameStatements<'a, N> {
     type Item = Result<LedgerStatement<'a>, LedgerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.pull() {
-            Ok(statement) => statement.map(Ok),
-            Err(error) => {
-                self.phase = 4;
-                Some(Err(error))
-            }
-        }
+        super::next_statement(self.pull(), &mut self.phase, 4)
     }
 }
 

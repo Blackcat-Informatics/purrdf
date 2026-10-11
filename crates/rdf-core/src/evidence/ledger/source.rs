@@ -54,21 +54,11 @@ pub enum LedgerBuildError {
     Storage(StorageError),
 }
 
-impl From<LedgerError> for LedgerBuildError {
-    fn from(error: LedgerError) -> Self {
-        Self::Declaration(error)
-    }
-}
-impl From<StorageError> for LedgerBuildError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
-impl From<ReasonTableError> for LedgerBuildError {
-    fn from(error: ReasonTableError) -> Self {
-        Self::Reasons(error)
-    }
-}
+purrdf_lex::variant_from!(LedgerBuildError {
+    Declaration(LedgerError),
+    Storage(StorageError),
+    Reasons(ReasonTableError),
+});
 impl core::fmt::Display for LedgerBuildError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

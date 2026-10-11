@@ -99,11 +99,7 @@ impl Records {
         if matches!(op, Op::NotExists)
             && let Some(original) = record.as_ref()
         {
-            return match &ctx.evidence_input {
-                Some(input) => input.negative_evidence(original, ctx.active_graph, &ctx.growth),
-                None => original.native_negative(&ctx.growth),
-            }
-            .map(Some);
+            return ctx.negative_evidence(original).map(Some);
         }
         Ok(record)
     }

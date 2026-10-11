@@ -519,6 +519,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) growth: crate::WorkspaceCapability,
     /// Original per-claim declarations and the lazily materialized query table.
     pub(crate) evidence_input: Option<crate::evidence_exec::EvidenceInput<'d, D::Id>>,
+    /// Native-only records lazily share the same admission home as source records.
+    native_evidence: std::sync::Mutex<Option<crate::evidence_exec::EvidenceOwner>>,
     /// Original final WHERE rows for non-SELECT evidence publication. Child
     /// contexts start without a receipt; their scratch ids never enter a parent.
     pub(crate) evidence_answer: Option<SolutionSeq<D::Id>>,
@@ -1308,6 +1310,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             workspace: crate::workspace::QueryWorkspace::resident(),
             growth: crate::WorkspaceCapability::default(),
             evidence_input: None,
+            native_evidence: std::sync::Mutex::new(None),
             candidate_scope: None,
             evidence_answer: None,
             evidence_search: None,
@@ -2770,6 +2773,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             workspace: self.workspace.clone(),
             growth: self.growth.clone(),
             evidence_input: self.evidence_input.clone(),
+            native_evidence: self.native_evidence_for_child()?,
             candidate_scope: self.candidate_scope,
             evidence_answer: None,
             evidence_search: None,
@@ -3149,6 +3153,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             workspace: self.workspace.clone(),
             growth: self.growth.clone(),
             evidence_input: self.evidence_input.clone(),
+            native_evidence: self.native_evidence_for_child()?,
             candidate_scope: self.candidate_scope,
             evidence_answer: None,
             evidence_search: None,
@@ -3346,13 +3351,79 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         Ok(built)
     }
 
-    /// Sources and native relation/shape providers can declare original records.
-    /// This guards preparation before their rows exist; row operators inspect
-    /// the actual attachments rather than infer their absence from a registry.
+    /// Sources and reachable native providers can declare original records.
+    /// An unused relation registry does not change ordinary query execution.
+    /// The existing numbered plan proves whole-query absence, including nested
+    /// EXISTS bodies and subqueries. Unknown plans and separately stored UDF
+    /// bodies stay conservative, as do shape providers. Row operators still
+    /// inspect actual attachments, independently of this preparation proof.
     pub(crate) fn may_have_evidence(&self) -> bool {
         self.evidence_input.is_some()
-            || !self.property_functions.is_empty()
+            || (!self.property_functions.is_empty()
+                && (!self.user_functions.is_empty()
+                    || self
+                        .plan
+                        .as_ref()
+                        .is_none_or(|plan| plan.shape().has_property_functions())))
             || !self.shapes.providers.is_empty()
+    }
+
+    pub(crate) fn evidence_owner(&self) -> Result<crate::evidence_exec::EvidenceOwner, EvalError> {
+        if let Some(input) = &self.evidence_input {
+            return Ok(input.owner.clone());
+        }
+        let mut owner = self
+            .native_evidence
+            .lock()
+            .map_err(|_| EvalError::internal("poisoned native evidence owner"))?;
+        if owner.is_none() {
+            *owner = Some(crate::evidence_exec::EvidenceOwner::new(
+                self.candidate_scope
+                    .and_then(crate::CandidateScope::evidence_owner)
+                    .cloned(),
+                &self.growth,
+            )?);
+        }
+        Ok(owner.as_ref().expect("native owner admitted above").clone())
+    }
+
+    fn native_evidence_for_child(
+        &self,
+    ) -> Result<std::sync::Mutex<Option<crate::evidence_exec::EvidenceOwner>>, EvalError> {
+        // Admit the shared control before a child can create its first record.
+        // An explicit source already shares that control through EvidenceInput.
+        let owner = if self.evidence_input.is_some() {
+            None
+        } else if self.may_have_evidence() {
+            Some(self.evidence_owner()?)
+        } else {
+            self.native_evidence
+                .lock()
+                .map_err(|_| EvalError::internal("poisoned native evidence owner"))?
+                .clone()
+        };
+        Ok(std::sync::Mutex::new(owner))
+    }
+
+    pub(crate) fn bind_native_evidence(
+        &self,
+        row: &crate::RowEvidence,
+    ) -> Result<crate::RowEvidence, EvalError> {
+        if row.is_virtual() {
+            return Ok(row.clone());
+        }
+        self.evidence_owner()?
+            .bind_native_evidence(row, &self.growth)
+    }
+
+    pub(crate) fn negative_evidence(
+        &self,
+        row: &crate::RowEvidence,
+    ) -> Result<crate::RowEvidence, EvalError> {
+        match &self.evidence_input {
+            Some(input) => input.negative_evidence(row, self.active_graph, &self.growth),
+            None => row.native_negative(|| self.evidence_owner()?.query_owner(&self.growth)),
+        }
     }
 
     pub(crate) fn existential_evidence<'r>(
@@ -3364,7 +3435,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             Some(input) => {
                 input.existential_evidence(witnesses, search, self.active_graph, &self.growth)
             }
-            None => crate::RowEvidence::native_existential(witnesses, search, &self.growth),
+            None => crate::RowEvidence::native_existential(witnesses, search, || {
+                self.evidence_owner()?.query_owner(&self.growth)
+            }),
         }
     }
 }
@@ -5031,10 +5104,7 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
         Query::Ask { pattern, .. } => match eval_answer_pattern(pattern, ctx)? {
             Evaluated::Complete(seq) => {
                 let tracked = ctx.may_have_evidence()
-                    || seq
-                        .rows
-                        .iter()
-                        .any(crate::solution::RetainedRow::has_evidence_attachment)
+                    || seq.rows.may_have_evidence_attachment()
                     || !seq.rows.search_evidence().is_virtual();
                 let supported = if tracked {
                     seq.rows.iter().any(|row| !row.evidence().is_undecided())
@@ -5281,6 +5351,88 @@ mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::{Child, NamedNode};
+
+    #[test]
+    fn native_evidence_owner_is_lazy_and_shared_before_workers_create_records() {
+        use purrdf_core::evidence::{EvidenceCombination, SearchCompleteness};
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let ordinary = EvalCtx::new(&dataset);
+        let ordinary_worker = ordinary.fork_for_worker().unwrap();
+        assert!(ordinary.native_evidence.lock().unwrap().is_none());
+        assert!(ordinary_worker.native_evidence.lock().unwrap().is_none());
+        let mut relations = crate::PropertyFunctionRegistry::default();
+        relations.register(
+            "http://example.org/unused-relation",
+            Arc::new(crate::property_fn::MemoryRelation::new(1, 1, Vec::new()).unwrap()),
+        );
+        let pattern = GraphPattern::empty_bgp();
+        let tree = crate::plan::Tree::build(&pattern);
+        let mut unused = EvalCtx::new(&dataset).with_property_functions(&relations);
+        unused.install_plan(&tree);
+        assert!(!unused.may_have_evidence());
+        let unused_worker = unused.fork_for_worker().unwrap();
+        assert!(!unused_worker.may_have_evidence());
+        assert!(unused.native_evidence.lock().unwrap().is_none());
+        assert!(unused_worker.native_evidence.lock().unwrap().is_none());
+        let context = EvalCtx::new(&dataset).with_property_functions(&relations);
+        let virtual_row = crate::RowEvidence::default();
+        assert!(
+            context
+                .existential_evidence([&virtual_row], &virtual_row)
+                .unwrap()
+                .is_virtual()
+        );
+        assert!(context.native_evidence.lock().unwrap().is_none());
+        let first_worker = context.fork_for_worker().unwrap();
+        let second_worker = context.fork_for_worker().unwrap();
+        let function = context.child_for_user_fn().unwrap().unwrap();
+        assert!(
+            context
+                .evidence_owner()
+                .unwrap()
+                .retained_owner(&context.growth)
+                .unwrap()
+                .is_none(),
+            "forks share only the admitted control until a real record is needed"
+        );
+        let first = first_worker.existential_evidence([], &virtual_row).unwrap();
+        for child in [&context, &second_worker, &function] {
+            let next = child.existential_evidence([], &virtual_row).unwrap();
+            first
+                .combine(&next, EvidenceCombination::Alternatives)
+                .unwrap();
+            let negative = child.negative_evidence(&virtual_row).unwrap();
+            first
+                .combine(&negative, EvidenceCombination::Conjunction)
+                .unwrap();
+        }
+        let foreign = crate::QueryEvidence::new(&context.growth).unwrap();
+        let original = foreign
+            .with_completeness(&virtual_row, SearchCompleteness::Undetermined, None)
+            .unwrap();
+        assert!(
+            first
+                .combine(&original, EvidenceCombination::Conjunction)
+                .is_err()
+        );
+        let admitted = context.bind_native_evidence(&original).unwrap();
+        assert_eq!(
+            first
+                .combine(&admitted, EvidenceCombination::Conjunction)
+                .unwrap()
+                .with_record(purrdf_core::evidence::EvidenceRecord::completeness)
+                .unwrap(),
+            SearchCompleteness::Undetermined
+        );
+        let other_query = EvalCtx::new(&dataset).with_property_functions(&relations);
+        let other = other_query.existential_evidence([], &virtual_row).unwrap();
+        assert!(
+            first
+                .combine(&other, EvidenceCombination::Alternatives)
+                .is_err()
+        );
+    }
 
     #[test]
     fn native_term_lookup_retains_known_ids_absence_and_shared_fork_state() {

@@ -24,11 +24,7 @@ pub enum EvidenceRecordError {
     Storage(StorageError),
 }
 
-impl From<StorageError> for EvidenceRecordError {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(EvidenceRecordError { Storage(StorageError) });
 
 impl core::fmt::Display for EvidenceRecordError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
