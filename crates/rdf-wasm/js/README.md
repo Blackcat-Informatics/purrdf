@@ -908,7 +908,7 @@ pieces:
 | `204` | — | an update applied |
 | `400` | the protocol refusal's name | a malformed request, or dataset parameters applied to an operation that does not parse |
 | `400` | `native-sparql-query-parse`, `native-sparql-update-parse` | the operation does not parse; `detail` is the parser's message |
-| `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, nesting past the host-stack budget); `detail` is the engine's message |
+| `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted`, `native-sparql-evaluation-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, or nesting past either stack budget); `detail` is the engine's message |
 | `403` | `native-sparql-service-denied` | the catalog withholds a capability from a `SERVICE` endpoint the query names; no endpoint was contacted |
 | `403` | `native-sparql-service-host-denied` | `resolveService` refused the request by its own policy (`{ kind: "denied" }`); no endpoint was contacted |
 | `403` | `native-sparql-load-denied` | the catalog does not authorize a `LOAD` source, or a location it redirected to; nothing was fetched |
@@ -919,7 +919,7 @@ pieces:
 | `413` | `ContentTooLarge` | the body exceeds `maxRequestBytes` |
 | `415` | the protocol refusal's name | a `Content-Type` the protocol does not define |
 | `422` | the governor's label | a deterministic ceiling stopped the request |
-| `500` | the engine's diagnostic code (`native-sparql-query-eval`, `native-sparql-evaluation-stack-exhausted`, …) | the query's evaluation failed; `detail` is the engine's message |
+| `500` | the engine's diagnostic code (`native-sparql-query-eval`, …) | the query's evaluation failed; `detail` is the engine's message |
 | `500` | `native-sparql-service-unconfigured`, `native-sparql-load-no-resolver` | no resolver reaches a named endpoint or source; with a `correlationId` |
 | `500` | `InternalError` | a host-supplied resolver threw, rejected or answered with something that is not an answer, an exception no code classifies, or any other unexpected exception; with a `correlationId` |
 | `502` | `native-sparql-service-failed` | a `SERVICE` endpoint was contacted and gave no usable answer: a network error, the resolver's timeout, an HTTP error status, a redirect, an undecodable body |
