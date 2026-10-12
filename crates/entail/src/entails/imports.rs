@@ -225,18 +225,18 @@ mod tests {
     /// importing each target.
     fn document(label: &str, object: &str, imports: &[&str]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_blank(label, BlankScope::DEFAULT);
-        let p = b.intern_iri(P);
-        let o = b.intern_iri(object);
-        b.push_quad(s, p, o, None);
-        let ontology = b.intern_iri("http://example.org/self");
-        let rdf_type = b.intern_iri(RDF_TYPE);
-        let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
-        b.push_quad(ontology, rdf_type, owl_ontology, None);
+        let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        let p = b.intern_iri(P).unwrap();
+        let o = b.intern_iri(object).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let ontology = b.intern_iri("http://example.org/self").unwrap();
+        let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+        let owl_ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+        b.push_quad(ontology, rdf_type, owl_ontology, None).unwrap();
         for target in imports {
-            let imports = b.intern_iri(OWL_IMPORTS);
-            let target = b.intern_iri(target);
-            b.push_quad(ontology, imports, target, None);
+            let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+            let target = b.intern_iri(target).unwrap();
+            b.push_quad(ontology, imports, target, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -259,10 +259,10 @@ mod tests {
         const V2: &str = "http://example.org/lib/2";
         let version = |v: &str| {
             let mut b = RdfDatasetBuilder::new();
-            let lib = b.intern_iri("http://example.org/lib");
-            let version_iri = b.intern_iri(OWL_VERSIONIRI);
-            let v = b.intern_iri(v);
-            b.push_quad(lib, version_iri, v, None);
+            let lib = b.intern_iri("http://example.org/lib").unwrap();
+            let version_iri = b.intern_iri(OWL_VERSIONIRI).unwrap();
+            let v = b.intern_iri(v).unwrap();
+            b.push_quad(lib, version_iri, v, None).unwrap();
             b.freeze().expect("freeze")
         };
         let mut map = ImportMap::default();
@@ -305,8 +305,12 @@ mod tests {
         const LIB: &str = "http://example.org/lib";
         use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUB;
         let triple = |b: &mut RdfDatasetBuilder, s: &str, p: &str, o: &str| {
-            let (s, p, o) = (b.intern_iri(s), b.intern_iri(p), b.intern_iri(o));
-            b.push_quad(s, p, o, None);
+            let (s, p, o) = (
+                b.intern_iri(s).unwrap(),
+                b.intern_iri(p).unwrap(),
+                b.intern_iri(o).unwrap(),
+            );
+            b.push_quad(s, p, o, None).unwrap();
         };
         let premise = |imports: bool| {
             let mut b = RdfDatasetBuilder::new();
@@ -387,14 +391,14 @@ mod tests {
         const LIB: &str = "http://example.org/lib";
         let premise = |anchored: bool| {
             let mut b = RdfDatasetBuilder::new();
-            let node = b.intern_iri("http://example.org/node");
-            let imports = b.intern_iri(OWL_IMPORTS);
-            let lib = b.intern_iri(LIB);
-            b.push_quad(node, imports, lib, None);
+            let node = b.intern_iri("http://example.org/node").unwrap();
+            let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+            let lib = b.intern_iri(LIB).unwrap();
+            b.push_quad(node, imports, lib, None).unwrap();
             if anchored {
-                let rdf_type = b.intern_iri(RDF_TYPE);
-                let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
-                b.push_quad(node, rdf_type, owl_ontology, None);
+                let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+                let owl_ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+                b.push_quad(node, rdf_type, owl_ontology, None).unwrap();
             }
             b.freeze().expect("freeze")
         };
@@ -576,27 +580,27 @@ mod tests {
         /// `imports` is set.
         fn premise_graph(imports: bool) -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
-            let tom = b.intern_iri("http://example.org/tom");
-            let ty = b.intern_iri(TYPE);
-            let cat = b.intern_iri("http://example.org/Cat");
-            b.push_quad(tom, ty, cat, None);
+            let tom = b.intern_iri("http://example.org/tom").unwrap();
+            let ty = b.intern_iri(TYPE).unwrap();
+            let cat = b.intern_iri("http://example.org/Cat").unwrap();
+            b.push_quad(tom, ty, cat, None).unwrap();
             if imports {
-                let ontology = b.intern_iri("http://example.org/o");
-                let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
-                b.push_quad(ontology, ty, owl_ontology, None);
-                let predicate = b.intern_iri(OWL_IMPORTS);
-                let schema = b.intern_iri("http://example.org/schema");
-                b.push_quad(ontology, predicate, schema, None);
+                let ontology = b.intern_iri("http://example.org/o").unwrap();
+                let owl_ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+                b.push_quad(ontology, ty, owl_ontology, None).unwrap();
+                let predicate = b.intern_iri(OWL_IMPORTS).unwrap();
+                let schema = b.intern_iri("http://example.org/schema").unwrap();
+                b.push_quad(ontology, predicate, schema, None).unwrap();
             }
             b.freeze().expect("freeze")
         }
 
         let premise = premise_graph(true);
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri("http://example.org/Cat");
-        let sub = b.intern_iri(SUB_CLASS_OF);
-        let animal = b.intern_iri("http://example.org/Animal");
-        b.push_quad(cat, sub, animal, None);
+        let cat = b.intern_iri("http://example.org/Cat").unwrap();
+        let sub = b.intern_iri(SUB_CLASS_OF).unwrap();
+        let animal = b.intern_iri("http://example.org/Animal").unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
         let schema = b.freeze().expect("freeze");
 
         let mut map = ImportMap::default();
@@ -606,10 +610,10 @@ mod tests {
         // `ex:tom a ex:Animal` — reachable ONLY through the imported schema, so an entailed
         // verdict is itself the proof that the run had the imported axioms.
         let mut b = RdfDatasetBuilder::new();
-        let tom = b.intern_iri("http://example.org/tom");
-        let ty = b.intern_iri(TYPE);
-        let animal = b.intern_iri("http://example.org/Animal");
-        b.push_quad(tom, ty, animal, None);
+        let tom = b.intern_iri("http://example.org/tom").unwrap();
+        let ty = b.intern_iri(TYPE).unwrap();
+        let animal = b.intern_iri("http://example.org/Animal").unwrap();
+        b.push_quad(tom, ty, animal, None).unwrap();
         let conclusion = b.freeze().expect("freeze");
 
         let certificate = entails(&premise, &conclusion, Regime::OwlRl, &map)
@@ -669,20 +673,20 @@ mod tests {
         // ontology header's `owl:imports`.
         let premise = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("http://example.org/s");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o");
-            b.push_quad(s, p, o, None);
-            let ontology = b.intern_iri("http://example.org/self");
-            let rdf_type = b.intern_iri(RDF_TYPE);
-            let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
-            b.push_quad(ontology, rdf_type, owl_ontology, None);
-            let imports = b.intern_iri(OWL_IMPORTS);
-            let target = b.intern_iri("http://example.org/a");
-            b.push_quad(ontology, imports, target, None);
-            let triple = b.intern_triple(s, p, o);
-            let reifier = b.intern_blank("r", BlankScope(1));
-            b.push_reifier_in_graph(reifier, triple, None);
+            let s = b.intern_iri("http://example.org/s").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o").unwrap();
+            b.push_quad(s, p, o, None).unwrap();
+            let ontology = b.intern_iri("http://example.org/self").unwrap();
+            let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+            let owl_ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+            b.push_quad(ontology, rdf_type, owl_ontology, None).unwrap();
+            let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+            let target = b.intern_iri("http://example.org/a").unwrap();
+            b.push_quad(ontology, imports, target, None).unwrap();
+            let triple = b.intern_triple(s, p, o).unwrap();
+            let reifier = b.intern_blank("r", BlankScope(1)).unwrap();
+            b.push_reifier_in_graph(reifier, triple, None).unwrap();
             b.freeze().expect("freeze")
         };
 
@@ -770,10 +774,10 @@ mod tests {
     fn triples(rows: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in rows {
-            let s = b.intern_iri(s);
-            let p = b.intern_iri(p);
-            let o = b.intern_iri(o);
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(s).unwrap();
+            let p = b.intern_iri(p).unwrap();
+            let o = b.intern_iri(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1105,13 +1109,13 @@ mod tests {
     fn a_blank_header_and_a_versioning_node_import_and_their_neighbours_do_not() {
         let blank = |class: &str| {
             let mut b = RdfDatasetBuilder::new();
-            let header = b.intern_blank("h", BlankScope::DEFAULT);
-            let rdf_type = b.intern_iri(RDF_TYPE);
-            let class = b.intern_iri(class);
-            let imports = b.intern_iri(OWL_IMPORTS);
-            let lib = b.intern_iri(LIB);
-            b.push_quad(header, rdf_type, class, None);
-            b.push_quad(header, imports, lib, None);
+            let header = b.intern_blank("h", BlankScope::DEFAULT).unwrap();
+            let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+            let class = b.intern_iri(class).unwrap();
+            let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+            let lib = b.intern_iri(LIB).unwrap();
+            b.push_quad(header, rdf_type, class, None).unwrap();
+            b.push_quad(header, imports, lib, None).unwrap();
             b.freeze().expect("freeze")
         };
         let Err(EntailError::UnresolvedImport(iri)) =

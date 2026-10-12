@@ -20,7 +20,7 @@ fn build(values: &[TermValue], first: u64) -> (SegmentedImage, Vec<GlobalTermId>
         .unwrap()
         .with_first_term_index(first)
         .unwrap();
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids = Vec::with_capacity(values.len());
     builder.intern_batch(values, |_, id| ids.push(id)).unwrap();
     for &id in &ids {
@@ -284,7 +284,7 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
         TermValue::iri("http://example.org/empty"),
     ];
     let limits = SegmentedBuildLimits::new(100, 20_000, 30, 2048, 3).unwrap();
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids = Vec::new();
     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
     builder
@@ -346,10 +346,10 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
 
 fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    let empty = builder.intern_iri("http://example.org/empty");
-    builder.push_quad(p, p, p, None);
-    builder.declare_named_graph(empty);
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let empty = builder.intern_iri("http://example.org/empty").unwrap();
+    builder.push_quad(p, p, p, None).unwrap();
+    builder.declare_named_graph(empty).unwrap();
     let source = builder.freeze().unwrap();
     let limits = SegmentedBuildLimits::new(100, 20_000, 30, 1024, 4).unwrap();
     let graph_count = |image: &SegmentedImage| {
@@ -387,8 +387,8 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     // A pack written without the declaration (as every pack written before
     // declarations were carried is) still needs the sidecar to restate it.
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    builder.push_quad(p, p, p, None);
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    builder.push_quad(p, p, p, None).unwrap();
     let old = purrdf_core::PackBuilder::build_bytes(builder.freeze().unwrap().as_ref()).unwrap();
     assert_eq!(
         graph_count(&SegmentedImage::from_pack_v1(&old, limits).unwrap()),

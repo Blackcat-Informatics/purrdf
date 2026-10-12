@@ -494,9 +494,9 @@ pub(crate) fn eval_ask_validator<
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
     invocation: crate::query_law::Invocation<'_>,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     let ComponentValidator::Ask { ask } = validator else {
-        return Err("expected ASK validator, got SELECT".to_owned());
+        return Err("expected ASK validator, got SELECT".into());
     };
     let mut results = Vec::with_capacity(value_nodes.len());
     // Every pre-binding but `$value` is a constant of this component invocation: the
@@ -679,9 +679,9 @@ pub(crate) fn eval_select_validator<
     current_shape: Option<&Term>,
     invocation: crate::query_law::Invocation<'_>,
     report: Option<crate::sparql::SparqlReportContext<'_>>,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     let ComponentValidator::Select { select } = validator else {
-        return Err("expected SELECT validator, got ASK".to_owned());
+        return Err("expected SELECT validator, got ASK".into());
     };
     // The parameter NAMES for the prepared door: `$this`, each declared parameter,
     // then the shape context, in the order the values are bound below. A component

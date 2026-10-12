@@ -167,13 +167,13 @@ impl PfCursor for Rows {
 /// unbound and the fallback is what reaches the call.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let beta = builder.intern_literal(RdfLiteral::simple("beta"));
-    builder.push_quad(s, p, beta, None);
-    let g = builder.intern_iri(&format!("{EX}g"));
-    let gamma = builder.intern_literal(RdfLiteral::simple("gamma"));
-    builder.push_quad(s, p, gamma, Some(g));
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let beta = builder.intern_literal(RdfLiteral::simple("beta")).unwrap();
+    builder.push_quad(s, p, beta, None).unwrap();
+    let g = builder.intern_iri(&format!("{EX}g")).unwrap();
+    let gamma = builder.intern_literal(RdfLiteral::simple("gamma")).unwrap();
+    builder.push_quad(s, p, gamma, Some(g)).unwrap();
     builder.freeze().expect("the fixture must validate")
 }
 
@@ -736,17 +736,19 @@ fn a_lateral_after_a_call_is_driven_by_the_calls_rows() {
 /// each a different value, so an answer names which of them reached the call.
 fn lateral_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     for (subject, value) in [("a", "alpha"), ("b", "beta"), ("c", "epsilon")] {
-        let subject = builder.intern_iri(&format!("{EX}{subject}"));
-        let value = builder.intern_literal(RdfLiteral::simple(value));
-        builder.push_quad(subject, p, value, None);
+        let subject = builder.intern_iri(&format!("{EX}{subject}")).unwrap();
+        let value = builder.intern_literal(RdfLiteral::simple(value)).unwrap();
+        builder.push_quad(subject, p, value, None).unwrap();
     }
     // One named graph, so a call inside `GRAPH ?g { … }` is evaluated once. Its
     // predicate is no other pattern's, and the default graph does not include it.
-    let graph = builder.intern_iri(&format!("{EX}g"));
-    let marker = builder.intern_iri(&format!("{EX}marker"));
-    builder.push_quad(graph, marker, graph, Some(graph));
+    let graph = builder.intern_iri(&format!("{EX}g")).unwrap();
+    let marker = builder.intern_iri(&format!("{EX}marker")).unwrap();
+    builder
+        .push_quad(graph, marker, graph, Some(graph))
+        .unwrap();
     builder.freeze().expect("the fixture must validate")
 }
 
@@ -1323,10 +1325,12 @@ fn a_key_or_an_aggregate_over_a_variable_the_text_may_leave_unbound_is_not_a_sou
 /// `STR` errors.
 fn blank_object_data() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let b = builder.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
-    builder.push_quad(s, p, b, None);
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let b = builder
+        .intern_blank("b0", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    builder.push_quad(s, p, b, None).unwrap();
     builder.freeze().expect("the fixture must validate")
 }
 
@@ -1738,30 +1742,34 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 /// which `SUM` and `AVG` poison.
 fn aggregate_data(poisoned: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let r = builder.intern_iri(&format!("{EX}r"));
-    let n = builder.intern_iri(&format!("{EX}n"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let r = builder.intern_iri(&format!("{EX}r")).unwrap();
+    let n = builder.intern_iri(&format!("{EX}n")).unwrap();
     for (subject, text, iri, numbers) in [
         ("a", "alpha", "x", &["1", "2"][..]),
         ("b", "beta", "y", &["4"][..]),
     ] {
-        let subject = builder.intern_iri(&format!("{EX}{subject}"));
-        let text = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, p, text, None);
-        let iri = builder.intern_iri(&format!("{EX}{iri}"));
-        builder.push_quad(subject, r, iri, None);
+        let subject = builder.intern_iri(&format!("{EX}{subject}")).unwrap();
+        let text = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, p, text, None).unwrap();
+        let iri = builder.intern_iri(&format!("{EX}{iri}")).unwrap();
+        builder.push_quad(subject, r, iri, None).unwrap();
         for number in numbers {
-            let number = builder.intern_literal(RdfLiteral::typed(*number, XSD_INTEGER));
-            builder.push_quad(subject, n, number, None);
+            let number = builder
+                .intern_literal(RdfLiteral::typed(*number, XSD_INTEGER))
+                .unwrap();
+            builder.push_quad(subject, n, number, None).unwrap();
         }
     }
     if poisoned {
-        let c = builder.intern_iri(&format!("{EX}c"));
-        let blank = builder.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
-        builder.push_quad(c, p, blank, None);
-        builder.push_quad(c, r, blank, None);
-        let zzz = builder.intern_literal(RdfLiteral::simple("zzz"));
-        builder.push_quad(c, n, zzz, None);
+        let c = builder.intern_iri(&format!("{EX}c")).unwrap();
+        let blank = builder
+            .intern_blank("b0", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        builder.push_quad(c, p, blank, None).unwrap();
+        builder.push_quad(c, r, blank, None).unwrap();
+        let zzz = builder.intern_literal(RdfLiteral::simple("zzz")).unwrap();
+        builder.push_quad(c, n, zzz, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }

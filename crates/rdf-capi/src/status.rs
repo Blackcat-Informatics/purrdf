@@ -66,6 +66,8 @@ pub enum PurrdfStatus {
     /// A geographic reference, geometry, numerical or resource refusal. A
     /// session call also returns the unchanged typed response record.
     GeoError = 14,
+    /// Logical capacity or physical storage refused; the diagnostic retains its cause.
+    StorageError = 15,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

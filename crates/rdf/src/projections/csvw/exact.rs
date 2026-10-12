@@ -1241,7 +1241,7 @@ fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError
     let mut builder = RdfDatasetBuilder::new();
     for graph in &dataset.named_graphs {
         let graph = graph.intern(&mut builder)?;
-        builder.declare_named_graph(graph);
+        builder.declare_named_graph(graph)?;
     }
     for quad in &dataset.quads {
         let subject = quad.subject.intern(&mut builder)?;
@@ -1250,14 +1250,14 @@ fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError
                 "exact CSVW quad predicate is not an IRI",
             ));
         };
-        let predicate = builder.intern_iri(predicate);
+        let predicate = builder.intern_iri(predicate)?;
         let object = quad.object.intern(&mut builder)?;
         let graph = quad
             .graph
             .as_ref()
             .map(|term| term.intern(&mut builder))
             .transpose()?;
-        builder.push_quad(subject, predicate, object, graph);
+        builder.push_quad(subject, predicate, object, graph)?;
     }
     for row in &dataset.reifiers {
         let reifier = row.reifier.intern(&mut builder)?;
@@ -1267,7 +1267,7 @@ fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError
             .as_ref()
             .map(|term| term.intern(&mut builder))
             .transpose()?;
-        builder.push_reifier_in_graph(reifier, statement, graph);
+        builder.push_reifier_in_graph(reifier, statement, graph)?;
     }
     for row in &dataset.annotations {
         let reifier = row.reifier.intern(&mut builder)?;
@@ -1276,20 +1276,16 @@ fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError
                 "exact CSVW annotation predicate is not an IRI",
             ));
         };
-        let predicate = builder.intern_iri(predicate);
+        let predicate = builder.intern_iri(predicate)?;
         let object = row.object.intern(&mut builder)?;
         let graph = row
             .graph
             .as_ref()
             .map(|term| term.intern(&mut builder))
             .transpose()?;
-        builder.push_annotation_in_graph(reifier, predicate, object, graph);
+        builder.push_annotation_in_graph(reifier, predicate, object, graph)?;
     }
-    builder.freeze().map_err(|error| {
-        ProjectionError::integrity(format!(
-            "exact CSVW rows reconstructed an invalid RDF dataset: {error}"
-        ))
-    })
+    builder.freeze().map_err(ProjectionError::from)
 }
 
 fn resolve_term<D: DatasetView>(
@@ -1633,29 +1629,37 @@ mod tests {
 
     fn fixture() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/subject");
-        let predicate = builder.intern_iri("http://example.org/predicate");
-        let graph = builder.intern_blank("graph", BlankScope(9));
-        let literal = builder.intern_literal(RdfLiteral {
-            lexical_form: "مرحبا,\nquoted \" value".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        builder.push_quad(subject, predicate, literal, Some(graph));
-        let quoted = builder.intern_triple(subject, predicate, literal);
-        let nested = builder.intern_triple(subject, predicate, quoted);
-        builder.push_quad(subject, predicate, nested, None);
-        let reifier = builder.intern_blank("reifier", BlankScope(7));
-        builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-        let annotation_predicate = builder.intern_iri("http://example.org/confidence");
-        let annotation_object = builder.intern_iri("http://example.org/high");
-        builder.push_annotation_in_graph(
-            reifier,
-            annotation_predicate,
-            annotation_object,
-            Some(graph),
-        );
+        let subject = builder.intern_iri("http://example.org/subject").unwrap();
+        let predicate = builder.intern_iri("http://example.org/predicate").unwrap();
+        let graph = builder.intern_blank("graph", BlankScope(9)).unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا,\nquoted \" value".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, literal, Some(graph))
+            .unwrap();
+        let quoted = builder.intern_triple(subject, predicate, literal).unwrap();
+        let nested = builder.intern_triple(subject, predicate, quoted).unwrap();
+        builder.push_quad(subject, predicate, nested, None).unwrap();
+        let reifier = builder.intern_blank("reifier", BlankScope(7)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(graph))
+            .unwrap();
+        let annotation_predicate = builder.intern_iri("http://example.org/confidence").unwrap();
+        let annotation_object = builder.intern_iri("http://example.org/high").unwrap();
+        builder
+            .push_annotation_in_graph(
+                reifier,
+                annotation_predicate,
+                annotation_object,
+                Some(graph),
+            )
+            .unwrap();
         builder.freeze().expect("fixture")
     }
 
@@ -1777,10 +1781,14 @@ mod tests {
     #[test]
     fn exact_csvw_preserves_explicit_empty_named_graphs() {
         let mut builder = RdfDatasetBuilder::new();
-        let iri = builder.intern_iri("http://example.org/empty-iri-graph");
-        let blank = builder.intern_blank("empty-blank-graph", BlankScope(12));
-        builder.declare_named_graph(iri);
-        builder.declare_named_graph(blank);
+        let iri = builder
+            .intern_iri("http://example.org/empty-iri-graph")
+            .unwrap();
+        let blank = builder
+            .intern_blank("empty-blank-graph", BlankScope(12))
+            .unwrap();
+        builder.declare_named_graph(iri).unwrap();
+        builder.declare_named_graph(blank).unwrap();
         let dataset = builder.freeze().expect("empty named graphs");
         let config = test_config(100);
         let projected = project_csvw_exact(dataset.as_ref(), &config).expect("project");

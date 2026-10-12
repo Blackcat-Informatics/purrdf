@@ -92,7 +92,7 @@ impl RdfDataset {
         // Term declarations first, in ascending id order — components and datatypes
         // (lower ids) precede the triple terms / literals that reference them.
         for i in 0..self.term_count() {
-            let id = TermId::from_index(i as u32);
+            let id = TermId::from_index(i as u32).expect("stored term index is representable");
             sink.term(id, self.resolve(id));
         }
         for quad in self.quads() {
@@ -114,7 +114,7 @@ mod tests {
     use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     /// A sink that records the stream and checks the term-before-reference
@@ -179,14 +179,16 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
         // A literal (references a datatype term) and a triple term (references s,p,o).
-        let lit = b.intern_literal(RdfLiteral::language_tagged("hi", "en"));
-        let triple = b.intern_triple(s, p, o);
+        let lit = b
+            .intern_literal(RdfLiteral::language_tagged("hi", "en"))
+            .unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
         let r = iri(&mut b, "r");
         let ap = iri(&mut b, "ap");
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, lit, None);
-        b.push_reifier(r, triple);
-        b.push_annotation(r, ap, o);
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, ap, o).unwrap();
         let ds = b.freeze().expect("valid");
 
         let mut sink = CollectSink::default();
@@ -228,11 +230,13 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
         let graph = iri(&mut b, "graph");
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let reifier = iri(&mut b, "reifier");
         let annotation_predicate = iri(&mut b, "confidence");
-        b.push_reifier_in_graph(reifier, triple, Some(graph));
-        b.push_annotation_in_graph(reifier, annotation_predicate, o, Some(graph));
+        b.push_reifier_in_graph(reifier, triple, Some(graph))
+            .unwrap();
+        b.push_annotation_in_graph(reifier, annotation_predicate, o, Some(graph))
+            .unwrap();
         let ds = b.freeze().expect("valid");
 
         let mut sink = GraphAwareSink::default();
@@ -252,7 +256,7 @@ mod tests {
         impl RdfDatasetVisitor for Silent {}
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         ds.emit(&mut Silent);
     }

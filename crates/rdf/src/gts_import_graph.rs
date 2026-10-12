@@ -80,7 +80,7 @@ impl GraphInterner {
 
         let id = match kind {
             TermKind::Iri => self.intern_iri(gts_id)?,
-            TermKind::Bnode => self.intern_blank(gts_id),
+            TermKind::Bnode => self.intern_blank(gts_id)?,
             TermKind::Literal => self.intern_literal(gts_id, depth)?,
             TermKind::Triple => self.intern_triple(gts_id, depth)?,
         };
@@ -98,14 +98,14 @@ impl GraphInterner {
             )
             .with_location(self.location(gts_id)));
         };
-        Ok(self.builder.intern_iri(&iri))
+        Ok(self.builder.intern_iri(&iri)?)
     }
 
-    fn intern_blank(&mut self, gts_id: usize) -> TermId {
+    fn intern_blank(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
         // MOVE the blank label out; all folded blanks share the flattened scope.
         let label = std::mem::take(&mut self.terms[gts_id].value)
             .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
-        self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)
+        Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
     }
 
     fn intern_literal(&mut self, gts_id: usize, depth: usize) -> Result<TermId, RdfDiagnostic> {
@@ -168,7 +168,7 @@ impl GraphInterner {
         let s = self.intern(s, depth + 1)?;
         let p = self.intern(p, depth + 1)?;
         let o = self.intern(o, depth + 1)?;
-        Ok(self.builder.intern_triple(s, p, o))
+        Ok(self.builder.intern_triple(s, p, o)?)
     }
 
     /// Intern a literal datatype term (which MUST resolve to an IRI) and return its
@@ -274,7 +274,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
             Some(g) => Some(interner.resolve_row_term(g, "quad graph name", &location)?),
             None => None,
         };
-        let handle = interner.builder.push_quad_with_handle(s, p, o, g);
+        let handle = interner.builder.push_quad_with_handle(s, p, o, g)?;
         interner.builder.attach_location(handle, location);
     }
 
@@ -289,8 +289,8 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         let g = graph
             .map(|g| interner.resolve_row_term(g, "reifier graph", &location))
             .transpose()?;
-        let triple = interner.builder.intern_triple(s, p, o);
-        interner.builder.push_reifier_in_graph(reifier, triple, g);
+        let triple = interner.builder.intern_triple(s, p, o)?;
+        interner.builder.push_reifier_in_graph(reifier, triple, g)?;
     }
 
     // Annotations `(reifier, predicate, value, graph?)`.
@@ -302,7 +302,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         let g = graph
             .map(|g| interner.resolve_row_term(g, "annotation graph", &location))
             .transpose()?;
-        interner.builder.push_annotation_in_graph(r, p, v, g);
+        interner.builder.push_annotation_in_graph(r, p, v, g)?;
     }
 
     let dataset = interner.builder.freeze()?;

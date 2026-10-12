@@ -166,10 +166,10 @@ mod tests {
     /// A dataset whose one triple's subject is the blank node `label`.
     fn with_blank(label: &str, scope: u32) -> std::sync::Arc<purrdf_core::RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_blank(label, BlankScope(scope));
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_blank(label, BlankScope(scope)).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -240,16 +240,19 @@ mod tests {
     #[test]
     fn a_label_in_a_side_table_or_a_graph_declaration_is_collected() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let triple = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("onlyReifier", BlankScope::DEFAULT);
-        b.push_reifier_in_graph(reifier, triple, None);
-        let annotated = b.intern_blank("onlyAnnotation", BlankScope::DEFAULT);
-        b.push_annotation_in_graph(reifier, p, annotated, None);
-        let graph = b.intern_blank("onlyGraph", BlankScope::DEFAULT);
-        b.declare_named_graph(graph);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_blank("onlyReifier", BlankScope::DEFAULT).unwrap();
+        b.push_reifier_in_graph(reifier, triple, None).unwrap();
+        let annotated = b
+            .intern_blank("onlyAnnotation", BlankScope::DEFAULT)
+            .unwrap();
+        b.push_annotation_in_graph(reifier, p, annotated, None)
+            .unwrap();
+        let graph = b.intern_blank("onlyGraph", BlankScope::DEFAULT).unwrap();
+        b.declare_named_graph(graph).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(ds.quads().count(), 0, "the fixture asserts no quad at all");
 
@@ -270,12 +273,14 @@ mod tests {
     #[test]
     fn a_colliding_label_in_a_reifier_position_lengthens_the_prefix() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let triple = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank(&format!("{FRESH_PREFIX}0"), BlankScope::DEFAULT);
-        b.push_reifier_in_graph(reifier, triple, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let reifier = b
+            .intern_blank(&format!("{FRESH_PREFIX}0"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_reifier_in_graph(reifier, triple, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let mut fresh = FreshBlanks::avoiding(&[&ds]);
@@ -347,9 +352,9 @@ mod term_walk_tests {
                 purrdf_core::term_fixture::TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let ds = builder.freeze().expect("a generated term freezes");
             let mut expected = BTreeSet::new();
             reference(&value, &mut expected);

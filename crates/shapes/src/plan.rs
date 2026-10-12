@@ -941,7 +941,7 @@ impl<'a> ShapePlan<'a> {
         &self,
         data: &ShaclData,
         slot: UniqueSlot,
-    ) -> Result<&'a UniqueGroups, String> {
+    ) -> Result<&'a UniqueGroups, crate::error::ShapesError> {
         let cell = self
             .binding
             .unique_values
@@ -958,7 +958,8 @@ impl<'a> ShapePlan<'a> {
         let built = UniqueGroups::build(data, spec, self.binding, self.classes)?;
         // A lost race publishes nothing and reads the winner's grouping.
         let _ = cell.set(built);
-        cell.get().ok_or_else(|| slot_defect("unique-values", slot))
+        cell.get()
+            .ok_or_else(|| slot_defect("unique-values", slot).into())
     }
 
     /// Whether the lowering this plan belongs to holds any `sh:uniqueValuesFor`
@@ -977,7 +978,10 @@ impl<'a> ShapePlan<'a> {
     ///
     /// # Errors
     /// As [`Self::unique_groups`].
-    pub(crate) fn warm_unique_values(&self, data: &ShaclData) -> Result<(), String> {
+    pub(crate) fn warm_unique_values(
+        &self,
+        data: &ShaclData,
+    ) -> Result<(), crate::error::ShapesError> {
         for slot in 0..self.graph.unique_values.len() {
             // Slots were handed out as `u32` at lowering time, so every position
             // of this row fits one.

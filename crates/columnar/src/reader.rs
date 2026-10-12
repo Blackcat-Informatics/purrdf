@@ -540,14 +540,14 @@ fn reconstruct_dataset(
         .values
         .iter()
         .map(|value| builder.intern_value(value))
-        .collect();
+        .collect::<Result<_, _>>()?;
     for (index, &named) in dictionary.named_graphs.iter().enumerate() {
         if named {
-            builder.declare_named_graph(ids[index]);
+            builder.declare_named_graph(ids[index])?;
         }
     }
     for &(s, p, o, g) in quads {
-        builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]));
+        builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]))?;
     }
     for &(reifier, s, p, o, g) in reifiers {
         let triple_value = TermValue::Triple {
@@ -561,7 +561,7 @@ fn reconstruct_dataset(
                 "component tuple has no corresponding triple term",
             )
         })?;
-        builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]));
+        builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]))?;
     }
     for &(reifier, predicate, value, graph) in annotations {
         builder.push_annotation_in_graph(
@@ -569,11 +569,14 @@ fn reconstruct_dataset(
             ids[predicate],
             ids[value],
             graph.map(|id| ids[id]),
-        );
+        )?;
     }
-    builder
-        .freeze()
-        .map_err(|error| ColumnarError::malformed("RDF reconstruction", error.to_string()))
+    builder.freeze().map_err(|error| {
+        error.storage_error().map_or_else(
+            || ColumnarError::malformed("RDF reconstruction", error.to_string()),
+            ColumnarError::Storage,
+        )
+    })
 }
 
 fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarError> {
@@ -741,22 +744,30 @@ mod tests {
 
     fn fixture() -> (Arc<RdfDataset>, ContentStore) {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("subject", BlankScope(3));
-        let predicate = builder.intern_iri("https://example.org/p");
-        let object = builder.intern_literal(RdfLiteral {
-            lexical_form: "bonjour".to_owned(),
-            datatype: None,
-            language: Some("fr".to_owned()),
-            direction: Some(RdfTextDirection::Ltr),
-        });
-        let graph = builder.intern_iri("https://example.org/graph");
-        let empty_graph = builder.intern_iri("https://example.org/empty");
-        builder.declare_named_graph(empty_graph);
-        builder.push_quad(subject, predicate, object, Some(graph));
-        let triple = builder.intern_triple(subject, predicate, object);
-        let reifier = builder.intern_blank("reifier", BlankScope(3));
-        builder.push_reifier_in_graph(reifier, triple, Some(graph));
-        builder.push_annotation_in_graph(reifier, predicate, object, None);
+        let subject = builder.intern_blank("subject", BlankScope(3)).unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "bonjour".to_owned(),
+                datatype: None,
+                language: Some("fr".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+            .unwrap();
+        let graph = builder.intern_iri("https://example.org/graph").unwrap();
+        let empty_graph = builder.intern_iri("https://example.org/empty").unwrap();
+        builder.declare_named_graph(empty_graph).unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
+        let triple = builder.intern_triple(subject, predicate, object).unwrap();
+        let reifier = builder.intern_blank("reifier", BlankScope(3)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, triple, Some(graph))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, predicate, object, None)
+            .unwrap();
 
         let mut blobs = ContentStore::new();
         blobs.insert(b"first".to_vec());

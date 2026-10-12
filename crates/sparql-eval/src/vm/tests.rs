@@ -403,20 +403,22 @@ impl Walker {
 
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&format!("{EX}p"));
-    let q = b.intern_iri(&format!("{EX}q"));
-    let a = b.intern_iri(&format!("{EX}a"));
-    let c = b.intern_iri(&format!("{EX}c"));
-    let thirty = b.intern_literal(RdfLiteral {
-        lexical_form: "30".to_owned(),
-        datatype: Some(format!("{XSD}integer")),
-        language: None,
-        direction: None,
-    });
-    let name = b.intern_literal(RdfLiteral::simple("Ann"));
-    b.push_quad(a, p, thirty, None);
-    b.push_quad(a, q, name, None);
-    b.push_quad(c, p, a, None);
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let q = b.intern_iri(&format!("{EX}q")).unwrap();
+    let a = b.intern_iri(&format!("{EX}a")).unwrap();
+    let c = b.intern_iri(&format!("{EX}c")).unwrap();
+    let thirty = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "30".to_owned(),
+            datatype: Some(format!("{XSD}integer")),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let name = b.intern_literal(RdfLiteral::simple("Ann")).unwrap();
+    b.push_quad(a, p, thirty, None).unwrap();
+    b.push_quad(a, q, name, None).unwrap();
+    b.push_quad(c, p, a, None).unwrap();
     b.freeze().expect("the fixture freezes")
 }
 

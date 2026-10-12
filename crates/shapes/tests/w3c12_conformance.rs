@@ -402,26 +402,32 @@ fn expected_triples(expected: &InferExpected) -> Result<Arc<RdfDataset>, String>
                 if let Term::Triple(statement) = o
                     && reifies(p, o)
                 {
-                    builder.push_owned_reifier(&purrdf_rdf::RdfReifier::new(
-                        s.to_rdf_term(),
-                        purrdf_rdf::RdfTriple::new(
-                            statement.subject.to_rdf_term(),
-                            statement.predicate.as_str(),
-                            statement.object.to_rdf_term(),
-                        ),
-                    ));
+                    builder
+                        .push_owned_reifier(&purrdf_rdf::RdfReifier::new(
+                            s.to_rdf_term(),
+                            purrdf_rdf::RdfTriple::new(
+                                statement.subject.to_rdf_term(),
+                                statement.predicate.as_str(),
+                                statement.object.to_rdf_term(),
+                            ),
+                        ))
+                        .unwrap();
                 } else if reifiers.contains(&s) {
-                    builder.push_owned_annotation(&purrdf_rdf::RdfAnnotation::new(
-                        s.to_rdf_term(),
-                        predicate.as_str(),
-                        o.to_rdf_term(),
-                    ));
+                    builder
+                        .push_owned_annotation(&purrdf_rdf::RdfAnnotation::new(
+                            s.to_rdf_term(),
+                            predicate.as_str(),
+                            o.to_rdf_term(),
+                        ))
+                        .unwrap();
                 } else {
-                    builder.push_owned_quad(&RdfQuad::new(
-                        s.to_rdf_term(),
-                        predicate.as_str(),
-                        o.to_rdf_term(),
-                    ));
+                    builder
+                        .push_owned_quad(&RdfQuad::new(
+                            s.to_rdf_term(),
+                            predicate.as_str(),
+                            o.to_rdf_term(),
+                        ))
+                        .unwrap();
                 }
             }
             builder.freeze().map_err(|e| e.to_string())

@@ -143,11 +143,15 @@ fn corpus(
         rows.reverse();
     }
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(NOTE);
+    let predicate = builder.intern_iri(NOTE).unwrap();
     for (id, text) in rows {
-        let subject = builder.intern_iri(&format!("https://example.org/technical/{id:02}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(*text));
-        builder.push_quad(subject, predicate, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/technical/{id:02}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(*text)).unwrap();
+        builder
+            .push_quad(subject, predicate, literal, None)
+            .unwrap();
     }
     let dataset = builder.freeze().expect("valid technical RDF corpus");
     let config = TextIndexConfig::new(
@@ -419,25 +423,35 @@ fn mixed_identifiers_and_declared_english_stemming_keep_script_boundaries() {
 #[test]
 fn rdf12_annotation_identity_survives_search_normalization() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/technical/claim");
-    let predicate = builder.intern_iri("https://example.org/technical/uses");
-    let object = builder.intern_iri("https://example.org/technical/model");
-    builder.push_quad(subject, predicate, object, None);
-    let triple = builder.intern_triple(subject, predicate, object);
-    let note = builder.intern_iri(NOTE);
+    let subject = builder
+        .intern_iri("https://example.org/technical/claim")
+        .unwrap();
+    let predicate = builder
+        .intern_iri("https://example.org/technical/uses")
+        .unwrap();
+    let object = builder
+        .intern_iri("https://example.org/technical/model")
+        .unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
+    let triple = builder.intern_triple(subject, predicate, object).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
     let originals = ["RDF1.2数据模型", "ＲＤＦ１．２数据模型"];
     let mut literals = Vec::new();
     for (number, lexical) in originals.into_iter().enumerate() {
-        let reifier = builder.intern_iri(&format!("https://example.org/technical/reifier{number}"));
-        let literal = builder.intern_literal(RdfLiteral {
-            lexical_form: lexical.to_owned(),
-            datatype: None,
-            language: Some("zh".to_owned()),
-            direction: Some(RdfTextDirection::Ltr),
-        });
+        let reifier = builder
+            .intern_iri(&format!("https://example.org/technical/reifier{number}"))
+            .unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: lexical.to_owned(),
+                datatype: None,
+                language: Some("zh".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+            .unwrap();
         literals.push(literal);
-        builder.push_reifier(reifier, triple);
-        builder.push_annotation(reifier, note, literal);
+        builder.push_reifier(reifier, triple).unwrap();
+        builder.push_annotation(reifier, note, literal).unwrap();
     }
     let dataset = builder
         .freeze()

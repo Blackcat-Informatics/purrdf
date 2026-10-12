@@ -44,14 +44,14 @@ const NS: &str = "http://example.org/";
 /// vocabulary for the RDFS closure to be substantially larger than the assertion.
 fn hierarchy() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let subclass = b.intern_iri(RDFS_SUBCLASS);
-    let cat = b.intern_iri(&format!("{NS}Cat"));
-    let animal = b.intern_iri(&format!("{NS}Animal"));
-    b.push_quad(cat, subclass, animal, None);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let subclass = b.intern_iri(RDFS_SUBCLASS).unwrap();
+    let cat = b.intern_iri(&format!("{NS}Cat")).unwrap();
+    let animal = b.intern_iri(&format!("{NS}Animal")).unwrap();
+    b.push_quad(cat, subclass, animal, None).unwrap();
     for name in ["mittens", "tom", "mia"] {
-        let individual = b.intern_iri(&format!("{NS}{name}"));
-        b.push_quad(individual, ty, cat, None);
+        let individual = b.intern_iri(&format!("{NS}{name}")).unwrap();
+        b.push_quad(individual, ty, cat, None).unwrap();
     }
     b.freeze().expect("the fixture freezes")
 }
@@ -313,14 +313,18 @@ fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
 #[test]
 fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
     let mut b = RdfDatasetBuilder::new();
-    let value = b.intern_iri("https://example.org/value");
+    let value = b.intern_iri("https://example.org/value").unwrap();
     for (subject, lexical) in [("s1", "1"), ("s2", "2"), ("s3", "3")] {
-        let s = b.intern_iri(&format!("https://example.org/{subject}"));
-        let literal = b.intern_literal(purrdf::RdfLiteral::typed(
-            lexical,
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        b.push_quad(s, value, literal, None);
+        let s = b
+            .intern_iri(&format!("https://example.org/{subject}"))
+            .unwrap();
+        let literal = b
+            .intern_literal(purrdf::RdfLiteral::typed(
+                lexical,
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        b.push_quad(s, value, literal, None).unwrap();
     }
     let dataset = b.freeze().expect("the fixture freezes");
 
@@ -597,28 +601,30 @@ use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
 /// after witness filtration.
 fn some_values_from_ontology(with_named_answers: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let class = b.intern_iri(OWL_CLASS);
-    let subclass_of = b.intern_iri(RDFS_SUBCLASS);
-    let a = b.intern_iri(&format!("{NS}A"));
-    let big_b = b.intern_iri(&format!("{NS}B"));
-    let r = b.intern_iri(&format!("{NS}r"));
-    let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-    let restriction_class = b.intern_iri(OWL_RESTRICTION);
-    let on_property = b.intern_iri(OWL_ON_PROPERTY);
-    let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
-    b.push_quad(a, ty, class, None);
-    b.push_quad(big_b, ty, class, None);
-    b.push_quad(restriction, ty, restriction_class, None);
-    b.push_quad(restriction, on_property, r, None);
-    b.push_quad(restriction, some_values_from, big_b, None);
-    b.push_quad(a, subclass_of, restriction, None);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let class = b.intern_iri(OWL_CLASS).unwrap();
+    let subclass_of = b.intern_iri(RDFS_SUBCLASS).unwrap();
+    let a = b.intern_iri(&format!("{NS}A")).unwrap();
+    let big_b = b.intern_iri(&format!("{NS}B")).unwrap();
+    let r = b.intern_iri(&format!("{NS}r")).unwrap();
+    let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+    let restriction_class = b.intern_iri(OWL_RESTRICTION).unwrap();
+    let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+    let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
+    b.push_quad(a, ty, class, None).unwrap();
+    b.push_quad(big_b, ty, class, None).unwrap();
+    b.push_quad(restriction, ty, restriction_class, None)
+        .unwrap();
+    b.push_quad(restriction, on_property, r, None).unwrap();
+    b.push_quad(restriction, some_values_from, big_b, None)
+        .unwrap();
+    b.push_quad(a, subclass_of, restriction, None).unwrap();
     for (name, target) in [("a1", "named1"), ("a2", "named2"), ("a3", "named3")] {
-        let individual = b.intern_iri(&format!("{NS}{name}"));
-        b.push_quad(individual, ty, a, None);
+        let individual = b.intern_iri(&format!("{NS}{name}")).unwrap();
+        b.push_quad(individual, ty, a, None).unwrap();
         if with_named_answers {
-            let named_target = b.intern_iri(&format!("{NS}{target}"));
-            b.push_quad(individual, r, named_target, None);
+            let named_target = b.intern_iri(&format!("{NS}{target}")).unwrap();
+            b.push_quad(individual, r, named_target, None).unwrap();
         }
     }
     b.freeze().expect("the fixture freezes")
@@ -809,26 +815,26 @@ use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
 /// `tom` an `Animal` lives only in the imported document.
 fn importing_premise() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let ontology = b.intern_iri(&format!("{NS}o"));
-    let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
-    let imports = b.intern_iri(OWL_IMPORTS);
-    let schema = b.intern_iri(&format!("{NS}schema"));
-    let tom = b.intern_iri(&format!("{NS}tom"));
-    let cat = b.intern_iri(&format!("{NS}Cat"));
-    b.push_quad(ontology, ty, owl_ontology, None);
-    b.push_quad(ontology, imports, schema, None);
-    b.push_quad(tom, ty, cat, None);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let ontology = b.intern_iri(&format!("{NS}o")).unwrap();
+    let owl_ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+    let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+    let schema = b.intern_iri(&format!("{NS}schema")).unwrap();
+    let tom = b.intern_iri(&format!("{NS}tom")).unwrap();
+    let cat = b.intern_iri(&format!("{NS}Cat")).unwrap();
+    b.push_quad(ontology, ty, owl_ontology, None).unwrap();
+    b.push_quad(ontology, imports, schema, None).unwrap();
+    b.push_quad(tom, ty, cat, None).unwrap();
     b.freeze().expect("the fixture freezes")
 }
 
 /// `ex:Cat rdfs:subClassOf ex:Animal .`
 fn imported_schema() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let subclass = b.intern_iri(RDFS_SUBCLASS);
-    let cat = b.intern_iri(&format!("{NS}Cat"));
-    let animal = b.intern_iri(&format!("{NS}Animal"));
-    b.push_quad(cat, subclass, animal, None);
+    let subclass = b.intern_iri(RDFS_SUBCLASS).unwrap();
+    let cat = b.intern_iri(&format!("{NS}Cat")).unwrap();
+    let animal = b.intern_iri(&format!("{NS}Animal")).unwrap();
+    b.push_quad(cat, subclass, animal, None).unwrap();
     b.freeze().expect("the fixture freezes")
 }
 

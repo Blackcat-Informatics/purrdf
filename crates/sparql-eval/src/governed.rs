@@ -428,15 +428,20 @@ impl PartialAnswers {
     /// result, ordinary quads, reifier bindings, annotations, and named-graph declarations
     /// are all filtered. [`Self::Unknown`] passes through untouched because it carries no
     /// rows to inspect.
-    #[must_use]
-    pub fn withholding_blank_nodes(self, mut withhold: impl FnMut(&str) -> bool) -> Self {
-        match self {
+    ///
+    /// # Errors
+    /// Preserves a graph reconstruction's original capacity or storage refusal.
+    pub fn withholding_blank_nodes(
+        self,
+        mut withhold: impl FnMut(&str) -> bool,
+    ) -> Result<Self, purrdf_core::RdfDiagnostic> {
+        Ok(match self {
             Self::Certain(partial) => {
-                let (partial, _) = partial.withholding_blank_nodes(&mut withhold);
+                let (partial, _) = partial.withholding_blank_nodes(&mut withhold)?;
                 Self::Certain(partial)
             }
             Self::AtMost(partial) => {
-                let (partial, removed) = partial.withholding_blank_nodes(&mut withhold);
+                let (partial, removed) = partial.withholding_blank_nodes(&mut withhold)?;
                 if removed {
                     Self::Unknown(NonMonotoneBarrier::named("blank-node-filter"))
                 } else {
@@ -444,7 +449,7 @@ impl PartialAnswers {
                 }
             }
             Self::Unknown(barrier) => Self::Unknown(barrier),
-        }
+        })
     }
 }
 
@@ -501,12 +506,15 @@ impl PartialSparqlResult {
 
     /// Apply the structurally-removal-only blank-node filter behind
     /// [`PartialAnswers::withholding_blank_nodes`].
-    fn withholding_blank_nodes(mut self, withhold: &mut impl FnMut(&str) -> bool) -> (Self, bool) {
-        let removed = withhold_blank_nodes_from_result(&mut self.result, withhold);
+    fn withholding_blank_nodes(
+        mut self,
+        withhold: &mut impl FnMut(&str) -> bool,
+    ) -> Result<(Self, bool), purrdf_core::RdfDiagnostic> {
+        let removed = withhold_blank_nodes_from_result(&mut self.result, withhold)?;
         if removed {
             self.positional_prefix = false;
         }
-        (self, removed)
+        Ok((self, removed))
     }
 }
 
@@ -517,8 +525,8 @@ impl PartialSparqlResult {
 fn withhold_blank_nodes_from_result(
     result: &mut SparqlResult,
     withhold: &mut impl FnMut(&str) -> bool,
-) -> bool {
-    match result {
+) -> Result<bool, purrdf_core::RdfDiagnostic> {
+    Ok(match result {
         SparqlResult::Solutions { rows, aux, .. } => {
             let before = rows.len();
             rows.retain(|row| {
@@ -528,7 +536,7 @@ fn withhold_blank_nodes_from_result(
             });
             let removed_rows = rows.len() != before;
             let removed_aux =
-                if let Some(filtered) = dataset_without_withheld_blank_nodes(aux, withhold) {
+                if let Some(filtered) = dataset_without_withheld_blank_nodes(aux, withhold)? {
                     *aux = filtered.into();
                     true
                 } else {
@@ -537,7 +545,7 @@ fn withhold_blank_nodes_from_result(
             removed_rows || removed_aux
         }
         SparqlResult::Graph(graph) => {
-            if let Some(filtered) = dataset_without_withheld_blank_nodes(graph, withhold) {
+            if let Some(filtered) = dataset_without_withheld_blank_nodes(graph, withhold)? {
                 *graph = filtered.into();
                 true
             } else {
@@ -545,7 +553,7 @@ fn withhold_blank_nodes_from_result(
             }
         }
         SparqlResult::Boolean(_) => false,
-    }
+    })
 }
 
 /// Whether `term`, or any component of it at any depth, is a blank node `withhold`
@@ -603,7 +611,7 @@ fn rdf_term_mentions_withheld_blank(
 fn dataset_without_withheld_blank_nodes(
     dataset: &RdfDataset,
     withhold: &mut impl FnMut(&str) -> bool,
-) -> Option<Arc<RdfDataset>> {
+) -> Result<Option<Arc<RdfDataset>>, purrdf_core::RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     let mut removed = false;
 
@@ -617,7 +625,7 @@ fn dataset_without_withheld_blank_nodes(
         if should_withhold {
             removed = true;
         } else {
-            builder.push_owned_quad(&quad);
+            builder.push_owned_quad(&quad)?;
         }
     }
     for reifier in dataset.owned_reifiers() {
@@ -631,7 +639,7 @@ fn dataset_without_withheld_blank_nodes(
         if should_withhold {
             removed = true;
         } else {
-            builder.push_owned_reifier(&reifier);
+            builder.push_owned_reifier(&reifier)?;
         }
     }
     for annotation in dataset.owned_annotations() {
@@ -644,23 +652,19 @@ fn dataset_without_withheld_blank_nodes(
         if should_withhold {
             removed = true;
         } else {
-            builder.push_owned_annotation(&annotation);
+            builder.push_owned_annotation(&annotation)?;
         }
     }
     for name in dataset.owned_named_graphs() {
         if rdf_term_mentions_withheld_blank(&name, withhold) {
             removed = true;
         } else {
-            let id = builder.intern_owned_term(&name);
-            builder.declare_named_graph(id);
+            let id = builder.intern_owned_term(&name)?;
+            builder.declare_named_graph(id)?;
         }
     }
 
-    removed.then(|| {
-        builder
-            .freeze()
-            .expect("a subset of a frozen result dataset is itself a valid dataset")
-    })
+    removed.then(|| builder.freeze()).transpose()
 }
 
 /// The evidence a governed query over an operationally fallible view accumulates: the

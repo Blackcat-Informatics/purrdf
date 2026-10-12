@@ -1531,21 +1531,23 @@ mod tests {
         use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let first = b.intern_iri(RDF_FIRST);
-        let rest = b.intern_iri(RDF_REST);
-        let nil = b.intern_iri(RDF_NIL);
-        let one_of = b.intern_iri(OWL_ONEOF);
-        let complement_of = b.intern_iri(OWL_COMPLEMENTOF);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let first = b.intern_iri(RDF_FIRST).unwrap();
+        let rest = b.intern_iri(RDF_REST).unwrap();
+        let nil = b.intern_iri(RDF_NIL).unwrap();
+        let one_of = b.intern_iri(OWL_ONEOF).unwrap();
+        let complement_of = b.intern_iri(OWL_COMPLEMENTOF).unwrap();
         let mut cell = 0usize;
         // Write `members` as an RDF list, returning its head.
         let mut list = |b: &mut RdfDatasetBuilder, members: &[TermId]| -> TermId {
             let mut head = nil;
             for &m in members.iter().rev() {
                 cell += 1;
-                let node = b.intern_blank(&format!("cell{cell}"), BlankScope::DEFAULT);
-                b.push_quad(node, first, m, None);
-                b.push_quad(node, rest, head, None);
+                let node = b
+                    .intern_blank(&format!("cell{cell}"), BlankScope::DEFAULT)
+                    .unwrap();
+                b.push_quad(node, first, m, None).unwrap();
+                b.push_quad(node, rest, head, None).unwrap();
                 head = node;
             }
             head
@@ -1553,22 +1555,27 @@ mod tests {
 
         let members: Vec<TermId> = ["small", "medium", "large"]
             .iter()
-            .map(|n| b.intern_iri(&format!("{NS}{n}")))
+            .map(|n| b.intern_iri(&format!("{NS}{n}")).unwrap())
             .collect();
-        let enum_class = b.intern_iri(&format!("{NS}Enum"));
+        let enum_class = b.intern_iri(&format!("{NS}Enum")).unwrap();
         let head = list(&mut b, &members);
-        b.push_quad(enum_class, one_of, head, None);
-        let my_t = b.intern_iri(&format!("{NS}myT"));
-        b.push_quad(my_t, ty, enum_class, None);
+        b.push_quad(enum_class, one_of, head, None).unwrap();
+        let my_t = b.intern_iri(&format!("{NS}myT")).unwrap();
+        b.push_quad(my_t, ty, enum_class, None).unwrap();
 
         for (i, name) in apart_from.iter().enumerate() {
-            let member = b.intern_iri(&format!("{NS}{name}"));
-            let singleton = b.intern_blank(&format!("only{i}"), BlankScope::DEFAULT);
+            let member = b.intern_iri(&format!("{NS}{name}")).unwrap();
+            let singleton = b
+                .intern_blank(&format!("only{i}"), BlankScope::DEFAULT)
+                .unwrap();
             let head = list(&mut b, &[member]);
-            b.push_quad(singleton, one_of, head, None);
-            let not_member = b.intern_blank(&format!("not{i}"), BlankScope::DEFAULT);
-            b.push_quad(not_member, complement_of, singleton, None);
-            b.push_quad(my_t, ty, not_member, None);
+            b.push_quad(singleton, one_of, head, None).unwrap();
+            let not_member = b
+                .intern_blank(&format!("not{i}"), BlankScope::DEFAULT)
+                .unwrap();
+            b.push_quad(not_member, complement_of, singleton, None)
+                .unwrap();
+            b.push_quad(my_t, ty, not_member, None).unwrap();
         }
 
         let ds = b.freeze().expect("freeze");

@@ -437,7 +437,7 @@ pub(crate) fn serialize_triples(
         .iter()
         .map(|t| RdfQuad::new(t.subject.clone(), t.predicate.clone(), t.object.clone()))
         .collect();
-    let dataset = flat_dataset_from_quads(&quads)?;
+    let dataset = flat_dataset_from_quads(&quads).map_err(|error| error.to_string())?;
     serialize_dataset_to_format(&dataset, format, base)
         .map(|outcome| outcome.bytes)
         .map_err(|e| e.to_string())
@@ -462,7 +462,7 @@ pub(crate) fn serialize_quads(
     format: NativeRdfFormat,
     base: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let dataset = flat_dataset_from_quads(quads)?;
+    let dataset = flat_dataset_from_quads(quads).map_err(|error| error.to_string())?;
     serialize_dataset_with(
         &dataset,
         format,
@@ -489,7 +489,7 @@ pub(super) fn dataset_from_quads_verbatim(
     quads: &[RdfQuad],
     declared_graphs: &[RdfTerm],
 ) -> Result<Arc<RdfDataset>, String> {
-    flat_dataset_from_quads_declaring(quads, declared_graphs)
+    flat_dataset_from_quads_declaring(quads, declared_graphs).map_err(|error| error.to_string())
 }
 
 pub(crate) fn read_input(

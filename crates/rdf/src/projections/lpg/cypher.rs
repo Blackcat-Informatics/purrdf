@@ -369,17 +369,23 @@ mod tests {
 
     fn fixture() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/subject");
-        let target = builder.intern_blank("target", BlankScope(3));
-        let graph = builder.intern_iri("http://example.org/graph");
-        let rdf_type = builder.intern_iri(TYPE);
-        let class = builder.intern_iri("http://example.org/Class");
-        builder.push_quad(subject, rdf_type, class, Some(graph));
-        let name = builder.intern_iri("http://example.org/name");
-        let hostile = builder.intern_literal(RdfLiteral::simple(
-            "x'); MATCH (evil) RETURN evil; // ` \\ newline\n",
-        ));
-        builder.push_quad(subject, name, hostile, Some(graph));
+        let subject = builder.intern_iri("http://example.org/subject").unwrap();
+        let target = builder.intern_blank("target", BlankScope(3)).unwrap();
+        let graph = builder.intern_iri("http://example.org/graph").unwrap();
+        let rdf_type = builder.intern_iri(TYPE).unwrap();
+        let class = builder.intern_iri("http://example.org/Class").unwrap();
+        builder
+            .push_quad(subject, rdf_type, class, Some(graph))
+            .unwrap();
+        let name = builder.intern_iri("http://example.org/name").unwrap();
+        let hostile = builder
+            .intern_literal(RdfLiteral::simple(
+                "x'); MATCH (evil) RETURN evil; // ` \\ newline\n",
+            ))
+            .unwrap();
+        builder
+            .push_quad(subject, name, hostile, Some(graph))
+            .unwrap();
         for (predicate, lexical, datatype) in [
             (
                 "http://example.org/enabled",
@@ -402,18 +408,26 @@ mod tests {
                 "http://www.w3.org/2001/XMLSchema#decimal",
             ),
         ] {
-            let predicate = builder.intern_iri(predicate);
-            let value = builder.intern_literal(RdfLiteral::typed(lexical, datatype));
-            builder.push_quad(subject, predicate, value, Some(graph));
+            let predicate = builder.intern_iri(predicate).unwrap();
+            let value = builder
+                .intern_literal(RdfLiteral::typed(lexical, datatype))
+                .unwrap();
+            builder
+                .push_quad(subject, predicate, value, Some(graph))
+                .unwrap();
         }
-        let relates = builder.intern_iri("http://example.org/relates");
-        builder.push_quad(subject, relates, target, None);
-        let quoted = builder.intern_triple(subject, relates, target);
-        let reifier = builder.intern_blank("reifier", BlankScope(5));
-        builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-        let confidence = builder.intern_iri("http://example.org/confidence");
-        let high = builder.intern_iri("http://example.org/high");
-        builder.push_annotation_in_graph(reifier, confidence, high, Some(graph));
+        let relates = builder.intern_iri("http://example.org/relates").unwrap();
+        builder.push_quad(subject, relates, target, None).unwrap();
+        let quoted = builder.intern_triple(subject, relates, target).unwrap();
+        let reifier = builder.intern_blank("reifier", BlankScope(5)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(graph))
+            .unwrap();
+        let confidence = builder.intern_iri("http://example.org/confidence").unwrap();
+        let high = builder.intern_iri("http://example.org/high").unwrap();
+        builder
+            .push_annotation_in_graph(reifier, confidence, high, Some(graph))
+            .unwrap();
         builder.freeze().expect("fixture")
     }
 

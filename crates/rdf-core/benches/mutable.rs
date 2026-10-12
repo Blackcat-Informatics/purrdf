@@ -43,11 +43,11 @@ fn iri(n: &str) -> TermValue {
 /// A deterministic base of `BASE_QUADS` quads: `(s{n}, p, o{n})`.
 fn build_base() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
+    let p = b.intern_iri("http://example.org/p").unwrap();
     for n in 0..BASE_QUADS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let o = b.intern_iri(&format!("http://example.org/o{n}"));
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let o = b.intern_iri(&format!("http://example.org/o{n}")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("base freezes")
 }
@@ -243,16 +243,20 @@ const EMPTY_GRAPHS: u32 = 50;
 /// plus `EMPTY_GRAPHS` declared empty graphs.
 fn build_graph_base() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
+    let p = b.intern_iri("http://example.org/p").unwrap();
     for n in 0..BASE_QUADS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let o = b.intern_iri(&format!("http://example.org/o{n}"));
-        let g = b.intern_iri(&format!("http://example.org/g{}", n % GRAPHS));
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let o = b.intern_iri(&format!("http://example.org/o{n}")).unwrap();
+        let g = b
+            .intern_iri(&format!("http://example.org/g{}", n % GRAPHS))
+            .unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
     }
     for n in 0..EMPTY_GRAPHS {
-        let g = b.intern_iri(&format!("http://example.org/empty{n}"));
-        b.declare_named_graph(g);
+        let g = b
+            .intern_iri(&format!("http://example.org/empty{n}"))
+            .unwrap();
+        b.declare_named_graph(g).unwrap();
     }
     b.freeze().expect("graph base freezes")
 }
@@ -310,22 +314,22 @@ const LARGE_GRAPH: u32 = 100_000;
 /// nothing proportional to the untouched statement tables.
 fn annotated_after_small_drop() -> MutableDataset {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let note = b.intern_iri("http://example.org/note");
-    let other = b.intern_iri("http://example.org/other");
-    let small = b.intern_iri("http://example.org/small");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let note = b.intern_iri("http://example.org/note").unwrap();
+    let other = b.intern_iri("http://example.org/other").unwrap();
+    let small = b.intern_iri("http://example.org/small").unwrap();
     for n in 0..STATEMENTS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let o = b.intern_iri(&format!("http://example.org/o{n}"));
-        let r = b.intern_iri(&format!("http://example.org/r{n}"));
-        b.push_quad(s, p, o, Some(other));
-        let triple = b.intern_triple(s, p, o);
-        b.push_reifier_in_graph(r, triple, Some(other));
-        b.push_annotation_in_graph(r, note, o, Some(other));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let o = b.intern_iri(&format!("http://example.org/o{n}")).unwrap();
+        let r = b.intern_iri(&format!("http://example.org/r{n}")).unwrap();
+        b.push_quad(s, p, o, Some(other)).unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(other)).unwrap();
+        b.push_annotation_in_graph(r, note, o, Some(other)).unwrap();
     }
-    let s = b.intern_iri("http://example.org/s0");
-    let o = b.intern_iri("http://example.org/o0");
-    b.push_quad(s, p, o, Some(small));
+    let s = b.intern_iri("http://example.org/s0").unwrap();
+    let o = b.intern_iri("http://example.org/o0").unwrap();
+    b.push_quad(s, p, o, Some(small)).unwrap();
     let mut cow = MutableDataset::new(b.freeze().expect("annotated base freezes"));
     cow.remove(&QuadValues::quad(
         iri("s0"),
@@ -342,17 +346,17 @@ fn annotated_after_small_drop() -> MutableDataset {
 /// run.
 fn after_large_drop() -> MutableDataset {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let big = b.intern_iri("http://example.org/big");
-    let other = b.intern_iri("http://example.org/other");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let big = b.intern_iri("http://example.org/big").unwrap();
+    let other = b.intern_iri("http://example.org/other").unwrap();
     for n in 0..LARGE_GRAPH {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let o = b.intern_iri(&format!("http://example.org/o{n}"));
-        b.push_quad(s, p, o, Some(big));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let o = b.intern_iri(&format!("http://example.org/o{n}")).unwrap();
+        b.push_quad(s, p, o, Some(big)).unwrap();
     }
-    let s = b.intern_iri("http://example.org/s0");
-    let o = b.intern_iri("http://example.org/o0");
-    b.push_quad(s, p, o, Some(other));
+    let s = b.intern_iri("http://example.org/s0").unwrap();
+    let o = b.intern_iri("http://example.org/o0").unwrap();
+    b.push_quad(s, p, o, Some(other)).unwrap();
     let mut cow = MutableDataset::new(b.freeze().expect("large base freezes"));
     for n in 0..LARGE_GRAPH {
         cow.remove(&QuadValues::quad(
@@ -382,7 +386,8 @@ fn declared_graph_with_rows(
         cow.declare_named_graph(graph.clone())
             .expect("the bench graph name is an absolute IRI"),
         "the bench graph is declared once"
-    );
+    )
+    .unwrap();
     let quads: Vec<QuadValues> = (0..rows)
         .map(|n| {
             QuadValues::quad(

@@ -18,14 +18,18 @@ const ROWS: usize = 4096;
 
 fn sparse_graph() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let left = builder.intern_iri("http://example.org/left");
-    let right = builder.intern_iri("http://example.org/right");
-    let value = builder.intern_iri("http://example.org/value");
+    let left = builder.intern_iri("http://example.org/left").unwrap();
+    let right = builder.intern_iri("http://example.org/right").unwrap();
+    let value = builder.intern_iri("http://example.org/value").unwrap();
     for key in 0..ROWS * 2 {
-        let subject = builder.intern_iri(&format!("http://example.org/key{key}"));
-        builder.push_quad(subject, if key < ROWS { right } else { left }, value, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/key{key}"))
+            .unwrap();
+        builder
+            .push_quad(subject, if key < ROWS { right } else { left }, value, None)
+            .unwrap();
         if key == 0 {
-            builder.push_quad(subject, left, value, None);
+            builder.push_quad(subject, left, value, None).unwrap();
         }
     }
     builder.freeze().expect("freeze sparse graph")

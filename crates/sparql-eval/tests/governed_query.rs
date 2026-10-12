@@ -35,22 +35,30 @@ const EDGES: usize = 8;
 /// rows, which is what makes the inclusive cap boundary observable to the row.
 fn fixture() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..EDGES {
-        let s = builder.intern_iri(&format!("http://example.org/s{index}"));
-        let o = builder.intern_iri(&format!("http://example.org/o{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let o = builder
+            .intern_iri(&format!("http://example.org/o{index}"))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("freeze fixture")
 }
 
 fn blank_fixture() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..EDGES {
-        let s = builder.intern_blank(&format!("b{index}"), BlankScope::DEFAULT);
-        let o = builder.intern_iri(&format!("http://example.org/o{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_blank(&format!("b{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        let o = builder
+            .intern_iri(&format!("http://example.org/o{index}"))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("freeze blank fixture")
 }
@@ -330,11 +338,15 @@ fn exhausted(outcome: &GovernedOutcome) -> (TrippedGovernor, &PartialAnswers, &G
 
 fn large_fixture(edges: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..edges {
-        let s = builder.intern_iri(&format!("http://example.org/n{index}"));
-        let o = builder.intern_iri(&format!("http://example.org/n{}", index + 1));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/n{index}"))
+            .unwrap();
+        let o = builder
+            .intern_iri(&format!("http://example.org/n{}", index + 1))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("freeze large fixture")
 }
@@ -760,13 +772,21 @@ fn public_blank_node_filter_cannot_forge_an_upper_bound() {
             continue;
         }
 
-        let untouched = exhausted.partial.clone().withholding_blank_nodes(|_| false);
+        let untouched = exhausted
+            .partial
+            .clone()
+            .withholding_blank_nodes(|_| false)
+            .unwrap();
         assert!(
             matches!(untouched, PartialAnswers::AtMost(_)),
             "a no-op filter keeps the original upper bound"
         );
 
-        let filtered = exhausted.partial.clone().withholding_blank_nodes(|_| true);
+        let filtered = exhausted
+            .partial
+            .clone()
+            .withholding_blank_nodes(|_| true)
+            .unwrap();
         let PartialAnswers::Unknown(barrier) = filtered else {
             panic!("removing a possible answer must discard the upper bound");
         };
@@ -1837,16 +1857,16 @@ fn explain_reports_a_deterministic_per_node_ledger() {
 #[test]
 fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    let label = builder.intern_iri("http://example.org/label");
-    let a = builder.intern_iri("http://example.org/a");
-    let b = builder.intern_iri("http://example.org/b");
-    let oa = builder.intern_iri("http://example.org/oa");
-    let ob = builder.intern_iri("http://example.org/ob");
-    let hit = builder.intern_literal(RdfLiteral::simple("hit"));
-    builder.push_quad(a, p, oa, None);
-    builder.push_quad(a, label, hit, None);
-    builder.push_quad(b, p, ob, None);
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let label = builder.intern_iri("http://example.org/label").unwrap();
+    let a = builder.intern_iri("http://example.org/a").unwrap();
+    let b = builder.intern_iri("http://example.org/b").unwrap();
+    let oa = builder.intern_iri("http://example.org/oa").unwrap();
+    let ob = builder.intern_iri("http://example.org/ob").unwrap();
+    let hit = builder.intern_literal(RdfLiteral::simple("hit")).unwrap();
+    builder.push_quad(a, p, oa, None).unwrap();
+    builder.push_quad(a, label, hit, None).unwrap();
+    builder.push_quad(b, p, ob, None).unwrap();
     let dataset = builder.freeze().expect("freeze the mini LATERAL fixture");
 
     let engine = NativeSparqlEngine::new();
@@ -2019,25 +2039,25 @@ fn ledger_attributes_lateral_rhs_work_to_the_rhs_nodes() {
 #[test]
 fn ledger_attributes_nested_lateral_rhs_rows_to_the_true_output() {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    let label = builder.intern_iri("http://example.org/label");
-    let q = builder.intern_iri("http://example.org/q");
-    let a = builder.intern_iri("http://example.org/a");
-    let b = builder.intern_iri("http://example.org/b");
-    let oa = builder.intern_iri("http://example.org/oa");
-    let ob = builder.intern_iri("http://example.org/ob");
-    let c = builder.intern_iri("http://example.org/c");
-    let a1 = builder.intern_literal(RdfLiteral::simple("a1"));
-    let a2 = builder.intern_literal(RdfLiteral::simple("a2"));
-    let b1 = builder.intern_literal(RdfLiteral::simple("b1"));
-    let b2 = builder.intern_literal(RdfLiteral::simple("b2"));
-    builder.push_quad(a, p, oa, None);
-    builder.push_quad(a, label, a1, None);
-    builder.push_quad(a, label, a2, None);
-    builder.push_quad(a, q, c, None);
-    builder.push_quad(b, p, ob, None);
-    builder.push_quad(b, label, b1, None);
-    builder.push_quad(b, label, b2, None);
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let label = builder.intern_iri("http://example.org/label").unwrap();
+    let q = builder.intern_iri("http://example.org/q").unwrap();
+    let a = builder.intern_iri("http://example.org/a").unwrap();
+    let b = builder.intern_iri("http://example.org/b").unwrap();
+    let oa = builder.intern_iri("http://example.org/oa").unwrap();
+    let ob = builder.intern_iri("http://example.org/ob").unwrap();
+    let c = builder.intern_iri("http://example.org/c").unwrap();
+    let a1 = builder.intern_literal(RdfLiteral::simple("a1")).unwrap();
+    let a2 = builder.intern_literal(RdfLiteral::simple("a2")).unwrap();
+    let b1 = builder.intern_literal(RdfLiteral::simple("b1")).unwrap();
+    let b2 = builder.intern_literal(RdfLiteral::simple("b2")).unwrap();
+    builder.push_quad(a, p, oa, None).unwrap();
+    builder.push_quad(a, label, a1, None).unwrap();
+    builder.push_quad(a, label, a2, None).unwrap();
+    builder.push_quad(a, q, c, None).unwrap();
+    builder.push_quad(b, p, ob, None).unwrap();
+    builder.push_quad(b, label, b1, None).unwrap();
+    builder.push_quad(b, label, b2, None).unwrap();
     let dataset = builder.freeze().expect("freeze the nested-LATERAL fixture");
 
     let engine = NativeSparqlEngine::new();

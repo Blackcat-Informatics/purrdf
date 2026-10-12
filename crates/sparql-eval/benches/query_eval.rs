@@ -134,60 +134,72 @@ const EX: &str = "https://example.org/";
 ///   / `j_construct_blank_bearing` CONSTRUCT cases)
 fn people_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let rdf_type = b.intern_iri(RDF_TYPE);
-    let person_class = b.intern_iri(&format!("{EX}Person"));
-    let p_name = b.intern_iri(&format!("{EX}name"));
-    let p_age = b.intern_iri(&format!("{EX}age"));
-    let p_label = b.intern_iri(&format!("{EX}label"));
-    let p_dept = b.intern_iri(&format!("{EX}dept"));
-    let p_city = b.intern_iri(&format!("{EX}city"));
-    let p_knows = b.intern_iri(&format!("{EX}knows"));
-    let p_email = b.intern_iri(&format!("{EX}email"));
-    let p_reports = b.intern_iri(&format!("{EX}reportsTo"));
-    let p_note = b.intern_iri(&format!("{EX}note"));
+    let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+    let person_class = b.intern_iri(&format!("{EX}Person")).unwrap();
+    let p_name = b.intern_iri(&format!("{EX}name")).unwrap();
+    let p_age = b.intern_iri(&format!("{EX}age")).unwrap();
+    let p_label = b.intern_iri(&format!("{EX}label")).unwrap();
+    let p_dept = b.intern_iri(&format!("{EX}dept")).unwrap();
+    let p_city = b.intern_iri(&format!("{EX}city")).unwrap();
+    let p_knows = b.intern_iri(&format!("{EX}knows")).unwrap();
+    let p_email = b.intern_iri(&format!("{EX}email")).unwrap();
+    let p_reports = b.intern_iri(&format!("{EX}reportsTo")).unwrap();
+    let p_note = b.intern_iri(&format!("{EX}note")).unwrap();
 
     let people: Vec<_> = (0..PEOPLE)
-        .map(|i| b.intern_iri(&format!("{EX}person{i}")))
+        .map(|i| b.intern_iri(&format!("{EX}person{i}")).unwrap())
         .collect();
     let depts: Vec<_> = (0..200)
-        .map(|d| b.intern_iri(&format!("{EX}dept{d}")))
+        .map(|d| b.intern_iri(&format!("{EX}dept{d}")).unwrap())
         .collect();
     let cities: Vec<_> = (0..50)
-        .map(|c| b.intern_iri(&format!("{EX}city{c}")))
+        .map(|c| b.intern_iri(&format!("{EX}city{c}")).unwrap())
         .collect();
 
     for i in 0..PEOPLE {
         let s = people[i];
-        b.push_quad(s, rdf_type, person_class, None);
+        b.push_quad(s, rdf_type, person_class, None).unwrap();
 
-        let name = b.intern_literal(RdfLiteral::simple(format!("Name{i}")));
-        b.push_quad(s, p_name, name, None);
+        let name = b
+            .intern_literal(RdfLiteral::simple(format!("Name{i}")))
+            .unwrap();
+        b.push_quad(s, p_name, name, None).unwrap();
 
-        let age = b.intern_literal(RdfLiteral::typed((18 + i % 60).to_string(), XSD_INTEGER));
-        b.push_quad(s, p_age, age, None);
+        let age = b
+            .intern_literal(RdfLiteral::typed((18 + i % 60).to_string(), XSD_INTEGER))
+            .unwrap();
+        b.push_quad(s, p_age, age, None).unwrap();
 
         let lang = if i % 2 == 0 { "en" } else { "de" };
-        let label = b.intern_literal(RdfLiteral::language_tagged(format!("Person {i}"), lang));
-        b.push_quad(s, p_label, label, None);
+        let label = b
+            .intern_literal(RdfLiteral::language_tagged(format!("Person {i}"), lang))
+            .unwrap();
+        b.push_quad(s, p_label, label, None).unwrap();
 
-        b.push_quad(s, p_dept, depts[i % 200], None);
-        b.push_quad(s, p_city, cities[i % 50], None);
+        b.push_quad(s, p_dept, depts[i % 200], None).unwrap();
+        b.push_quad(s, p_city, cities[i % 50], None).unwrap();
 
         for step in [1usize, 17, 97] {
-            b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+            b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None)
+                .unwrap();
         }
 
         if i % 10 == 0 {
-            let email = b.intern_literal(RdfLiteral::simple(format!("p{i}@example.org")));
-            b.push_quad(s, p_email, email, None);
+            let email = b
+                .intern_literal(RdfLiteral::simple(format!("p{i}@example.org")))
+                .unwrap();
+            b.push_quad(s, p_email, email, None).unwrap();
         }
 
         if i > 0 {
-            b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+            b.push_quad(s, p_reports, people[(i - 1) / 2], None)
+                .unwrap();
         }
 
-        let note = b.intern_blank(&format!("note{i}"), BlankScope::DEFAULT);
-        b.push_quad(s, p_note, note, None);
+        let note = b
+            .intern_blank(&format!("note{i}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(s, p_note, note, None).unwrap();
     }
 
     b.freeze().expect("freeze people dataset")

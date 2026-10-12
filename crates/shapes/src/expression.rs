@@ -1420,7 +1420,7 @@ pub fn eval_node_expr(
     focus: &Term,
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_node_expr_in_scope(store, focus, expr, guard, Scope::EMPTY)
 }
 
@@ -1440,7 +1440,7 @@ pub(crate) fn eval_planned_node_expr(
     lowered: &LoweredExpr,
     plan: ShapePlan<'_>,
     guard: &mut RecursionGuard,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_planned_node_expr_in_scope(store, focus, expr, lowered, plan, guard, Scope::EMPTY)
 }
 
@@ -1540,7 +1540,7 @@ pub(crate) fn eval_planned_node_expr_in_scope(
     plan: ShapePlan<'_>,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     guard.enter_node_expr()?;
     // Capture, unwind one level, THEN propagate: an early `?` here would leave
     // the structural counter permanently raised for the rest of the evaluation.
@@ -1575,7 +1575,7 @@ fn eval_unlowered(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
     disallows: &crate::report::ConformanceDisallows,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     let lowering = crate::plan::lower_standalone_expression(expr);
     let mut binding = lowering.bind(store.core_view());
     binding.set_conformance_disallows(disallows);
@@ -1606,7 +1606,7 @@ pub fn eval_node_expr_in_scope(
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_unlowered(
         store,
         focus,
@@ -1631,7 +1631,7 @@ pub(crate) fn eval_node_expr_in_run(
     focus: &Term,
     expr: &NodeExpr,
     disallows: &crate::report::ConformanceDisallows,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_unlowered(
         store,
         focus,
@@ -1723,7 +1723,7 @@ fn eval_node_expr_at_depth(
     plan: ShapePlan<'_>,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     // Every recursive descent reads the sub-lowering the WALK made for the operand
     // it is descending into, by the position the walk assigned in declaration
     // order. A position the lowering does not hold is refused loudly rather than
@@ -1943,7 +1943,8 @@ fn eval_node_expr_at_depth(
                              is a list parameter function, whose every argument must produce at \
                              most one node",
                             iri.as_str()
-                        ));
+                        )
+                        .into());
                     }
                 }
             }
@@ -2083,7 +2084,8 @@ fn eval_node_expr_at_depth(
                 more => Err(format!(
                     "shnex:focusNode must yield at most one node, got {}",
                     more.len()
-                )),
+                )
+                .into()),
             }
         }
         // §4.2.3 Concat expression: operand outputs concatenated left to right.
@@ -2162,7 +2164,8 @@ fn eval_node_expr_at_depth(
                     return Err(format!(
                         "shnex:instancesOf produced {class}, which is not an IRI; SHACL 1.2 Node \
                          Expressions §4.5.1 makes every class it is given an IRI"
-                    ));
+                    )
+                    .into());
                 };
                 classes.push(store.core_view().term_id_by_iri(iri.as_str()));
             }
@@ -2221,7 +2224,8 @@ fn eval_node_expr_at_depth(
                                     "shnex:conformsToShape shape argument must produce exactly \
                                      one shape IRI, got {}",
                                     produced.len()
-                                ));
+                                )
+                                .into());
                             };
                             let resolved = shapes.get().ok_or_else(|| {
                                 "shnex:conformsToShape: the shapes graph's shape index was never \
@@ -2245,7 +2249,8 @@ fn eval_node_expr_at_depth(
                 more => Err(format!(
                     "shnex:conformsToShape node argument must yield at most one node, got {}",
                     more.len()
-                )),
+                )
+                .into()),
             }
         }
         // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`) / §6.2 (`sh:sparqlExpr`),
@@ -2268,7 +2273,8 @@ fn eval_node_expr_at_depth(
                     return Err(format!(
                         "{key} node expression cannot be evaluated: the scope binds a variable \
                          named ?this, which would clobber the pre-bound focus node"
-                    ));
+                    )
+                    .into());
                 }
                 bindings.push((name.to_owned(), value.clone()));
             }
@@ -2314,7 +2320,8 @@ fn eval_node_expr_at_depth(
                             "{key} node expression cannot pre-bind ?{name}: the argument produces \
                              {} nodes and a query variable carries one",
                             more.len()
-                        ));
+                        )
+                        .into());
                     }
                 }
             }
@@ -2344,7 +2351,7 @@ fn eval_node_expr_at_depth(
                 &declared,
                 invocation,
             )
-            .map_err(|e| format!("{key} node expression: {e}"))
+            .map_err(|error| error.context(&format!("{key} node expression: ")))
         }
         // §6.3 Arg expression: look the key up in the argument scope and evaluate
         // the bound NODE EXPRESSION there, in the empty scope —
@@ -2372,7 +2379,8 @@ fn eval_node_expr_at_depth(
                         "shnex:arg {key} names a list-parameter argument, which must produce at \
                          most one node, got {}",
                         out.len()
-                    ));
+                    )
+                    .into());
                 }
                 Ok(out)
             }
@@ -2432,7 +2440,8 @@ fn eval_node_expr_at_depth(
                      Expressions §6.2 reports an evaluation failure when there is more than one",
                     func.iri.as_str(),
                     out.len()
-                ));
+                )
+                .into());
             }
             Ok(out)
         }
@@ -2535,7 +2544,7 @@ pub fn eval_custom_function_call(
     func: &Arc<CustomFunction>,
     args: &[Term],
     guard: &mut RecursionGuard,
-) -> Result<Option<Term>, String> {
+) -> Result<Option<Term>, crate::error::ShapesError> {
     let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
     for (index, value) in args.iter().enumerate() {
         let key = u64::try_from(index)
@@ -2556,7 +2565,8 @@ pub fn eval_custom_function_call(
              §7.3 returns a value only when the body produces exactly one",
             func.iri.as_str(),
             more.len()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -2580,7 +2590,7 @@ fn conforms_guarded(
     node: &Term,
     shape: ShapePlan<'_>,
     guard: &mut RecursionGuard,
-) -> Result<bool, String> {
+) -> Result<bool, crate::error::ShapesError> {
     let shape_id = shape.shape().id.to_string();
     let node_key = node.to_string();
     let next_depth = guard.depth().saturating_add(1);
@@ -2623,7 +2633,7 @@ fn aggregate(
     operand: AggregateOperand<'_, '_>,
     agg: &str,
     scope: Scope<'_>,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     let AggregateOperand {
         of,
         lowered,
@@ -2863,7 +2873,7 @@ mod tests {
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
         let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(err.contains("myFn"), "got: {err}");
+        assert!(err.to_string().contains("myFn"), "got: {err}");
     }
 
     #[test]
@@ -2961,7 +2971,10 @@ mod tests {
             ))],
         });
         let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(err.contains("custom SPARQL function"), "got: {err}");
+        assert!(
+            err.to_string().contains("custom SPARQL function"),
+            "got: {err}"
+        );
     }
 
     /// A multi-valued function-call argument is the CARTESIAN PRODUCT of the
@@ -3188,7 +3201,7 @@ mod tests {
             args: vec![],
         });
         let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(err.contains("missing"), "got: {err}");
+        assert!(err.to_string().contains("missing"), "got: {err}");
     }
 
     /// §4.1.6 takes `then` only when "IFs is the list ( true )". A non-zero
@@ -3632,11 +3645,12 @@ mod tests {
         .expect("spawn deep-stack thread")
         .expect_err("an expression nested past the structural ceiling must be a hard error");
         assert!(
-            err.contains("node expression nesting depth exceeded"),
+            err.to_string()
+                .contains("node expression nesting depth exceeded"),
             "error should name the structural limit, got: {err}"
         );
         assert!(
-            err.contains(&MAX_NODE_EXPR_DEPTH.to_string()),
+            err.to_string().contains(&MAX_NODE_EXPR_DEPTH.to_string()),
             "error should name the ceiling value, got: {err}"
         );
     }
@@ -3739,7 +3753,7 @@ mod tests {
         .expect("spawn deep-stack thread")
         .expect_err("a filter chain past the depth ceiling must be a hard error");
         assert!(
-            err.contains("recursion depth"),
+            err.to_string().contains("recursion depth"),
             "error should name the recursion depth, got: {err}"
         );
     }

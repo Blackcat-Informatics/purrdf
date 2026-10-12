@@ -455,7 +455,8 @@ impl PageProvider for CountingDemandProvider {
 fn logical_rdf_byte_len(dataset: &RdfDataset) -> u64 {
     let mut total = 0_u64;
     for index in 0..dataset.term_count() {
-        let id = TermId::from_index(u32::try_from(index).expect("term count fits u32"));
+        let id = TermId::from_index(u32::try_from(index).expect("term count fits u32"))
+            .expect("stored term index is representable");
         let term_len = match dataset.resolve(id) {
             TermRef::Iri(iri) => {
                 1_u64 + u64::try_from(iri.len()).expect("an in-memory count fits u64")

@@ -3295,15 +3295,15 @@ mod tests {
         // :a :knows :b ; :likes :cake .
         // :b :likes :tea .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let likes = b.intern_iri("http://ex/likes");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let cake = b.intern_iri("http://ex/cake");
-        let tea = b.intern_iri("http://ex/tea");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, likes, cake, None);
-        b.push_quad(bb, likes, tea, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let likes = b.intern_iri("http://ex/likes").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let cake = b.intern_iri("http://ex/cake").unwrap();
+        let tea = b.intern_iri("http://ex/tea").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, likes, cake, None).unwrap();
+        b.push_quad(bb, likes, tea, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3481,16 +3481,24 @@ mod tests {
             rows: (start..end)
                 .map(|key| {
                     purrdf_core::smallvec![
-                        Some(SolutionTerm::Existing(TermId::from_index(key))),
-                        Some(SolutionTerm::Existing(TermId::from_index(0))),
+                        Some(SolutionTerm::Existing(
+                            TermId::from_index(key).expect("stored term index is representable")
+                        )),
+                        Some(SolutionTerm::Existing(
+                            TermId::from_index(0).expect("stored term index is representable")
+                        )),
                     ]
                 })
                 .collect(),
         };
         let mut left = make(ROWS, ROWS * 2, "left");
         left.rows.push_resident_fixture(purrdf_core::smallvec![
-            Some(SolutionTerm::Existing(TermId::from_index(0))),
-            Some(SolutionTerm::Existing(TermId::from_index(0))),
+            Some(SolutionTerm::Existing(
+                TermId::from_index(0).expect("stored term index is representable")
+            )),
+            Some(SolutionTerm::Existing(
+                TermId::from_index(0).expect("stored term index is representable")
+            )),
         ]);
         (left, make(0, ROWS, "right"))
     }
@@ -3676,7 +3684,11 @@ mod tests {
     fn probe_has_match_hits_index_then_scans_wild() {
         use crate::scratch::SolutionTerm;
         use purrdf_core::TermId;
-        let t = |i: u32| Some(SolutionTerm::Existing(TermId::from_index(i)));
+        let t = |i: u32| {
+            Some(SolutionTerm::Existing(
+                TermId::from_index(i).expect("stored term index is representable"),
+            ))
+        };
 
         // Inner over schema [x]: x=1, x=2, and one wild row (x unbound).
         let inner = SolutionSeq {
@@ -3801,21 +3813,23 @@ mod tests {
             direction: None,
         };
         let mut b = RdfDatasetBuilder::new();
-        let v = b.intern_iri("http://example.org/v");
-        let flag = b.intern_iri("http://example.org/flag");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        let i5 = b.intern_literal(int("5"));
-        let i7 = b.intern_literal(int("7"));
-        let tru = b.intern_literal(RdfLiteral {
-            lexical_form: "true".to_owned(),
-            datatype: Some(XBOOL.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(x, v, i5, None);
-        b.push_quad(y, v, i7, None);
-        b.push_quad(x, flag, tru, None);
+        let v = b.intern_iri("http://example.org/v").unwrap();
+        let flag = b.intern_iri("http://example.org/flag").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        let i5 = b.intern_literal(int("5")).unwrap();
+        let i7 = b.intern_literal(int("7")).unwrap();
+        let tru = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "true".to_owned(),
+                datatype: Some(XBOOL.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(x, v, i5, None).unwrap();
+        b.push_quad(y, v, i7, None).unwrap();
+        b.push_quad(x, flag, tru, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3937,28 +3951,32 @@ mod tests {
         use purrdf_sparql_algebra::Variable;
 
         let mut b = RdfDatasetBuilder::new();
-        let p1 = b.intern_iri("http://ex/p1");
-        let p2 = b.intern_iri("http://ex/p2");
-        let p3 = b.intern_iri("http://ex/p3");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
+        let p1 = b.intern_iri("http://ex/p1").unwrap();
+        let p2 = b.intern_iri("http://ex/p2").unwrap();
+        let p3 = b.intern_iri("http://ex/p3").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
         use purrdf_xsd::datatype::XSD_INTEGER as XINT;
-        let ten = b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "10".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let twenty = b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "20".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(a, p1, ten, None);
-        b.push_quad(bb, p2, twenty, None);
-        b.push_quad(c, p3, ten, None);
+        let ten = b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "10".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let twenty = b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "20".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(a, p1, ten, None).unwrap();
+        b.push_quad(bb, p2, twenty, None).unwrap();
+        b.push_quad(c, p3, ten, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let one = || Expression::Literal(Literal::new_typed("1", NamedNode::new_unchecked(XINT)));
@@ -4262,20 +4280,20 @@ mod tests {
     /// several per-input-row commit boundaries to be stopped between.
     fn wide_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("https://example.org/knows");
-        let likes = b.intern_iri("https://example.org/likes");
-        let a = b.intern_iri("https://example.org/a");
-        let bb = b.intern_iri("https://example.org/b");
-        let c = b.intern_iri("https://example.org/c");
-        let d = b.intern_iri("https://example.org/d");
-        let tea = b.intern_iri("https://example.org/tea");
-        let cake = b.intern_iri("https://example.org/cake");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(bb, knows, c, None);
-        b.push_quad(c, knows, d, None);
-        b.push_quad(bb, likes, tea, None);
-        b.push_quad(c, likes, cake, None);
-        b.push_quad(d, likes, tea, None);
+        let knows = b.intern_iri("https://example.org/knows").unwrap();
+        let likes = b.intern_iri("https://example.org/likes").unwrap();
+        let a = b.intern_iri("https://example.org/a").unwrap();
+        let bb = b.intern_iri("https://example.org/b").unwrap();
+        let c = b.intern_iri("https://example.org/c").unwrap();
+        let d = b.intern_iri("https://example.org/d").unwrap();
+        let tea = b.intern_iri("https://example.org/tea").unwrap();
+        let cake = b.intern_iri("https://example.org/cake").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(bb, knows, c, None).unwrap();
+        b.push_quad(c, knows, d, None).unwrap();
+        b.push_quad(bb, likes, tea, None).unwrap();
+        b.push_quad(c, likes, cake, None).unwrap();
+        b.push_quad(d, likes, tea, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -4608,17 +4626,25 @@ mod tests {
     /// graph `:g1`); `:g2` is never used as a graph name.
     fn graph_variable_lateral_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("https://example.org/lateral-graph#p");
-        let q = b.intern_iri("https://example.org/lateral-graph#q");
-        let s1 = b.intern_iri("https://example.org/lateral-graph#s1");
-        let s2 = b.intern_iri("https://example.org/lateral-graph#s2");
-        let g1 = b.intern_iri("https://example.org/lateral-graph#g1");
-        let g2 = b.intern_iri("https://example.org/lateral-graph#g2");
-        let x = b.intern_iri("https://example.org/lateral-graph#x");
-        let y = b.intern_iri("https://example.org/lateral-graph#y");
-        b.push_quad(s1, p, g1, None);
-        b.push_quad(s2, p, g2, None);
-        b.push_quad(x, q, y, Some(g1));
+        let p = b.intern_iri("https://example.org/lateral-graph#p").unwrap();
+        let q = b.intern_iri("https://example.org/lateral-graph#q").unwrap();
+        let s1 = b
+            .intern_iri("https://example.org/lateral-graph#s1")
+            .unwrap();
+        let s2 = b
+            .intern_iri("https://example.org/lateral-graph#s2")
+            .unwrap();
+        let g1 = b
+            .intern_iri("https://example.org/lateral-graph#g1")
+            .unwrap();
+        let g2 = b
+            .intern_iri("https://example.org/lateral-graph#g2")
+            .unwrap();
+        let x = b.intern_iri("https://example.org/lateral-graph#x").unwrap();
+        let y = b.intern_iri("https://example.org/lateral-graph#y").unwrap();
+        b.push_quad(s1, p, g1, None).unwrap();
+        b.push_quad(s2, p, g2, None).unwrap();
+        b.push_quad(x, q, y, Some(g1)).unwrap();
         b.freeze().expect("freeze")
     }
 

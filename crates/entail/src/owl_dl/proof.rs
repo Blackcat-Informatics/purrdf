@@ -5908,12 +5908,12 @@ mod tests {
 
         /// Intern an IRI.
         fn iri(&mut self, iri: &str) -> TermId {
-            self.builder.intern_iri(iri)
+            self.builder.intern_iri(iri).unwrap()
         }
 
         /// Push a default-graph triple.
         fn quad(&mut self, s: TermId, p: TermId, o: TermId) {
-            self.builder.push_quad(s, p, o, None);
+            self.builder.push_quad(s, p, o, None).unwrap();
         }
 
         /// Freeze into a dataset.
@@ -6704,12 +6704,15 @@ mod tests {
         let range = f.iri("http://www.w3.org/2000/01/rdf-schema#range");
         let datatype_property = f.iri("http://www.w3.org/2002/07/owl#DatatypeProperty");
         let integer = f.iri("http://www.w3.org/2001/XMLSchema#integer");
-        let text = f.builder.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "abc".to_owned(),
-            datatype: Some("http://www.w3.org/2001/XMLSchema#string".to_owned()),
-            language: None,
-            direction: None,
-        });
+        let text = f
+            .builder
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "abc".to_owned(),
+                datatype: Some("http://www.w3.org/2001/XMLSchema#string".to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
         f.quad(p, ty, datatype_property);
         f.quad(p, range, integer);
         f.quad(a, p, text);
@@ -6771,15 +6774,19 @@ mod tests {
         let on_property = f.iri("http://www.w3.org/2002/07/owl#onProperty");
         let max_cardinality = f.iri("http://www.w3.org/2002/07/owl#maxCardinality");
         let different = f.iri("http://www.w3.org/2002/07/owl#differentFrom");
-        let two = f.builder.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "2".to_owned(),
-            datatype: Some("http://www.w3.org/2001/XMLSchema#nonNegativeInteger".to_owned()),
-            language: None,
-            direction: None,
-        });
+        let two = f
+            .builder
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "2".to_owned(),
+                datatype: Some("http://www.w3.org/2001/XMLSchema#nonNegativeInteger".to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
         let bound = f
             .builder
-            .intern_blank("r", purrdf_core::BlankScope::DEFAULT);
+            .intern_blank("r", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         f.quad(bound, ty, restriction);
         f.quad(bound, on_property, p);
         f.quad(bound, max_cardinality, two);
@@ -6880,7 +6887,8 @@ mod tests {
         let nil = f.iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil");
         let cell = f
             .builder
-            .intern_blank("m1", purrdf_core::BlankScope::DEFAULT);
+            .intern_blank("m1", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         // `D owl:oneOf (b)` — the `o`-clause, which identifies every `D` with `b`.
         f.quad(cell, first, b);
         f.quad(cell, rest, nil);
@@ -7877,13 +7885,16 @@ mod tests {
         let nothing = f.iri("http://www.w3.org/2002/07/owl#Nothing");
         let union = f
             .builder
-            .intern_blank("u", purrdf_core::BlankScope::DEFAULT);
+            .intern_blank("u", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         let head = f
             .builder
-            .intern_blank("l1", purrdf_core::BlankScope::DEFAULT);
+            .intern_blank("l1", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         let tail = f
             .builder
-            .intern_blank("l2", purrdf_core::BlankScope::DEFAULT);
+            .intern_blank("l2", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         f.quad(head, first, c);
         f.quad(head, rest, tail);
         f.quad(tail, first, d);

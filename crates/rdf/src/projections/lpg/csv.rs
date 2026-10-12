@@ -1261,39 +1261,61 @@ mod tests {
 
     fn fixture() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/subject");
-        let target = builder.intern_iri("http://example.org/target");
-        let blank = builder.intern_blank("blank", BlankScope(7));
-        let graph = builder.intern_iri("http://example.org/graph");
-        let rdf_type = builder.intern_iri(TYPE);
-        let first_class = builder.intern_iri("http://example.org/FirstClass");
-        let second_class = builder.intern_iri("http://example.org/SecondClass");
-        builder.push_quad(subject, rdf_type, first_class, Some(graph));
-        builder.push_quad(subject, rdf_type, second_class, None);
+        let subject = builder.intern_iri("http://example.org/subject").unwrap();
+        let target = builder.intern_iri("http://example.org/target").unwrap();
+        let blank = builder.intern_blank("blank", BlankScope(7)).unwrap();
+        let graph = builder.intern_iri("http://example.org/graph").unwrap();
+        let rdf_type = builder.intern_iri(TYPE).unwrap();
+        let first_class = builder.intern_iri("http://example.org/FirstClass").unwrap();
+        let second_class = builder
+            .intern_iri("http://example.org/SecondClass")
+            .unwrap();
+        builder
+            .push_quad(subject, rdf_type, first_class, Some(graph))
+            .unwrap();
+        builder
+            .push_quad(subject, rdf_type, second_class, None)
+            .unwrap();
 
-        let label = builder.intern_iri("http://example.org/label");
-        let hostile = builder.intern_literal(RdfLiteral::simple("comma, quote \" and\nline"));
-        builder.push_quad(blank, label, hostile, Some(graph));
-        let number_predicate = builder.intern_iri("http://example.org/count");
-        let number = builder.intern_literal(RdfLiteral::typed(
-            "9223372036854775808",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(subject, number_predicate, number, None);
+        let label = builder.intern_iri("http://example.org/label").unwrap();
+        let hostile = builder
+            .intern_literal(RdfLiteral::simple("comma, quote \" and\nline"))
+            .unwrap();
+        builder
+            .push_quad(blank, label, hostile, Some(graph))
+            .unwrap();
+        let number_predicate = builder.intern_iri("http://example.org/count").unwrap();
+        let number = builder
+            .intern_literal(RdfLiteral::typed(
+                "9223372036854775808",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder
+            .push_quad(subject, number_predicate, number, None)
+            .unwrap();
 
-        let relates = builder.intern_iri("http://example.org/relates");
-        builder.push_quad(subject, relates, target, None);
-        let contains = builder.intern_iri("http://example.org/contains");
-        builder.push_quad(target, contains, blank, Some(graph));
+        let relates = builder.intern_iri("http://example.org/relates").unwrap();
+        builder.push_quad(subject, relates, target, None).unwrap();
+        let contains = builder.intern_iri("http://example.org/contains").unwrap();
+        builder
+            .push_quad(target, contains, blank, Some(graph))
+            .unwrap();
 
-        let quoted = builder.intern_triple(subject, relates, target);
-        let quotes = builder.intern_iri("http://example.org/quotes");
-        builder.push_quad(subject, quotes, quoted, Some(graph));
-        let reifier = builder.intern_blank("reifier", BlankScope(9));
-        builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-        let confidence = builder.intern_iri("http://example.org/confidence");
-        let high = builder.intern_iri("http://example.org/high");
-        builder.push_annotation_in_graph(reifier, confidence, high, Some(graph));
+        let quoted = builder.intern_triple(subject, relates, target).unwrap();
+        let quotes = builder.intern_iri("http://example.org/quotes").unwrap();
+        builder
+            .push_quad(subject, quotes, quoted, Some(graph))
+            .unwrap();
+        let reifier = builder.intern_blank("reifier", BlankScope(9)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(graph))
+            .unwrap();
+        let confidence = builder.intern_iri("http://example.org/confidence").unwrap();
+        let high = builder.intern_iri("http://example.org/high").unwrap();
+        builder
+            .push_annotation_in_graph(reifier, confidence, high, Some(graph))
+            .unwrap();
         builder.freeze().expect("fixture")
     }
 

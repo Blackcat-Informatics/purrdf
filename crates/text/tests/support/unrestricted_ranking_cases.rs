@@ -37,11 +37,13 @@ pub(super) fn five_thousand_term_index() -> (Arc<RdfDataset>, Arc<TextIndex>, St
     let names = names();
     let needle = names.join(" ");
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(NOTE);
+    let predicate = builder.intern_iri(NOTE).unwrap();
     for (subject, text) in [("a", needle.clone()), ("b", names[..2_500].join(" "))] {
-        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
-        let object = builder.intern_literal(RdfLiteral::simple(&text));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{subject}"))
+            .unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     let dataset = builder.freeze().expect("dataset");
     let index = Arc::new(
@@ -207,14 +209,16 @@ pub(super) fn promoted_field_arithmetic_is_exact() {
 /// Routing and retained field buffers have no sixteen-field ceiling.
 pub(super) fn thirty_two_index_fields_are_exact() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/document");
-    let object = builder.intern_literal(RdfLiteral::simple("needle needle"));
+    let subject = builder.intern_iri("https://example.org/document").unwrap();
+    let object = builder
+        .intern_literal(RdfLiteral::simple("needle needle"))
+        .unwrap();
     let mut predicates = Vec::new();
     let mut fields = Vec::new();
     for at in 0..32 {
         let iri = format!("https://example.org/field-{at:02}");
-        let predicate = builder.intern_iri(&iri);
-        builder.push_quad(subject, predicate, object, None);
+        let predicate = builder.intern_iri(&iri).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         predicates.push(TermValue::iri(&iri));
         fields.push(
             RankingField::new(

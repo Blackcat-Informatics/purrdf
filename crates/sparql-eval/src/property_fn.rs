@@ -4203,9 +4203,15 @@ mod tests {
     /// plus the `rows`-controlled row widths.
     fn table_dataset(rows: &[Vec<&str>]) -> (Arc<RdfDataset>, TermValue) {
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
-        let rest = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
-        let nil = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil");
+        let first = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first")
+            .unwrap();
+        let rest = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest")
+            .unwrap();
+        let nil = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil")
+            .unwrap();
 
         // Build each row list, then the outer list of row heads, tail-first so every
         // `rdf:rest` target already exists.
@@ -4213,28 +4219,32 @@ mod tests {
         for (row_index, row) in rows.iter().enumerate() {
             let mut cell = nil;
             for (cell_index, value) in row.iter().enumerate().rev() {
-                let node = b.intern_blank(
-                    &format!("r{row_index}c{cell_index}"),
-                    purrdf_core::BlankScope::DEFAULT,
-                );
-                let value = b.intern_iri(value);
-                b.push_quad(node, first, value, None);
-                b.push_quad(node, rest, cell, None);
+                let node = b
+                    .intern_blank(
+                        &format!("r{row_index}c{cell_index}"),
+                        purrdf_core::BlankScope::DEFAULT,
+                    )
+                    .unwrap();
+                let value = b.intern_iri(value).unwrap();
+                b.push_quad(node, first, value, None).unwrap();
+                b.push_quad(node, rest, cell, None).unwrap();
                 cell = node;
             }
             row_heads.push(cell);
         }
         let mut outer = nil;
         for (index, row_head) in row_heads.iter().enumerate().rev() {
-            let node = b.intern_blank(&format!("t{index}"), purrdf_core::BlankScope::DEFAULT);
-            b.push_quad(node, first, *row_head, None);
-            b.push_quad(node, rest, outer, None);
+            let node = b
+                .intern_blank(&format!("t{index}"), purrdf_core::BlankScope::DEFAULT)
+                .unwrap();
+            b.push_quad(node, first, *row_head, None).unwrap();
+            b.push_quad(node, rest, outer, None).unwrap();
             outer = node;
         }
         let head_label = format!("t{}", 0);
-        let subject = b.intern_iri("http://example.org/codes");
-        let predicate = b.intern_iri("http://example.org/table");
-        b.push_quad(subject, predicate, outer, None);
+        let subject = b.intern_iri("http://example.org/codes").unwrap();
+        let predicate = b.intern_iri("http://example.org/table").unwrap();
+        b.push_quad(subject, predicate, outer, None).unwrap();
         let dataset = b.freeze().expect("freeze");
         (
             dataset,

@@ -15,26 +15,26 @@ const VECTORS: &str = include_str!("../../../../tests/goldens/dataset-state-v1.t
 
 fn fixture(name: &str) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    let q = builder.intern_iri("http://example.org/q");
-    let g = builder.intern_iri("http://example.org/g");
-    let h = builder.intern_iri("http://example.org/h");
-    let s = builder.intern_blank("authored", BlankScope(19));
-    let quoted = builder.intern_triple(s, p, h);
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let q = builder.intern_iri("http://example.org/q").unwrap();
+    let g = builder.intern_iri("http://example.org/g").unwrap();
+    let h = builder.intern_iri("http://example.org/h").unwrap();
+    let s = builder.intern_blank("authored", BlankScope(19)).unwrap();
+    let quoted = builder.intern_triple(s, p, h).unwrap();
     match name {
         "empty_default" => {}
-        "empty_iri_graph" => builder.declare_named_graph(g),
-        "empty_blank_graph" => builder.declare_named_graph(s),
-        "ordinary" => builder.push_quad(s, q, h, None),
-        "reifier" => builder.push_reifier(s, quoted),
-        "annotation" => builder.push_annotation(s, q, h),
+        "empty_iri_graph" => builder.declare_named_graph(g).unwrap(),
+        "empty_blank_graph" => builder.declare_named_graph(s).unwrap(),
+        "ordinary" => builder.push_quad(s, q, h, None).unwrap(),
+        "reifier" => builder.push_reifier(s, quoted).unwrap(),
+        "annotation" => builder.push_annotation(s, q, h).unwrap(),
         "ordinary_annotation" => {
-            builder.push_quad(s, q, h, None);
-            builder.push_annotation(s, q, h);
+            builder.push_quad(s, q, h, None).unwrap();
+            builder.push_annotation(s, q, h).unwrap();
         }
         "nested_shared_graph" => {
-            let nested = builder.intern_triple(s, p, quoted);
-            builder.push_quad(s, q, nested, Some(s));
+            let nested = builder.intern_triple(s, p, quoted).unwrap();
+            builder.push_quad(s, q, nested, Some(s)).unwrap();
         }
         "list_shared_graph" | "map_shared_graph" | "embedded_list_shared_graph" => {
             let (lexical, datatype) = match name {
@@ -52,18 +52,24 @@ fn fixture(name: &str) -> Arc<RdfDataset> {
                 ),
             };
             // The authored lexical labels bind to the one document scope.
-            let s = builder.intern_blank("authored", BlankScope::DEFAULT);
-            let object = builder.intern_literal(RdfLiteral::typed(lexical, datatype));
-            builder.push_quad(s, q, object, Some(s));
+            let s = builder
+                .intern_blank("authored", BlankScope::DEFAULT)
+                .unwrap();
+            let object = builder
+                .intern_literal(RdfLiteral::typed(lexical, datatype))
+                .unwrap();
+            builder.push_quad(s, q, object, Some(s)).unwrap();
         }
         "literal_exact_metadata" => {
-            let object = builder.intern_literal(RdfLiteral {
-                lexical_form: "a\0é".to_owned(),
-                datatype: Some(purrdf_iri::vocab::rdf::DIR_LANG_STRING.to_owned()),
-                language: Some("fr".to_owned()),
-                direction: Some(RdfTextDirection::Rtl),
-            });
-            builder.push_quad(g, p, object, None);
+            let object = builder
+                .intern_literal(RdfLiteral {
+                    lexical_form: "a\0é".to_owned(),
+                    datatype: Some(purrdf_iri::vocab::rdf::DIR_LANG_STRING.to_owned()),
+                    language: Some("fr".to_owned()),
+                    direction: Some(RdfTextDirection::Rtl),
+                })
+                .unwrap();
+            builder.push_quad(g, p, object, None).unwrap();
         }
         _ => panic!("unknown frozen state fixture: {name}"),
     }
@@ -140,49 +146,57 @@ fn genuine_branching_refuses_its_search_budget_and_has_an_admitted_neighbor() {
 
 fn incidence_fixture(asymmetric: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
-    let q = builder.intern_iri("http://example.org/q");
-    let g = builder.intern_iri("http://example.org/g");
-    let h = builder.intern_iri("http://example.org/h");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let q = builder.intern_iri("http://example.org/q").unwrap();
+    let g = builder.intern_iri("http://example.org/g").unwrap();
+    let h = builder.intern_iri("http://example.org/h").unwrap();
     let labels = ["left", "right"];
-    let blanks = labels.map(|label| builder.intern_blank(label, BlankScope::DEFAULT));
+    let blanks = labels.map(|label| builder.intern_blank(label, BlankScope::DEFAULT).unwrap());
     for (index, &blank) in blanks.iter().enumerate() {
         let other = blanks[1 - index];
         let label = labels[index];
         let other_label = labels[1 - index];
-        builder.declare_named_graph(blank);
-        let inner = builder.intern_triple(blank, p, other);
-        let outer = builder.intern_triple(other, p, inner);
-        builder.push_quad(g, p, outer, None);
-        builder.push_quad(g, q, h, Some(blank));
-        builder.push_reifier(blank, inner);
-        builder.push_annotation(blank, q, h);
-        let list = builder.intern_literal(RdfLiteral::typed(
-            format!("[ _:{label}, [ _:{other_label}, _:{label} ] ]"),
-            purrdf_cdt::CDT_LIST,
-        ));
-        builder.push_quad(g, p, list, None);
-        let map = builder.intern_literal(RdfLiteral::typed(
-            format!("{{ _:{label}: [ _:{other_label}, _:{label} ] }}"),
-            purrdf_cdt::CDT_MAP,
-        ));
-        builder.push_annotation(g, q, map);
-        let embedded = builder.intern_literal(RdfLiteral::typed(
-            format!(
-                "[\"[_:{label}, _:{other_label}]\"^^<{}> ]",
-                purrdf_cdt::CDT_LIST
-            ),
-            purrdf_cdt::CDT_LIST,
-        ));
-        builder.push_quad(g, q, embedded, None);
+        builder.declare_named_graph(blank).unwrap();
+        let inner = builder.intern_triple(blank, p, other).unwrap();
+        let outer = builder.intern_triple(other, p, inner).unwrap();
+        builder.push_quad(g, p, outer, None).unwrap();
+        builder.push_quad(g, q, h, Some(blank)).unwrap();
+        builder.push_reifier(blank, inner).unwrap();
+        builder.push_annotation(blank, q, h).unwrap();
+        let list = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("[ _:{label}, [ _:{other_label}, _:{label} ] ]"),
+                purrdf_cdt::CDT_LIST,
+            ))
+            .unwrap();
+        builder.push_quad(g, p, list, None).unwrap();
+        let map = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("{{ _:{label}: [ _:{other_label}, _:{label} ] }}"),
+                purrdf_cdt::CDT_MAP,
+            ))
+            .unwrap();
+        builder.push_annotation(g, q, map).unwrap();
+        let embedded = builder
+            .intern_literal(RdfLiteral::typed(
+                format!(
+                    "[\"[_:{label}, _:{other_label}]\"^^<{}> ]",
+                    purrdf_cdt::CDT_LIST
+                ),
+                purrdf_cdt::CDT_LIST,
+            ))
+            .unwrap();
+        builder.push_quad(g, q, embedded, None).unwrap();
     }
-    builder.push_quad(g, p, h, None);
+    builder.push_quad(g, p, h, None).unwrap();
     if asymmetric {
-        let object = builder.intern_literal(RdfLiteral::typed(
-            format!("[\"{{_:left: [_:left]}}\"^^<{}> ]", purrdf_cdt::CDT_MAP),
-            purrdf_cdt::CDT_LIST,
-        ));
-        builder.push_quad(g, p, object, None);
+        let object = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("[\"{{_:left: [_:left]}}\"^^<{}> ]", purrdf_cdt::CDT_MAP),
+                purrdf_cdt::CDT_LIST,
+            ))
+            .unwrap();
+        builder.push_quad(g, p, object, None).unwrap();
     }
     builder.freeze().unwrap()
 }

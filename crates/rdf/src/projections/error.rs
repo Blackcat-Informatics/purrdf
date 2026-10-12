@@ -7,6 +7,8 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ProjectionErrorKind {
+    /// A logical capacity or physical storage admission refused reconstruction.
+    Storage,
     /// The source dictionary or row stream failed operationally.
     SourceRead,
     /// Mandatory configuration is absent, malformed, or contradictory.
@@ -27,6 +29,7 @@ impl ProjectionErrorKind {
     /// Stable lowercase machine label for this category.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Storage => "storage",
             Self::SourceRead => "source-read",
             Self::Configuration => "configuration",
             Self::ResourceLimit => "resource-limit",
@@ -44,6 +47,7 @@ pub struct ProjectionError {
     kind: ProjectionErrorKind,
     message: String,
     path: Option<String>,
+    storage: Option<purrdf_lex::allocation::StorageError>,
 }
 
 impl ProjectionError {
@@ -56,6 +60,7 @@ impl ProjectionError {
             kind,
             message: message.into(),
             path: None,
+            storage: None,
         }
     }
 
@@ -104,6 +109,11 @@ impl ProjectionError {
     pub fn path(&self) -> Option<&str> {
         self.path.as_deref()
     }
+
+    /// The original logical capacity or physical storage failure, if present.
+    pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
+        self.storage
+    }
 }
 
 impl fmt::Display for ProjectionError {
@@ -116,11 +126,59 @@ impl fmt::Display for ProjectionError {
     }
 }
 
-impl std::error::Error for ProjectionError {}
+impl From<purrdf_lex::allocation::StorageError> for ProjectionError {
+    fn from(error: purrdf_lex::allocation::StorageError) -> Self {
+        let mut result = Self::new(ProjectionErrorKind::Storage, error.to_string());
+        result.storage = Some(error);
+        result
+    }
+}
+
+impl From<purrdf_core::RdfDiagnostic> for ProjectionError {
+    fn from(error: purrdf_core::RdfDiagnostic) -> Self {
+        error
+            .storage_error()
+            .map_or_else(|| Self::integrity(error.to_string()), Self::from)
+    }
+}
+
+impl std::error::Error for ProjectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.storage
+            .as_ref()
+            .map(|error| error as &dyn std::error::Error)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_causes_survive_projection_and_rdf_diagnostic_boundaries() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        for cause in [
+            StorageError::Capacity(CapacityError {
+                space: CapacitySpace::LocalTerms,
+                attempted: u128::from(u32::MAX) + 1,
+                limit: u128::from(u32::MAX),
+            }),
+            StorageError::AllocationFailed,
+        ] {
+            let direct = ProjectionError::from(cause).at_path("rows.csv");
+            let diagnostic = ProjectionError::from(purrdf_core::RdfDiagnostic::from(cause));
+            assert_eq!(direct.kind(), ProjectionErrorKind::Storage);
+            assert_eq!(direct.storage_error(), Some(cause));
+            assert_eq!(diagnostic.storage_error(), Some(cause));
+            assert_eq!(direct.path(), Some("rows.csv"));
+            assert_eq!(
+                std::error::Error::source(&direct)
+                    .unwrap()
+                    .downcast_ref::<StorageError>(),
+                Some(&cause)
+            );
+        }
+    }
 
     #[test]
     fn display_includes_stable_category_and_path() {

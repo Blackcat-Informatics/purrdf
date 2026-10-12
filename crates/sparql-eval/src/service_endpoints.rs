@@ -2157,7 +2157,7 @@ mod tests {
     /// fails), all through `ex:endpoint`; and `ex:g1 ex:other ex:o`.
     fn local() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let endpoint = b.intern_iri(&format!("{EX}endpoint"));
+        let endpoint = b.intern_iri(&format!("{EX}endpoint")).unwrap();
         for (g, e) in [
             ("g1", "e1"),
             ("g2", "e2"),
@@ -2165,14 +2165,14 @@ mod tests {
             ("g4", "e3"),
             ("g5", "down"),
         ] {
-            let g = b.intern_iri(&format!("{EX}{g}"));
-            let e = b.intern_iri(&format!("{EX}{e}"));
-            b.push_quad(g, endpoint, e, None);
+            let g = b.intern_iri(&format!("{EX}{g}")).unwrap();
+            let e = b.intern_iri(&format!("{EX}{e}")).unwrap();
+            b.push_quad(g, endpoint, e, None).unwrap();
         }
-        let g1 = b.intern_iri(&format!("{EX}g1"));
-        let other = b.intern_iri(&format!("{EX}other"));
-        let o = b.intern_iri(&format!("{EX}o"));
-        b.push_quad(g1, other, o, None);
+        let g1 = b.intern_iri(&format!("{EX}g1")).unwrap();
+        let other = b.intern_iri(&format!("{EX}other")).unwrap();
+        let o = b.intern_iri(&format!("{EX}o")).unwrap();
+        b.push_quad(g1, other, o, None).unwrap();
         b.freeze().expect("freeze")
     }
 

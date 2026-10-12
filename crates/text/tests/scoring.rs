@@ -30,14 +30,16 @@ const NOTE: &str = "https://example.org/note";
 /// Build an index over `(subject, lexical form, language tag)` rows.
 fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for &(subject, text, language) in rows {
-        let s = builder.intern_iri(subject);
-        let literal = builder.intern_literal(match language {
-            Some(tag) => RdfLiteral::language_tagged(text, tag),
-            None => RdfLiteral::simple(text),
-        });
-        builder.push_quad(s, note, literal, None);
+        let s = builder.intern_iri(subject).unwrap();
+        let literal = builder
+            .intern_literal(match language {
+                Some(tag) => RdfLiteral::language_tagged(text, tag),
+                None => RdfLiteral::simple(text),
+            })
+            .unwrap();
+        builder.push_quad(s, note, literal, None).unwrap();
     }
     let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
     TextIndex::from_dataset(

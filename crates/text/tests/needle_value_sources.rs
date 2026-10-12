@@ -31,16 +31,18 @@ const NOTE: &str = "http://example.org/note";
 /// Four documents: two hold `alpha beta`, one only `gamma`, one neither.
 fn fixture() -> (Arc<RdfDataset>, PropertyFunctionRegistry) {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text) in [
         ("d1", "alpha beta alpha beta"),
         ("d2", "alpha beta gamma delta"),
         ("d3", "gamma gamma river stone"),
         ("d4", "lazy dog sleeps late"),
     ] {
-        let s = builder.intern_iri(&format!("http://example.org/{local}"));
-        let o = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(s, note, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let o = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(s, note, o, None).unwrap();
     }
     let dataset = builder.freeze().expect("the fixture must validate");
     let config = TextIndexConfig::new(

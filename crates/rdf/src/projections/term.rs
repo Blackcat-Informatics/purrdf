@@ -136,8 +136,8 @@ impl ProjectionTerm {
         builder: &mut purrdf_core::RdfDatasetBuilder,
     ) -> Result<purrdf_core::TermId, ProjectionError> {
         Ok(match self {
-            Self::Iri { value } => builder.intern_iri(value),
-            Self::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
+            Self::Iri { value } => builder.intern_iri(value)?,
+            Self::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope))?,
             Self::Literal {
                 lexical,
                 datatype,
@@ -148,7 +148,7 @@ impl ProjectionTerm {
                 datatype: Some(datatype.clone()),
                 language: language.clone(),
                 direction: *direction,
-            }),
+            })?,
             Self::Triple {
                 subject,
                 predicate,
@@ -160,9 +160,9 @@ impl ProjectionTerm {
                         "projected triple term predicate is not an IRI",
                     ));
                 };
-                let predicate = builder.intern_iri(predicate);
+                let predicate = builder.intern_iri(predicate)?;
                 let object = object.intern(builder)?;
-                builder.intern_triple(subject, predicate, object)
+                builder.intern_triple(subject, predicate, object)?
             }
         })
     }
@@ -592,15 +592,17 @@ mod tests {
     #[test]
     fn nested_directional_term_round_trips_view_json_and_value() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_literal(RdfLiteral {
-            lexical_form: "marhaba".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        let triple = builder.intern_triple(s, p, o);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "marhaba".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        let triple = builder.intern_triple(s, p, o).unwrap();
         let dataset = builder.freeze().expect("freeze");
 
         let term = ProjectionTerm::from_view(&dataset, triple, limits()).expect("project");

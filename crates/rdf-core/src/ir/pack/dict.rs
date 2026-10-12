@@ -1401,10 +1401,10 @@ mod tests {
     fn build_dataset(triples: &[(TermValue, TermValue, TermValue)]) -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
-            let s = b.intern_value(s);
-            let p = b.intern_value(p);
-            let o = b.intern_value(o);
-            b.push_quad(s, p, o, None);
+            let s = b.intern_value(s).unwrap();
+            let p = b.intern_value(p).unwrap();
+            let o = b.intern_value(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("valid dataset")
     }
@@ -1817,11 +1817,11 @@ mod tests {
         // predicate, or object — so it must still mint a unified id and round-trip
         // via `id_by_value`/`term_value`, agreeing with `predicate_id_by_value`.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_value(&iri("s"));
-        let p = b.intern_value(&iri("p"));
-        let o = b.intern_value(&iri("o"));
-        let g = b.intern_value(&iri("g"));
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_value(&iri("s")).unwrap();
+        let p = b.intern_value(&iri("p")).unwrap();
+        let o = b.intern_value(&iri("o")).unwrap();
+        let g = b.intern_value(&iri("g")).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
@@ -1838,13 +1838,13 @@ mod tests {
         // "g" names the graph of the second quad AND is the subject of the first
         // quad: it must get exactly ONE unified id, not a second duplicate entry.
         let mut b = RdfDatasetBuilder::new();
-        let g = b.intern_value(&iri("g"));
-        let p = b.intern_value(&iri("p"));
-        let o1 = b.intern_value(&iri("o1"));
-        let s2 = b.intern_value(&iri("s2"));
-        let o2 = b.intern_value(&iri("o2"));
-        b.push_quad(g, p, o1, None);
-        b.push_quad(s2, p, o2, Some(g));
+        let g = b.intern_value(&iri("g")).unwrap();
+        let p = b.intern_value(&iri("p")).unwrap();
+        let o1 = b.intern_value(&iri("o1")).unwrap();
+        let s2 = b.intern_value(&iri("s2")).unwrap();
+        let o2 = b.intern_value(&iri("o2")).unwrap();
+        b.push_quad(g, p, o1, None).unwrap();
+        b.push_quad(s2, p, o2, Some(g)).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
@@ -1865,12 +1865,12 @@ mod tests {
         // The side-table term closure must still fold both into the dictionary
         // and round-trip them.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_value(&iri("s"));
-        let p = b.intern_value(&iri("p"));
-        let o = b.intern_value(&iri("o"));
-        let triple = b.intern_triple(s, p, o);
-        let reifier = b.intern_value(&iri("r"));
-        b.push_reifier(reifier, triple);
+        let s = b.intern_value(&iri("s")).unwrap();
+        let p = b.intern_value(&iri("p")).unwrap();
+        let o = b.intern_value(&iri("o")).unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_value(&iri("r")).unwrap();
+        b.push_reifier(reifier, triple).unwrap();
         let dataset = b.freeze().expect("valid dataset");
         assert_eq!(dataset.quad_count(), 0, "reification is side-table only");
 
@@ -1893,15 +1893,15 @@ mod tests {
         // The annotation's predicate and object appear ONLY in the annotation
         // side-table (never a base quad's subject/predicate/object).
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_value(&iri("s"));
-        let p = b.intern_value(&iri("p"));
-        let o = b.intern_value(&iri("o"));
-        let triple = b.intern_triple(s, p, o);
-        let reifier = b.intern_value(&iri("r"));
-        b.push_reifier(reifier, triple);
-        let ap = b.intern_value(&iri("confidence"));
-        let ao = b.intern_value(&TermValue::simple_literal("0.9"));
-        b.push_annotation(reifier, ap, ao);
+        let s = b.intern_value(&iri("s")).unwrap();
+        let p = b.intern_value(&iri("p")).unwrap();
+        let o = b.intern_value(&iri("o")).unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_value(&iri("r")).unwrap();
+        b.push_reifier(reifier, triple).unwrap();
+        let ap = b.intern_value(&iri("confidence")).unwrap();
+        let ao = b.intern_value(&TermValue::simple_literal("0.9")).unwrap();
+        b.push_annotation(reifier, ap, ao).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
@@ -1921,15 +1921,15 @@ mod tests {
     #[test]
     fn rdf_reifies_predicate_gets_unified_id_when_reifiers_present() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_value(&iri("s"));
-        let p = b.intern_value(&iri("p"));
-        let o = b.intern_value(&iri("o"));
-        let triple = b.intern_triple(s, p, o);
-        let reifier = b.intern_value(&iri("r"));
+        let s = b.intern_value(&iri("s")).unwrap();
+        let p = b.intern_value(&iri("p")).unwrap();
+        let o = b.intern_value(&iri("o")).unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_value(&iri("r")).unwrap();
         // Mirror the ingest path: `rdf:reifies` is interned even though it never
         // appears in any base quad or side-table row tuple directly.
-        b.intern_iri(RDF_REIFIES);
-        b.push_reifier(reifier, triple);
+        b.intern_iri(RDF_REIFIES).unwrap();
+        b.push_reifier(reifier, triple).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
@@ -2064,7 +2064,7 @@ mod tests {
 
             // Ground truth: every value the dataset itself ever interned.
             let truth: HashSet<TermValue> = (0..dataset.term_count())
-                .map(|i| dataset.term_value(TermId::from_index(i as u32)).unwrap())
+                .map(|i| dataset.term_value(TermId::from_index(i as u32).expect("stored term index is representable")).unwrap())
                 .collect();
 
             for id in 1..=dict.n_terms() {

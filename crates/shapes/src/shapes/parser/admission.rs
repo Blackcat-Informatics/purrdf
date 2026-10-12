@@ -307,7 +307,7 @@ mod tests {
             let data = purrdf_rdf::RdfDatasetBuilder::new().freeze().unwrap();
             let data = crate::data::ShaclData::new(Arc::clone(&data), data, None);
             crate::rules::infer(&data, &shapes, &crate::rules::RuleOptions::default())
-                .map_err(crate::report::CompleteValidationError::Execution)
+                .map_err(crate::report::CompleteValidationError::execution)
         })
     }
 
@@ -1063,7 +1063,7 @@ mod tests {
                     crate::term::NamedNode::new_unchecked("http://example.org/Chosen"),
                 );
                 crate::rules::infer(&data, &shapes, &options)
-                    .map_err(crate::report::CompleteValidationError::Execution)
+                    .map_err(crate::report::CompleteValidationError::execution)
             })
             .unwrap();
             assert_eq!(result.inferred().len(), 1);
@@ -1088,7 +1088,7 @@ mod tests {
                     let data = crate::data::ShaclData::new(Arc::clone(&data), data, None);
                     let options = crate::rules::RuleOptions::default();
                     let inference = crate::rules::infer(&data, &shapes, &options)
-                        .map_err(crate::report::CompleteValidationError::Execution)?;
+                        .map_err(crate::report::CompleteValidationError::execution)?;
                     assert_eq!(inference.inferred().len(), expected);
                     let state = Arc::new(purrdf_sparql_eval::GovernorState::new(
                         &purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_fuel(0),

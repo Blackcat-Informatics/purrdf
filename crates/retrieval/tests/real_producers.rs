@@ -857,14 +857,16 @@ fn dataset() -> Arc<RdfDataset> {
 /// refuses to declare a ranked order over.
 fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for &(local, text, language) in rows {
-        let subject = builder.intern_iri(&ex(local));
-        let literal = builder.intern_literal(language.map_or_else(
-            || RdfLiteral::simple(text),
-            |tag| RdfLiteral::language_tagged(text, tag),
-        ));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder.intern_iri(&ex(local)).unwrap();
+        let literal = builder
+            .intern_literal(language.map_or_else(
+                || RdfLiteral::simple(text),
+                |tag| RdfLiteral::language_tagged(text, tag),
+            ))
+            .unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset is valid")
 }

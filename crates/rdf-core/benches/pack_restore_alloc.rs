@@ -85,19 +85,25 @@ fn rdf_11_dataset() -> Arc<RdfDataset> {
         let _ = write!(iri, "{NS}{suffix}");
         iri.clone()
     };
-    let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-    let class = builder.intern_iri(&name("Thing"));
-    let label = builder.intern_iri(&name("label"));
-    let peer = builder.intern_iri(&name("peer"));
+    let rdf_type = builder
+        .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        .unwrap();
+    let class = builder.intern_iri(&name("Thing")).unwrap();
+    let label = builder.intern_iri(&name("label")).unwrap();
+    let peer = builder.intern_iri(&name("peer")).unwrap();
 
     let subjects: Vec<_> = (0..SUBJECTS)
-        .map(|i| builder.intern_iri(&name(&format!("s{i}"))))
+        .map(|i| builder.intern_iri(&name(&format!("s{i}"))).unwrap())
         .collect();
     for (i, &s) in subjects.iter().enumerate() {
-        builder.push_quad(s, rdf_type, class, None);
-        let text = builder.intern_literal(RdfLiteral::simple(format!("label of subject {i}")));
-        builder.push_quad(s, label, text, None);
-        builder.push_quad(s, peer, subjects[(i + 1) % SUBJECTS], None);
+        builder.push_quad(s, rdf_type, class, None).unwrap();
+        let text = builder
+            .intern_literal(RdfLiteral::simple(format!("label of subject {i}")))
+            .unwrap();
+        builder.push_quad(s, label, text, None).unwrap();
+        builder
+            .push_quad(s, peer, subjects[(i + 1) % SUBJECTS], None)
+            .unwrap();
     }
     builder.freeze().expect("the RDF 1.1 fixture freezes")
 }
@@ -113,33 +119,45 @@ fn rdf_12_dataset() -> Arc<RdfDataset> {
         let _ = write!(iri, "{NS}{suffix}");
         iri.clone()
     };
-    let says = builder.intern_iri(&name("says"));
-    let note = builder.intern_iri(&name("note"));
-    let source = builder.intern_iri(&name("source"));
-    let graph = builder.intern_iri(&name("g"));
+    let says = builder.intern_iri(&name("says")).unwrap();
+    let note = builder.intern_iri(&name("note")).unwrap();
+    let source = builder.intern_iri(&name("source")).unwrap();
+    let graph = builder.intern_iri(&name("g")).unwrap();
 
     for i in 0..SUBJECTS {
-        let subject = builder.intern_iri(&name(&format!("s{i}")));
-        let object = builder.intern_literal(RdfLiteral {
-            lexical_form: format!("statement {i}"),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(if i % 2 == 0 {
-                RdfTextDirection::Ltr
-            } else {
-                RdfTextDirection::Rtl
-            }),
-        });
+        let subject = builder.intern_iri(&name(&format!("s{i}"))).unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: format!("statement {i}"),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(if i % 2 == 0 {
+                    RdfTextDirection::Ltr
+                } else {
+                    RdfTextDirection::Rtl
+                }),
+            })
+            .unwrap();
         let in_graph = (i % 4 == 0).then_some(graph);
-        builder.push_quad(subject, says, object, in_graph);
+        builder.push_quad(subject, says, object, in_graph).unwrap();
 
         // A quoted triple, bound to a blank-node reifier and annotated.
-        let quoted = builder.intern_triple(subject, says, object);
-        let reifier = builder.intern_blank(&format!("r{i}"), purrdf_core::BlankScope::DEFAULT);
-        builder.push_reifier_in_graph(reifier, quoted, in_graph);
-        let annotation = builder.intern_literal(RdfLiteral::simple(format!("annotation {i}")));
-        builder.push_annotation_in_graph(reifier, note, annotation, in_graph);
-        builder.push_quad(reifier, source, subject, in_graph);
+        let quoted = builder.intern_triple(subject, says, object).unwrap();
+        let reifier = builder
+            .intern_blank(&format!("r{i}"), purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, in_graph)
+            .unwrap();
+        let annotation = builder
+            .intern_literal(RdfLiteral::simple(format!("annotation {i}")))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, note, annotation, in_graph)
+            .unwrap();
+        builder
+            .push_quad(reifier, source, subject, in_graph)
+            .unwrap();
     }
     builder.freeze().expect("the RDF 1.2 fixture freezes")
 }

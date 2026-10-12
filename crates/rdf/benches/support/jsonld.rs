@@ -13,33 +13,55 @@ pub(crate) const STAR_STRIDE: usize = 8;
 
 pub(crate) fn build_dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/predicate");
-    let name = builder.intern_iri("https://example.org/name");
-    let asserts = builder.intern_iri("https://example.org/asserts");
-    let confidence = builder.intern_iri("https://example.org/confidence");
-    let graph = builder.intern_iri("https://example.org/graph");
+    let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+    let name = builder.intern_iri("https://example.org/name").unwrap();
+    let asserts = builder.intern_iri("https://example.org/asserts").unwrap();
+    let confidence = builder
+        .intern_iri("https://example.org/confidence")
+        .unwrap();
+    let graph = builder.intern_iri("https://example.org/graph").unwrap();
 
     for index in 0..rows {
-        let subject = builder.intern_iri(&format!("https://example.org/subject/{index}"));
-        let object = builder.intern_iri(&format!("https://example.org/object/{index}"));
-        let literal = builder.intern_literal(RdfLiteral::language_tagged(
-            format!("deterministic value {index}"),
-            if index % 2 == 0 { "en" } else { "fr" },
-        ));
+        let subject = builder
+            .intern_iri(&format!("https://example.org/subject/{index}"))
+            .unwrap();
+        let object = builder
+            .intern_iri(&format!("https://example.org/object/{index}"))
+            .unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::language_tagged(
+                format!("deterministic value {index}"),
+                if index % 2 == 0 { "en" } else { "fr" },
+            ))
+            .unwrap();
         let graph_name = (index % 4 == 0).then_some(graph);
-        builder.push_quad(subject, predicate, object, graph_name);
-        builder.push_quad(subject, name, literal, graph_name);
+        builder
+            .push_quad(subject, predicate, object, graph_name)
+            .unwrap();
+        builder
+            .push_quad(subject, name, literal, graph_name)
+            .unwrap();
 
         if index % STAR_STRIDE == 0 {
-            let proposition = builder.intern_triple(subject, predicate, object);
-            let reifier = builder.intern_iri(&format!("https://example.org/reifier/{index}"));
-            let score = builder.intern_literal(RdfLiteral::typed(
-                format!("{}.5", index % 10),
-                "http://www.w3.org/2001/XMLSchema#decimal",
-            ));
-            builder.push_reifier_in_graph(reifier, proposition, graph_name);
-            builder.push_annotation_in_graph(reifier, confidence, score, graph_name);
-            builder.push_quad(subject, asserts, proposition, graph_name);
+            let proposition = builder.intern_triple(subject, predicate, object).unwrap();
+            let reifier = builder
+                .intern_iri(&format!("https://example.org/reifier/{index}"))
+                .unwrap();
+            let score = builder
+                .intern_literal(RdfLiteral::typed(
+                    format!("{}.5", index % 10),
+                    "http://www.w3.org/2001/XMLSchema#decimal",
+                ))
+                .unwrap();
+            builder
+                .push_reifier_in_graph(reifier, proposition, graph_name)
+                .unwrap();
+            builder
+                .push_annotation_in_graph(reifier, confidence, score, graph_name)
+                .unwrap();
+            builder
+                .push_quad(subject, asserts, proposition, graph_name)
+                .unwrap();
         }
     }
 
@@ -55,13 +77,14 @@ pub(crate) fn build_many_namespace_dataset(
     iris_per_namespace: usize,
 ) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("urn:subject");
-    let object = builder.intern_iri("urn:object");
+    let subject = builder.intern_iri("urn:subject").unwrap();
+    let object = builder.intern_iri("urn:object").unwrap();
     for namespace in 0..namespace_count {
         for local in 0..iris_per_namespace {
-            let predicate =
-                builder.intern_iri(&format!("https://bench.example/ns/{namespace}/term{local}"));
-            builder.push_quad(subject, predicate, object, None);
+            let predicate = builder
+                .intern_iri(&format!("https://bench.example/ns/{namespace}/term{local}"))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
     }
     builder.freeze().expect("many-namespace JSON-LD fixture")
@@ -73,12 +96,22 @@ pub(crate) fn build_many_namespace_dataset(
 )]
 pub(crate) fn build_many_named_graph_dataset(graph_count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://bench.example/predicate");
+    let predicate = builder
+        .intern_iri("https://bench.example/predicate")
+        .unwrap();
     for index in 0..graph_count {
-        let subject = builder.intern_iri(&format!("https://bench.example/subject/{index}"));
-        let object = builder.intern_iri(&format!("https://bench.example/object/{index}"));
-        let graph = builder.intern_iri(&format!("https://bench.example/graph/{index}"));
-        builder.push_quad(subject, predicate, object, Some(graph));
+        let subject = builder
+            .intern_iri(&format!("https://bench.example/subject/{index}"))
+            .unwrap();
+        let object = builder
+            .intern_iri(&format!("https://bench.example/object/{index}"))
+            .unwrap();
+        let graph = builder
+            .intern_iri(&format!("https://bench.example/graph/{index}"))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
     }
     builder.freeze().expect("many-graph JSON-LD fixture")
 }
@@ -89,11 +122,13 @@ pub(crate) fn build_many_named_graph_dataset(graph_count: usize) -> Arc<RdfDatas
 )]
 pub(crate) fn build_multivalue_dataset(value_count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://bench.example/subject");
-    let predicate = builder.intern_iri("https://bench.example/value");
+    let subject = builder.intern_iri("https://bench.example/subject").unwrap();
+    let predicate = builder.intern_iri("https://bench.example/value").unwrap();
     for index in 0..value_count {
-        let object = builder.intern_iri(&format!("https://bench.example/object/{index:05}"));
-        builder.push_quad(subject, predicate, object, None);
+        let object = builder
+            .intern_iri(&format!("https://bench.example/object/{index:05}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     builder.freeze().expect("multivalue JSON-LD fixture")
 }

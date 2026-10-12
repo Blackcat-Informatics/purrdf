@@ -26,6 +26,8 @@ use std::fmt;
 /// A grading refusal distinct from an unequal, well-formed pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GradeError {
+    /// Native report construction or comparison refused physical or logical storage.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The input does not satisfy its declared result or manifest shape.
     Malformed(String),
     /// Well-formed inputs disagree under the declared comparison.
@@ -37,6 +39,7 @@ pub enum GradeError {
 impl fmt::Display for GradeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (kind, message) = match self {
+            Self::Storage(error) => return write!(f, "storage refused: {error}"),
             Self::Malformed(message) => ("malformed input", message),
             Self::Mismatch(message) => ("mismatch", message),
             Self::Canonicalization(message) => ("canonicalization refused", message),
@@ -45,4 +48,83 @@ impl fmt::Display for GradeError {
     }
 }
 
-impl std::error::Error for GradeError {}
+impl std::error::Error for GradeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+
+impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    fn from(error: purrdf_core::RdfDiagnostic) -> Self {
+        error
+            .storage_error()
+            .map_or_else(|| Self::Malformed(error.to_string()), Self::Storage)
+    }
+}
+
+impl From<purrdf_core::CanonError> for GradeError {
+    fn from(error: purrdf_core::CanonError) -> Self {
+        match error {
+            purrdf_core::CanonError::Storage(error) => Self::Storage(error),
+            purrdf_core::CanonError::Invalid(error) => error.storage_error().map_or_else(
+                || Self::Canonicalization(purrdf_core::CanonError::Invalid(error).to_string()),
+                Self::Storage,
+            ),
+            other => Self::Canonicalization(other.to_string()),
+        }
+    }
+}
+
+impl
+    From<
+        purrdf_core::ViewCanonError<
+            <purrdf_core::RdfDataset as purrdf_core::DatasetView>::ReadError,
+            (),
+        >,
+    > for GradeError
+{
+    fn from(
+        error: purrdf_core::ViewCanonError<
+            <purrdf_core::RdfDataset as purrdf_core::DatasetView>::ReadError,
+            (),
+        >,
+    ) -> Self {
+        match error {
+            purrdf_core::ViewCanonError::NotReady { error, .. } => match error {},
+            purrdf_core::ViewCanonError::Refused(error) => error.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GradeError;
+
+    #[test]
+    fn native_capacity_refusal_survives_report_and_canonicalization_boundaries() {
+        let cause: purrdf_lex::allocation::StorageError = purrdf_core::TermId::from_index(u32::MAX)
+            .unwrap_err()
+            .into();
+        for error in [
+            GradeError::from(purrdf_core::RdfDiagnostic::from(cause)),
+            GradeError::from(purrdf_core::CanonError::Storage(cause)),
+            GradeError::from(purrdf_core::CanonError::Invalid(cause.into())),
+            GradeError::from(purrdf_core::ViewCanonError::Refused(
+                purrdf_core::CanonError::Storage(cause),
+            )),
+        ] {
+            assert_eq!(error, GradeError::Storage(cause));
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<purrdf_lex::allocation::StorageError>(),
+                Some(&cause)
+            );
+        }
+    }
+}

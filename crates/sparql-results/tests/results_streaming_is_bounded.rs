@@ -61,18 +61,24 @@ impl Chunks {
 /// A CONSTRUCT answer far larger than one drain window.
 fn graph_result(rows: usize) -> SparqlResult {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/predicate-with-a-deliberately-long-name");
+    let p = b
+        .intern_iri("https://example.org/predicate-with-a-deliberately-long-name")
+        .unwrap();
     for i in 0..rows {
-        let s = b.intern_owned_term(&RdfTerm::iri(format!(
-            "https://example.org/subject/{i}/with/a/deliberately/long/path/segment"
-        )));
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!(
+                "https://example.org/subject/{i}/with/a/deliberately/long/path/segment"
+            )))
+            .unwrap();
         // Quotes and newlines so the JSON escaper is doing real work on every line,
         // not passing a clean run straight through.
-        let o = b.intern_literal(RdfLiteral::simple(format!(
-            "row {i} carrying \"quoted\" text\nand a newline, padded so the rendered \
+        let o = b
+            .intern_literal(RdfLiteral::simple(format!(
+                "row {i} carrying \"quoted\" text\nand a newline, padded so the rendered \
              document crosses the staging window many times over"
-        )));
-        b.push_quad(s, p, o, None);
+            )))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     SparqlResult::Graph(b.freeze().expect("dataset freezes").into())
 }

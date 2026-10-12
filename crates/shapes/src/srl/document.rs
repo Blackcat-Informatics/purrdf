@@ -62,6 +62,8 @@ use crate::term::{NamedNode, Term, Triple};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SrlError {
+    /// Data materialization or a shapes operation refused evaluation.
+    Shapes(crate::error::ShapesError),
     /// The document is not a SPARQL-RL Document: §7 "A conforming SRL document is an RDF
     /// string that conforms to the grammar starting with the RuleSet production".
     Syntax {
@@ -121,6 +123,7 @@ pub enum SrlError {
 impl fmt::Display for SrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Shapes(error) => error.fmt(f),
             Self::Syntax {
                 document,
                 line,
@@ -173,7 +176,15 @@ impl fmt::Display for SrlError {
     }
 }
 
-impl std::error::Error for SrlError {}
+impl std::error::Error for SrlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Shapes(error) => Some(error),
+            Self::LimitExceeded(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// One rule of a document.
 #[derive(Debug, Clone)]
@@ -579,8 +590,7 @@ pub fn infer(
 ) -> Result<Inference, SrlError> {
     document.check_well_formed()?;
     document.stratify()?;
-    let projected =
-        crate::engine::project_dataset(base).map_err(|message| SrlError::Evaluation { message })?;
+    let projected = crate::engine::project_dataset(base).map_err(SrlError::Shapes)?;
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
     eval::evaluate(
         &document.rule_set(),
@@ -589,6 +599,7 @@ pub fn infer(
         &options.rules,
     )
     .map_err(|error| match error {
+        crate::rules::RulesError::Shapes(error) => SrlError::Shapes(error),
         crate::rules::RulesError::LimitExceeded(mut limit) => {
             limit.rename(|index| document.rules.get(index).map(SrlRule::describe));
             SrlError::LimitExceeded(limit)

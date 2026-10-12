@@ -97,31 +97,31 @@ fn pack_pattern(
 fn build_fixture() -> std::sync::Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let p = b.intern_iri("http://example.org/p");
-    let o1 = b.intern_iri("http://example.org/o1");
-    b.push_quad(s1, p, o1, None); // p as predicate
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o1 = b.intern_iri("http://example.org/o1").unwrap();
+    b.push_quad(s1, p, o1, None).unwrap(); // p as predicate
 
-    let s2 = b.intern_iri("http://example.org/s2");
-    let o2 = b.intern_iri("http://example.org/o2");
-    b.push_quad(s2, p, o2, None); // p as predicate again
+    let s2 = b.intern_iri("http://example.org/s2").unwrap();
+    let o2 = b.intern_iri("http://example.org/o2").unwrap();
+    b.push_quad(s2, p, o2, None).unwrap(); // p as predicate again
 
-    let p2 = b.intern_iri("http://example.org/p2");
-    let o3 = b.intern_iri("http://example.org/o3");
-    b.push_quad(p, p2, o3, None); // p as SUBJECT
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let o3 = b.intern_iri("http://example.org/o3").unwrap();
+    b.push_quad(p, p2, o3, None).unwrap(); // p as SUBJECT
 
-    let s3 = b.intern_iri("http://example.org/s3");
-    let p3 = b.intern_iri("http://example.org/p3");
-    b.push_quad(s3, p3, p, None); // p as OBJECT
+    let s3 = b.intern_iri("http://example.org/s3").unwrap();
+    let p3 = b.intern_iri("http://example.org/p3").unwrap();
+    b.push_quad(s3, p3, p, None).unwrap(); // p as OBJECT
 
-    let s4 = b.intern_iri("http://example.org/s4");
-    let q = b.intern_iri("http://example.org/q");
-    let o4 = b.intern_iri("http://example.org/o4");
-    b.push_quad(s4, q, o4, None); // q as predicate, pure
+    let s4 = b.intern_iri("http://example.org/s4").unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
+    let o4 = b.intern_iri("http://example.org/o4").unwrap();
+    b.push_quad(s4, q, o4, None).unwrap(); // q as predicate, pure
 
-    let s5 = b.intern_iri("http://example.org/s5");
-    let o5 = b.intern_iri("http://example.org/o5");
-    b.push_quad(s5, q, o5, None); // q as predicate, pure (again)
+    let s5 = b.intern_iri("http://example.org/s5").unwrap();
+    let o5 = b.intern_iri("http://example.org/o5").unwrap();
+    b.push_quad(s5, q, o5, None).unwrap(); // q as predicate, pure (again)
 
     b.freeze().expect("valid dataset")
 }

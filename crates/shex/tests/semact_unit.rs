@@ -199,15 +199,15 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
     // constraint's own predicate.
     const EXT: &str = "http://example.org/Recorder";
     let mut b = RdfDatasetBuilder::new();
-    let s1 = b.intern_iri("http://a.example/s1");
-    let p1 = b.intern_iri("http://a.example/p1");
-    let q1 = b.intern_iri("http://a.example/q1");
-    let o1 = b.intern_iri("http://a.example/o1");
-    let o2 = b.intern_iri("http://a.example/o2");
-    let o3 = b.intern_iri("http://a.example/o3");
-    b.push_quad(s1, p1, o1, None);
-    b.push_quad(s1, p1, o2, None);
-    b.push_quad(s1, q1, o3, None);
+    let s1 = b.intern_iri("http://a.example/s1").unwrap();
+    let p1 = b.intern_iri("http://a.example/p1").unwrap();
+    let q1 = b.intern_iri("http://a.example/q1").unwrap();
+    let o1 = b.intern_iri("http://a.example/o1").unwrap();
+    let o2 = b.intern_iri("http://a.example/o2").unwrap();
+    let o3 = b.intern_iri("http://a.example/o3").unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
+    b.push_quad(s1, p1, o2, None).unwrap();
+    b.push_quad(s1, q1, o3, None).unwrap();
     let data = b.freeze().expect("freeze");
 
     let schema = parse_shexc(

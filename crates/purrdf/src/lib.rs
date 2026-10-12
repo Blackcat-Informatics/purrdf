@@ -408,10 +408,12 @@ mod tests {
     #[test]
     fn facade_exposes_full_text_search() {
         let mut builder = RdfDatasetBuilder::new();
-        let note = builder.intern_iri("https://example.org/note");
-        let subject = builder.intern_iri("https://example.org/a");
-        let literal = builder.intern_literal(RdfLiteral::simple("the quick brown fox"));
-        builder.push_quad(subject, note, literal, None);
+        let note = builder.intern_iri("https://example.org/note").unwrap();
+        let subject = builder.intern_iri("https://example.org/a").unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::simple("the quick brown fox"))
+            .unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
         let dataset = builder.freeze().expect("the facade fixture validates");
 
         let config = text::TextIndexConfig::new(
@@ -487,11 +489,13 @@ mod tests {
         const STRATUM: &str = "https://example.org/stratum/lexical";
 
         let mut builder = RdfDatasetBuilder::new();
-        let note = builder.intern_iri(NOTE);
+        let note = builder.intern_iri(NOTE).unwrap();
         for (local, text) in [("a", "the quick brown fox"), ("b", "a quick red fox")] {
-            let subject = builder.intern_iri(&format!("https://example.org/{local}"));
-            let literal = builder.intern_literal(RdfLiteral::simple(text));
-            builder.push_quad(subject, note, literal, None);
+            let subject = builder
+                .intern_iri(&format!("https://example.org/{local}"))
+                .unwrap();
+            let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+            builder.push_quad(subject, note, literal, None).unwrap();
         }
         let dataset = builder.freeze().expect("the facade fixture validates");
 

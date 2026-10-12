@@ -94,14 +94,14 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
 
 fn structural_result_reader_keeps_all_empty_solutions() {
     let mut b = RdfDatasetBuilder::new();
-    let root = b.intern_blank("root", BlankScope::DEFAULT);
-    let class = b.intern_iri(rs::RESULT_SET);
-    let ty = b.intern_iri(rdf::TYPE);
-    let solution = b.intern_iri(rs::SOLUTION);
-    b.push_quad(root, ty, class, None);
+    let root = b.intern_blank("root", BlankScope::DEFAULT).unwrap();
+    let class = b.intern_iri(rs::RESULT_SET).unwrap();
+    let ty = b.intern_iri(rdf::TYPE).unwrap();
+    let solution = b.intern_iri(rs::SOLUTION).unwrap();
+    b.push_quad(root, ty, class, None).unwrap();
     for label in ["first", "second"] {
-        let row = b.intern_blank(label, BlankScope::DEFAULT);
-        b.push_quad(root, solution, row, None);
+        let row = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        b.push_quad(root, solution, row, None).unwrap();
     }
     let ds = b.freeze().unwrap();
     let result = result_set::decode(graph::Reader {
@@ -115,21 +115,21 @@ fn structural_result_reader_keeps_all_empty_solutions() {
 
 fn report_only_relabelling_cannot_excuse_a_wrong_source_focus() {
     let mut b = RdfDatasetBuilder::new();
-    let a = b.intern_blank("a", BlankScope(11));
-    let c = b.intern_blank("a", BlankScope(12));
-    let p = b.intern_iri("http://example.org/anchor");
-    let first = b.intern_iri("http://example.org/first");
-    let second = b.intern_iri("http://example.org/second");
-    b.push_quad(first, p, a, None);
-    b.push_quad(second, p, c, None);
+    let a = b.intern_blank("a", BlankScope(11)).unwrap();
+    let c = b.intern_blank("a", BlankScope(12)).unwrap();
+    let p = b.intern_iri("http://example.org/anchor").unwrap();
+    let first = b.intern_iri("http://example.org/first").unwrap();
+    let second = b.intern_iri("http://example.org/second").unwrap();
+    b.push_quad(first, p, a, None).unwrap();
+    b.push_quad(second, p, c, None).unwrap();
     let source = b.freeze().unwrap();
     let mut reports = Vec::new();
     for label in ["expected", "actual"] {
         let mut b = RdfDatasetBuilder::new();
-        let result = b.intern_blank("result", BlankScope::DEFAULT);
-        let focus = b.intern_blank(label, BlankScope::DEFAULT);
-        let p = b.intern_iri(sh::FOCUS_NODE);
-        b.push_quad(result, p, focus, None);
+        let result = b.intern_blank("result", BlankScope::DEFAULT).unwrap();
+        let focus = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        let p = b.intern_iri(sh::FOCUS_NODE).unwrap();
+        b.push_quad(result, p, focus, None).unwrap();
         reports.push(b.freeze().unwrap());
     }
     report::compare_graphs(&reports[0], &reports[1]).unwrap();
@@ -209,17 +209,17 @@ fn expected_rejection_does_not_accept_environmental_failures() {
 
 fn manifest_lists_use_the_same_selected_graph() {
     let mut b = RdfDatasetBuilder::new();
-    let root = b.intern_iri("http://example.org/manifest");
-    let head = b.intern_blank("list", BlankScope::DEFAULT);
-    let entry = b.intern_iri("http://example.org/case");
-    let entries = b.intern_iri(mf::ENTRIES);
-    let first = b.intern_iri(rdf::FIRST);
-    let rest = b.intern_iri(rdf::REST);
-    let nil = b.intern_iri(rdf::NIL);
-    let graph = b.intern_iri("http://example.org/other");
-    b.push_quad(root, entries, head, None);
-    b.push_quad(head, first, entry, None);
-    b.push_quad(head, rest, nil, Some(graph));
+    let root = b.intern_iri("http://example.org/manifest").unwrap();
+    let head = b.intern_blank("list", BlankScope::DEFAULT).unwrap();
+    let entry = b.intern_iri("http://example.org/case").unwrap();
+    let entries = b.intern_iri(mf::ENTRIES).unwrap();
+    let first = b.intern_iri(rdf::FIRST).unwrap();
+    let rest = b.intern_iri(rdf::REST).unwrap();
+    let nil = b.intern_iri(rdf::NIL).unwrap();
+    let graph = b.intern_iri("http://example.org/other").unwrap();
+    b.push_quad(root, entries, head, None).unwrap();
+    b.push_quad(head, first, entry, None).unwrap();
+    b.push_quad(head, rest, nil, Some(graph)).unwrap();
     let ds = b.freeze().unwrap();
     assert!(
         manifest::decode(graph::Reader {
@@ -384,10 +384,10 @@ fn optional_details_are_selected_per_corresponding_result() {
 
 fn deliberate_shared_domain_allows_only_cross_role_aliases() {
     let mut b = RdfDatasetBuilder::new();
-    let blank = b.intern_blank("shared", BlankScope(7));
-    let anchor = b.intern_iri("http://example.org/anchor");
-    let p = b.intern_iri("http://example.org/p");
-    b.push_quad(anchor, p, blank, None);
+    let blank = b.intern_blank("shared", BlankScope(7)).unwrap();
+    let anchor = b.intern_iri("http://example.org/anchor").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    b.push_quad(anchor, p, blank, None).unwrap();
     let source = b.freeze().unwrap();
     let expected = parsed_report("_:r sh:focusNode _:shared; sh:sourceShape _:shared .");
     let actual = parsed_report("_:r sh:focusNode _:dg; sh:sourceShape _:sg .");
@@ -533,13 +533,13 @@ fn composite_blank_renaming_is_global_across_permuted_rows() {
 fn source_metadata_and_empty_graph_declarations_are_observable() {
     let empty = RdfDatasetBuilder::new().freeze().unwrap();
     let mut b = RdfDatasetBuilder::new();
-    let graph = b.intern_blank("empty", BlankScope(4));
-    b.declare_named_graph(graph);
+    let graph = b.intern_blank("empty", BlankScope(4)).unwrap();
+    b.declare_named_graph(graph).unwrap();
     let declared = b.freeze().unwrap();
     assert!(report::compare_graphs(&empty, &declared).is_err());
     let mut b = RdfDatasetBuilder::new();
-    let graph = b.intern_blank("renamed", BlankScope(9));
-    b.declare_named_graph(graph);
+    let graph = b.intern_blank("renamed", BlankScope(9)).unwrap();
+    b.declare_named_graph(graph).unwrap();
     report::compare_graphs(&declared, &b.freeze().unwrap()).unwrap();
     let source = report::SourceContext {
         dataset: &empty,

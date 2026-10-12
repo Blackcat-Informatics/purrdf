@@ -24,10 +24,10 @@ use crate::term::PurrdfTermView;
 /// A dataset handle with one triple, so an UPDATE has something to sit beside.
 fn dataset() -> *mut PurrdfDataset {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/s");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri("http://example.org/s").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
 }
 

@@ -31,13 +31,13 @@ const EX: &str = "http://example.org/";
 /// would also pay for rows the drained graph does not own.
 fn base() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&format!("{EX}p"));
-    let g = b.intern_iri(&format!("{EX}base-graph"));
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let g = b.intern_iri(&format!("{EX}base-graph")).unwrap();
     for n in 0..256 {
-        let s = b.intern_iri(&format!("{EX}s{n}"));
-        let o = b.intern_iri(&format!("{EX}o{n}"));
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri(&format!("{EX}s{n}")).unwrap();
+        let o = b.intern_iri(&format!("{EX}o{n}")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
     }
     b.freeze().expect("drain base")
 }
@@ -198,8 +198,8 @@ fn named_graph_capability_reads_do_not_allocate_the_registry() {
     const BASE_GRAPHS: usize = 512;
     let mut builder = RdfDatasetBuilder::new();
     for index in 0..BASE_GRAPHS {
-        let graph = builder.intern_iri(&format!("{EX}cap-{index}"));
-        builder.declare_named_graph(graph);
+        let graph = builder.intern_iri(&format!("{EX}cap-{index}")).unwrap();
+        builder.declare_named_graph(graph).unwrap();
     }
     let mut mutable = MutableDataset::new_with_graph_existence(
         builder.freeze().expect("empty base graph declarations"),
@@ -273,8 +273,8 @@ fn bulk_declaration_checkpoints_preserve_unvisited_entries_and_snapshots() {
         let TermValue::Iri(name) = name else {
             unreachable!("the fixture declares only IRIs")
         };
-        let id = builder.intern_iri(name);
-        builder.declare_named_graph(id);
+        let id = builder.intern_iri(name).unwrap();
+        builder.declare_named_graph(id).unwrap();
     }
     let base = builder.freeze().expect("declared-empty base");
     assert_eq!(

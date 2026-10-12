@@ -169,7 +169,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-columnar"
-deps = ["purrdf-core"]
+deps = ["purrdf-core", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-datalog"

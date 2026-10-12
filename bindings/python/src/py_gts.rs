@@ -68,7 +68,7 @@ struct SliceArtifactRow {
 /// statement-layer fold). Used so the production [`RdfBundle`] carries the actual hot
 /// graph (not a placeholder) while it gates the artifact index.
 fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, String> {
-    flat_dataset_from_quads(quads)
+    flat_dataset_from_quads(quads).map_err(|error| error.to_string())
 }
 
 /// Assemble the self-describing S3 [`RdfBundle`] from the slice-artifact rows and
@@ -96,7 +96,8 @@ fn assemble_slice_bundle(
         // One UnitId per slice (idempotent intern); metadata = IRI + name.
         let unit = bundle
             .provenance
-            .register_unit(row.slice_iri.clone(), OriginKind::Source);
+            .register_unit(row.slice_iri.clone(), OriginKind::Source)
+            .map_err(|error| error.to_string())?;
         bundle.add_unit(
             unit,
             UnitMetadata::new(row.slice_iri.clone(), row.slice_name.clone()),
@@ -104,7 +105,8 @@ fn assemble_slice_bundle(
         // One content-addressed artifact per ontology file (bytes → ContentStore).
         let artifact = bundle
             .provenance
-            .register_artifact(row.logical_path.clone());
+            .register_artifact(row.logical_path.clone())
+            .map_err(|error| error.to_string())?;
         bundle.add_artifact(
             artifact,
             unit,

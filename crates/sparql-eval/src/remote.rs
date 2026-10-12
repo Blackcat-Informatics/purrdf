@@ -2439,22 +2439,22 @@ mod tests {
     /// `:a :knows :x`, `:a :knows :y` (the local graph).
     fn local() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://example.org/knows");
-        let a = b.intern_iri("http://example.org/a");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        b.push_quad(a, knows, x, None);
-        b.push_quad(a, knows, y, None);
+        let knows = b.intern_iri("http://example.org/knows").unwrap();
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        b.push_quad(a, knows, x, None).unwrap();
+        b.push_quad(a, knows, y, None).unwrap();
         b.freeze().expect("freeze")
     }
 
     /// `:x :name "X"` (the remote endpoint graph) — only :x has a name.
     fn endpoint() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let name = b.intern_iri("http://example.org/name");
-        let x = b.intern_iri("http://example.org/x");
-        let xn = b.intern_literal(RdfLiteral::simple("X"));
-        b.push_quad(x, name, xn, None);
+        let name = b.intern_iri("http://example.org/name").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let xn = b.intern_literal(RdfLiteral::simple("X")).unwrap();
+        b.push_quad(x, name, xn, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3226,11 +3226,11 @@ mod tests {
     /// `:row{i} :endpoint <http://example.org/ep{i}>` for `i` in `0..n`.
     fn multi_endpoint_local(n: usize) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let endpoint = b.intern_iri("http://example.org/endpoint");
+        let endpoint = b.intern_iri("http://example.org/endpoint").unwrap();
         for i in 0..n {
-            let row = b.intern_iri(&format!("http://example.org/row{i}"));
-            let ep = b.intern_iri(&format!("http://example.org/ep{i}"));
-            b.push_quad(row, endpoint, ep, None);
+            let row = b.intern_iri(&format!("http://example.org/row{i}")).unwrap();
+            let ep = b.intern_iri(&format!("http://example.org/ep{i}")).unwrap();
+            b.push_quad(row, endpoint, ep, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -3238,10 +3238,12 @@ mod tests {
     /// Endpoint `i` contains `:s :name "ep{i}"`.
     fn multi_endpoint(i: usize) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let name = b.intern_iri("http://example.org/name");
-        let s = b.intern_iri("http://example.org/s");
-        let lit = b.intern_literal(RdfLiteral::simple(format!("ep{i}")));
-        b.push_quad(s, name, lit, None);
+        let name = b.intern_iri("http://example.org/name").unwrap();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::simple(format!("ep{i}")))
+            .unwrap();
+        b.push_quad(s, name, lit, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3802,10 +3804,10 @@ mod tests {
     /// pushdown into a forwarded `SERVICE` body.
     fn local_with_blank() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let has_anon = b.intern_iri("http://example.org/hasAnon");
-        let s = b.intern_iri("http://example.org/s");
-        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
-        b.push_quad(s, has_anon, bn, None);
+        let has_anon = b.intern_iri("http://example.org/hasAnon").unwrap();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT).unwrap();
+        b.push_quad(s, has_anon, bn, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3814,10 +3816,10 @@ mod tests {
     /// restriction over it IS legal `VALUES` syntax and must survive forwarding.
     fn local_with_iri() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let has_target = b.intern_iri("http://example.org/hasTarget");
-        let s = b.intern_iri("http://example.org/s");
-        let t = b.intern_iri("http://example.org/t");
-        b.push_quad(s, has_target, t, None);
+        let has_target = b.intern_iri("http://example.org/hasTarget").unwrap();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let t = b.intern_iri("http://example.org/t").unwrap();
+        b.push_quad(s, has_target, t, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -4919,15 +4921,21 @@ mod response_identity_tests {
         let dataset_label = minted_label(Some(PREFIX), "service", 2);
         let embedded_label = minted_label(Some(PREFIX), "service", 3);
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/local");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let bare = builder.intern_value(&TermValue::blank(&dataset_label));
-        let embedded = builder.intern_value(&TermValue::typed_literal(
-            format!("[[_:{embedded_label}]]"),
-            purrdf_cdt::CDT_LIST,
-        ));
-        builder.push_quad(subject, predicate, bare, None);
-        builder.push_quad(subject, predicate, embedded, None);
+        let subject = builder.intern_iri("http://example.org/local").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let bare = builder
+            .intern_value(&TermValue::blank(&dataset_label))
+            .unwrap();
+        let embedded = builder
+            .intern_value(&TermValue::typed_literal(
+                format!("[[_:{embedded_label}]]"),
+                purrdf_cdt::CDT_LIST,
+            ))
+            .unwrap();
+        builder.push_quad(subject, predicate, bare, None).unwrap();
+        builder
+            .push_quad(subject, predicate, embedded, None)
+            .unwrap();
         let dataset = builder.freeze().expect("local graph");
         let mut ctx = EvalCtx::new(dataset.as_ref())
             .with_bnode_mint_prefix(PREFIX)

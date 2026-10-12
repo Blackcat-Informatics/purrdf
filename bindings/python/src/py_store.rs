@@ -79,6 +79,20 @@ pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{}: {err}", err.diagnostic_code()))
 }
 
+/// Keep physical IRI ingress refusal distinct from invalid lexical input.
+pub(crate) fn iri_read_value_error(error: &purrdf::iri::IriReadError) -> PyErr {
+    match error {
+        purrdf::iri::IriReadError::Lexical(error) => iri_value_error(error),
+        purrdf::iri::IriReadError::Storage(error) => storage_value_error(*error),
+    }
+}
+
+/// Render storage refusal through the shared diagnostic presentation boundary.
+pub(crate) fn storage_value_error(error: purrdf_lex::allocation::StorageError) -> PyErr {
+    let diagnostic = purrdf_core::RdfDiagnostic::from(error);
+    presentation::value_error(diagnostic.to_string(), &diagnostic)
+}
+
 /// Register the native Store / term / SPARQL surface on the `purrdf` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRdfFormat>()?;

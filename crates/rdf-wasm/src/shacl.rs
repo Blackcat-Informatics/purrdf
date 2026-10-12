@@ -161,6 +161,7 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
 /// synchronous and the asynchronous lane alike.
 pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
     match error {
+        ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(*error).to_string(),
         ShapesError::Imports(error) => error.to_string(),
         ShapesError::Invalid(message) => message.clone(),
         ShapesError::ShaclJs(refusal) => refusal.message().to_owned(),

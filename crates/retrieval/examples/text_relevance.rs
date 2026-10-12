@@ -290,14 +290,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bytes = artifacts.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let analyzer = Analyzer::resolve(AnalyzerProfile::standard(), &bytes)?;
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(PREDICATE);
+    let predicate = builder.intern_iri(PREDICATE).unwrap();
     let mut names = BTreeMap::new();
     for (at, &(id, text)) in inputs.documents.iter().enumerate() {
         let iri = format!("https://example.org/relevance/doc/{at:08}");
         names.insert(TermValue::iri(&iri), id.to_owned());
-        let subject = builder.intern_iri(&iri);
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, predicate, literal, None);
+        let subject = builder.intern_iri(&iri).unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject, predicate, literal, None)
+            .unwrap();
     }
     let dataset = builder.freeze()?;
     let config = TextIndexConfig::new(

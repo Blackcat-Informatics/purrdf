@@ -321,12 +321,12 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in rows {
             let s = match s.strip_prefix("_:") {
-                Some(label) => b.intern_blank(label, BlankScope::DEFAULT),
-                None => b.intern_iri(s),
+                Some(label) => b.intern_blank(label, BlankScope::DEFAULT).unwrap(),
+                None => b.intern_iri(s).unwrap(),
             };
-            let p = b.intern_iri(p);
-            let o = b.intern_iri(o);
-            b.push_quad(s, p, o, None);
+            let p = b.intern_iri(p).unwrap();
+            let o = b.intern_iri(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }

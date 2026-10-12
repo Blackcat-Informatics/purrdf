@@ -422,20 +422,22 @@ fn changed_materialization_metadata_is_invalid_data() {
 
 fn page_with_side_tables() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/s");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri("http://example.org/s").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
 
-    let quoted_subject = builder.intern_iri("http://example.org/a");
-    let quoted_predicate = builder.intern_iri("http://example.org/b");
-    let quoted_object = builder.intern_iri("http://example.org/c");
-    let triple = builder.intern_triple(quoted_subject, quoted_predicate, quoted_object);
-    let reifier = builder.intern_iri("http://example.org/r");
-    builder.push_reifier(reifier, triple);
-    let confidence = builder.intern_iri("http://example.org/confidence");
-    let high = builder.intern_iri("http://example.org/high");
-    builder.push_annotation(reifier, confidence, high);
+    let quoted_subject = builder.intern_iri("http://example.org/a").unwrap();
+    let quoted_predicate = builder.intern_iri("http://example.org/b").unwrap();
+    let quoted_object = builder.intern_iri("http://example.org/c").unwrap();
+    let triple = builder
+        .intern_triple(quoted_subject, quoted_predicate, quoted_object)
+        .unwrap();
+    let reifier = builder.intern_iri("http://example.org/r").unwrap();
+    builder.push_reifier(reifier, triple).unwrap();
+    let confidence = builder.intern_iri("http://example.org/confidence").unwrap();
+    let high = builder.intern_iri("http://example.org/high").unwrap();
+    builder.push_annotation(reifier, confidence, high).unwrap();
     builder.freeze().expect("valid RDF 1.2 side tables")
 }
 
@@ -658,11 +660,19 @@ fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_wor
 /// sticky-failure test below (`page` above only ever writes the default graph).
 fn page_in_named_graph(subject: &str, object: &str, graph: &str) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri(&format!("http://example.org/{object}"));
-    let graph = builder.intern_iri(&format!("http://example.org/{graph}"));
-    builder.push_quad(subject, predicate, object, Some(graph));
+    let subject = builder
+        .intern_iri(&format!("http://example.org/{subject}"))
+        .unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder
+        .intern_iri(&format!("http://example.org/{object}"))
+        .unwrap();
+    let graph = builder
+        .intern_iri(&format!("http://example.org/{graph}"))
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, object, Some(graph))
+        .unwrap();
     builder.freeze().expect("valid page")
 }
 
@@ -751,11 +761,21 @@ fn named_graphs_is_empty_after_a_sticky_failure() {
 /// `annotation_quads_in_graph` page-narrowing tests below.
 fn page_with_annotation_in_own_graph(i: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let reifier = builder.intern_iri(&format!("http://example.org/r{i}"));
-    let predicate = builder.intern_iri(&format!("http://example.org/p{i}"));
-    let object = builder.intern_iri(&format!("http://example.org/o{i}"));
-    let graph = builder.intern_iri(&format!("http://example.org/g{i}"));
-    builder.push_annotation_in_graph(reifier, predicate, object, Some(graph));
+    let reifier = builder
+        .intern_iri(&format!("http://example.org/r{i}"))
+        .unwrap();
+    let predicate = builder
+        .intern_iri(&format!("http://example.org/p{i}"))
+        .unwrap();
+    let object = builder
+        .intern_iri(&format!("http://example.org/o{i}"))
+        .unwrap();
+    let graph = builder
+        .intern_iri(&format!("http://example.org/g{i}"))
+        .unwrap();
+    builder
+        .push_annotation_in_graph(reifier, predicate, object, Some(graph))
+        .unwrap();
     builder.freeze().expect("valid page")
 }
 

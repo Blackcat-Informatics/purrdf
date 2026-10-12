@@ -101,17 +101,22 @@ impl TermId {
     /// Low-level kernel API: the interner mints ids in allocation order; the
     /// sibling `purrdf` adapters (canonical Turtle serializer) also re-mint an
     /// id while scanning `0..term_count()` of a single dataset. The result is only
-    /// meaningful against the dataset whose table has `index` (C0.8). Hard-fails
+    /// meaningful against the dataset whose table has `index` (C0.8). Refuses
     /// (rather than wrapping) if `index` is `u32::MAX`, since `index + 1` would
     /// overflow the id space — the largest dense index is `u32::MAX - 1`, so the
     /// table can hold up to `u32::MAX` terms.
     #[inline]
-    pub fn from_index(index: u32) -> Self {
-        let raw = index
-            .checked_add(1)
-            .expect("term table cannot exceed u32::MAX entries");
-        // `raw = index + 1 >= 1`, so the `NonZeroU32` invariant always holds.
-        Self(NonZeroU32::new(raw).expect("index + 1 is always >= 1"))
+    pub fn from_index(index: u32) -> Result<Self, purrdf_lex::allocation::CapacityError> {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        CapacityError::slot(
+            CapacitySpace::LocalTerms,
+            u64::from(index),
+            u64::from(u32::MAX),
+        )?;
+        // The checked slot proves this sum is representable and nonzero.
+        Ok(Self(
+            NonZeroU32::new(index + 1).expect("checked nonzero term representation"),
+        ))
     }
 }
 
@@ -221,9 +226,42 @@ impl Default for BlankScope {
 /// holds only this 8-byte range — `InternedTerm` becomes `Copy` and per-term heap
 /// allocations collapse to one growable arena.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct StrRange {
-    pub offset: u32,
-    pub len: u32,
+pub(crate) struct StrRange<W = u32> {
+    pub offset: W,
+    pub len: W,
+}
+
+/// The two arena address widths; resident local terms retain compact ranges,
+/// while a global dictionary's range carries its full logical u64 address.
+pub(crate) trait ArenaOffset: Copy + TryFrom<u64> + Into<u64> {
+    const LIMIT: u64;
+    const SPACE: purrdf_lex::allocation::CapacitySpace;
+}
+
+impl ArenaOffset for u32 {
+    const LIMIT: u64 = Self::MAX as u64;
+    const SPACE: purrdf_lex::allocation::CapacitySpace =
+        purrdf_lex::allocation::CapacitySpace::LocalTermBytes;
+}
+
+impl ArenaOffset for u64 {
+    const LIMIT: Self = Self::MAX;
+    const SPACE: purrdf_lex::allocation::CapacitySpace =
+        purrdf_lex::allocation::CapacitySpace::GlobalTermBytes;
+}
+
+impl<W: ArenaOffset> StrRange<W> {
+    /// The actual range arithmetic used before append, independent of the
+    /// resident allocation. This also admits synthetic large-offset checks
+    /// without allocating gigabytes merely to reach a logical boundary.
+    fn checked(offset: u64, len: u64) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::{CapacityError, StorageError};
+        let attempted = u128::from(offset) + u128::from(len);
+        CapacityError::check(W::SPACE, attempted, u128::from(W::LIMIT))?;
+        let offset = W::try_from(offset).map_err(|_| StorageError::SizeOverflow)?;
+        let len = W::try_from(len).map_err(|_| StorageError::SizeOverflow)?;
+        Ok(Self { offset, len })
+    }
 }
 
 /// A language tag as the term interner keys and stores it: folded by
@@ -255,41 +293,46 @@ pub(crate) fn interned_language_with_memory<'a, S: purrdf_lex::allocation::Admis
 /// Append `s` to `arena` and return the range it occupies: the one writer of the
 /// term arenas [`arena_str`] reads.
 ///
-/// The range must fit `u32`, and it is checked BEFORE the arena is extended: an
-/// overflow fails fast and leaves the arena consistent, rather than growing it past
-/// `u32::MAX` and corrupting every later range.
+/// The range must fit the arena's offset type (`u32` locally, `u64` globally).
+/// It is checked before the arena is extended, so capacity refusal leaves the
+/// original bytes and retained ranges unchanged.
 ///
-/// # Panics
-///
-/// When the arena would pass `u32::MAX` bytes.
-pub(crate) fn push_arena_str(arena: &mut Vec<u8>, s: &str) -> StrRange {
-    use purrdf_lex::allocation::{Memory, Resident};
-    let mut resident = Resident;
-    let mut memory = Memory::resume(&mut resident, arena.capacity());
-    push_arena_str_with_memory(arena, s, &mut memory)
-        .expect("resident term arena allocation failed")
-}
-
-/// The original arena producer, admitting growth before any allocation.
-pub(crate) fn push_arena_str_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+/// # Errors
+/// Refuses an unrepresentable range or physical allocation. Growth is admitted
+/// before allocation.
+pub(crate) fn push_arena_str_with_memory<
+    W: ArenaOffset,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
     arena: &mut Vec<u8>,
     s: &str,
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-) -> Result<StrRange, purrdf_lex::allocation::StorageError> {
+) -> Result<StrRange<W>, purrdf_lex::allocation::StorageError> {
     use purrdf_lex::allocation::StorageError;
-    let offset = u32::try_from(arena.len()).map_err(|_| StorageError::SizeOverflow)?;
-    let len = u32::try_from(s.len()).map_err(|_| StorageError::SizeOverflow)?;
-    offset.checked_add(len).ok_or(StorageError::SizeOverflow)?;
+    let range = StrRange::checked(
+        u64::try_from(arena.len()).map_err(|_| StorageError::SizeOverflow)?,
+        u64::try_from(s.len()).map_err(|_| StorageError::SizeOverflow)?,
+    )?;
     memory.extend(arena, s.bytes())?;
-    Ok(StrRange { offset, len })
+    Ok(range)
 }
 
 /// Borrow an arena range as `&str`. The arena only ever receives validated UTF-8
 /// (it is appended from `&str` values) and ranges are recorded at push time, so the
 /// sub-slice is always valid UTF-8.
 #[inline]
-pub(crate) fn arena_str(arena: &[u8], range: StrRange) -> &str {
-    let bytes = &arena[range.offset as usize..range.offset as usize + range.len as usize];
+pub(crate) fn arena_str<W: ArenaOffset>(arena: &[u8], range: StrRange<W>) -> &str {
+    // Only the append producer constructs retained ranges. A range retained in
+    // a resident buffer must address that buffer; a foreign range is an invariant
+    // error, distinct from capacity refusal while appending user input.
+    let start =
+        usize::try_from(range.offset.into()).expect("arena offset addresses its resident buffer");
+    let len =
+        usize::try_from(range.len.into()).expect("arena length addresses its resident buffer");
+    let end = start
+        .checked_add(len)
+        .expect("retained arena range has a checked end");
+    let bytes = &arena[start..end];
     debug_assert!(
         std::str::from_utf8(bytes).is_ok(),
         "arena range is valid UTF-8"
@@ -970,11 +1013,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn global_arena_range_crosses_four_gib_without_narrowing() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let offset = u64::from(u32::MAX) - 2;
+        let wide = StrRange::<u64>::checked(offset, 9).unwrap();
+        assert_eq!(wide.offset, offset);
+        assert_eq!(wide.len, 9);
+        assert_eq!(wide.offset + wide.len, u64::from(u32::MAX) + 7);
+        assert_eq!(
+            StrRange::<u32>::checked(offset, 9),
+            Err(StorageError::Capacity(CapacityError {
+                space: CapacitySpace::LocalTermBytes,
+                attempted: u128::from(u32::MAX) + 7,
+                limit: u128::from(u32::MAX)
+            }))
+        );
+        assert_eq!(
+            StrRange::<u64>::checked(u64::MAX, 0).unwrap().offset,
+            u64::MAX
+        );
+        assert_eq!(
+            StrRange::<u64>::checked(u64::MAX, 1),
+            Err(StorageError::Capacity(CapacityError {
+                space: CapacitySpace::GlobalTermBytes,
+                attempted: u128::from(u64::MAX) + 1,
+                limit: u128::from(u64::MAX)
+            }))
+        );
+    }
+
+    #[test]
+    fn both_arena_widths_use_the_same_append_and_resolution_home() {
+        use purrdf_lex::allocation::{Memory, Resident};
+        let mut arena = Vec::new();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let local: StrRange<u32> =
+            push_arena_str_with_memory(&mut arena, "aλ", &mut memory).unwrap();
+        let global: StrRange<u64> =
+            push_arena_str_with_memory(&mut arena, "猫", &mut memory).unwrap();
+        assert_eq!(arena_str(&arena, local), "aλ");
+        assert_eq!(arena_str(&arena, global), "猫");
+        assert_eq!(global.offset, u64::from(local.offset + local.len));
+    }
+
+    #[test]
     fn push_arena_str_appends_and_answers_the_range_it_occupies() {
         let mut arena = Vec::new();
-        let first = push_arena_str(&mut arena, "abc");
-        let empty = push_arena_str(&mut arena, "");
-        let second = push_arena_str(&mut arena, "déf");
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        let first: StrRange = push_arena_str_with_memory(&mut arena, "abc", &mut memory).unwrap();
+        let empty: StrRange = push_arena_str_with_memory(&mut arena, "", &mut memory).unwrap();
+        let second: StrRange = push_arena_str_with_memory(&mut arena, "déf", &mut memory).unwrap();
         assert_eq!(arena_str(&arena, first), "abc");
         assert_eq!(arena_str(&arena, empty), "");
         assert_eq!(arena_str(&arena, second), "déf");
@@ -986,7 +1076,7 @@ mod tests {
         // `u32::MAX` is no longer a valid index (the stored value is `index + 1`,
         // so the last addressable index is `u32::MAX - 1`).
         for raw in [0u32, 1, 42, u32::MAX - 1] {
-            let id = TermId::from_index(raw);
+            let id = TermId::from_index(raw).expect("stored term index is representable");
             assert_eq!(id.index(), raw as usize);
         }
     }
@@ -999,10 +1089,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cannot exceed u32::MAX entries")]
     fn term_id_from_index_rejects_u32_max() {
-        // `index + 1` would overflow the id space; the mint hard-fails.
-        let _ = TermId::from_index(u32::MAX);
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        assert_eq!(
+            TermId::from_index(u32::MAX),
+            Err(CapacityError {
+                space: CapacitySpace::LocalTerms,
+                attempted: u128::from(u32::MAX) + 1,
+                limit: u128::from(u32::MAX)
+            })
+        );
     }
 
     #[test]
@@ -1227,7 +1323,7 @@ mod tests {
             // The arena range is irrelevant here — this pins that base direction
             // participates in literal identity (: lexical form is now a range).
             lexical_form: StrRange { offset: 0, len: 1 },
-            datatype: TermId::from_index(0),
+            datatype: TermId::from_index(0).expect("stored term index is representable"),
             language: None,
             direction: Some(RdfTextDirection::Ltr),
         };

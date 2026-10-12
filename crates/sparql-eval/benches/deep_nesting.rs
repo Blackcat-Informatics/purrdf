@@ -66,14 +66,16 @@ const PROBE_CEILING: usize = 20_000;
 /// `<s1>` … `<s4>` each `<p>` their number, and only `<s1>` also `<q>` it.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
     for n in 1..=4 {
-        let s = builder.intern_iri(&format!("{EX}s{n}"));
-        let o = builder.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}s{n}")).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         if n == 1 {
-            builder.push_quad(s, q, o, None);
+            builder.push_quad(s, q, o, None).unwrap();
         }
     }
     builder.freeze().expect("the deep-nesting dataset")

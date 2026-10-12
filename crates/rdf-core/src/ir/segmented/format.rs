@@ -457,7 +457,7 @@ pub(super) fn decode_quad(bytes: &[u8]) -> Result<QuadIds<GlobalTermId>, Segment
     let g = if graph == 0 {
         None
     } else {
-        Some(GlobalTermId::from_index(graph - 1))
+        Some(GlobalTermId::from_index(graph - 1).expect("stored term index is representable"))
     };
     Ok(QuadIds { s, p, o, g })
 }

@@ -25,11 +25,11 @@ fn row(s: &str, o: &str) -> purrdf_core::QuadValues {
 fn page(rows: &[purrdf_core::QuadValues]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for row in rows {
-        let s = builder.intern_value(&row.s);
-        let p = builder.intern_value(&row.p);
-        let o = builder.intern_value(&row.o);
-        let g = row.g.as_ref().map(|g| builder.intern_value(g));
-        builder.push_quad(s, p, o, g);
+        let s = builder.intern_value(&row.s).unwrap();
+        let p = builder.intern_value(&row.p).unwrap();
+        let o = builder.intern_value(&row.o).unwrap();
+        let g = row.g.as_ref().map(|g| builder.intern_value(g).unwrap());
+        builder.push_quad(s, p, o, g).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -70,9 +70,9 @@ fn page_bytes(dataset: &PagedDataset) -> Vec<Vec<u8>> {
 fn dictionary_values(dataset: &PagedDataset) -> Vec<TermValue> {
     (0..dataset.dictionary().len())
         .map(|i| {
-            dataset
-                .dictionary()
-                .term_value(GlobalTermId::from_index(i as u64))
+            dataset.dictionary().term_value(
+                GlobalTermId::from_index(i as u64).expect("stored term index is representable"),
+            )
         })
         .collect()
 }
@@ -142,11 +142,15 @@ fn construction_append_and_snapshot_do_not_read_lower_pages() {
     let first = Arc::new(PagedDataset::from_provider(a.clone()).unwrap());
     let second = Arc::new(PagedDataset::from_provider(b.clone()).unwrap());
     assert_eq!(
-        first.dictionary().term_value(GlobalTermId::from_index(0)),
+        first
+            .dictionary()
+            .term_value(GlobalTermId::from_index(0).expect("stored term index is representable")),
         iri("a")
     );
     assert_eq!(
-        second.dictionary().term_value(GlobalTermId::from_index(0)),
+        second
+            .dictionary()
+            .term_value(GlobalTermId::from_index(0).expect("stored term index is representable")),
         iri("b")
     );
     a.reads.store(0, Ordering::Relaxed);
@@ -416,17 +420,17 @@ fn typed_page(
 ) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for q in reifiers {
-        let s = b.intern_value(&q.s);
-        let o = b.intern_value(&q.o);
-        let g = q.g.as_ref().map(|g| b.intern_value(g));
-        b.push_reifier_in_graph(s, o, g);
+        let s = b.intern_value(&q.s).unwrap();
+        let o = b.intern_value(&q.o).unwrap();
+        let g = q.g.as_ref().map(|g| b.intern_value(g).unwrap());
+        b.push_reifier_in_graph(s, o, g).unwrap();
     }
     for q in annotations {
-        let s = b.intern_value(&q.s);
-        let p = b.intern_value(&q.p);
-        let o = b.intern_value(&q.o);
-        let g = q.g.as_ref().map(|g| b.intern_value(g));
-        b.push_annotation_in_graph(s, p, o, g);
+        let s = b.intern_value(&q.s).unwrap();
+        let p = b.intern_value(&q.p).unwrap();
+        let o = b.intern_value(&q.o).unwrap();
+        let g = q.g.as_ref().map(|g| b.intern_value(g).unwrap());
+        b.push_annotation_in_graph(s, p, o, g).unwrap();
     }
     b.freeze().unwrap()
 }
@@ -524,8 +528,8 @@ fn graph_pruning_partial_removals_empty_declarations_and_scoped_head_values_surv
         ..row("a", "b")
     };
     let mut b = RdfDatasetBuilder::new();
-    let empty = b.intern_value(&iri("empty"));
-    b.declare_named_graph(empty);
+    let empty = b.intern_value(&iri("empty")).unwrap();
+    b.declare_named_graph(empty).unwrap();
     let provider = Arc::new(ProbeProvider::new(
         vec![
             page(std::slice::from_ref(&q)),
@@ -608,8 +612,8 @@ fn canonical_fold_matches_independent_eager_typed_surface_and_dictionary_for_two
     let mut oracle = RdfDatasetBuilder::new();
     purrdf_core::ir::import::DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
     purrdf_core::ir::import::DatasetImporter::new(&mut oracle, typed.as_ref()).append();
-    let graph = oracle.intern_value(&iri("empty"));
-    oracle.declare_named_graph(graph);
+    let graph = oracle.intern_value(&iri("empty")).unwrap();
+    oracle.declare_named_graph(graph).unwrap();
     let oracle = oracle.freeze().unwrap();
     for n in [1, 3] {
         let eager = canonical_paged_seal(oracle.as_ref(), bound(n)).unwrap();
@@ -996,8 +1000,8 @@ fn explicit_head_graph_lifetime_survives_sealing_while_populated_then_last_row_r
         vec![graph.clone()]
     );
     let mut eager = RdfDatasetBuilder::new();
-    let id = eager.intern_value(&graph);
-    eager.declare_named_graph(id);
+    let id = eager.intern_value(&graph).unwrap();
+    eager.declare_named_graph(id).unwrap();
     assert_eq!(
         page_bytes(
             &snapshot
@@ -1018,10 +1022,12 @@ fn logical_id_filters_do_not_recheck_descriptors_per_row_or_cached_reread() {
                 .collect::<Vec<_>>(),
         );
         let mut builder = RdfDatasetBuilder::new();
-        let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
+        let triple = builder
+            .intern_value(&purrdf_core::term_fixture::triple_chain(1))
+            .unwrap();
         for i in 0..rows {
-            let r = builder.intern_value(&iri(&format!("reifier{i}")));
-            builder.push_reifier(r, triple);
+            let r = builder.intern_value(&iri(&format!("reifier{i}"))).unwrap();
+            builder.push_reifier(r, triple).unwrap();
         }
         let providers = [
             Arc::new(ProbeProvider::new(vec![ordinary], None)),
@@ -1089,13 +1095,15 @@ fn cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open
         let ordinary = page(&[row("a", "x"), row("b", "y")]);
         let mut builder = RdfDatasetBuilder::new();
         purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref()).append();
-        let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
-        let note = builder.intern_value(&iri("note"));
-        let value = builder.intern_value(&iri("value"));
+        let triple = builder
+            .intern_value(&purrdf_core::term_fixture::triple_chain(1))
+            .unwrap();
+        let note = builder.intern_value(&iri("note")).unwrap();
+        let value = builder.intern_value(&iri("value")).unwrap();
         for i in 0..2 {
-            let r = builder.intern_value(&iri(&format!("reifier{i}")));
-            builder.push_reifier(r, triple);
-            builder.push_annotation(r, note, value);
+            let r = builder.intern_value(&iri(&format!("reifier{i}"))).unwrap();
+            builder.push_reifier(r, triple).unwrap();
+            builder.push_annotation(r, note, value).unwrap();
         }
         let provider = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
         let snapshot = PagedStack::new(vec![Arc::new(
@@ -1179,9 +1187,11 @@ fn cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open
 fn declaration_probe_fault_suppresses_the_candidate_that_triggered_it() {
     let ordinary = Arc::new(ProbeProvider::new(vec![page(&[row("r", "note")])], None));
     let mut builder = RdfDatasetBuilder::new();
-    let r = builder.intern_value(&iri("r"));
-    let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
-    builder.push_reifier(r, triple);
+    let r = builder.intern_value(&iri("r")).unwrap();
+    let triple = builder
+        .intern_value(&purrdf_core::term_fixture::triple_chain(1))
+        .unwrap();
+    builder.push_reifier(r, triple).unwrap();
     let declarations = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
     let snapshot = PagedStack::new(
         vec![ordinary, declarations.clone()]

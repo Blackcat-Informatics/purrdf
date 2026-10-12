@@ -312,6 +312,14 @@ pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
     JsError::new(&format!("{}: {err}", err.diagnostic_code()))
 }
 
+/// Keep physical IRI ingress refusal distinct from invalid lexical input.
+fn iri_read_to_err(error: &purrdf::iri::IriReadError) -> JsError {
+    match error {
+        purrdf::iri::IriReadError::Lexical(error) => iri_to_err(error),
+        purrdf::iri::IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+    }
+}
+
 /// The source of every [`Dataset`]'s identity. Starts at 1 so no dataset is ever `0`.
 ///
 /// An atomic rather than a thread-local cell only because it is the plainest shared
@@ -773,7 +781,7 @@ impl Dataset {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
         self.mutate(|inner| match inner.insert(values) {
             Ok(changed) => (Ok(changed), changed),
-            Err(error) => (Err(iri_to_err(&error)), false),
+            Err(error) => (Err(iri_read_to_err(&error)), false),
         })
         .map_err(|error| diag_to_err(&error))?
     }
@@ -879,7 +887,7 @@ impl Dataset {
             // These values were just read back out of an existing dataset, so they
             // already satisfy the absoluteness invariant. Propagate rather than
             // unwrap anyway: a panic across the wasm boundary is not a diagnostic.
-            out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
+            out.insert(qv.clone()).map_err(|e| iri_read_to_err(&e))?;
         }
         Self::from_mutable(out)
     }

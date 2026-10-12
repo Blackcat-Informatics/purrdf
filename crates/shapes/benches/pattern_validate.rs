@@ -69,15 +69,19 @@ const CASES: &[(usize, usize)] = &[(64, 1), (64, 8), (512, 1), (512, 8)];
 /// `sh:pattern`, plus the shapes source text.
 fn pattern_fixture(focus_nodes: usize, values_per_focus: usize) -> (Arc<RdfDataset>, String) {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let widget = builder.intern_iri(&format!("{BENCH_EX}Widget"));
-    let code = builder.intern_iri(&format!("{BENCH_EX}code"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let widget = builder.intern_iri(&format!("{BENCH_EX}Widget")).unwrap();
+    let code = builder.intern_iri(&format!("{BENCH_EX}code")).unwrap();
     for focus in 0..focus_nodes {
-        let subject = builder.intern_iri(&format!("{BENCH_EX}widget-{focus}"));
-        builder.push_quad(subject, rdf_type, widget, None);
+        let subject = builder
+            .intern_iri(&format!("{BENCH_EX}widget-{focus}"))
+            .unwrap();
+        builder.push_quad(subject, rdf_type, widget, None).unwrap();
         for value in 0..values_per_focus {
-            let literal = builder.intern_literal(RdfLiteral::simple(format!("W-{focus}-{value}")));
-            builder.push_quad(subject, code, literal, None);
+            let literal = builder
+                .intern_literal(RdfLiteral::simple(format!("W-{focus}-{value}")))
+                .unwrap();
+            builder.push_quad(subject, code, literal, None).unwrap();
         }
     }
     let dataset = builder.freeze().expect("freeze SHACL pattern fixture");
@@ -208,16 +212,16 @@ const LONG_VALUES: usize = 1024;
 fn long_value_dataset() -> Arc<RdfDataset> {
     let mut rng = SplitMix64::new(0x0047_2600_BE4C_0003);
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let doc = builder.intern_iri(&format!("{BENCH_EX}Doc"));
-    let text = builder.intern_iri(&format!("{BENCH_EX}text"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let doc = builder.intern_iri(&format!("{BENCH_EX}Doc")).unwrap();
+    let text = builder.intern_iri(&format!("{BENCH_EX}text")).unwrap();
     for i in 0..LONG_VALUES {
-        let subject = builder.intern_iri(&format!("{BENCH_EX}doc-{i}"));
-        builder.push_quad(subject, rdf_type, doc, None);
+        let subject = builder.intern_iri(&format!("{BENCH_EX}doc-{i}")).unwrap();
+        builder.push_quad(subject, rdf_type, doc, None).unwrap();
         let mut value = filler(&mut rng, 4096);
         value.push_str(MATCH_TAIL);
-        let literal = builder.intern_literal(RdfLiteral::simple(value));
-        builder.push_quad(subject, text, literal, None);
+        let literal = builder.intern_literal(RdfLiteral::simple(value)).unwrap();
+        builder.push_quad(subject, text, literal, None).unwrap();
     }
     builder.freeze().expect("freeze SHACL long-value fixture")
 }

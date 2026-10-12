@@ -37,10 +37,10 @@ fn ex(local: &str) -> String {
 fn dataset(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for (s, p, o) in triples {
-        let s = builder.intern_iri(&ex(s));
-        let p = builder.intern_iri(&ex(p));
-        let o = builder.intern_iri(&ex(o));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&ex(s)).unwrap();
+        let p = builder.intern_iri(&ex(p)).unwrap();
+        let o = builder.intern_iri(&ex(o)).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("freeze fixture")
 }

@@ -29,15 +29,20 @@ impl Fixture {
     pub(crate) fn name(&mut self, local: &str) -> TermId {
         self.builder
             .intern_iri(&format!("https://example.org/{local}"))
+            .unwrap()
     }
     pub(crate) fn blank(&mut self) -> TermId {
         let label = format!("schema{}", self.next);
         self.next += 1;
-        self.builder.intern_blank(&label, BlankScope::DEFAULT)
+        self.builder
+            .intern_blank(&label, BlankScope::DEFAULT)
+            .unwrap()
     }
     pub(crate) fn edge(&mut self, subject: TermId, predicate: &str, object: TermId) {
-        let predicate = self.builder.intern_iri(predicate);
-        self.builder.push_quad(subject, predicate, object, None);
+        let predicate = self.builder.intern_iri(predicate).unwrap();
+        self.builder
+            .push_quad(subject, predicate, object, None)
+            .unwrap();
     }
     pub(crate) fn instance(&mut self, local: &str, class: TermId) -> TermId {
         let individual = self.name(local);
@@ -54,12 +59,15 @@ impl Fixture {
         data: bool,
     ) {
         let restriction = self.blank();
-        let value = self.builder.intern_literal(RdfLiteral {
-            lexical_form: count.to_string(),
-            datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
-            language: None,
-            direction: None,
-        });
+        let value = self
+            .builder
+            .intern_literal(RdfLiteral {
+                lexical_form: count.to_string(),
+                datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
         self.edge(restriction, owl::ON_PROPERTY, role);
         self.edge(
             restriction,
@@ -88,13 +96,13 @@ impl Fixture {
         self.edge(class, rdfs::SUB_CLASS_OF, restriction);
     }
     pub(crate) fn list(&mut self, members: &[TermId]) -> TermId {
-        let nil = self.builder.intern_iri(rdf::NIL);
+        let nil = self.builder.intern_iri(rdf::NIL).unwrap();
         if members.is_empty() {
             return nil;
         }
         let vocab = ListVocab {
-            first: self.builder.intern_iri(rdf::FIRST),
-            rest: self.builder.intern_iri(rdf::REST),
+            first: self.builder.intern_iri(rdf::FIRST).unwrap(),
+            rest: self.builder.intern_iri(rdf::REST).unwrap(),
             nil,
         };
         let cells: Vec<_> = (0..members.len()).map(|_| self.blank()).collect();
@@ -103,7 +111,9 @@ impl Fixture {
             &vocab,
             |index| cells[index],
             |subject, predicate, object| {
-                self.builder.push_quad(subject, predicate, object, None);
+                self.builder
+                    .push_quad(subject, predicate, object, None)
+                    .unwrap();
             },
         )
     }
@@ -238,7 +248,10 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
                 let subject = fixture.name("s");
                 let edge = fixture.name("edge");
                 fixture.edge(edge, rdfs::RANGE, class);
-                fixture.builder.push_quad(subject, edge, object, None);
+                fixture
+                    .builder
+                    .push_quad(subject, edge, object, None)
+                    .unwrap();
             }
             _ => {
                 let source = fixture.name("B");
@@ -334,8 +347,8 @@ fn exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer() {
         let mut fixture = Fixture::default();
         let class = fixture.name("A");
         let role = fixture.name("dp");
-        let filler = fixture.builder.intern_iri(datatype);
-        let data_property = fixture.builder.intern_iri(owl::DATATYPE_PROPERTY);
+        let filler = fixture.builder.intern_iri(datatype).unwrap();
+        let data_property = fixture.builder.intern_iri(owl::DATATYPE_PROPERTY).unwrap();
         fixture.edge(role, rdf::TYPE, data_property);
         fixture.bounds(class, role, filler, minimum, true, true);
         if extent.is_none() {
@@ -361,11 +374,12 @@ fn exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer() {
     let class = fixture.name("A");
     let role = fixture.name("dp");
     let opaque = fixture.name("CustomDatatype");
-    let datatype = fixture.builder.intern_iri(rdfs::DATATYPE);
+    let datatype = fixture.builder.intern_iri(rdfs::DATATYPE).unwrap();
     fixture.edge(opaque, rdf::TYPE, datatype);
     let supported = fixture
         .builder
-        .intern_iri(purrdf_xsd::datatype::XSD_INTEGER);
+        .intern_iri(purrdf_xsd::datatype::XSD_INTEGER)
+        .unwrap();
     fixture.bounds(class, role, opaque, 2, true, true);
     fixture.bounds(class, role, supported, 1, false, true);
     let dataset = fixture.freeze();
@@ -458,7 +472,8 @@ fn actual_long_datatype_temporaries_share_the_preparation_owner() {
     let role = fixture.name("dp");
     let datatype = fixture
         .builder
-        .intern_iri(purrdf_xsd::datatype::XSD_INTEGER);
+        .intern_iri(purrdf_xsd::datatype::XSD_INTEGER)
+        .unwrap();
     let range = fixture.blank();
     fixture.edge(range, owl::ON_DATATYPE, datatype);
     let whole = "9".repeat(1024);
@@ -474,12 +489,15 @@ fn actual_long_datatype_temporaries_share_the_preparation_owner() {
         ),
     ] {
         let facet = fixture.blank();
-        let literal = fixture.builder.intern_literal(RdfLiteral {
-            lexical_form: lexical,
-            datatype: Some(purrdf_xsd::datatype::XSD_DECIMAL.to_owned()),
-            language: None,
-            direction: None,
-        });
+        let literal = fixture
+            .builder
+            .intern_literal(RdfLiteral {
+                lexical_form: lexical,
+                datatype: Some(purrdf_xsd::datatype::XSD_DECIMAL.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
         fixture.edge(facet, predicate, literal);
         facets.push(facet);
     }
@@ -531,8 +549,11 @@ fn nominal_identification_and_distinct_successors_remain_per_individual() {
         let source = fixture.instance("i", class);
         let left = fixture.instance("left", filler);
         let right = fixture.instance("right", filler);
-        fixture.builder.push_quad(source, role, left, None);
-        fixture.builder.push_quad(source, role, right, None);
+        fixture.builder.push_quad(source, role, left, None).unwrap();
+        fixture
+            .builder
+            .push_quad(source, role, right, None)
+            .unwrap();
         if distinct {
             fixture.edge(left, owl::DIFFERENT_FROM, right);
         } else {

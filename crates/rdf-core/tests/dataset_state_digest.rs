@@ -102,25 +102,27 @@ impl Node {
         labels: &impl Fn(u8) -> (String, BlankScope),
     ) -> TermId {
         match self {
-            Self::Iri(iri) => builder.intern_iri(iri),
+            Self::Iri(iri) => builder.intern_iri(iri).unwrap(),
             Self::Blank(id) => {
                 let (label, scope) = labels(*id);
-                builder.intern_blank(&label, scope)
+                builder.intern_blank(&label, scope).unwrap()
             }
             Self::Literal {
                 lexical,
                 datatype,
                 language,
                 direction,
-            } => builder.intern_literal(RdfLiteral {
-                lexical_form: (*lexical).to_owned(),
-                datatype: Some((*datatype).to_owned()),
-                language: language.map(str::to_owned),
-                direction: *direction,
-            }),
+            } => builder
+                .intern_literal(RdfLiteral {
+                    lexical_form: (*lexical).to_owned(),
+                    datatype: Some((*datatype).to_owned()),
+                    language: language.map(str::to_owned),
+                    direction: *direction,
+                })
+                .unwrap(),
             Self::Triple(parts) => {
                 let [s, p, o] = parts.each_ref().map(|part| part.intern(builder, labels));
-                builder.intern_triple(s, p, o)
+                builder.intern_triple(s, p, o).unwrap()
             }
             Self::Composite {
                 chunks,
@@ -139,7 +141,9 @@ impl Node {
                     write!(lexical, "_:{encoded}").expect("writing to a string cannot fail");
                     lexical.push_str(chunk);
                 }
-                builder.intern_literal(RdfLiteral::typed(lexical, *datatype))
+                builder
+                    .intern_literal(RdfLiteral::typed(lexical, *datatype))
+                    .unwrap()
             }
         }
     }
@@ -231,7 +235,7 @@ impl State {
         let mut builder = RdfDatasetBuilder::new();
         for graph in &self.graphs {
             let graph = graph.intern(&mut builder, labels);
-            builder.declare_named_graph(graph);
+            builder.declare_named_graph(graph).unwrap();
         }
         for row in &self.rows {
             let [s, p, o] = row
@@ -243,12 +247,12 @@ impl State {
                 .as_ref()
                 .map(|graph| graph.intern(&mut builder, labels));
             match row.role {
-                Role::Ordinary => builder.push_quad(s, p, o, graph),
+                Role::Ordinary => builder.push_quad(s, p, o, graph).unwrap(),
                 Role::Reifier => {
                     assert_eq!(row.terms[1], Node::Iri(REIFIES));
-                    builder.push_reifier_in_graph(s, o, graph);
+                    builder.push_reifier_in_graph(s, o, graph).unwrap();
                 }
-                Role::Annotation => builder.push_annotation_in_graph(s, p, o, graph),
+                Role::Annotation => builder.push_annotation_in_graph(s, p, o, graph).unwrap(),
             }
         }
         builder

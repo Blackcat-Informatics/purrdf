@@ -164,6 +164,7 @@ fn selected_row_message_keeps_datatype_language_direction_and_template_bindings(
             assert_eq!(
                 report
                     .to_dataset()
+                    .expect("authored complete report emits")
                     .owned_quads()
                     .filter(|quad| quad.predicate == crate::model::sh::RESULT_MESSAGE)
                     .map(|quad| quad.object)
@@ -297,7 +298,11 @@ fn fresh_query_mint_prefixes_agree_under_serial_and_parallel_chunk_geometries() 
             .map(|result| result.value.as_ref().unwrap())
             .collect();
         assert_eq!(values.len(), 129);
-        let graph = report.to_dataset().owned_quads().collect::<Vec<_>>();
+        let graph = report
+            .to_dataset()
+            .expect("authored complete report emits")
+            .owned_quads()
+            .collect::<Vec<_>>();
         if let Some(expected) = &baseline {
             assert_eq!(&graph, expected);
         } else {
@@ -385,6 +390,7 @@ fn equal_values_sort_with_source_constraint_and_recursive_evidence() {
                 ShaclProfile::LEGACY,
             )
             .to_dataset()
+            .expect("authored complete report emits")
             .owned_quads()
             .collect::<Vec<_>>();
             if let Some(expected) = &baseline {
@@ -418,8 +424,8 @@ fn failure_selection_keeps_canonical_literal_order_and_untyped_precedence() {
         .bind_complete_shared_dataset(data.freeze().unwrap())
         .unwrap();
     let dataset = binding.validator.data.core_view();
-    let first = super::FocusNode::Interned(first);
-    let later = super::FocusNode::Interned(later);
+    let first = super::FocusNode::Interned(first.expect("authored literal"));
+    let later = super::FocusNode::Interned(later.expect("authored literal"));
     assert_ne!(
         first.to_term(dataset).to_string(),
         later.to_term(dataset).to_string()

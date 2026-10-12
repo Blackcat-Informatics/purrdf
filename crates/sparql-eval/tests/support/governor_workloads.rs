@@ -35,26 +35,32 @@ fn big_lexical(n: usize) -> String {
 /// Per row `n`: an integer, a four-place decimal, a forty-digit integer and a group.
 pub fn numeric_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p_i = b.intern_iri(&format!("{EX}i"));
-    let p_d = b.intern_iri(&format!("{EX}d"));
-    let p_b = b.intern_iri(&format!("{EX}b"));
-    let p_g = b.intern_iri(&format!("{EX}g"));
+    let p_i = b.intern_iri(&format!("{EX}i")).unwrap();
+    let p_d = b.intern_iri(&format!("{EX}d")).unwrap();
+    let p_b = b.intern_iri(&format!("{EX}b")).unwrap();
+    let p_g = b.intern_iri(&format!("{EX}g")).unwrap();
     let groups: Vec<_> = (0..GROUPS)
-        .map(|g| b.intern_iri(&format!("{EX}group{g}")))
+        .map(|g| b.intern_iri(&format!("{EX}group{g}")).unwrap())
         .collect();
     for n in 0..NUMERIC_ROWS {
-        let s = b.intern_iri(&format!("{EX}row{n}"));
+        let s = b.intern_iri(&format!("{EX}row{n}")).unwrap();
         let i = (n * 7919) % 1_000_000;
-        let int = b.intern_literal(RdfLiteral::typed(i.to_string(), XSD_INTEGER));
-        b.push_quad(s, p_i, int, None);
-        let dec = b.intern_literal(RdfLiteral::typed(
-            format!("{}.{:04}", i % 1000, (n * 31) % 10_000),
-            XSD_DECIMAL,
-        ));
-        b.push_quad(s, p_d, dec, None);
-        let big = b.intern_literal(RdfLiteral::typed(big_lexical(n), XSD_INTEGER));
-        b.push_quad(s, p_b, big, None);
-        b.push_quad(s, p_g, groups[n % GROUPS], None);
+        let int = b
+            .intern_literal(RdfLiteral::typed(i.to_string(), XSD_INTEGER))
+            .unwrap();
+        b.push_quad(s, p_i, int, None).unwrap();
+        let dec = b
+            .intern_literal(RdfLiteral::typed(
+                format!("{}.{:04}", i % 1000, (n * 31) % 10_000),
+                XSD_DECIMAL,
+            ))
+            .unwrap();
+        b.push_quad(s, p_d, dec, None).unwrap();
+        let big = b
+            .intern_literal(RdfLiteral::typed(big_lexical(n), XSD_INTEGER))
+            .unwrap();
+        b.push_quad(s, p_b, big, None).unwrap();
+        b.push_quad(s, p_g, groups[n % GROUPS], None).unwrap();
     }
     b.freeze().expect("freeze numeric dataset")
 }
@@ -62,15 +68,18 @@ pub fn numeric_dataset() -> Arc<RdfDataset> {
 /// Per subject `i`: its integer modulo 100 and one three-element composite list.
 pub fn loop_dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let v = builder.intern_iri(&format!("{EX}v"));
-    let list = builder.intern_iri(&format!("{EX}list"));
-    let three = builder.intern_literal(RdfLiteral::typed("[1,2,3]", purrdf_cdt::CDT_LIST));
+    let v = builder.intern_iri(&format!("{EX}v")).unwrap();
+    let list = builder.intern_iri(&format!("{EX}list")).unwrap();
+    let three = builder
+        .intern_literal(RdfLiteral::typed("[1,2,3]", purrdf_cdt::CDT_LIST))
+        .unwrap();
     for index in 0..rows {
-        let subject = builder.intern_iri(&format!("{EX}s{index}"));
-        let value =
-            builder.intern_literal(RdfLiteral::typed((index % 100).to_string(), XSD_INTEGER));
-        builder.push_quad(subject, v, value, None);
-        builder.push_quad(subject, list, three, None);
+        let subject = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed((index % 100).to_string(), XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(subject, v, value, None).unwrap();
+        builder.push_quad(subject, list, three, None).unwrap();
     }
     builder.freeze().expect("freeze the row-loop dataset")
 }

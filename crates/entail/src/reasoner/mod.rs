@@ -1139,10 +1139,12 @@ mod tests {
     /// firing before the first decision this `Reasoner` makes.
     fn stopped_reasoner() -> Reasoner {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri("https://example.org/Cat");
-        let animal = b.intern_iri("https://example.org/Animal");
-        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        b.push_quad(cat, sub, animal, None);
+        let cat = b.intern_iri("https://example.org/Cat").unwrap();
+        let animal = b.intern_iri("https://example.org/Animal").unwrap();
+        let sub = b
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut reasoner = Reasoner::new(&ds).expect("a bare subclass axiom is consistent");
         reasoner.kb.stop = Some(Arc::new(AlreadyStopped) as Arc<dyn StopSignal>);
@@ -1207,10 +1209,14 @@ mod tests {
     #[test]
     fn with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value() {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri("https://example.org/Cat");
-        let reserved = b.intern_iri(&format!("{}bad", purrdf_core::RESERVED_NAMESPACE));
-        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        b.push_quad(cat, sub, reserved, None);
+        let cat = b.intern_iri("https://example.org/Cat").unwrap();
+        let reserved = b
+            .intern_iri(&format!("{}bad", purrdf_core::RESERVED_NAMESPACE))
+            .unwrap();
+        let sub = b
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        b.push_quad(cat, sub, reserved, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let error = Reasoner::with_proofs(&ds)
             .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
@@ -1226,10 +1232,12 @@ mod tests {
     #[test]
     fn with_proofs_still_admits_an_ordinary_dataset() {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri("https://example.org/Cat");
-        let animal = b.intern_iri("https://example.org/Animal");
-        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        b.push_quad(cat, sub, animal, None);
+        let cat = b.intern_iri("https://example.org/Cat").unwrap();
+        let animal = b.intern_iri("https://example.org/Animal").unwrap();
+        let sub = b
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let reasoner = Reasoner::with_proofs(&ds).expect("an ordinary dataset must still build");
         assert!(reasoner.records_proofs());

@@ -28,7 +28,7 @@ pub fn fixture_with_layout(
         .unwrap()
         .with_first_term_index((1_u64 << 53) + 1)
         .unwrap();
-    let mut persistent = SegmentedBuilder::new(limits);
+    let mut persistent = SegmentedBuilder::new(limits).unwrap();
     let mut resident = RdfDatasetBuilder::new();
     let p = TermValue::iri("https://example.org/p");
     let q = TermValue::iri("https://example.org/q");
@@ -62,7 +62,7 @@ pub fn fixture_with_layout(
         let s = purrdf_core::term_fixture::intern_value(&mut resident, &triple[0]);
         let p = purrdf_core::term_fixture::intern_value(&mut resident, &triple[1]);
         let o = purrdf_core::term_fixture::intern_value(&mut resident, &triple[2]);
-        resident.push_quad(s, p, o, None);
+        resident.push_quad(s, p, o, None).unwrap();
     }
     (persistent.seal().unwrap(), resident.freeze().unwrap())
 }

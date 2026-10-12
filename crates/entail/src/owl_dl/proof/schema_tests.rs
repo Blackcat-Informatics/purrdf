@@ -20,7 +20,10 @@ fn derived() -> (DlProof, DlProofContext) {
     let subject = fixture.name("subject");
     let object = fixture.name("i");
     fixture.edge(edge, rdfs::RANGE, class);
-    fixture.builder.push_quad(subject, edge, object, None);
+    fixture
+        .builder
+        .push_quad(subject, edge, object, None)
+        .unwrap();
     let dataset = fixture.freeze();
     let reasoner = Reasoner::with_proofs(&dataset).unwrap();
     let answer = reasoner.consistency();
@@ -91,7 +94,10 @@ fn refusing_native_support_keeps_search_parity_and_a_typed_incomplete_proof() {
     let subject = fixture.name("s");
     let object = fixture.name("i");
     fixture.edge(edge, rdfs::RANGE, class);
-    fixture.builder.push_quad(subject, edge, object, None);
+    fixture
+        .builder
+        .push_quad(subject, edge, object, None)
+        .unwrap();
     let dataset = fixture.freeze();
     let plain = Reasoner::new(&dataset).unwrap().consistency();
     let mut refused = Reasoner::with_proofs(&dataset).unwrap();

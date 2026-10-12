@@ -463,24 +463,26 @@ impl Emit<'_> {
     /// Intern `{NS}{local}`.
     fn iri(&mut self, local: &str) -> TermId {
         let iri = format!("{NS}{local}");
-        self.builder.intern_iri(&iri)
+        self.builder.intern_iri(&iri).unwrap()
     }
 
     /// Intern an auxiliary node belonging to this focus node alone.
     fn scoped(&mut self, suffix: &str) -> TermId {
         let iri = format!("{NS}{}-{suffix}", self.scope);
-        self.builder.intern_iri(&iri)
+        self.builder.intern_iri(&iri).unwrap()
     }
 
     /// Intern a literal.
     fn lit(&mut self, literal: RdfLiteral) -> TermId {
-        self.builder.intern_literal(literal)
+        self.builder.intern_literal(literal).unwrap()
     }
 
     /// Push `subject predicate object` into the default graph.
     fn quad(&mut self, subject: TermId, predicate: &str, object: TermId) {
         let predicate = self.iri(predicate);
-        self.builder.push_quad(subject, predicate, object, None);
+        self.builder
+            .push_quad(subject, predicate, object, None)
+            .unwrap();
     }
 
     /// Push a triple whose subject is the focus node.
@@ -513,8 +515,10 @@ impl Emit<'_> {
     /// its own method rather than a case spelling an absolute IRI inline.
     fn classify(&mut self, subject: TermId, class: &str) {
         let class = self.iri(class);
-        let predicate = self.builder.intern_iri(RDF_TYPE);
-        self.builder.push_quad(subject, predicate, class, None);
+        let predicate = self.builder.intern_iri(RDF_TYPE).unwrap();
+        self.builder
+            .push_quad(subject, predicate, class, None)
+            .unwrap();
     }
 
     /// Declare a per-focus-node reifier for the statement
@@ -531,22 +535,25 @@ impl Emit<'_> {
     fn reify(&mut self, predicate: &str, object: TermId) -> TermId {
         let predicate = self.iri(predicate);
         let subject = self.focus;
-        let triple = self.builder.intern_triple(subject, predicate, object);
+        let triple = self
+            .builder
+            .intern_triple(subject, predicate, object)
+            .unwrap();
         let reifier = self.scoped("stmt");
-        self.builder.push_reifier(reifier, triple);
+        self.builder.push_reifier(reifier, triple).unwrap();
         reifier
     }
 
     /// Attach a SHACL list of `members` to the focus node under `predicate`, its
     /// cells named per focus node so no two focus nodes share one.
     fn list(&mut self, predicate: &str, members: &[TermId]) {
-        let first = self.builder.intern_iri(RDF_FIRST);
-        let rest = self.builder.intern_iri(RDF_REST);
-        let mut next = self.builder.intern_iri(RDF_NIL);
+        let first = self.builder.intern_iri(RDF_FIRST).unwrap();
+        let rest = self.builder.intern_iri(RDF_REST).unwrap();
+        let mut next = self.builder.intern_iri(RDF_NIL).unwrap();
         for (index, member) in members.iter().enumerate().rev() {
             let cell = self.scoped(&format!("cell{index}"));
-            self.builder.push_quad(cell, first, *member, None);
-            self.builder.push_quad(cell, rest, next, None);
+            self.builder.push_quad(cell, first, *member, None).unwrap();
+            self.builder.push_quad(cell, rest, next, None).unwrap();
             next = cell;
         }
         self.prop(predicate, next);
@@ -554,8 +561,10 @@ impl Emit<'_> {
 
     /// Declare `subject rdfs:subClassOf class`.
     fn subclass(&mut self, subject: TermId, class: TermId) {
-        let predicate = self.builder.intern_iri(RDFS_SUBCLASS_OF);
-        self.builder.push_quad(subject, predicate, class, None);
+        let predicate = self.builder.intern_iri(RDFS_SUBCLASS_OF).unwrap();
+        self.builder
+            .push_quad(subject, predicate, class, None)
+            .unwrap();
     }
 
     /// Attach a per-focus-node target node typed `ex:Target`, returning it.
@@ -1425,8 +1434,8 @@ struct CaseFixture {
 /// rather than of two.
 fn build_case(case: &ConstraintCase, conforming: usize, violating: usize) -> CaseFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}")).unwrap();
 
     let mut conforming_names = Vec::with_capacity(conforming);
     let mut violating_names = Vec::with_capacity(violating);
@@ -1436,8 +1445,10 @@ fn build_case(case: &ConstraintCase, conforming: usize, violating: usize) -> Cas
     ] {
         for index in 0..count {
             let scope = format!("{prefix}{index}");
-            let focus = builder.intern_iri(&format!("{NS}{scope}"));
-            builder.push_quad(focus, rdf_type, focus_class, None);
+            let focus = builder.intern_iri(&format!("{NS}{scope}")).unwrap();
+            builder
+                .push_quad(focus, rdf_type, focus_class, None)
+                .unwrap();
             let mut emit = Emit {
                 builder: &mut builder,
                 focus,
@@ -1578,41 +1589,53 @@ const SEAM_HIERARCHY_QUADS: usize = SEAM_HIERARCHY_CLASSES;
 /// costs something per class, which nobody disputes.
 fn seam_dataset(focus_nodes: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let subclass_of = builder.intern_iri(RDFS_SUBCLASS_OF);
-    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}"));
-    let target_class = builder.intern_iri(&format!("{NS}Target"));
-    let name = builder.intern_iri(&format!("{NS}name"));
-    let count = builder.intern_iri(&format!("{NS}count"));
-    let reference = builder.intern_iri(&format!("{NS}ref"));
-    let key = builder.intern_iri(&format!("{NS}key"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let subclass_of = builder.intern_iri(RDFS_SUBCLASS_OF).unwrap();
+    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}")).unwrap();
+    let target_class = builder.intern_iri(&format!("{NS}Target")).unwrap();
+    let name = builder.intern_iri(&format!("{NS}name")).unwrap();
+    let count = builder.intern_iri(&format!("{NS}count")).unwrap();
+    let reference = builder.intern_iri(&format!("{NS}ref")).unwrap();
+    let key = builder.intern_iri(&format!("{NS}key")).unwrap();
 
     let subclasses: Vec<_> = (0..SEAM_HIERARCHY_CLASSES)
-        .map(|class| builder.intern_iri(&format!("{NS}seam-k{class}")))
+        .map(|class| builder.intern_iri(&format!("{NS}seam-k{class}")).unwrap())
         .collect();
     for &subclass in &subclasses {
-        builder.push_quad(subclass, subclass_of, focus_class, None);
+        builder
+            .push_quad(subclass, subclass_of, focus_class, None)
+            .unwrap();
     }
 
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{NS}seam-c{index}"));
-        let target = builder.intern_iri(&format!("{NS}seam-t{index}"));
-        let number = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
-        let target_key = builder.intern_literal(RdfLiteral::simple(format!("key-{index}")));
-        builder.push_quad(
-            focus,
-            rdf_type,
-            subclasses[index % SEAM_HIERARCHY_CLASSES],
-            None,
-        );
+        let focus = builder.intern_iri(&format!("{NS}seam-c{index}")).unwrap();
+        let target = builder.intern_iri(&format!("{NS}seam-t{index}")).unwrap();
+        let number = builder
+            .intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER))
+            .unwrap();
+        let target_key = builder
+            .intern_literal(RdfLiteral::simple(format!("key-{index}")))
+            .unwrap();
+        builder
+            .push_quad(
+                focus,
+                rdf_type,
+                subclasses[index % SEAM_HIERARCHY_CLASSES],
+                None,
+            )
+            .unwrap();
         if index % SEAM_VIOLATION_PERIOD != 0 {
-            let label = builder.intern_literal(RdfLiteral::simple(format!("item-{index}")));
-            builder.push_quad(focus, name, label, None);
+            let label = builder
+                .intern_literal(RdfLiteral::simple(format!("item-{index}")))
+                .unwrap();
+            builder.push_quad(focus, name, label, None).unwrap();
         }
-        builder.push_quad(focus, count, number, None);
-        builder.push_quad(focus, reference, target, None);
-        builder.push_quad(target, rdf_type, target_class, None);
-        builder.push_quad(target, key, target_key, None);
+        builder.push_quad(focus, count, number, None).unwrap();
+        builder.push_quad(focus, reference, target, None).unwrap();
+        builder
+            .push_quad(target, rdf_type, target_class, None)
+            .unwrap();
+        builder.push_quad(target, key, target_key, None).unwrap();
     }
     builder.freeze().expect("the seam dataset must freeze")
 }
@@ -2119,14 +2142,16 @@ fn expansion_fixture(
     usize,
 ) {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}"));
-    let reference = builder.intern_iri(&format!("{NS}ref"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}")).unwrap();
+    let reference = builder.intern_iri(&format!("{NS}ref")).unwrap();
     for index in 0..EXPANSION_FOCUS_NODES {
-        let focus = builder.intern_iri(&format!("{NS}x{index}"));
-        let target = builder.intern_iri(&format!("{NS}xt{index}"));
-        builder.push_quad(focus, rdf_type, focus_class, None);
-        builder.push_quad(focus, reference, target, None);
+        let focus = builder.intern_iri(&format!("{NS}x{index}")).unwrap();
+        let target = builder.intern_iri(&format!("{NS}xt{index}")).unwrap();
+        builder
+            .push_quad(focus, rdf_type, focus_class, None)
+            .unwrap();
+        builder.push_quad(focus, reference, target, None).unwrap();
     }
     let base = builder.freeze().expect("the expansion base freezes");
 

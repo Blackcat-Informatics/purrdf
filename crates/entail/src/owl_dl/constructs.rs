@@ -692,11 +692,13 @@ mod tests {
         }
 
         fn iri(&mut self, iri: &str) -> TermId {
-            self.builder.intern_iri(iri)
+            self.builder.intern_iri(iri).unwrap()
         }
 
         fn blank(&mut self, label: &str) -> TermId {
-            self.builder.intern_blank(label, BlankScope::DEFAULT)
+            self.builder
+                .intern_blank(label, BlankScope::DEFAULT)
+                .unwrap()
         }
 
         fn literal(&mut self, lexical: &str, datatype: &str) -> TermId {
@@ -705,7 +707,7 @@ mod tests {
         }
 
         fn quad(&mut self, s: TermId, p: TermId, o: TermId) {
-            self.builder.push_quad(s, p, o, None);
+            self.builder.push_quad(s, p, o, None).unwrap();
         }
 
         /// Write `members` as an RDF collection, returning its head.

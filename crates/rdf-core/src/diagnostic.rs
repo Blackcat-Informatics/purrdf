@@ -267,6 +267,7 @@ pub struct RdfDiagnostic {
     /// Where the diagnostic applies, when known.
     pub location: Option<Box<RdfLocation>>,
     presentation: Option<Box<DiagnosticPresentation>>,
+    storage: Option<Box<purrdf_lex::allocation::StorageError>>,
 }
 
 purrdf_lex::resident_clone!(RdfDiagnostic);
@@ -306,6 +307,11 @@ impl RdfDiagnostic {
                     memory.boxed(presentation)
                 })
                 .transpose()?,
+            storage: self
+                .storage
+                .as_deref()
+                .map(|error| memory.boxed(*error))
+                .transpose()?,
         })
     }
 
@@ -331,6 +337,9 @@ impl RdfDiagnostic {
             bytes = bytes
                 .checked_add(size_of::<DiagnosticPresentation>())?
                 .checked_add(presentation.retained_bytes()?)?;
+        }
+        if self.storage.is_some() {
+            bytes = bytes.checked_add(size_of::<purrdf_lex::allocation::StorageError>())?;
         }
         Some(bytes)
     }
@@ -363,6 +372,7 @@ impl RdfDiagnostic {
             detail: None,
             location: None,
             presentation: None,
+            storage: None,
         }
     }
 
@@ -375,6 +385,16 @@ impl RdfDiagnostic {
     /// Machine consumers never need to recover arguments from that wording.
     pub fn from_iri(error: &purrdf_iri::IriError) -> Self {
         Self::error(error.diagnostic_code(), "").with_presentation(error.presentation())
+    }
+
+    /// The exact original capacity or physical refusal, when this diagnostic
+    /// transports a native storage failure through a codec's reporting API.
+    #[must_use]
+    pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
+        match &self.storage {
+            Some(error) => Some(**error),
+            None => None,
+        }
     }
 
     /// Attach validated presentation data and render its compatibility English.
@@ -402,6 +422,16 @@ impl RdfDiagnostic {
         object.insert("severity".to_owned(), Value::from(self.severity.as_str()));
         object.insert("code".to_owned(), Value::from(self.code.clone()));
         object.insert("message".to_owned(), Value::from(self.message.clone()));
+        if let Some(purrdf_lex::allocation::StorageError::Capacity(error)) = self.storage_error() {
+            let mut capacity = Object::new();
+            capacity.insert("space".to_owned(), Value::from(error.space.as_str()));
+            capacity.insert(
+                "attempted".to_owned(),
+                Value::from(error.attempted.to_string()),
+            );
+            capacity.insert("limit".to_owned(), Value::from(error.limit.to_string()));
+            object.insert("capacity".to_owned(), Value::Object(capacity));
+        }
         if let Some(detail) = &self.detail {
             object.insert("detail".to_owned(), Value::from(detail.clone()));
         }
@@ -469,28 +499,55 @@ impl fmt::Display for RdfDiagnostic {
     }
 }
 
-impl std::error::Error for RdfDiagnostic {}
+impl From<purrdf_lex::allocation::StorageError> for RdfDiagnostic {
+    fn from(error: purrdf_lex::allocation::StorageError) -> Self {
+        let code = match error {
+            purrdf_lex::allocation::StorageError::Capacity(_) => "rdf-capacity-exhausted",
+            _ => "rdf-storage-refused",
+        };
+        let mut diagnostic = Self::error(code, error.to_string());
+        diagnostic.storage = Some(Box::new(error));
+        diagnostic
+    }
+}
+impl From<purrdf_iri::IriReadError> for RdfDiagnostic {
+    fn from(error: purrdf_iri::IriReadError) -> Self {
+        match error {
+            purrdf_iri::IriReadError::Lexical(error) => Self::from_iri(&error),
+            purrdf_iri::IriReadError::Storage(error) => error.into(),
+        }
+    }
+}
+impl std::error::Error for RdfDiagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.storage
+            .as_deref()
+            .map(|error| error as &dyn std::error::Error)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+    struct Grant {
+        live: usize,
+        limit: usize,
+    }
+    impl Admission for Grant {
+        fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+            if bytes > self.limit {
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = bytes;
+            Ok(())
+        }
+    }
+
     #[test]
     fn native_diagnostic_copy_preserves_typed_fields_and_exact_original_layouts() {
-        use purrdf_lex::allocation::{Admission, Memory, StorageError};
-        struct Grant {
-            live: usize,
-            limit: usize,
-        }
-        impl Admission for Grant {
-            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
-                if bytes > self.limit {
-                    return Err(StorageError::AdmissionFailed);
-                }
-                self.live = bytes;
-                Ok(())
-            }
-        }
         let primary = DiagnosticPresentation::new(
             "primary",
             "bad {value}",
@@ -556,6 +613,42 @@ mod tests {
             assert_eq!(memory.admitted_bytes(), 0);
         }
         assert_eq!(admitted.live, 0);
+    }
+
+    #[test]
+    fn storage_cause_keeps_exact_fields_in_an_admitted_compact_diagnostic() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let cause = StorageError::from(
+            CapacityError::slot(CapacitySpace::GlobalTerms, u64::MAX, u64::MAX - 1).unwrap_err(),
+        );
+        let source = RdfDiagnostic::from(cause);
+        assert!(size_of::<RdfDiagnostic>() <= 128);
+        assert_eq!(source.storage_error(), Some(cause));
+        assert_eq!(
+            std::error::Error::source(&source)
+                .unwrap()
+                .downcast_ref::<StorageError>(),
+            Some(&cause)
+        );
+        let mut grant = Grant {
+            live: 0,
+            limit: usize::MAX,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let copy = source.clone_with_memory(&mut memory).unwrap();
+        assert_eq!(copy, source);
+        assert_eq!(copy.to_json(), source.to_json());
+        let bytes = copy.retained_bytes().unwrap();
+        assert_eq!(memory.admitted_bytes(), bytes);
+        drop(copy);
+        memory.release_bytes(bytes).unwrap();
+        memory.admission_mut().limit = bytes - size_of::<StorageError>();
+        assert_eq!(
+            memory.scope(|memory| source.clone_with_memory(memory)),
+            Err(StorageError::AdmissionFailed)
+        );
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(source.storage_error(), Some(cause));
     }
 
     #[test]

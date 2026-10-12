@@ -52,10 +52,10 @@ fn only_the_unmentioned_parameters_are_named_in_declaration_order() {
 #[test]
 fn a_declared_used_parameter_passes_and_runs() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("http://example.org/s");
-    let p = builder.intern_iri(P);
-    let o = builder.intern_iri("http://example.org/o");
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri("http://example.org/s").unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let o = builder.intern_iri("http://example.org/o").unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     let dataset = builder.freeze().expect("the one-triple fixture");
 
     let engine = NativeSparqlEngine::new();

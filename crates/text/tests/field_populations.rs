@@ -266,9 +266,9 @@ fn index_carriers_follow_partition_and_remapping_facts() {
     };
 
     let mut builder = RdfDatasetBuilder::new();
-    let title = builder.intern_iri("https://example.org/title");
-    let body = builder.intern_iri("https://example.org/body");
-    let graph = builder.intern_iri("https://example.org/graph");
+    let title = builder.intern_iri("https://example.org/title").unwrap();
+    let body = builder.intern_iri("https://example.org/body").unwrap();
+    let graph = builder.intern_iri("https://example.org/graph").unwrap();
     for (subject, predicate, text, named) in [
         ("a", title, "cat", false),
         ("b", body, "cat cat dog dog", false),
@@ -276,9 +276,13 @@ fn index_carriers_follow_partition_and_remapping_facts() {
         ("d", title, "cat", true),
         ("d", body, "dog", true),
     ] {
-        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, predicate, literal, named.then_some(graph));
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{subject}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject, predicate, literal, named.then_some(graph))
+            .unwrap();
     }
     let dataset = builder.freeze().expect("dataset");
     let config = TextIndexConfig::new(

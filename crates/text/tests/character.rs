@@ -15,11 +15,15 @@ use purrdf_text::{
 
 fn data(rows: &[(&str, &str)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/text");
+    let predicate = builder.intern_iri("https://example.org/text").unwrap();
     for &(subject, text) in rows {
-        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, predicate, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{subject}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject, predicate, literal, None)
+            .unwrap();
     }
     builder.freeze().expect("fixture dataset")
 }
@@ -205,20 +209,24 @@ fn long_han_runs_have_bounded_keys_without_losing_later_characters() {
 fn auxiliary_only_graph_and_language_partitions_allow_ranked_declaration() {
     for lexical in [false, true] {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri("https://example.org/text");
+        let predicate = builder.intern_iri("https://example.org/text").unwrap();
         if lexical {
-            let subject = builder.intern_iri("https://example.org/lexical");
-            let text = builder.intern_literal(RdfLiteral::simple("cat"));
-            builder.push_quad(subject, predicate, text, None);
+            let subject = builder.intern_iri("https://example.org/lexical").unwrap();
+            let text = builder.intern_literal(RdfLiteral::simple("cat")).unwrap();
+            builder.push_quad(subject, predicate, text, None).unwrap();
         }
         for (name, language, graph) in [
             ("aux-default", "fr", None),
             ("aux-named", "zh", Some("https://example.org/graph")),
         ] {
-            let subject = builder.intern_iri(&format!("https://example.org/{name}"));
-            let text = builder.intern_literal(RdfLiteral::language_tagged("---", language));
-            let graph = graph.map(|graph| builder.intern_iri(graph));
-            builder.push_quad(subject, predicate, text, graph);
+            let subject = builder
+                .intern_iri(&format!("https://example.org/{name}"))
+                .unwrap();
+            let text = builder
+                .intern_literal(RdfLiteral::language_tagged("---", language))
+                .unwrap();
+            let graph = graph.map(|graph| builder.intern_iri(graph).unwrap());
+            builder.push_quad(subject, predicate, text, graph).unwrap();
         }
         let dataset = builder.freeze().expect("auxiliary partitions");
         let config = TextIndexConfig::new(

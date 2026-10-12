@@ -23,16 +23,19 @@ struct Answers {
 }
 
 impl GuardEvaluator for Answers {
-    fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+    fn evaluate(
+        &self,
+        call: &GuardCall<'_>,
+    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
         match call.guard.name() {
             "expand" => self
                 .rows
                 .lock()
                 .expect("unpoisoned fixture")
                 .take()
-                .ok_or_else(|| "the one positive source invoked expand twice".to_owned()),
+                .ok_or_else(|| "the one positive source invoked expand twice".into()),
             "reject" => Ok(Vec::new()),
-            other => Err(format!("unexpected guard {other}")),
+            other => Err(format!("unexpected guard {other}").into()),
         }
     }
 }

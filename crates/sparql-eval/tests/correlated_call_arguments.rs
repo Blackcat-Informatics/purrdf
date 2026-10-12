@@ -199,25 +199,25 @@ impl PfCursor for Rows {
 /// sharing a value, which an `EXISTS` memo may answer once for both.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let r = builder.intern_iri(&format!("{EX}r"));
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let r = builder.intern_iri(&format!("{EX}r")).unwrap();
     for kind in KINDS {
-        let predicate = builder.intern_iri(&kind.predicate());
+        let predicate = builder.intern_iri(&kind.predicate()).unwrap();
         for &name in LEFT_NAMES {
             let value = match kind {
-                Kind::Iri => builder.intern_iri(&format!("{EX}{name}")),
-                Kind::Literal => builder.intern_literal(RdfLiteral::simple(name)),
-                Kind::Blank => builder.intern_blank(name, BlankScope::DEFAULT),
+                Kind::Iri => builder.intern_iri(&format!("{EX}{name}")).unwrap(),
+                Kind::Literal => builder.intern_literal(RdfLiteral::simple(name)).unwrap(),
+                Kind::Blank => builder.intern_blank(name, BlankScope::DEFAULT).unwrap(),
                 Kind::Quoted => {
-                    let object = builder.intern_iri(&format!("{EX}{name}"));
-                    builder.intern_triple(a, r, object)
+                    let object = builder.intern_iri(&format!("{EX}{name}")).unwrap();
+                    builder.intern_triple(a, r, object).unwrap()
                 }
             };
-            let subject = builder.intern_iri(&format!("{EX}s-{name}"));
-            builder.push_quad(subject, predicate, value, None);
+            let subject = builder.intern_iri(&format!("{EX}s-{name}")).unwrap();
+            builder.push_quad(subject, predicate, value, None).unwrap();
             if name == "alpha" {
-                let twin = builder.intern_iri(&format!("{EX}t-{name}"));
-                builder.push_quad(twin, predicate, value, None);
+                let twin = builder.intern_iri(&format!("{EX}t-{name}")).unwrap();
+                builder.push_quad(twin, predicate, value, None).unwrap();
             }
         }
     }

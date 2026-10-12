@@ -471,13 +471,21 @@ mod tests {
         use purrdf_core::TermFactory as _;
 
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/crate/");
-        let predicate = builder.intern_iri("https://example.org/vocab/hasPart");
-        let object = builder.intern_iri("https://example.org/crate/data/train.csv");
-        builder.push_quad(subject, predicate, object, None);
-        let label = builder.intern_iri("https://example.org/vocab/name");
-        let literal = builder.intern_value(&purrdf_core::TermValue::simple_literal("train"));
-        builder.push_quad(object, label, literal, None);
+        let subject = builder.intern_iri("https://example.org/crate/").unwrap();
+        let predicate = builder
+            .intern_iri("https://example.org/vocab/hasPart")
+            .unwrap();
+        let object = builder
+            .intern_iri("https://example.org/crate/data/train.csv")
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let label = builder
+            .intern_iri("https://example.org/vocab/name")
+            .unwrap();
+        let literal = builder
+            .intern_value(&purrdf_core::TermValue::simple_literal("train"))
+            .unwrap();
+        builder.push_quad(object, label, literal, None).unwrap();
         builder.freeze().expect("fixture freezes")
     }
 

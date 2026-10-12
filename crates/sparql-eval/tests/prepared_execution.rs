@@ -530,14 +530,14 @@ const PREPARED_PLAN_QUERY: &str = "SELECT ?o WHERE {\n  ?s <http://example.org/p
 #[test]
 fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let q = b.intern_iri("http://example.org/q");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
     for i in 0..8u32 {
-        let s = b.intern_iri(&format!("http://example.org/s{i}"));
-        let o = b.intern_iri(&format!("http://example.org/o{i}"));
-        let r = b.intern_iri(&format!("http://example.org/r{i}"));
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, q, r, None);
+        let s = b.intern_iri(&format!("http://example.org/s{i}")).unwrap();
+        let o = b.intern_iri(&format!("http://example.org/o{i}")).unwrap();
+        let r = b.intern_iri(&format!("http://example.org/r{i}")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, q, r, None).unwrap();
     }
     let ds = b.freeze().expect("freeze");
     assert_stays_on_the_calling_thread(&ds);
@@ -1104,11 +1104,13 @@ fn aggregates_env(registry: &AggregateRegistry) -> ExtensionEnv {
 /// only come from silently running under the mismatched registry.
 fn aggregate_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let val = b.intern_iri(&format!("{REL_EX}val"));
+    let val = b.intern_iri(&format!("{REL_EX}val")).unwrap();
     for (index, n) in [1i64, 2, 2, 10].into_iter().enumerate() {
-        let s = b.intern_iri(&format!("{REL_EX}s{index}"));
-        let v = b.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER.to_owned()));
-        b.push_quad(s, val, v, None);
+        let s = b.intern_iri(&format!("{REL_EX}s{index}")).unwrap();
+        let v = b
+            .intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER.to_owned()))
+            .unwrap();
+        b.push_quad(s, val, v, None).unwrap();
     }
     b.freeze().expect("freeze fixture")
 }
@@ -1296,19 +1298,23 @@ fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
 fn a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle() {
     const NS: &str = "http://example.org/execution-blank#";
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&format!("{NS}p"));
-    let iri_s0 = b.intern_iri(&format!("{NS}iri0"));
-    let iri_s1 = b.intern_iri(&format!("{NS}iri1"));
-    let blank_s0 = b.intern_blank("blank0", purrdf_core::BlankScope::DEFAULT);
-    let blank_s1 = b.intern_blank("blank1", purrdf_core::BlankScope::DEFAULT);
-    let o_iri0 = b.intern_iri(&format!("{NS}o-iri0"));
-    let o_iri1 = b.intern_iri(&format!("{NS}o-iri1"));
-    let o_blank0 = b.intern_iri(&format!("{NS}o-blank0"));
-    let o_blank1 = b.intern_iri(&format!("{NS}o-blank1"));
-    b.push_quad(iri_s0, p, o_iri0, None);
-    b.push_quad(iri_s1, p, o_iri1, None);
-    b.push_quad(blank_s0, p, o_blank0, None);
-    b.push_quad(blank_s1, p, o_blank1, None);
+    let p = b.intern_iri(&format!("{NS}p")).unwrap();
+    let iri_s0 = b.intern_iri(&format!("{NS}iri0")).unwrap();
+    let iri_s1 = b.intern_iri(&format!("{NS}iri1")).unwrap();
+    let blank_s0 = b
+        .intern_blank("blank0", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    let blank_s1 = b
+        .intern_blank("blank1", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    let o_iri0 = b.intern_iri(&format!("{NS}o-iri0")).unwrap();
+    let o_iri1 = b.intern_iri(&format!("{NS}o-iri1")).unwrap();
+    let o_blank0 = b.intern_iri(&format!("{NS}o-blank0")).unwrap();
+    let o_blank1 = b.intern_iri(&format!("{NS}o-blank1")).unwrap();
+    b.push_quad(iri_s0, p, o_iri0, None).unwrap();
+    b.push_quad(iri_s1, p, o_iri1, None).unwrap();
+    b.push_quad(blank_s0, p, o_blank0, None).unwrap();
+    b.push_quad(blank_s1, p, o_blank1, None).unwrap();
     let ds = b.freeze().expect("freeze");
 
     let engine = NativeSparqlEngine::new();

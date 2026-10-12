@@ -29,6 +29,8 @@ use std::vec::Vec;
 /// A physical failure, separate from any native lexical language.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StorageError {
+    /// A logical address space refused the requested count before mutation.
+    Capacity(CapacityError),
     /// A concrete allocation layout or live-byte sum cannot be represented.
     SizeOverflow,
     /// A fallible allocation refused its already admitted destination.
@@ -41,16 +43,169 @@ pub enum StorageError {
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::SizeOverflow => "native allocation layout overflow",
-            Self::AllocationFailed => "native destination allocation failed",
-            Self::AdmissionFailed => "native workspace admission refused",
-            Self::FormattingFailed => "native diagnostic formatting failed",
-        })
+        match self {
+            Self::Capacity(error) => error.fmt(f),
+            Self::SizeOverflow => f.write_str("native allocation layout overflow"),
+            Self::AllocationFailed => f.write_str("native destination allocation failed"),
+            Self::AdmissionFailed => f.write_str("native workspace admission refused"),
+            Self::FormattingFailed => f.write_str("native diagnostic formatting failed"),
+        }
     }
 }
 
 impl std::error::Error for StorageError {}
+
+/// Exhaustion of one named logical space, distinct from physical allocation.
+/// Counts use u128 so even an attempted count beyond a u64 space is reported
+/// exactly, without wrapping or replacing the first failure with a layout error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CapacityError {
+    /// The table or address space whose limit was reached.
+    pub space: CapacitySpace,
+    /// The requested total count, including the attempted addition.
+    pub attempted: u128,
+    /// The largest representable count in that space.
+    pub limit: u128,
+}
+
+impl CapacityError {
+    /// Check the original producer's next count before it mutates storage.
+    ///
+    /// # Errors
+    /// Returns the named space, exact attempted count and actual address limit.
+    pub fn check(space: CapacitySpace, attempted: u128, limit: u128) -> Result<(), Self> {
+        if attempted > limit {
+            Err(Self {
+                space,
+                attempted,
+                limit,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Mint one logical slot after checking its exclusive table count.
+    /// The requested count is computed in u128, even at a u64 boundary.
+    ///
+    /// # Errors
+    /// Returns the exact next count and the producer's actual representation limit.
+    pub fn slot(space: CapacitySpace, index: u64, limit: u64) -> Result<u64, Self> {
+        Self::check(space, u128::from(index) + 1, u128::from(limit))?;
+        Ok(index)
+    }
+}
+
+/// The native logical spaces whose producers report exact capacity failures.
+/// The closed identity is retained through certificates and language boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CapacitySpace {
+    /// Resident RDF terms.
+    LocalTerms,
+    /// Resident RDF text arena.
+    LocalTermBytes,
+    /// Global RDF terms.
+    GlobalTerms,
+    /// Global RDF text arena.
+    GlobalTermBytes,
+    /// Resident statement rows.
+    Quads,
+    /// Resident RDF reifier bindings.
+    Reifiers,
+    /// Resident RDF annotation rows.
+    Annotations,
+    /// Lazy statement permutation addresses.
+    Permutation,
+    /// Mutable delta terms.
+    DeltaTerms,
+    /// Dataset merge blank scopes.
+    BlankScopes,
+    /// Streaming import blank scopes.
+    ImportBlankScopes,
+    /// Provenance units.
+    ProvenanceUnits,
+    /// Provenance artifacts.
+    Artifacts,
+    /// Provenance origin sets.
+    OriginSets,
+    /// Datalog atomic terms.
+    DatalogTerms,
+    /// Datalog materialized rows.
+    DatalogRows,
+    /// Datalog relation partitions.
+    DatalogPartitions,
+    /// Datalog rules.
+    DatalogRules,
+    /// Datalog proof terms.
+    DatalogProofs,
+    /// Datalog compound nodes.
+    DatalogNodes,
+    /// Datalog metavariables.
+    DatalogMetas,
+    /// Datalog atomic symbols.
+    DatalogSymbols,
+}
+
+impl CapacitySpace {
+    const NAMES: [(Self, &'static str); 22] = [
+        (Self::LocalTerms, "rdf-local-terms"),
+        (Self::LocalTermBytes, "rdf-local-text"),
+        (Self::GlobalTerms, "rdf-global-terms"),
+        (Self::GlobalTermBytes, "rdf-global-text"),
+        (Self::Quads, "rdf-quads"),
+        (Self::Reifiers, "rdf-reifiers"),
+        (Self::Annotations, "rdf-annotations"),
+        (Self::Permutation, "rdf-permutation"),
+        (Self::DeltaTerms, "rdf-delta-terms"),
+        (Self::BlankScopes, "rdf-merge-blank-scopes"),
+        (Self::ImportBlankScopes, "rdf-import-blank-scopes"),
+        (Self::ProvenanceUnits, "rdf-provenance-units"),
+        (Self::Artifacts, "rdf-provenance-artifacts"),
+        (Self::OriginSets, "rdf-origin-sets"),
+        (Self::DatalogTerms, "datalog-terms"),
+        (Self::DatalogRows, "datalog-rows"),
+        (Self::DatalogPartitions, "datalog-partitions"),
+        (Self::DatalogRules, "datalog-rules"),
+        (Self::DatalogProofs, "datalog-proofs"),
+        (Self::DatalogNodes, "datalog-nodes"),
+        (Self::DatalogMetas, "datalog-metavariables"),
+        (Self::DatalogSymbols, "datalog-symbols"),
+    ];
+
+    /// Stable allocation-free identity for error publication.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        Self::NAMES[self as usize].1
+    }
+
+    /// Decode the same closed identity without allocating or leaking strings.
+    #[must_use]
+    pub fn of_name(name: &str) -> Option<Self> {
+        Self::NAMES
+            .iter()
+            .find_map(|&(space, spelling)| (spelling == name).then_some(space))
+    }
+}
+
+impl fmt::Display for CapacitySpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for CapacityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} capacity exhausted: attempted {}, limit {}",
+            self.space, self.attempted, self.limit
+        )
+    }
+}
+
+impl std::error::Error for CapacityError {}
+
+crate::variant_from!(StorageError { Capacity(CapacityError) });
 
 /// A borrowed caller's live-capacity admission for one native computation.
 pub trait Admission {

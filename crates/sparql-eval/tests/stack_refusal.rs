@@ -12,14 +12,18 @@ use purrdf_sparql_eval::{
 
 fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller() {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let probe = builder.intern_iri("http://example.org/q");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let probe = builder.intern_iri("http://example.org/q").unwrap();
     for index in 1..=4 {
-        let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-        let object = builder.intern_iri(&format!("http://example.org/o{index}"));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let object = builder
+            .intern_iri(&format!("http://example.org/o{index}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         if index == 1 {
-            builder.push_quad(subject, probe, object, None);
+            builder.push_quad(subject, probe, object, None).unwrap();
         }
     }
     let dataset = builder.freeze().expect("valid resident fixture");

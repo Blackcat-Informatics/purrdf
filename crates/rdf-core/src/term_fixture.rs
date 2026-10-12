@@ -145,7 +145,9 @@ pub fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
         let s = intern_value(&mut builder, s);
         let p = intern_value(&mut builder, p);
         let o = intern_value(&mut builder, o);
-        builder.push_quad(s, p, o, None);
+        builder
+            .push_quad(s, p, o, None)
+            .expect("bounded authored fixture");
     }
     builder.freeze().expect("page freeze")
 }
@@ -206,9 +208,15 @@ pub fn graph_slots(tag: &str) -> Arc<RdfDataset> {
         format!("empty{tag}"),
     ]
     .map(|name| intern_value(&mut builder, &iri(&name)));
-    builder.push_quad(s, p, phantom, None);
-    builder.push_quad(s, p, o, Some(graph));
-    builder.declare_named_graph(empty);
+    builder
+        .push_quad(s, p, phantom, None)
+        .expect("bounded authored fixture");
+    builder
+        .push_quad(s, p, o, Some(graph))
+        .expect("bounded authored fixture");
+    builder
+        .declare_named_graph(empty)
+        .expect("bounded authored fixture");
     builder.freeze().expect("graph-slot fixture freezes")
 }
 
@@ -233,7 +241,9 @@ pub fn graph_membership_corpus(tag: &str, graphs: usize) -> Arc<RdfDataset> {
         rows.push((s, p, term(format!("o{tag}{i}")), Some(graph)));
     }
     for (s, p, o, g) in rows {
-        builder.push_quad(s, p, o, g);
+        builder
+            .push_quad(s, p, o, g)
+            .expect("bounded authored fixture");
     }
     builder.freeze().expect("graph-membership corpus freezes")
 }

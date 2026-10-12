@@ -36,16 +36,18 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 /// matches `a` only, a constant in its middle matches `b` only, and none matches `c`.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     for (subject, value) in [("a", "9999"), ("b", "2500"), ("c", "20000")] {
-        let s = builder.intern_iri(&format!("{EX}{subject}"));
-        let o = builder.intern_literal(RdfLiteral {
-            lexical_form: value.to_owned(),
-            datatype: Some(format!("{XSD}integer")),
-            language: None,
-            direction: None,
-        });
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}{subject}")).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: value.to_owned(),
+                datatype: Some(format!("{XSD}integer")),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset")
 }

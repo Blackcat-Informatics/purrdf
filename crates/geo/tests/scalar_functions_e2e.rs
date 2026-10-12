@@ -161,16 +161,18 @@ fn geojson_datatype() -> String {
 /// file pass against a seam that aborted on the first bad geometry it met.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(&ex("geom"));
+    let predicate = builder.intern_iri(&ex("geom")).unwrap();
     for (subject, lexical) in [
         ("a", POINT_INSIDE),
         ("b", POINT_OUTSIDE),
         ("c", SQUARE),
         ("bad", MALFORMED),
     ] {
-        let s = builder.intern_iri(&ex(subject));
-        let o = builder.intern_literal(RdfLiteral::typed(lexical, wkt_datatype()));
-        builder.push_quad(s, predicate, o, None);
+        let s = builder.intern_iri(&ex(subject)).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(lexical, wkt_datatype()))
+            .unwrap();
+        builder.push_quad(s, predicate, o, None).unwrap();
     }
     builder
         .freeze()

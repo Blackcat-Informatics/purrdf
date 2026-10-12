@@ -81,7 +81,7 @@ fn bench_ordinary_scheme_inactive(c: &mut Bench) {
             |iris| {
                 let mut builder = RdfDatasetBuilder::new();
                 for iri in &iris {
-                    black_box(builder.intern_iri(black_box(iri)));
+                    black_box(builder.intern_iri(black_box(iri)).unwrap());
                 }
                 black_box(builder)
             },
@@ -104,7 +104,7 @@ fn bench_ordinary_scheme_active(c: &mut Bench) {
                 let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme prefix");
                 let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, None);
                 for iri in &iris {
-                    black_box(builder.intern_iri(black_box(iri)));
+                    black_box(builder.intern_iri(black_box(iri)).unwrap());
                 }
                 black_box(builder)
             },
@@ -127,7 +127,7 @@ fn bench_content_ids_scheme_active(c: &mut Bench) {
                 let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme prefix");
                 let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, None);
                 for iri in &iris {
-                    black_box(builder.intern_iri(black_box(iri)));
+                    black_box(builder.intern_iri(black_box(iri)).unwrap());
                 }
                 black_box(builder)
             },

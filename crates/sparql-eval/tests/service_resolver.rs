@@ -40,20 +40,20 @@ const NET_EP: &str = "https://example.org/remote/sparql";
 /// dropped one (zero rows).
 fn local_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri("https://example.org/vocab#knows");
-    let a = b.intern_iri("https://example.org/a");
-    let x = b.intern_iri("https://example.org/x");
-    b.push_quad(a, knows, x, None);
+    let knows = b.intern_iri("https://example.org/vocab#knows").unwrap();
+    let a = b.intern_iri("https://example.org/a").unwrap();
+    let x = b.intern_iri("https://example.org/x").unwrap();
+    b.push_quad(a, knows, x, None).unwrap();
     b.freeze().expect("freeze")
 }
 
 /// `:x :name "in-process"` — the dataset behind [`LOCAL_EP`].
 fn service_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let name = b.intern_iri("https://example.org/vocab#name");
-    let x = b.intern_iri("https://example.org/x");
-    let value = b.intern_literal(RdfLiteral::simple("in-process"));
-    b.push_quad(x, name, value, None);
+    let name = b.intern_iri("https://example.org/vocab#name").unwrap();
+    let x = b.intern_iri("https://example.org/x").unwrap();
+    let value = b.intern_literal(RdfLiteral::simple("in-process")).unwrap();
+    b.push_quad(x, name, value, None).unwrap();
     b.freeze().expect("freeze")
 }
 

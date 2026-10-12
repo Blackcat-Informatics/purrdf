@@ -293,7 +293,7 @@ impl BoundShapes {
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
         disallows: &ConformanceDisallows,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ShapesError> {
         let mut binding = lowered.bind(data.core_view(), &classes);
         binding.set_conformance_disallows(disallows);
         let targets = shapes
@@ -305,7 +305,7 @@ impl BoundShapes {
                     PreparedTargets::for_shape(data, shape, &binding, &classes)
                 }
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, ShapesError>>()?;
         let dispatch = TargetDispatch::invert(&targets);
         Ok(Self {
             lowered,
@@ -409,7 +409,7 @@ impl PreparedTargets {
         shape: &Shape,
         binding: &DatasetBinding,
         classes: &ClassCatalog,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ShapesError> {
         let mut prepared = Self::default();
         for (index, target) in shape.targets.iter().enumerate() {
             match target {
@@ -689,10 +689,10 @@ impl AskTarget {
 /// # Errors
 ///
 /// When the ASK fails to evaluate — an unanswerable target is not an empty one.
-fn target_ask(data: &ShaclData, ask: &str, focus: &FocusNode) -> Result<bool, String> {
+fn target_ask(data: &ShaclData, ask: &str, focus: &FocusNode) -> Result<bool, ShapesError> {
     let term = focus.to_term(data.core_view());
     crate::sparql::eval_target_ask_view(data.sparql_view(), ask, &term)
-        .map_err(|error| format!("sh:target SPARQLTarget sh:ask failed: {error}"))
+        .map_err(|error| error.context("sh:target SPARQLTarget sh:ask failed: "))
 }
 
 /// The source occurrence, rather than supplied substitutions, distinguishes a
@@ -702,7 +702,7 @@ fn source_sparql_target(
     shape: &Term,
     index: usize,
     target: &Target,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, ShapesError> {
     let Target::Sparql {
         select,
         substitutions,
@@ -724,7 +724,7 @@ fn source_sparql_target(
         substitutions,
         invocation,
     )
-    .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))
+    .map_err(|error| error.context("sh:target SPARQLTarget failed: "))
 }
 
 /// The DUAL of [`PreparedTargets`]: which shapes claim a node, rather than which
@@ -1166,7 +1166,7 @@ pub(crate) fn resolve_focus_nodes(
     targets: &[Target],
     binding: &DatasetBinding,
     classes: &ClassCatalog,
-) -> Result<Vec<FocusNode>, String> {
+) -> Result<Vec<FocusNode>, ShapesError> {
     let ds = data.core_view();
     let mut seen_ids: IdSet = IdSet::default();
     let mut seen_foreign: FastSet<Term> = FastSet::default();
@@ -1250,7 +1250,7 @@ trait ShapeReporting: Copy + Sync {
         focus: &FocusNode,
         shapes: &Shapes,
         plan: ShapePlan<'_>,
-    ) -> Result<Vec<Self::Result>, String>;
+    ) -> Result<Vec<Self::Result>, ShapesError>;
 }
 
 #[derive(Clone, Copy)]
@@ -1264,7 +1264,7 @@ impl ShapeReporting for LegacyReporting {
         focus: &FocusNode,
         shapes: &Shapes,
         plan: ShapePlan<'_>,
-    ) -> Result<Vec<Self::Result>, String> {
+    ) -> Result<Vec<Self::Result>, ShapesError> {
         crate::constraints::validate_shape_with_plan_at(
             data,
             focus,
@@ -1285,7 +1285,7 @@ impl ShapeReporting for EvidenceReporting<'_> {
         focus: &FocusNode,
         shapes: &Shapes,
         plan: ShapePlan<'_>,
-    ) -> Result<Vec<Self::Result>, String> {
+    ) -> Result<Vec<Self::Result>, ShapesError> {
         crate::constraints::validate_shape_with_evidence_at(
             data,
             focus,
@@ -1303,7 +1303,7 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
     plan: ShapePlan<'_>,
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
-) -> Result<Vec<R::Result>, String> {
+) -> Result<Vec<R::Result>, ShapesError> {
     // The function bodies, bound against the extension environment in force. Bound
     // ONCE, here, above both the serial and the chunked branch, and installed by
     // `Arc` clone afterwards — never re-bound per branch or per chunk. Two reasons,
@@ -1438,7 +1438,7 @@ fn validate_with_plan_and_focus_filter<F>(
     shapes: &Shapes,
     bound: &BoundShapes,
     include_focus: F,
-) -> Result<ValidationReport, String>
+) -> Result<ValidationReport, ShapesError>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -1458,7 +1458,7 @@ fn validate_results_with_plan_and_focus_filter<R: ShapeReporting, F>(
     shapes: &Shapes,
     bound: &BoundShapes,
     mut include_focus: F,
-) -> Result<Vec<R::Result>, String>
+) -> Result<Vec<R::Result>, ShapesError>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -1536,7 +1536,7 @@ impl CompletePreparedValidator {
                     EvidenceReporting(capture),
                     None::<fn(&Shape, &Term) -> bool>,
                 )
-                .map_err(crate::report::CompleteValidationError::Execution)
+                .map_err(crate::report::CompleteValidationError::execution)
         })
     }
 
@@ -1567,7 +1567,7 @@ impl CompletePreparedValidator {
         self.collect_report(profile, |capture| {
             self.validator
                 .validate_results_using(EvidenceReporting(capture), Some(include_focus))
-                .map_err(crate::report::CompleteValidationError::Execution)
+                .map_err(crate::report::CompleteValidationError::execution)
         })
     }
 
@@ -1839,7 +1839,7 @@ impl PreparedShapes {
     /// assert_eq!(report.results().len(), 1);
     /// assert_eq!(report.results().next().unwrap().source_constraint().unwrap().to_string(),
     ///            "<http://example.org/C>");
-    /// let graph = report.to_graph();
+    /// let graph = report.to_graph()?;
     /// assert!(matches!(graph.root(), purrdf_shapes::term::Term::BlankNode(_)));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -1910,7 +1910,12 @@ impl PreparedShapes {
                 .report_sources_with_profile(self.shapes.validation_options.shacl_profile)?;
         }
         let (data_view, context) = complete_data(data, &self.shapes, project, shapes_graph_iri)
-            .map_err(crate::report::CompleteValidationError::SourceContext)?;
+            .map_err(|error| match error {
+                ShapesError::Invalid(message) => {
+                    crate::report::CompleteValidationError::SourceContext(message)
+                }
+                error => crate::report::CompleteValidationError::Shapes(error),
+            })?;
         let validator = self.bind_admitted(data_view, request)?;
         Ok(CompletePreparedValidator {
             validator,
@@ -2145,7 +2150,7 @@ impl PreparedShapes {
         data: &RdfDataset,
     ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
         self.bind_projected_dataset_request(
-            project_dataset(data).map_err(crate::report::CompleteValidationError::Execution)?,
+            project_dataset(data).map_err(crate::report::CompleteValidationError::Shapes)?,
         )
     }
 
@@ -2578,9 +2583,17 @@ impl PreparedValidator {
             ));
         }
         let records = outcome.map_err(|error| {
-            capture
-                .take_failure()
-                .map_or(error, crate::report::ReportFailure::into_public)
+            let failure = capture.take_failure();
+            // SomeValue can retain a suppressed candidate's semantic cause.
+            // It must not replace a later operational storage refusal.
+            if matches!(
+                error,
+                crate::report::CompleteValidationError::Shapes(ShapesError::Storage(_))
+            ) {
+                error
+            } else {
+                failure.map_or(error, crate::report::ReportFailure::into_public)
+            }
         })?;
         Ok(records)
     }
@@ -2605,11 +2618,11 @@ impl PreparedValidator {
         self.run_request(|| {
             let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
                 self.validate_results_using(LegacyReporting, include_focus)
-                    .map_err(crate::report::CompleteValidationError::Execution)?
+                    .map_err(crate::report::CompleteValidationError::execution)?
             } else {
                 self.collect_records(self.profile(), |capture| {
                     self.validate_results_using(EvidenceReporting(capture), include_focus)
-                        .map_err(crate::report::CompleteValidationError::Execution)
+                        .map_err(crate::report::CompleteValidationError::execution)
                 })?
                 .into_iter()
                 .map(|record| record.value)
@@ -2625,7 +2638,7 @@ impl PreparedValidator {
         &self,
         reporting: R,
         mut include_focus: Option<F>,
-    ) -> Result<Vec<R::Result>, String> {
+    ) -> Result<Vec<R::Result>, ShapesError> {
         let mut all_results = Vec::new();
         for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
@@ -3703,7 +3716,7 @@ fn validate_linked_with_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
     include_focus: F,
-) -> Result<ValidationReport, String>
+) -> Result<ValidationReport, ShapesError>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -3726,7 +3739,7 @@ where
 pub(crate) fn validate_dataset_as_document(
     data: &RdfDataset,
     shapes: &Shapes,
-) -> Result<ValidationReport, String> {
+) -> Result<ValidationReport, ShapesError> {
     let projected = project_dataset(data)?;
     let data = build_projected_data(projected, shapes, None)?;
     validate_linked_with_focus_filter(&data, shapes, |_, _| true)
@@ -3778,7 +3791,7 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
 fn with_shapes_graph_subclasses(
     data: &ShaclData,
     shapes: &Shapes,
-) -> Result<Option<ShaclData>, String> {
+) -> Result<Option<ShaclData>, ShapesError> {
     if !shapes.validation_options.subclass_of_in_shapes_graph {
         return Ok(None);
     }
@@ -3971,7 +3984,7 @@ fn validate_data_with_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
     mut include_focus: F,
-) -> Result<ValidationReport, String>
+) -> Result<ValidationReport, ShapesError>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -4095,7 +4108,7 @@ fn complete_data(
     shapes: &Shapes,
     project: bool,
     override_graph: Option<&str>,
-) -> Result<(ShaclData, crate::report::ReportSourceContext), String> {
+) -> Result<(ShaclData, crate::report::ReportSourceContext), ShapesError> {
     use ::purrdf_rdf::ir::{
         CompositeDatasetView, CompositeSource, GraphPlacement, ScopeBinding, ViewLimits,
     };
@@ -4105,9 +4118,10 @@ fn complete_data(
         crate::report::ReportSourceContext::new(Arc::clone(&data), Arc::clone(shapes.dataset()));
     let mut reservations = RdfDatasetBuilder::new();
     for index in 0..shapes.dataset().term_count() {
-        let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"));
+        let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"))
+            .expect("stored term index is representable");
         if let TermRef::Blank { label, scope } = shapes.dataset().resolve_term(id) {
-            reservations.intern_blank(label, scope);
+            reservations.intern_blank(label, scope)?;
             context.record_blank(scope.qualify_label(label).into_owned(), true, label, scope);
         }
     }
@@ -4119,7 +4133,8 @@ fn complete_data(
         if !context.sources_share_identity() {
             for index in 0..data.term_count() {
                 let id =
-                    TermId::from_index(u32::try_from(index).expect("native term count fits u32"));
+                    TermId::from_index(u32::try_from(index).expect("native term count fits u32"))
+                        .expect("stored term index is representable");
                 if let TermRef::Blank { label, scope } = data.resolve_term(id) {
                     context.record_blank(
                         scope.qualify_label(label).into_owned(),
@@ -4144,7 +4159,7 @@ fn complete_data(
         )?;
         return Ok((ShaclData::from_views(core, sparql, graph), context));
     }
-    let reservations = reservations.freeze().map_err(|error| error.to_string())?;
+    let reservations = reservations.freeze()?;
     let sources = || {
         vec![
             CompositeSource::new(Arc::clone(&reservations))
@@ -4157,7 +4172,8 @@ fn complete_data(
             .map_err(|error| error.to_string())?,
     );
     for index in 0..data.term_count() {
-        let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"));
+        let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"))
+            .expect("stored term index is representable");
         if let TermRef::Blank { label, scope } = data.resolve_term(id) {
             let TermValue::Blank {
                 label: mapped,
@@ -4271,7 +4287,7 @@ pub fn validate_projected_dataset_with_shapes_graph(
 /// Build a SHACL-projection dataset from the source [`RdfDataset`], flattening
 /// every quad into the default graph and materializing reifier bindings as
 /// `rdf:reifies` triples and statement annotations as plain triples.
-pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
+pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, ShapesError> {
     use ::purrdf_rdf::RdfDatasetBuilder;
 
     let mut builder = RdfDatasetBuilder::new();
@@ -4281,14 +4297,16 @@ pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     // graph name.
     for mut quad in ::purrdf_rdf::flat_rdf_quads(data) {
         quad.graph_name = None;
-        builder.push_owned_quad(&quad);
+        builder.push_owned_quad(&quad)?;
     }
 
-    builder.freeze().map_err(|e| e.to_string())
+    builder.freeze().map_err(ShapesError::from)
 }
 
 #[cfg(test)]
-pub(crate) fn shacl_dataset_from_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
+pub(crate) fn shacl_dataset_from_dataset(
+    data: &RdfDataset,
+) -> Result<Arc<RdfDataset>, ShapesError> {
     project_dataset(data)
 }
 
@@ -4795,20 +4813,34 @@ mod tests {
         for seed in 0..96_u64 {
             let mut rng = purrdf_testkit::rng::SplitMix64::new(0x5C1A_55B1_A2C0_0000 ^ seed);
             let mut builder = RdfDatasetBuilder::new();
-            let sub_class_of = builder.intern_iri(crate::model::rdfs::SUB_CLASS_OF);
-            let graph_name = builder.intern_iri("http://example.org/graph");
+            let sub_class_of = builder
+                .intern_iri(crate::model::rdfs::SUB_CLASS_OF)
+                .unwrap();
+            let graph_name = builder.intern_iri("http://example.org/graph").unwrap();
             let iri_count = 1 + rng.below_usize(12);
             let blank_count = rng.below_usize(24);
             let mut nodes: Vec<TermId> = (0..iri_count)
-                .map(|index| builder.intern_iri(&format!("http://example.org/C{index}")))
+                .map(|index| {
+                    builder
+                        .intern_iri(&format!("http://example.org/C{index}"))
+                        .unwrap()
+                })
                 .collect();
             let blanks: Vec<TermId> = (0..blank_count)
-                .map(|index| builder.intern_blank(&format!("b{index}"), BlankScope::DEFAULT))
+                .map(|index| {
+                    builder
+                        .intern_blank(&format!("b{index}"), BlankScope::DEFAULT)
+                        .unwrap()
+                })
                 .collect();
             nodes.extend_from_slice(&blanks);
-            let literal = builder.intern_literal(RdfLiteral::simple("not a class"));
+            let literal = builder
+                .intern_literal(RdfLiteral::simple("not a class"))
+                .unwrap();
             let edge = |builder: &mut RdfDatasetBuilder, s: TermId, o: TermId, named: bool| {
-                builder.push_quad(s, sub_class_of, o, named.then_some(graph_name));
+                builder
+                    .push_quad(s, sub_class_of, o, named.then_some(graph_name))
+                    .unwrap();
             };
             for _ in 0..rng.below_usize(3 * nodes.len() + 1) {
                 let s = nodes[rng.below_usize(nodes.len())];
@@ -4898,6 +4930,28 @@ mod tests {
         (shapes, validator)
     }
 
+    #[test]
+    fn report_capture_cannot_replace_storage_with_a_suppressed_semantic_failure() {
+        use crate::report::CompleteValidationError;
+        use purrdf_lex::allocation::StorageError;
+
+        let (_, validator) = bind_target_fixture("", "");
+        let capacity = purrdf_datalog::id::TermId::from_index(u64::MAX)
+            .expect_err("the terminal term slot cannot be minted");
+        let error = validator
+            .collect_records(crate::profile::ShaclProfile::LEGACY, |capture| {
+                capture
+                    .semantic_failure(&Term::NamedNode(NamedNode::new_unchecked(TARGET_NS)), None);
+                Err(ShapesError::Storage(StorageError::Capacity(capacity)).into())
+            })
+            .expect_err("storage refusal must stop report publication");
+        assert!(matches!(
+            error,
+            CompleteValidationError::Shapes(ShapesError::Storage(StorageError::Capacity(actual)))
+                if actual == capacity
+        ));
+    }
+
     /// EVERY node this dataset can name, plus terms it never interned.
     ///
     /// A target set is not only about nodes the graph mentions — `sh:targetNode`
@@ -4907,9 +4961,10 @@ mod tests {
         let view = validator.data.core_view();
         let mut candidates: Vec<FocusNode> = (0..view.term_count())
             .map(|index| {
-                FocusNode::Interned(TermId::from_index(
-                    u32::try_from(index).expect("fixture fits in u32"),
-                ))
+                FocusNode::Interned(
+                    TermId::from_index(u32::try_from(index).expect("fixture fits in u32"))
+                        .expect("stored term index is representable"),
+                )
             })
             .collect();
         for local in ["neverInterned", "neverInternedAndNotATarget"] {
@@ -5161,14 +5216,18 @@ mod tests {
             let data = project_dataset(&data).unwrap();
             let binding = prepared.bind_projected_dataset(Arc::clone(&data)).unwrap();
             assert!(Arc::ptr_eq(&prepared.classes, &binding.bound.classes));
-            assert!(Arc::ptr_eq(&data, &binding.data.core_arc()));
+            assert!(Arc::ptr_eq(
+                &data,
+                &binding.data.core_arc().expect("bound native data")
+            ));
             let report = binding.validate().unwrap();
             assert_eq!(report.results.len(), *expected, "{source}");
             assert_eq!(
-                report.to_ntriples(),
+                report.to_ntriples().expect("authored report emits"),
                 validate_projected_dataset(data, &shapes)
                     .unwrap()
-                    .to_ntriples(),
+                    .to_ntriples()
+                    .expect("authored report emits"),
                 "independent binding must equal full validation: {source}",
             );
         });
@@ -5343,9 +5402,9 @@ mod tests {
             "http://example.org/ns#b",
         ]
         .into_iter()
-        .map(|value| builder.intern_iri(value))
+        .map(|value| builder.intern_iri(value).unwrap())
         .collect();
-        builder.push_quad(ids[0], ids[1], ids[2], None);
+        builder.push_quad(ids[0], ids[1], ids[2], None).unwrap();
         let dataset = builder.freeze().expect("valid test dataset");
 
         let shapes_ttl = format!(
@@ -5656,8 +5715,8 @@ mod tests {
 
         // Also verify to_ntriples() is identical
         assert_eq!(
-            report1.to_ntriples(),
-            report2.to_ntriples(),
+            report1.to_ntriples().expect("authored report emits"),
+            report2.to_ntriples().expect("authored report emits"),
             "N-Triples output must be identical across runs"
         );
     }
@@ -5763,7 +5822,9 @@ mod tests {
             let data_nt: String = ordered.concat();
             let data = load_data_nt(&data_nt);
             let shapes = load_shapes_ttl(&shapes_ttl);
-            validate(&data, &shapes).to_ntriples()
+            validate(&data, &shapes)
+                .to_ntriples()
+                .expect("authored report emits")
         };
 
         let forward = render(&lines);
@@ -5942,7 +6003,7 @@ mod tests {
                 1,
                 "both targets resolve the same derived instance"
             );
-            let serialized = report.to_ntriples();
+            let serialized = report.to_ntriples().expect("authored report emits");
             if let Some(expected) = &previous {
                 assert_eq!(&serialized, expected);
             }
@@ -5979,7 +6040,10 @@ mod tests {
         let GovernedValidation::Complete { report, .. } = outcome else {
             panic!("unbounded validation must complete");
         };
-        assert_eq!(report.to_ntriples(), ordinary.to_ntriples());
+        assert_eq!(
+            report.to_ntriples().expect("authored report emits"),
+            ordinary.to_ntriples().expect("authored report emits")
+        );
         assert_eq!(thread_index_builds(), 1);
     }
 
@@ -6069,13 +6133,19 @@ mod tests {
             .validate_focus_nodes(&[alice.clone(), alice])
             .expect("bounded validation must succeed");
         assert_eq!(bounded.results.len(), 5, "alice matches every target kind");
-        assert_eq!(bounded.to_ntriples(), expected_bounded.to_ntriples());
+        assert_eq!(
+            bounded.to_ntriples().expect("authored report emits"),
+            expected_bounded
+                .to_ntriples()
+                .expect("authored report emits")
+        );
         assert_eq!(
             prepared
                 .validate()
                 .expect("prepared whole validation")
-                .to_ntriples(),
-            expected_whole.to_ntriples()
+                .to_ntriples()
+                .expect("authored report emits"),
+            expected_whole.to_ntriples().expect("authored report emits")
         );
 
         let alice_id = prepared
@@ -6085,8 +6155,11 @@ mod tests {
             prepared
                 .validate_focus_node_ids(&[alice_id, alice_id])
                 .expect("id-native bounded validation")
-                .to_ntriples(),
-            expected_bounded.to_ntriples()
+                .to_ntriples()
+                .expect("authored report emits"),
+            expected_bounded
+                .to_ntriples()
+                .expect("authored report emits")
         );
         assert!(
             prepared
@@ -6101,7 +6174,8 @@ mod tests {
         // what keeps it honest.
         let invalid = FocusId::new(
             prepared.data.identity(),
-            TermId::from_index(u32::try_from(projected.term_count()).expect("small test term")),
+            TermId::from_index(u32::try_from(projected.term_count()).expect("small test term"))
+                .expect("stored term index is representable"),
         );
         assert!(
             prepared.validate_focus_node_ids(&[invalid]).is_err(),
@@ -6170,14 +6244,30 @@ mod tests {
             .expect("prepared validator");
         let first = prepared.validate().expect("first prepared validation");
         let second = prepared.validate().expect("second prepared validation");
-        assert_eq!(text_report.to_ntriples(), projected_report.to_ntriples());
-        assert_eq!(text_report.to_ntriples(), first.to_ntriples());
-        assert_eq!(first.to_ntriples(), second.to_ntriples());
+        assert_eq!(
+            text_report.to_ntriples().expect("authored report emits"),
+            projected_report
+                .to_ntriples()
+                .expect("authored report emits")
+        );
+        assert_eq!(
+            text_report.to_ntriples().expect("authored report emits"),
+            first.to_ntriples().expect("authored report emits")
+        );
+        assert_eq!(
+            first.to_ntriples().expect("authored report emits"),
+            second.to_ntriples().expect("authored report emits")
+        );
 
         let reversed = data_nt.lines().rev().collect::<Vec<_>>().join("\n");
         let reversed_report =
             validate_graphs(&reversed, &shapes_ttl, None).expect("permuted text validation");
-        assert_eq!(text_report.to_ntriples(), reversed_report.to_ntriples());
+        assert_eq!(
+            text_report.to_ntriples().expect("authored report emits"),
+            reversed_report
+                .to_ntriples()
+                .expect("authored report emits")
+        );
     }
 
     #[test]
@@ -6352,7 +6442,9 @@ mod tests {
                 .expect("test pool must build")
                 .install(|| {
                     let _guard = crate::parallel::force_scheduler_for_test(parallel, chunk_size);
-                    validate(&data, &shapes).to_ntriples()
+                    validate(&data, &shapes)
+                        .to_ntriples()
+                        .expect("authored report emits")
                 })
         };
 
@@ -7463,6 +7555,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("{case_name}: validation failed: {error}"))
                 .to_ntriples()
+                .expect("authored report emits")
             };
 
             let expected = {
@@ -7512,11 +7605,15 @@ mod tests {
     /// builds.
     fn focus_dataset_interning(locals: &[&str]) -> Arc<RdfDataset> {
         let mut builder = ::purrdf_rdf::RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let class = builder.intern_iri("http://example.org/ns#Focus");
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let class = builder.intern_iri("http://example.org/ns#Focus").unwrap();
         for local in locals {
-            let node = builder.intern_iri(&format!("http://example.org/ns#{local}"));
-            builder.push_quad(node, rdf_type, class, None);
+            let node = builder
+                .intern_iri(&format!("http://example.org/ns#{local}"))
+                .unwrap();
+            builder.push_quad(node, rdf_type, class, None).unwrap();
         }
         builder.freeze().expect("the fixture dataset freezes")
     }
@@ -7525,7 +7622,10 @@ mod tests {
     /// order.
     fn anti_canonical_focus_ids(data: &ShaclData) -> Vec<TermId> {
         (0..data.core_view().term_count())
-            .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
+            .map(|index| {
+                TermId::from_index(u32::try_from(index).expect("fixture fits in u32"))
+                    .expect("stored term index is representable")
+            })
             .filter(|id| {
                 matches!(
                     data.core_view().resolve_term(*id),
@@ -7825,11 +7925,12 @@ mod tests {
                  a real validation rather than an empty pass"
             );
             assert_eq!(
-                accepted.to_ntriples(),
+                accepted.to_ntriples().expect("authored report emits"),
                 validator
                     .validate_focus_nodes(&terms)
                     .unwrap_or_else(|error| panic!("{label}: the term-keyed route: {error}"))
-                    .to_ntriples(),
+                    .to_ntriples()
+                    .expect("authored report emits"),
                 "{label}: the id-native route must still produce the report it produced before, \
                  content and ORDER alike"
             );
@@ -7965,11 +8066,15 @@ mod tests {
             .affected_focus_node_ids(&snapshot)
             .expect("the expansion succeeds");
         assert_eq!(
-            validation.report.to_ntriples(),
+            validation
+                .report
+                .to_ntriples()
+                .expect("authored report emits"),
             validator
                 .validate_focus_node_ids(expansion.ids().expect("bounded"))
                 .expect("the hand-driven loop validates")
-                .to_ntriples(),
+                .to_ntriples()
+                .expect("authored report emits"),
             "the one call and the hand-driven loop must reach one report, content and ORDER alike",
         );
 
@@ -7984,11 +8089,15 @@ mod tests {
         );
         assert!(validation.scope.reason().is_some_and(|why| !why.is_empty()));
         assert_eq!(
-            validation.report.to_ntriples(),
+            validation
+                .report
+                .to_ntriples()
+                .expect("authored report emits"),
             validator
                 .validate()
                 .expect("the full validation succeeds")
-                .to_ntriples(),
+                .to_ntriples()
+                .expect("authored report emits"),
             "the fallback must BE the full validation, not a short answer wearing its name",
         );
     }
@@ -8017,7 +8126,13 @@ mod tests {
             let GovernedValidation::Complete { report, .. } = governed.outcome else {
                 panic!("core constraint evaluation charges no evaluator budget, so this completes");
             };
-            assert_eq!(report.to_ntriples(), ungoverned.report.to_ntriples());
+            assert_eq!(
+                report.to_ntriples().expect("authored report emits"),
+                ungoverned
+                    .report
+                    .to_ntriples()
+                    .expect("authored report emits")
+            );
         }
 
         // The fallback arm is where the budget bites, because it is the arm that

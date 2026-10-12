@@ -47,10 +47,12 @@ fn local_dataset(n: usize) -> Arc<RdfDataset> {
 /// One endpoint graph: `:s :name "ep{i}"`.
 fn endpoint_dataset(i: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let name = b.intern_iri("http://ex/name");
-    let s = b.intern_iri("http://ex/s");
-    let lit = b.intern_literal(RdfLiteral::simple(format!("ep{i}")));
-    b.push_quad(s, name, lit, None);
+    let name = b.intern_iri("http://ex/name").unwrap();
+    let s = b.intern_iri("http://ex/s").unwrap();
+    let lit = b
+        .intern_literal(RdfLiteral::simple(format!("ep{i}")))
+        .unwrap();
+    b.push_quad(s, name, lit, None).unwrap();
     b.freeze().expect("freeze endpoint")
 }
 

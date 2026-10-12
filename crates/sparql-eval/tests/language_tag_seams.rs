@@ -230,13 +230,17 @@ fn the_seam_verdict_is_the_grammars_verdict() {
 /// constraint whose loss is VISIBLE as extra rows rather than as a missing one.
 fn two_tagged_objects() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s1 = b.intern_iri(&format!("{EX}s1"));
-    let s2 = b.intern_iri(&format!("{EX}s2"));
-    let p = b.intern_iri(&format!("{EX}p"));
-    let purr = b.intern_literal(RdfLiteral::language_tagged("purr", "en"));
-    let meow = b.intern_literal(RdfLiteral::language_tagged("meow", "en"));
-    b.push_quad(s1, p, purr, None);
-    b.push_quad(s2, p, meow, None);
+    let s1 = b.intern_iri(&format!("{EX}s1")).unwrap();
+    let s2 = b.intern_iri(&format!("{EX}s2")).unwrap();
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let purr = b
+        .intern_literal(RdfLiteral::language_tagged("purr", "en"))
+        .unwrap();
+    let meow = b
+        .intern_literal(RdfLiteral::language_tagged("meow", "en"))
+        .unwrap();
+    b.push_quad(s1, p, purr, None).unwrap();
+    b.push_quad(s2, p, meow, None).unwrap();
     b.freeze().expect("freeze the fixture")
 }
 

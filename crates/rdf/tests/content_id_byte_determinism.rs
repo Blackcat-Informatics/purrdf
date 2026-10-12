@@ -60,19 +60,27 @@ struct CaIds {
 /// - an ordinary `example.org` quad, and
 /// - a derivation annotation `(ca_subject, wasDerivedFrom, ca_object)`.
 fn populate(builder: &mut RdfDatasetBuilder) -> CaIds {
-    let ca_subject = builder.intern_iri(&blake3_iri(0xaa));
-    let ca_object = builder.intern_iri(&blake3_iri(0xbb));
-    let plain_subject = builder.intern_iri("http://example.org/thing");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let derived_from = builder.intern_iri(DERIVED_FROM);
-    let label = builder.intern_literal(RdfLiteral::simple("content-addressed"));
+    let ca_subject = builder.intern_iri(&blake3_iri(0xaa)).unwrap();
+    let ca_object = builder.intern_iri(&blake3_iri(0xbb)).unwrap();
+    let plain_subject = builder.intern_iri("http://example.org/thing").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let derived_from = builder.intern_iri(DERIVED_FROM).unwrap();
+    let label = builder
+        .intern_literal(RdfLiteral::simple("content-addressed"))
+        .unwrap();
 
     // A content-addressed IRI as the subject of an asserted quad.
-    builder.push_quad(ca_subject, predicate, label, None);
+    builder
+        .push_quad(ca_subject, predicate, label, None)
+        .unwrap();
     // A content-addressed IRI as the object of an asserted quad.
-    builder.push_quad(plain_subject, predicate, ca_object, None);
+    builder
+        .push_quad(plain_subject, predicate, ca_object, None)
+        .unwrap();
     // A derivation annotation linking the two content-addressed terms.
-    builder.push_annotation(ca_subject, derived_from, ca_object);
+    builder
+        .push_annotation(ca_subject, derived_from, ca_object)
+        .unwrap();
 
     CaIds {
         subject: ca_subject,
@@ -256,13 +264,13 @@ fn ex(local: &str) -> String {
 #[test]
 fn differential_default_and_named_graph_worlds() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    b.push_quad(s, p, o, None);
-    let g = b.intern_iri(&ex("g"));
-    let s2 = b.intern_iri(&ex("s2"));
-    b.push_quad(s2, p, o, Some(g));
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    let g = b.intern_iri(&ex("g")).unwrap();
+    let s2 = b.intern_iri(&ex("s2")).unwrap();
+    b.push_quad(s2, p, o, Some(g)).unwrap();
     let ds = b.freeze().expect("valid dataset");
     assert_flat_differential(&ds, "default+named graph worlds");
 }
@@ -271,12 +279,12 @@ fn differential_default_and_named_graph_worlds() {
 #[test]
 fn differential_blank_coreference_across_graphs() {
     let mut b = RdfDatasetBuilder::new();
-    let shared = b.intern_blank("shared", BlankScope::DEFAULT);
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    b.push_quad(shared, p, o, None);
-    let g = b.intern_iri(&ex("g"));
-    b.push_quad(shared, p, o, Some(g));
+    let shared = b.intern_blank("shared", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    b.push_quad(shared, p, o, None).unwrap();
+    let g = b.intern_iri(&ex("g")).unwrap();
+    b.push_quad(shared, p, o, Some(g)).unwrap();
     let ds = b.freeze().expect("valid dataset");
     assert_flat_differential(&ds, "blank co-reference across graphs");
 }
@@ -292,10 +300,10 @@ fn differential_blank_label_collision_across_scopes() {
     /// this test produces two DIFFERENT blanks sharing one label across scopes.
     fn one_labeled(local_p: &str) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let n = b.intern_blank("n", BlankScope::DEFAULT);
-        let p = b.intern_iri(&ex(local_p));
-        let o = b.intern_iri(&ex("o"));
-        b.push_quad(n, p, o, None);
+        let n = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+        let p = b.intern_iri(&ex(local_p)).unwrap();
+        let o = b.intern_iri(&ex("o")).unwrap();
+        b.push_quad(n, p, o, None).unwrap();
         b.freeze().expect("valid dataset")
     }
     let a = one_labeled("p1");
@@ -308,16 +316,20 @@ fn differential_blank_label_collision_across_scopes() {
 #[test]
 fn differential_language_and_direction_literals() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p1 = b.intern_iri(&ex("p1"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("hello", "en"));
-    b.push_quad(s, p1, tagged, None);
-    let p2 = b.intern_iri(&ex("p2"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    b.push_quad(s, p2, directional, None);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p1 = b.intern_iri(&ex("p1")).unwrap();
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("hello", "en"))
+        .unwrap();
+    b.push_quad(s, p1, tagged, None).unwrap();
+    let p2 = b.intern_iri(&ex("p2")).unwrap();
+    let directional = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    b.push_quad(s, p2, directional, None).unwrap();
     let ds = b.freeze().expect("valid dataset");
     assert_flat_differential(&ds, "language + direction literals");
 }
@@ -326,19 +338,19 @@ fn differential_language_and_direction_literals() {
 #[test]
 fn differential_deeply_quoted_triple_terms() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let t1 = b.intern_triple(s, p, o);
-    let s2 = b.intern_iri(&ex("s2"));
-    let p2 = b.intern_iri(&ex("p2"));
-    let t2 = b.intern_triple(s2, p2, t1);
-    let s3 = b.intern_iri(&ex("s3"));
-    let p3 = b.intern_iri(&ex("p3"));
-    let t3 = b.intern_triple(s3, p3, t2);
-    let top_s = b.intern_iri(&ex("top"));
-    let top_p = b.intern_iri(&ex("holds"));
-    b.push_quad(top_s, top_p, t3, None);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let t1 = b.intern_triple(s, p, o).unwrap();
+    let s2 = b.intern_iri(&ex("s2")).unwrap();
+    let p2 = b.intern_iri(&ex("p2")).unwrap();
+    let t2 = b.intern_triple(s2, p2, t1).unwrap();
+    let s3 = b.intern_iri(&ex("s3")).unwrap();
+    let p3 = b.intern_iri(&ex("p3")).unwrap();
+    let t3 = b.intern_triple(s3, p3, t2).unwrap();
+    let top_s = b.intern_iri(&ex("top")).unwrap();
+    let top_p = b.intern_iri(&ex("holds")).unwrap();
+    b.push_quad(top_s, top_p, t3, None).unwrap();
     let ds = b.freeze().expect("valid dataset");
     assert_flat_differential(&ds, "deeply quoted triple terms");
 }
@@ -347,12 +359,12 @@ fn differential_deeply_quoted_triple_terms() {
 #[test]
 fn differential_reifiers() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let t = b.intern_triple(s, p, o);
-    let r = b.intern_blank("r", BlankScope::DEFAULT);
-    b.push_reifier(r, t);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let t = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+    b.push_reifier(r, t).unwrap();
     let ds = b.freeze().expect("valid dataset");
     assert_flat_differential(&ds, "reifiers");
 }
@@ -361,15 +373,15 @@ fn differential_reifiers() {
 #[test]
 fn differential_annotations() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let t = b.intern_triple(s, p, o);
-    let r = b.intern_blank("r", BlankScope::DEFAULT);
-    b.push_reifier(r, t);
-    let conf = b.intern_iri(&ex("confidence"));
-    let high = b.intern_iri(&ex("high"));
-    b.push_annotation(r, conf, high);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let t = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+    b.push_reifier(r, t).unwrap();
+    let conf = b.intern_iri(&ex("confidence")).unwrap();
+    let high = b.intern_iri(&ex("high")).unwrap();
+    b.push_annotation(r, conf, high).unwrap();
     let ds = b.freeze().expect("valid dataset");
     assert_flat_differential(&ds, "annotations");
 }
@@ -381,15 +393,15 @@ fn differential_annotations() {
 #[test]
 fn differential_reifier_and_annotation_case_under_both_hash_algorithms() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let t = b.intern_triple(s, p, o);
-    let r = b.intern_blank("r", BlankScope::DEFAULT);
-    b.push_reifier(r, t);
-    let conf = b.intern_iri(&ex("confidence"));
-    let high = b.intern_iri(&ex("high"));
-    b.push_annotation(r, conf, high);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let t = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+    b.push_reifier(r, t).unwrap();
+    let conf = b.intern_iri(&ex("confidence")).unwrap();
+    let high = b.intern_iri(&ex("high")).unwrap();
+    b.push_annotation(r, conf, high).unwrap();
     let ds = b.freeze().expect("valid dataset");
 
     let sha256_actual = try_canonicalize_flat_view(&*ds, CanonHash::Sha256)
@@ -444,14 +456,14 @@ fn differential_row_spelled_natively_and_as_base_quad_in_both_graph_placements()
 
     // Default graph.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let t = b.intern_triple(s, p, o);
-    let r = b.intern_blank("r", BlankScope::DEFAULT);
-    b.push_reifier(r, t);
-    let reifies = b.intern_iri(REIFIES);
-    b.push_quad(r, reifies, t, None);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let t = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+    b.push_reifier(r, t).unwrap();
+    let reifies = b.intern_iri(REIFIES).unwrap();
+    b.push_quad(r, reifies, t, None).unwrap();
     let default_ds = b.freeze().expect("valid dataset");
     assert_flat_differential(
         &default_ds,
@@ -460,15 +472,15 @@ fn differential_row_spelled_natively_and_as_base_quad_in_both_graph_placements()
 
     // Named graph.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let t = b.intern_triple(s, p, o);
-    let r = b.intern_blank("r", BlankScope::DEFAULT);
-    let g = b.intern_iri(&ex("g"));
-    b.push_reifier_in_graph(r, t, Some(g));
-    let reifies = b.intern_iri(REIFIES);
-    b.push_quad(r, reifies, t, Some(g));
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let t = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+    let g = b.intern_iri(&ex("g")).unwrap();
+    b.push_reifier_in_graph(r, t, Some(g)).unwrap();
+    let reifies = b.intern_iri(REIFIES).unwrap();
+    b.push_quad(r, reifies, t, Some(g)).unwrap();
     let named_ds = b.freeze().expect("valid dataset");
     assert_flat_differential(
         &named_ds,
@@ -484,27 +496,27 @@ fn differential_row_spelled_natively_and_as_base_quad_in_both_graph_placements()
 /// statement-layer content in more than one scope.
 fn statement_layer_fixture_both_graphs() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let conf = b.intern_iri(&ex("confidence"));
-    let high = b.intern_iri(&ex("high"));
+    let conf = b.intern_iri(&ex("confidence")).unwrap();
+    let high = b.intern_iri(&ex("high")).unwrap();
 
-    let s1 = b.intern_iri(&ex("s1"));
-    let p1 = b.intern_iri(&ex("p1"));
-    let o1 = b.intern_iri(&ex("o1"));
-    b.push_quad(s1, p1, o1, None);
-    let t1 = b.intern_triple(s1, p1, o1);
-    let r1 = b.intern_blank("r1", BlankScope::DEFAULT);
-    b.push_reifier(r1, t1);
-    b.push_annotation(r1, conf, high);
+    let s1 = b.intern_iri(&ex("s1")).unwrap();
+    let p1 = b.intern_iri(&ex("p1")).unwrap();
+    let o1 = b.intern_iri(&ex("o1")).unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
+    let t1 = b.intern_triple(s1, p1, o1).unwrap();
+    let r1 = b.intern_blank("r1", BlankScope::DEFAULT).unwrap();
+    b.push_reifier(r1, t1).unwrap();
+    b.push_annotation(r1, conf, high).unwrap();
 
-    let g = b.intern_iri(&ex("g"));
-    let s2 = b.intern_iri(&ex("s2"));
-    let p2 = b.intern_iri(&ex("p2"));
-    let o2 = b.intern_iri(&ex("o2"));
-    b.push_quad(s2, p2, o2, Some(g));
-    let t2 = b.intern_triple(s2, p2, o2);
-    let r2 = b.intern_blank("r2", BlankScope::DEFAULT);
-    b.push_reifier_in_graph(r2, t2, Some(g));
-    b.push_annotation_in_graph(r2, conf, high, Some(g));
+    let g = b.intern_iri(&ex("g")).unwrap();
+    let s2 = b.intern_iri(&ex("s2")).unwrap();
+    let p2 = b.intern_iri(&ex("p2")).unwrap();
+    let o2 = b.intern_iri(&ex("o2")).unwrap();
+    b.push_quad(s2, p2, o2, Some(g)).unwrap();
+    let t2 = b.intern_triple(s2, p2, o2).unwrap();
+    let r2 = b.intern_blank("r2", BlankScope::DEFAULT).unwrap();
+    b.push_reifier_in_graph(r2, t2, Some(g)).unwrap();
+    b.push_annotation_in_graph(r2, conf, high, Some(g)).unwrap();
 
     b.freeze().expect("valid dataset")
 }
@@ -514,10 +526,10 @@ fn statement_layer_fixture_both_graphs() -> Arc<RdfDataset> {
 #[test]
 fn flat_and_overlay_agree_without_a_statement_layer_and_diverge_with_one() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    b.push_quad(s, p, o, None);
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let plain = b.freeze().expect("valid dataset");
     let flat_bytes = try_canonicalize_flat_view(&*plain, CanonHash::Sha256)
         .expect("admissible")
@@ -682,37 +694,39 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// assertion. This fixture gives it one.
 fn statement_layer_fixture_both_graphs_with_a_spelled_row() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let conf = b.intern_iri(&ex("confidence"));
-    let high = b.intern_iri(&ex("high"));
+    let conf = b.intern_iri(&ex("confidence")).unwrap();
+    let high = b.intern_iri(&ex("high")).unwrap();
 
-    let s1 = b.intern_iri(&ex("s1"));
-    let p1 = b.intern_iri(&ex("p1"));
-    let o1 = b.intern_iri(&ex("o1"));
-    b.push_quad(s1, p1, o1, None);
-    let t1 = b.intern_triple(s1, p1, o1);
-    let r1 = b.intern_blank("r1", BlankScope::DEFAULT);
-    b.push_reifier(r1, t1);
-    b.push_annotation(r1, conf, high);
+    let s1 = b.intern_iri(&ex("s1")).unwrap();
+    let p1 = b.intern_iri(&ex("p1")).unwrap();
+    let o1 = b.intern_iri(&ex("o1")).unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
+    let t1 = b.intern_triple(s1, p1, o1).unwrap();
+    let r1 = b.intern_blank("r1", BlankScope::DEFAULT).unwrap();
+    b.push_reifier(r1, t1).unwrap();
+    b.push_annotation(r1, conf, high).unwrap();
 
-    let g = b.intern_iri(&ex("g"));
-    let s2 = b.intern_iri(&ex("s2"));
-    let p2 = b.intern_iri(&ex("p2"));
-    let o2 = b.intern_iri(&ex("o2"));
-    b.push_quad(s2, p2, o2, Some(g));
-    let t2 = b.intern_triple(s2, p2, o2);
-    let r2 = b.intern_blank("r2", BlankScope::DEFAULT);
-    b.push_reifier_in_graph(r2, t2, Some(g));
-    b.push_annotation_in_graph(r2, conf, high, Some(g));
+    let g = b.intern_iri(&ex("g")).unwrap();
+    let s2 = b.intern_iri(&ex("s2")).unwrap();
+    let p2 = b.intern_iri(&ex("p2")).unwrap();
+    let o2 = b.intern_iri(&ex("o2")).unwrap();
+    b.push_quad(s2, p2, o2, Some(g)).unwrap();
+    let t2 = b.intern_triple(s2, p2, o2).unwrap();
+    let r2 = b.intern_blank("r2", BlankScope::DEFAULT).unwrap();
+    b.push_reifier_in_graph(r2, t2, Some(g)).unwrap();
+    b.push_annotation_in_graph(r2, conf, high, Some(g)).unwrap();
 
     // The third row: NO native reifier of its own — it exists ONLY as a base quad
     // spelling the overlay's sentinel shape.
-    let s3 = b.intern_iri(&ex("s3"));
-    let p3 = b.intern_iri(&ex("p3"));
-    let o3 = b.intern_iri(&ex("o3"));
-    let t3 = b.intern_triple(s3, p3, o3);
-    let r3 = b.intern_iri(&ex("r3"));
-    let reifies_sentinel = b.intern_iri(&format!("{RESERVED_NAMESPACE}reifies"));
-    b.push_quad(r3, reifies_sentinel, t3, None);
+    let s3 = b.intern_iri(&ex("s3")).unwrap();
+    let p3 = b.intern_iri(&ex("p3")).unwrap();
+    let o3 = b.intern_iri(&ex("o3")).unwrap();
+    let t3 = b.intern_triple(s3, p3, o3).unwrap();
+    let r3 = b.intern_iri(&ex("r3")).unwrap();
+    let reifies_sentinel = b
+        .intern_iri(&format!("{RESERVED_NAMESPACE}reifies"))
+        .unwrap();
+    b.push_quad(r3, reifies_sentinel, t3, None).unwrap();
 
     b.freeze().expect("valid dataset")
 }
@@ -788,11 +802,11 @@ fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
 fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused() {
     // Valid neighbour: `urn:purrdf:other:…`, NOT inside `urn:purrdf:rdfc:`.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
+    let s = b.intern_iri(&ex("s")).unwrap();
     let neighbour = "urn:purrdf:other:annotation";
-    let p = b.intern_iri(neighbour);
-    let o = b.intern_iri(&ex("o"));
-    b.push_quad(s, p, o, None);
+    let p = b.intern_iri(neighbour).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let admitted_ds = b.freeze().expect("valid dataset");
     let bytes = try_canonicalize_flat_view(&*admitted_ds, CanonHash::Sha256)
         .expect("an IRI adjacent to, but outside, the reserved namespace must be admitted")
@@ -806,11 +820,11 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     // The reserved namespace itself: refused, TYPED, naming the offending
     // position.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&ex("s"));
+    let s = b.intern_iri(&ex("s")).unwrap();
     let reserved = format!("{RESERVED_NAMESPACE}reifies");
-    let p = b.intern_iri(&reserved);
-    let o = b.intern_iri(&ex("o"));
-    b.push_quad(s, p, o, None);
+    let p = b.intern_iri(&reserved).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let inadmissible_ds = b.freeze().expect("valid dataset");
     match try_canonicalize_flat_view(&*inadmissible_ds, CanonHash::Sha256) {
         Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(violation))) => {
@@ -826,13 +840,13 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     // overlay's own lowering emits — is now ADMITTED (not refused) and lowers to an
     // ordinary `rdf:reifies` row rather than leaking the sentinel.
     let mut b = RdfDatasetBuilder::new();
-    let r = b.intern_iri(&ex("r"));
-    let s = b.intern_iri(&ex("s"));
-    let p = b.intern_iri(&ex("p"));
-    let o = b.intern_iri(&ex("o"));
-    let triple = b.intern_triple(s, p, o);
-    let reifies = b.intern_iri(&reserved);
-    b.push_quad(r, reifies, triple, None);
+    let r = b.intern_iri(&ex("r")).unwrap();
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let reifies = b.intern_iri(&reserved).unwrap();
+    b.push_quad(r, reifies, triple, None).unwrap();
     let admitted_triple_term_ds = b.freeze().expect("valid dataset");
     let bytes = try_canonicalize_flat_view(&*admitted_triple_term_ds, CanonHash::Sha256)
         .expect(

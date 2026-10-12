@@ -143,27 +143,29 @@ impl Shape {
 /// Retyping them would bench a different parse.
 fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let first = b.intern_iri(RDF_FIRST);
-    let rest = b.intern_iri(RDF_REST);
-    let nil = b.intern_iri(RDF_NIL);
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-    let range = b.intern_iri(RDFS_RANGE);
-    let equivalent = b.intern_iri(OWL_EQUIVALENTCLASS);
-    let inverse_of = b.intern_iri(OWL_INVERSEOF);
-    let intersection_of = b.intern_iri(OWL_INTERSECTIONOF);
-    let on_property = b.intern_iri(OWL_ONPROPERTY);
-    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
-    let cardinality = b.intern_iri(OWL_CARDINALITY);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let first = b.intern_iri(RDF_FIRST).unwrap();
+    let rest = b.intern_iri(RDF_REST).unwrap();
+    let nil = b.intern_iri(RDF_NIL).unwrap();
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let range = b.intern_iri(RDFS_RANGE).unwrap();
+    let equivalent = b.intern_iri(OWL_EQUIVALENTCLASS).unwrap();
+    let inverse_of = b.intern_iri(OWL_INVERSEOF).unwrap();
+    let intersection_of = b.intern_iri(OWL_INTERSECTIONOF).unwrap();
+    let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM).unwrap();
+    let cardinality = b.intern_iri(OWL_CARDINALITY).unwrap();
 
     let states: TermId = shape.states(equivalent, sub_class);
 
-    let one = b.intern_literal(RdfLiteral {
-        lexical_form: "1".to_owned(),
-        datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
-        language: None,
-        direction: None,
-    });
+    let one = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "1".to_owned(),
+            datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
 
     for k in 0..blocks {
         // The role axioms: `r ≡ ri⁻` with a range on `ri`, so the universal obligations a
@@ -176,48 +178,62 @@ fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
         } else {
             String::new()
         };
-        let r = b.intern_iri(&format!("{EX}r{tag}"));
-        let ri = b.intern_iri(&format!("{EX}ri{tag}"));
-        let p = b.intern_iri(&format!("{EX}p{tag}"));
-        let c = b.intern_iri(&format!("{EX}c{tag}"));
-        let s = b.intern_iri(&format!("{EX}S{tag}"));
-        let d = b.intern_iri(&format!("{EX}D{tag}"));
-        b.push_quad(r, inverse_of, ri, None);
-        b.push_quad(ri, range, s, None);
+        let r = b.intern_iri(&format!("{EX}r{tag}")).unwrap();
+        let ri = b.intern_iri(&format!("{EX}ri{tag}")).unwrap();
+        let p = b.intern_iri(&format!("{EX}p{tag}")).unwrap();
+        let c = b.intern_iri(&format!("{EX}c{tag}")).unwrap();
+        let s = b.intern_iri(&format!("{EX}S{tag}")).unwrap();
+        let d = b.intern_iri(&format!("{EX}D{tag}")).unwrap();
+        b.push_quad(r, inverse_of, ri, None).unwrap();
+        b.push_quad(ri, range, s, None).unwrap();
 
-        let class = b.intern_iri(&format!("{EX}A{k}"));
+        let class = b.intern_iri(&format!("{EX}A{k}")).unwrap();
         // The one difference the third group is about: every block on ONE individual.
         let individual = if shape.co_typed() {
-            b.intern_iri(&format!("{EX}a"))
+            b.intern_iri(&format!("{EX}a")).unwrap()
         } else {
-            b.intern_iri(&format!("{EX}a{k}"))
+            b.intern_iri(&format!("{EX}a{k}")).unwrap()
         };
 
         // `∀r.(S ⊓ ∀p.D)`, with the intersection as an RDF collection.
-        let inner = b.intern_blank(&format!("inner{k}"), BlankScope::DEFAULT);
-        b.push_quad(inner, on_property, p, None);
-        b.push_quad(inner, all_values, d, None);
-        let tail = b.intern_blank(&format!("tail{k}"), BlankScope::DEFAULT);
-        b.push_quad(tail, first, inner, None);
-        b.push_quad(tail, rest, nil, None);
-        let head = b.intern_blank(&format!("head{k}"), BlankScope::DEFAULT);
-        b.push_quad(head, first, s, None);
-        b.push_quad(head, rest, tail, None);
-        let conjunction = b.intern_blank(&format!("and{k}"), BlankScope::DEFAULT);
-        b.push_quad(conjunction, intersection_of, head, None);
-        let universal = b.intern_blank(&format!("all{k}"), BlankScope::DEFAULT);
-        b.push_quad(universal, on_property, r, None);
-        b.push_quad(universal, all_values, conjunction, None);
+        let inner = b
+            .intern_blank(&format!("inner{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(inner, on_property, p, None).unwrap();
+        b.push_quad(inner, all_values, d, None).unwrap();
+        let tail = b
+            .intern_blank(&format!("tail{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(tail, first, inner, None).unwrap();
+        b.push_quad(tail, rest, nil, None).unwrap();
+        let head = b
+            .intern_blank(&format!("head{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(head, first, s, None).unwrap();
+        b.push_quad(head, rest, tail, None).unwrap();
+        let conjunction = b
+            .intern_blank(&format!("and{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(conjunction, intersection_of, head, None)
+            .unwrap();
+        let universal = b
+            .intern_blank(&format!("all{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(universal, on_property, r, None).unwrap();
+        b.push_quad(universal, all_values, conjunction, None)
+            .unwrap();
 
         // `=1 c` — an exact cardinality on a second property.
-        let counted = b.intern_blank(&format!("exactly{k}"), BlankScope::DEFAULT);
-        b.push_quad(counted, on_property, c, None);
-        b.push_quad(counted, cardinality, one, None);
+        let counted = b
+            .intern_blank(&format!("exactly{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(counted, on_property, c, None).unwrap();
+        b.push_quad(counted, cardinality, one, None).unwrap();
 
-        b.push_quad(class, states, universal, None);
-        b.push_quad(class, states, counted, None);
-        b.push_quad(class, sub_class, s, None);
-        b.push_quad(individual, ty, class, None);
+        b.push_quad(class, states, universal, None).unwrap();
+        b.push_quad(class, states, counted, None).unwrap();
+        b.push_quad(class, sub_class, s, None).unwrap();
+        b.push_quad(individual, ty, class, None).unwrap();
     }
 
     b.freeze().expect("freeze")
@@ -234,25 +250,31 @@ fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
 /// on a clash. This is the cost the nominal-introduction path adds, with somewhere to be seen.
 fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let first = b.intern_iri(RDF_FIRST);
-    let rest = b.intern_iri(RDF_REST);
-    let nil = b.intern_iri(RDF_NIL);
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-    let inverse_of = b.intern_iri(OWL_INVERSEOF);
-    let one_of = b.intern_iri("http://www.w3.org/2002/07/owl#oneOf");
-    let on_property = b.intern_iri(OWL_ONPROPERTY);
-    let some_values = b.intern_iri("http://www.w3.org/2002/07/owl#someValuesFrom");
-    let max_cardinality = b.intern_iri("http://www.w3.org/2002/07/owl#maxCardinality");
-    let min_cardinality = b.intern_iri("http://www.w3.org/2002/07/owl#minCardinality");
-    let thing = b.intern_iri("http://www.w3.org/2002/07/owl#Thing");
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let first = b.intern_iri(RDF_FIRST).unwrap();
+    let rest = b.intern_iri(RDF_REST).unwrap();
+    let nil = b.intern_iri(RDF_NIL).unwrap();
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let inverse_of = b.intern_iri(OWL_INVERSEOF).unwrap();
+    let one_of = b.intern_iri("http://www.w3.org/2002/07/owl#oneOf").unwrap();
+    let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+    let some_values = b
+        .intern_iri("http://www.w3.org/2002/07/owl#someValuesFrom")
+        .unwrap();
+    let max_cardinality = b
+        .intern_iri("http://www.w3.org/2002/07/owl#maxCardinality")
+        .unwrap();
+    let min_cardinality = b
+        .intern_iri("http://www.w3.org/2002/07/owl#minCardinality")
+        .unwrap();
+    let thing = b.intern_iri("http://www.w3.org/2002/07/owl#Thing").unwrap();
 
-    let p = b.intern_iri(&format!("{EX}p"));
-    let inv_p = b.intern_iri(&format!("{EX}invP"));
-    let r = b.intern_iri(&format!("{EX}r"));
-    let spy = b.intern_iri(&format!("{EX}spy"));
-    let u = b.intern_iri(&format!("{EX}u"));
-    b.push_quad(p, inverse_of, inv_p, None);
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let inv_p = b.intern_iri(&format!("{EX}invP")).unwrap();
+    let r = b.intern_iri(&format!("{EX}r")).unwrap();
+    let spy = b.intern_iri(&format!("{EX}spy")).unwrap();
+    let u = b.intern_iri(&format!("{EX}u")).unwrap();
+    b.push_quad(p, inverse_of, inv_p, None).unwrap();
 
     let count = |b: &mut RdfDatasetBuilder, n: usize| {
         b.intern_literal(RdfLiteral {
@@ -261,32 +283,35 @@ fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
             language: None,
             direction: None,
         })
+        .unwrap()
     };
 
     // ⊤ ⊑ ∃p.{spy}.
-    let one = b.intern_blank("oneof", BlankScope::DEFAULT);
-    b.push_quad(one, first, spy, None);
-    b.push_quad(one, rest, nil, None);
-    let enum_class = b.intern_blank("enum", BlankScope::DEFAULT);
-    b.push_quad(enum_class, one_of, one, None);
-    let some = b.intern_blank("some", BlankScope::DEFAULT);
-    b.push_quad(some, on_property, p, None);
-    b.push_quad(some, some_values, enum_class, None);
-    b.push_quad(thing, sub_class, some, None);
+    let one = b.intern_blank("oneof", BlankScope::DEFAULT).unwrap();
+    b.push_quad(one, first, spy, None).unwrap();
+    b.push_quad(one, rest, nil, None).unwrap();
+    let enum_class = b.intern_blank("enum", BlankScope::DEFAULT).unwrap();
+    b.push_quad(enum_class, one_of, one, None).unwrap();
+    let some = b.intern_blank("some", BlankScope::DEFAULT).unwrap();
+    b.push_quad(some, on_property, p, None).unwrap();
+    b.push_quad(some, some_values, enum_class, None).unwrap();
+    b.push_quad(thing, sub_class, some, None).unwrap();
 
     // spy : ≤bound invP.⊤.
     let bound_lit = count(&mut b, bound);
-    let at_most = b.intern_blank("atmost", BlankScope::DEFAULT);
-    b.push_quad(at_most, on_property, inv_p, None);
-    b.push_quad(at_most, max_cardinality, bound_lit, None);
-    b.push_quad(spy, ty, at_most, None);
+    let at_most = b.intern_blank("atmost", BlankScope::DEFAULT).unwrap();
+    b.push_quad(at_most, on_property, inv_p, None).unwrap();
+    b.push_quad(at_most, max_cardinality, bound_lit, None)
+        .unwrap();
+    b.push_quad(spy, ty, at_most, None).unwrap();
 
     // u : ≥bound r.⊤.
     let min_lit = count(&mut b, bound);
-    let at_least = b.intern_blank("atleast", BlankScope::DEFAULT);
-    b.push_quad(at_least, on_property, r, None);
-    b.push_quad(at_least, min_cardinality, min_lit, None);
-    b.push_quad(u, ty, at_least, None);
+    let at_least = b.intern_blank("atleast", BlankScope::DEFAULT).unwrap();
+    b.push_quad(at_least, on_property, r, None).unwrap();
+    b.push_quad(at_least, min_cardinality, min_lit, None)
+        .unwrap();
+    b.push_quad(u, ty, at_least, None).unwrap();
 
     b.freeze().expect("freeze")
 }
@@ -320,22 +345,25 @@ fn star_role_ontology(n: usize) -> Arc<RdfDataset> {
 /// `n` individuals typed `C`, with `C ⊑ ∀p.C`, and one `p` assertion per `(from, to)` pair.
 fn role_ontology(n: usize, links: impl IntoIterator<Item = (usize, usize)>) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-    let on_property = b.intern_iri(OWL_ONPROPERTY);
-    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
-    let p = b.intern_iri(&format!("{EX}p"));
-    let c = b.intern_iri(&format!("{EX}C"));
-    let every = b.intern_blank("every", BlankScope::DEFAULT);
-    b.push_quad(every, on_property, p, None);
-    b.push_quad(every, all_values, c, None);
-    b.push_quad(c, sub_class, every, None);
-    let individuals: Vec<TermId> = (0..n).map(|i| b.intern_iri(&format!("{EX}i{i}"))).collect();
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM).unwrap();
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let c = b.intern_iri(&format!("{EX}C")).unwrap();
+    let every = b.intern_blank("every", BlankScope::DEFAULT).unwrap();
+    b.push_quad(every, on_property, p, None).unwrap();
+    b.push_quad(every, all_values, c, None).unwrap();
+    b.push_quad(c, sub_class, every, None).unwrap();
+    let individuals: Vec<TermId> = (0..n)
+        .map(|i| b.intern_iri(&format!("{EX}i{i}")).unwrap())
+        .collect();
     for &individual in &individuals {
-        b.push_quad(individual, ty, c, None);
+        b.push_quad(individual, ty, c, None).unwrap();
     }
     for (from, to) in links {
-        b.push_quad(individuals[from], p, individuals[to], None);
+        b.push_quad(individuals[from], p, individuals[to], None)
+            .unwrap();
     }
     b.freeze().expect("freeze")
 }
@@ -346,46 +374,48 @@ fn role_ontology(n: usize, links: impl IntoIterator<Item = (usize, usize)>) -> A
 /// so deciding it makes `choices` choices while the chain sits saturated beside them.
 fn choices_ontology(abox: usize, choices: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-    let on_property = b.intern_iri(OWL_ONPROPERTY);
-    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
-    let max_qualified = b.intern_iri(OWL_MAXQUALIFIEDCARDINALITY);
-    let on_class = b.intern_iri(OWL_ONCLASS);
-    let p = b.intern_iri(&format!("{EX}p"));
-    let r = b.intern_iri(&format!("{EX}r"));
-    let q = b.intern_iri(&format!("{EX}Q"));
-    let f = b.intern_iri(&format!("{EX}F"));
-    let every = b.intern_blank("every", BlankScope::DEFAULT);
-    b.push_quad(every, on_property, p, None);
-    b.push_quad(every, all_values, q, None);
-    b.push_quad(q, sub_class, every, None);
-    let two = b.intern_literal(RdfLiteral {
-        lexical_form: "2".to_owned(),
-        datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
-        language: None,
-        direction: None,
-    });
-    let bounded = b.intern_blank("bounded", BlankScope::DEFAULT);
-    b.push_quad(bounded, on_property, r, None);
-    b.push_quad(bounded, max_qualified, two, None);
-    b.push_quad(bounded, on_class, f, None);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM).unwrap();
+    let max_qualified = b.intern_iri(OWL_MAXQUALIFIEDCARDINALITY).unwrap();
+    let on_class = b.intern_iri(OWL_ONCLASS).unwrap();
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let r = b.intern_iri(&format!("{EX}r")).unwrap();
+    let q = b.intern_iri(&format!("{EX}Q")).unwrap();
+    let f = b.intern_iri(&format!("{EX}F")).unwrap();
+    let every = b.intern_blank("every", BlankScope::DEFAULT).unwrap();
+    b.push_quad(every, on_property, p, None).unwrap();
+    b.push_quad(every, all_values, q, None).unwrap();
+    b.push_quad(q, sub_class, every, None).unwrap();
+    let two = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "2".to_owned(),
+            datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let bounded = b.intern_blank("bounded", BlankScope::DEFAULT).unwrap();
+    b.push_quad(bounded, on_property, r, None).unwrap();
+    b.push_quad(bounded, max_qualified, two, None).unwrap();
+    b.push_quad(bounded, on_class, f, None).unwrap();
     let chain: Vec<TermId> = (0..abox)
-        .map(|i| b.intern_iri(&format!("{EX}i{i}")))
+        .map(|i| b.intern_iri(&format!("{EX}i{i}")).unwrap())
         .collect();
     for &individual in &chain {
-        b.push_quad(individual, ty, q, None);
+        b.push_quad(individual, ty, q, None).unwrap();
     }
     for pair in chain.windows(2) {
-        b.push_quad(pair[0], p, pair[1], None);
+        b.push_quad(pair[0], p, pair[1], None).unwrap();
     }
     for c in 0..choices {
-        let a = b.intern_iri(&format!("{EX}a{c}"));
-        b.push_quad(a, ty, bounded, None);
+        let a = b.intern_iri(&format!("{EX}a{c}")).unwrap();
+        b.push_quad(a, ty, bounded, None).unwrap();
         for k in 0..3 {
-            let successor = b.intern_iri(&format!("{EX}a{c}s{k}"));
-            b.push_quad(successor, ty, f, None);
-            b.push_quad(a, r, successor, None);
+            let successor = b.intern_iri(&format!("{EX}a{c}s{k}")).unwrap();
+            b.push_quad(successor, ty, f, None).unwrap();
+            b.push_quad(a, r, successor, None).unwrap();
         }
     }
     b.freeze().expect("freeze")

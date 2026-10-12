@@ -68,6 +68,7 @@
 use core::hash::Hasher;
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -109,6 +110,8 @@ const KIND_BY_RULE: u8 = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProofError {
+    /// Native capacity or allocation refused; this is not an invalid-proof verdict.
+    Storage(StorageError),
     /// The proof is not a well-formed term: a reference outside the arena, a premise that
     /// does not precede the step it justifies, or — for a decoded proof — bytes that are
     /// truncated, mis-tagged, or carry an unknown node kind.
@@ -206,6 +209,7 @@ fn render(fact: &Fact) -> String {
 impl fmt::Display for ProofError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Malformed { detail } => write!(f, "malformed proof term: {detail}"),
             Self::NotAsserted { goal } => write!(
                 f,
@@ -273,6 +277,8 @@ impl fmt::Display for ProofError {
 
 impl std::error::Error for ProofError {}
 
+purrdf_lex::variant_from!(ProofError { Storage(StorageError) });
+
 // ── The term ────────────────────────────────────────────────────────────────────
 
 /// One node of the proof DAG — the crate's whole proof language.
@@ -300,6 +306,18 @@ enum ProofTerm {
 }
 
 impl ProofTerm {
+    /// Borrow the complete identity before any derived-premise allocation.
+    fn identity(&self) -> ProofIdentity<'_> {
+        match self {
+            Self::Axiom { goal } => (goal, None),
+            Self::ByRule {
+                goal,
+                rule,
+                premises,
+            } => (goal, Some((*rule, premises))),
+        }
+    }
+
     /// The conclusion this node states.
     fn goal(&self) -> &Fact {
         match self {
@@ -307,6 +325,9 @@ impl ProofTerm {
         }
     }
 }
+
+/// An axiom or rule application, borrowing all lexical and premise payloads.
+type ProofIdentity<'a> = (&'a Fact, Option<(usize, &'a [ProofId])>);
 
 /// Fold `fact`'s four length-prefixed surfaces into `hasher`.
 fn hash_fact(hasher: &mut impl Hasher, fact: &Fact) {
@@ -323,24 +344,20 @@ fn hash_fact(hasher: &mut impl Hasher, fact: &Fact) {
 /// table this feeds is NEVER iterated and the hash is NEVER persisted — a proof's stable
 /// identity is [`ProofArena::digest`], a BLAKE3 digest over the canonical encoding — so the
 /// hasher's lack of version stability cannot reach an output.
-fn term_hash(term: &ProofTerm) -> u64 {
+fn term_hash((goal, derivation): ProofIdentity<'_>) -> u64 {
     let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    match term {
-        ProofTerm::Axiom { goal } => {
+    match derivation {
+        None => {
             hasher.write_u8(KIND_AXIOM);
             hash_fact(&mut hasher, goal);
         }
-        ProofTerm::ByRule {
-            goal,
-            rule,
-            premises,
-        } => {
+        Some((rule, premises)) => {
             hasher.write_u8(KIND_BY_RULE);
             hash_fact(&mut hasher, goal);
-            hasher.write_u64(*rule as u64);
+            hasher.write_u64(rule as u64);
             hasher.write_u64(premises.len() as u64);
             for premise in premises {
-                hasher.write_u64(premise.index() as u64);
+                hasher.write_u64(premise.index());
             }
         }
     }
@@ -413,6 +430,9 @@ pub struct ProofArena {
     /// Content hash → id, for O(1) interning. Probed, NEVER iterated: its order is a hash
     /// order and would be an illegal emission source.
     by_content: HashTable<ProofId>,
+    /// Reduced-width owner model, absent from the shipping representation.
+    #[cfg(test)]
+    proof_limit: Option<u64>,
 }
 
 impl ProofArena {
@@ -430,7 +450,7 @@ impl ProofArena {
     ///
     /// Constructing one asserts nothing — [`check`](Self::check) is what tests the claim,
     /// against the seeded EDB.
-    pub fn axiom(&mut self, goal: Fact) -> ProofId {
+    pub fn axiom(&mut self, goal: Fact) -> Result<ProofId, StorageError> {
         self.intern(ProofTerm::Axiom { goal })
     }
 
@@ -447,33 +467,84 @@ impl ProofArena {
     /// foreign one is a programming error; a proof arriving from OUTSIDE the process comes
     /// through [`decode`](Self::decode), which reports the same defect as a
     /// [`ProofError::Malformed`] rejection instead.
-    pub fn by_rule(&mut self, goal: Fact, rule: usize, premises: &[ProofId]) -> ProofId {
+    pub fn by_rule(
+        &mut self,
+        goal: Fact,
+        rule: usize,
+        premises: &[ProofId],
+    ) -> Result<ProofId, StorageError> {
         for premise in premises {
             assert!(
-                premise.index() < self.terms.len(),
+                premise.resident_index() < self.terms.len(),
                 "a premise must be interned in this arena before the step it justifies"
             );
         }
-        self.intern(ProofTerm::ByRule {
-            goal,
-            rule,
-            premises: premises.to_vec(),
-        })
+        let identity = (&goal, Some((rule, premises)));
+        let hash = term_hash(identity);
+        if let Some(id) = self.find(identity, hash) {
+            return Ok(id);
+        }
+        // Only a miss needs capacity or a copy of the caller's premise vector.
+        let id = self.reserve_missing()?;
+        let mut resident = Resident;
+        let premises = Memory::new(&mut resident).collect(premises.iter().copied())?;
+        self.insert_missing(
+            ProofTerm::ByRule {
+                goal,
+                rule,
+                premises,
+            },
+            hash,
+            id,
+        );
+        Ok(id)
     }
 
     /// Intern `term`, returning the existing id if an identical term is already held.
-    fn intern(&mut self, term: ProofTerm) -> ProofId {
-        let hash = term_hash(&term);
-        let terms = &self.terms;
-        if let Some(&id) = self.by_content.find(hash, |&id| terms[id.index()] == term) {
-            return id;
+    fn intern(&mut self, term: ProofTerm) -> Result<ProofId, StorageError> {
+        let hash = term_hash(term.identity());
+        if let Some(id) = self.find(term.identity(), hash) {
+            return Ok(id);
         }
-        let id = ProofId::from_index(self.terms.len());
-        self.terms.push(term);
+        let id = self.reserve_missing()?;
+        self.insert_missing(term, hash, id);
+        Ok(id)
+    }
+
+    /// Probe the borrowed identity before any capacity or physical admission.
+    fn find(&self, identity: ProofIdentity<'_>, hash: u64) -> Option<ProofId> {
         let terms = &self.terms;
         self.by_content
-            .insert_unique(hash, id, |&id| term_hash(&terms[id.index()]));
-        id
+            .find(hash, |&id| {
+                terms[id.resident_index()].identity() == identity
+            })
+            .copied()
+    }
+
+    /// Admit the original node and index before constructing its owned payload.
+    fn reserve_missing(&mut self) -> Result<ProofId, StorageError> {
+        let limit = u64::MAX;
+        #[cfg(test)]
+        let limit = self.proof_limit.unwrap_or(limit);
+        let id = ProofId::from_address_with_limit(self.terms.len(), limit)?;
+        self.terms
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.by_content
+            .try_reserve(1, |&id| {
+                term_hash(self.terms[id.resident_index()].identity())
+            })
+            .map_err(|_| StorageError::AllocationFailed)?;
+        Ok(id)
+    }
+
+    /// Publish an already-admitted absent node under its original identity.
+    fn insert_missing(&mut self, term: ProofTerm, hash: u64, id: ProofId) {
+        self.terms.push(term);
+        let terms = &self.terms;
+        self.by_content.insert_unique(hash, id, |&id| {
+            term_hash(terms[id.resident_index()].identity())
+        });
     }
 
     /// The conclusion the node STATES — which is exactly what a checker must not believe.
@@ -555,7 +626,7 @@ impl ProofArena {
             proven.insert(index, fact);
         }
         proven
-            .remove(&root.index())
+            .remove(&root.address()?)
             .ok_or_else(|| Self::malformed("the root of a proof is reachable from itself"))
     }
 
@@ -573,23 +644,23 @@ impl ProofArena {
     /// does not already exist. The walk re-checks that invariant rather than assuming it, so
     /// a term set that somehow violated it is rejected instead of silently mis-checked.
     fn reachable_from(&self, root: ProofId) -> Result<BTreeSet<usize>, ProofError> {
-        if root.index() >= self.terms.len() {
+        if root.address()? >= self.terms.len() {
             return Err(Self::malformed("the root is outside this arena"));
         }
         let mut reachable = BTreeSet::new();
-        let mut stack = vec![root.index()];
+        let mut stack = vec![root.address()?];
         while let Some(index) = stack.pop() {
             if !reachable.insert(index) {
                 continue;
             }
             if let ProofTerm::ByRule { premises, .. } = &self.terms[index] {
                 for premise in premises {
-                    if premise.index() >= index {
+                    if premise.address()? >= index {
                         return Err(Self::malformed(
                             "a premise must be interned before the step it justifies",
                         ));
                     }
-                    stack.push(premise.index());
+                    stack.push(premise.address()?);
                 }
             }
         }
@@ -671,7 +742,7 @@ impl ProofArena {
         // so a variable repeated across atoms — or twice within one atom — must agree.
         let mut subst: BTreeMap<&str, &str> = BTreeMap::new();
         for (&(body_position, atom), premise) in positive.iter().zip(premises) {
-            let fact = proven.get(&premise.index()).ok_or_else(|| {
+            let fact = proven.get(&premise.address()?).ok_or_else(|| {
                 Self::malformed("a premise was not established before the step that uses it")
             })?;
             if !match_atom(atom, fact, &mut subst) {
@@ -769,7 +840,7 @@ impl ProofArena {
                     out.extend_from_slice(&(*rule as u64).to_le_bytes());
                     out.extend_from_slice(&(premises.len() as u64).to_le_bytes());
                     for premise in premises {
-                        let back = position[&premise.index()];
+                        let back = position[&premise.resident_index()];
                         out.extend_from_slice(&(back as u64).to_le_bytes());
                     }
                 }
@@ -813,7 +884,7 @@ impl ProofArena {
         let _ = self.term(root);
         let mut out = Vec::new();
         let mut seen: BTreeSet<usize> = BTreeSet::new();
-        let mut stack = vec![Step::Visit(root.index())];
+        let mut stack = vec![Step::Visit(root.resident_index())];
         while let Some(step) = stack.pop() {
             match step {
                 Step::Visit(index) => {
@@ -824,7 +895,7 @@ impl ProofArena {
                     if let ProofTerm::ByRule { premises, .. } = &self.terms[index] {
                         // Reversed, so the premises are descended into in authored order.
                         for premise in premises.iter().rev() {
-                            stack.push(Step::Visit(premise.index()));
+                            stack.push(Step::Visit(premise.resident_index()));
                         }
                     }
                 }
@@ -865,7 +936,7 @@ impl ProofArena {
             let kind = reader.byte()?;
             let goal = reader.fact()?;
             let id = match kind {
-                KIND_AXIOM => arena.axiom(goal),
+                KIND_AXIOM => arena.axiom(goal)?,
                 KIND_BY_RULE => {
                     let rule = reader.length()?;
                     let premise_count = reader.length()?;
@@ -881,7 +952,7 @@ impl ProofArena {
                         }
                         premises.push(ids[back]);
                     }
-                    arena.by_rule(goal, rule, &premises)
+                    arena.by_rule(goal, rule, &premises)?
                 }
                 other => {
                     return Err(ProofError::Malformed {
@@ -929,7 +1000,7 @@ impl EvaluationProofs {
     /// height is strictly below its consumer's, by the definition of proof height. Both
     /// components are content-derived, so the interning sequence, and hence every arena id,
     /// is a pure function of the evaluation.
-    pub fn of(evaluation: &Evaluation) -> Self {
+    pub fn of(evaluation: &Evaluation) -> Result<Self, StorageError> {
         let derivations = evaluation.derivations();
         let mut order: Vec<usize> = (0..derivations.len()).collect();
         order.sort_by(|&left, &right| {
@@ -945,11 +1016,11 @@ impl EvaluationProofs {
             for source in derivation.sources() {
                 let premise = match built.get(source) {
                     Some(&id) => id,
-                    None => arena.axiom(source.clone()),
+                    None => arena.axiom(source.clone())?,
                 };
                 premises.push(premise);
             }
-            let root = arena.by_rule(derivation.fact().clone(), derivation.rule(), &premises);
+            let root = arena.by_rule(derivation.fact().clone(), derivation.rule(), &premises)?;
             built.insert(derivation.fact(), root);
         }
 
@@ -957,7 +1028,7 @@ impl EvaluationProofs {
             .into_iter()
             .map(|(fact, id)| (fact.clone(), id))
             .collect();
-        Self { arena, roots }
+        Ok(Self { arena, roots })
     }
 
     /// The arena the roots address.
@@ -1199,6 +1270,32 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proof_capacity_preserves_axiom_and_rule_hits_before_admission() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut arena = ProofArena::default();
+        let given = fact("a", P, "b");
+        let derived = fact("a", T, "b");
+        let axiom = arena.axiom(given.clone()).unwrap();
+        let rule = arena.by_rule(derived.clone(), 0, &[axiom]).unwrap();
+        let digest = arena.digest(rule);
+        arena.proof_limit = Some(2);
+        assert_eq!(arena.axiom(given), Ok(axiom));
+        assert_eq!(arena.by_rule(derived.clone(), 0, &[axiom]), Ok(rule));
+        assert_eq!(
+            arena.by_rule(derived.clone(), 1, &[axiom]),
+            Err(StorageError::Capacity(CapacityError {
+                space: CapacitySpace::DatalogProofs,
+                attempted: 3,
+                limit: 2
+            }))
+        );
+        assert_eq!(arena.len(), 2);
+        assert_eq!(arena.digest(rule), digest);
+        arena.proof_limit = None;
+        assert_eq!(arena.by_rule(derived, 1, &[axiom]).unwrap().index(), 2);
+    }
+
     use super::*;
 
     use crate::clause::HeadDisjunct;
@@ -1226,12 +1323,14 @@ mod tests {
     fn store_of(triples: &[(&str, &str, &str)]) -> RelationStore {
         let mut store = RelationStore::new();
         for &(subject, predicate, object) in triples {
-            store.insert(
-                &surface(subject),
-                &surface(predicate),
-                &surface(object),
-                RelationStore::DEFAULT_GRAPH,
-            );
+            store
+                .insert(
+                    &surface(subject),
+                    &surface(predicate),
+                    &surface(object),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
         }
         store
     }
@@ -1262,9 +1361,11 @@ mod tests {
     /// A hand-built, VALID proof of `t(a, c)` over [`chain_rules`], plus its arena.
     fn chain_proof() -> (ProofArena, ProofId) {
         let mut arena = ProofArena::default();
-        let first = arena.axiom(fact("a", P, "b"));
-        let second = arena.axiom(fact("b", P, "c"));
-        let root = arena.by_rule(fact("a", T, "c"), 0, &[first, second]);
+        let first = arena.axiom(fact("a", P, "b")).unwrap();
+        let second = arena.axiom(fact("b", P, "c")).unwrap();
+        let root = arena
+            .by_rule(fact("a", T, "c"), 0, &[first, second])
+            .unwrap();
         (arena, root)
     }
 
@@ -1284,7 +1385,7 @@ mod tests {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
             let evaluation =
                 evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
-            let proofs = EvaluationProofs::of(&evaluation);
+            let proofs = EvaluationProofs::of(&evaluation).unwrap();
             assert_eq!(
                 proofs.roots().len(),
                 evaluation.derivations().len(),
@@ -1330,25 +1431,31 @@ mod tests {
             let mut store = RelationStore::new();
             for i in 0..n {
                 for j in 0..n {
-                    store.insert(
-                        &surface(&node(i)),
-                        &surface(P),
-                        &surface(&node(j)),
-                        RelationStore::DEFAULT_GRAPH,
-                    );
+                    store
+                        .insert(
+                            &surface(&node(i)),
+                            &surface(P),
+                            &surface(&node(j)),
+                            RelationStore::DEFAULT_GRAPH,
+                        )
+                        .unwrap();
                 }
-                store.insert(
-                    &surface(&node(i)),
-                    &surface(Q),
-                    &surface(&node((i + 1) % n)),
-                    RelationStore::DEFAULT_GRAPH,
-                );
-                store.insert(
-                    &surface(&node(i)),
-                    &surface(R),
-                    &surface(&node((i + 2) % n)),
-                    RelationStore::DEFAULT_GRAPH,
-                );
+                store
+                    .insert(
+                        &surface(&node(i)),
+                        &surface(Q),
+                        &surface(&node((i + 1) % n)),
+                        RelationStore::DEFAULT_GRAPH,
+                    )
+                    .unwrap();
+                store
+                    .insert(
+                        &surface(&node(i)),
+                        &surface(R),
+                        &surface(&node((i + 2) % n)),
+                        RelationStore::DEFAULT_GRAPH,
+                    )
+                    .unwrap();
             }
             store
         };
@@ -1358,7 +1465,7 @@ mod tests {
             "the fixture must route through the triejoin, or it tests the binary join twice"
         );
         let evaluation = evaluate(&exe, seed()).expect("the triangle stays inside every ceiling");
-        let proofs = EvaluationProofs::of(&evaluation);
+        let proofs = EvaluationProofs::of(&evaluation).unwrap();
         assert_eq!(proofs.roots().len(), n, "one derived fact per node");
 
         let edb = seed();
@@ -1389,11 +1496,13 @@ mod tests {
         ];
 
         let mut arena = ProofArena::default();
-        let first = arena.axiom(fact("a", P, "b"));
-        let second = arena.axiom(fact("b", P, "c"));
+        let first = arena.axiom(fact("a", P, "b")).unwrap();
+        let second = arena.axiom(fact("b", P, "c")).unwrap();
 
         // The step is real, but it cites clause 1, which does not license it.
-        let wrong = arena.by_rule(fact("a", T, "c"), 1, &[first, second]);
+        let wrong = arena
+            .by_rule(fact("a", T, "c"), 1, &[first, second])
+            .unwrap();
         let ctx = ProofContext::new(&rules, &edb, &edb);
         assert_eq!(
             arena.check(wrong, &ctx),
@@ -1425,7 +1534,9 @@ mod tests {
         );
 
         // And a clause index the program simply has not.
-        let absent = arena.by_rule(fact("a", T, "c"), 7, &[first, second]);
+        let absent = arena
+            .by_rule(fact("a", T, "c"), 7, &[first, second])
+            .unwrap();
         assert_eq!(
             arena.check(absent, &ctx),
             Err(ProofError::UnknownRule { rule: 7 })
@@ -1444,10 +1555,10 @@ mod tests {
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
         let mut arena = ProofArena::default();
-        let first = arena.axiom(fact("a", P, "b"));
+        let first = arena.axiom(fact("a", P, "b")).unwrap();
 
         // The second body atom has no premise at all.
-        let short = arena.by_rule(fact("a", T, "c"), 0, &[first]);
+        let short = arena.by_rule(fact("a", T, "c"), 0, &[first]).unwrap();
         assert_eq!(
             arena.check(short, &ctx),
             Err(ProofError::PremiseCountMismatch {
@@ -1458,8 +1569,10 @@ mod tests {
         );
 
         // The premise exists but the fact it asserts was never given.
-        let unsupported = arena.axiom(fact("b", P, "z"));
-        let forged = arena.by_rule(fact("a", T, "z"), 0, &[first, unsupported]);
+        let unsupported = arena.axiom(fact("b", P, "z")).unwrap();
+        let forged = arena
+            .by_rule(fact("a", T, "z"), 0, &[first, unsupported])
+            .unwrap();
         assert_eq!(
             arena.check(forged, &ctx),
             Err(ProofError::NotAsserted {
@@ -1470,8 +1583,10 @@ mod tests {
 
         // The same guard closes circularity: a DERIVED fact asserted as given is refused,
         // because an axiom may appeal to the seeded EDB alone.
-        let circular_premise = arena.axiom(fact("a", T, "c"));
-        let circular = arena.by_rule(fact("a", T, "c"), 0, &[first, circular_premise]);
+        let circular_premise = arena.axiom(fact("a", T, "c")).unwrap();
+        let circular = arena
+            .by_rule(fact("a", T, "c"), 0, &[first, circular_premise])
+            .unwrap();
         let exe = compile(rules.clone()).expect("the chain program compiles");
         let evaluation = evaluate(&exe, chain_edb()).expect("the chain stays inside every ceiling");
         assert!(
@@ -1502,9 +1617,11 @@ mod tests {
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
         let mut arena = ProofArena::default();
-        let first = arena.axiom(fact("a", P, "b"));
-        let second = arena.axiom(fact("b", P, "c"));
-        let tampered = arena.by_rule(fact("a", T, "zzz"), 0, &[first, second]);
+        let first = arena.axiom(fact("a", P, "b")).unwrap();
+        let second = arena.axiom(fact("b", P, "c")).unwrap();
+        let tampered = arena
+            .by_rule(fact("a", T, "zzz"), 0, &[first, second])
+            .unwrap();
         assert_eq!(
             arena.check(tampered, &ctx),
             Err(ProofError::GoalMismatch {
@@ -1617,7 +1734,7 @@ mod tests {
             evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
         let edb = workload.edb();
         let ctx = ProofContext::new(&workload.rules, &edb, evaluation.facts());
-        let proofs = EvaluationProofs::of(&evaluation);
+        let proofs = EvaluationProofs::of(&evaluation).unwrap();
 
         let mut mutations = 0usize;
         for derivation in evaluation.derivations() {
@@ -1633,10 +1750,12 @@ mod tests {
                     .map(|source| {
                         proofs
                             .root_for(source)
-                            .unwrap_or_else(|| arena.axiom(source.clone()))
+                            .unwrap_or_else(|| arena.axiom(source.clone()).unwrap())
                     })
                     .collect();
-                let mutated = arena.by_rule(derivation.fact().clone(), other, &premises);
+                let mutated = arena
+                    .by_rule(derivation.fact().clone(), other, &premises)
+                    .unwrap();
                 assert!(
                     arena.check(mutated, &ctx).is_err(),
                     "clause {other} does not license {:?} from {:?}",
@@ -1657,8 +1776,8 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
         let mut arena = ProofArena::default();
-        let first = arena.axiom(fact("a", P, "b"));
-        let second = arena.axiom(fact("b", P, "c"));
+        let first = arena.axiom(fact("a", P, "b")).unwrap();
+        let second = arena.axiom(fact("b", P, "c")).unwrap();
         // `t(a, a)` is not in the least model; no permutation of the real premises yields it.
         for premises in [
             vec![first, second],
@@ -1666,7 +1785,7 @@ mod tests {
             vec![first, first],
             vec![second, second],
         ] {
-            let claim = arena.by_rule(fact("a", T, "a"), 0, &premises);
+            let claim = arena.by_rule(fact("a", T, "a"), 0, &premises).unwrap();
             assert!(
                 matches!(
                     arena.check(claim, &ctx),
@@ -1697,13 +1816,17 @@ mod tests {
 
         let mut arena = ProofArena::default();
         // `c base d` has no `q`, so the step holds.
-        let allowed_premise = arena.axiom(fact("c", base, "d"));
-        let allowed = arena.by_rule(fact("c", R, "d"), 0, &[allowed_premise]);
+        let allowed_premise = arena.axiom(fact("c", base, "d")).unwrap();
+        let allowed = arena
+            .by_rule(fact("c", R, "d"), 0, &[allowed_premise])
+            .unwrap();
         assert_eq!(arena.check(allowed, &ctx), Ok(fact("c", R, "d")));
 
         // `a base b` DOES have a `q`, so the guard blocks it.
-        let blocked_premise = arena.axiom(fact("a", base, "b"));
-        let blocked = arena.by_rule(fact("a", R, "b"), 0, &[blocked_premise]);
+        let blocked_premise = arena.axiom(fact("a", base, "b")).unwrap();
+        let blocked = arena
+            .by_rule(fact("a", R, "b"), 0, &[blocked_premise])
+            .unwrap();
         assert_eq!(
             arena.check(blocked, &ctx),
             Err(ProofError::NegatedPremiseSatisfied {
@@ -1730,12 +1853,16 @@ mod tests {
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
         let mut arena = ProofArena::default();
-        let allowed_premise = arena.axiom(fact("c", base, "d"));
-        let allowed = arena.by_rule(fact("c", R, "d"), 0, &[allowed_premise]);
+        let allowed_premise = arena.axiom(fact("c", base, "d")).unwrap();
+        let allowed = arena
+            .by_rule(fact("c", R, "d"), 0, &[allowed_premise])
+            .unwrap();
         assert_eq!(arena.check(allowed, &ctx), Ok(fact("c", R, "d")));
 
-        let blocked_premise = arena.axiom(fact("a", base, "b"));
-        let blocked = arena.by_rule(fact("a", R, "b"), 0, &[blocked_premise]);
+        let blocked_premise = arena.axiom(fact("a", base, "b")).unwrap();
+        let blocked = arena
+            .by_rule(fact("a", R, "b"), 0, &[blocked_premise])
+            .unwrap();
         assert_eq!(
             arena.check(blocked, &ctx),
             Err(ProofError::NegatedPremiseSatisfied {
@@ -1763,7 +1890,7 @@ mod tests {
         let seed = || store_of(&[("a", P, "b"), ("a", base, "b"), ("c", base, "d")]);
         let exe = compile(rules.clone()).expect("the fixture compiles");
         let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
-        let proofs = EvaluationProofs::of(&evaluation);
+        let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
         assert_ne!(proofs.roots(), []);
@@ -1778,22 +1905,33 @@ mod tests {
     #[test]
     fn structurally_identical_proofs_share_one_node() {
         let mut arena = ProofArena::default();
-        let left = arena.axiom(fact("a", P, "b"));
-        let right = arena.axiom(fact("a", P, "b"));
+        let left = arena.axiom(fact("a", P, "b")).unwrap();
+        let right = arena.axiom(fact("a", P, "b")).unwrap();
         assert_eq!(left, right, "identical axioms intern once");
         assert_eq!(arena.len(), 1);
 
-        let first = arena.by_rule(fact("a", T, "c"), 0, &[left, left]);
-        let second = arena.by_rule(fact("a", T, "c"), 0, &[right, right]);
+        let first = arena.by_rule(fact("a", T, "c"), 0, &[left, left]).unwrap();
+        let second = arena
+            .by_rule(fact("a", T, "c"), 0, &[right, right])
+            .unwrap();
         assert_eq!(first, second, "identical rule applications intern once");
         assert_eq!(arena.len(), 2);
 
         // A different rule index, a different goal and a different premise list are all
         // different terms.
-        assert_ne!(first, arena.by_rule(fact("a", T, "c"), 1, &[left, left]));
-        assert_ne!(first, arena.by_rule(fact("a", T, "d"), 0, &[left, left]));
-        let other = arena.axiom(fact("b", P, "c"));
-        assert_ne!(first, arena.by_rule(fact("a", T, "c"), 0, &[left, other]));
+        assert_ne!(
+            first,
+            arena.by_rule(fact("a", T, "c"), 1, &[left, left]).unwrap()
+        );
+        assert_ne!(
+            first,
+            arena.by_rule(fact("a", T, "d"), 0, &[left, left]).unwrap()
+        );
+        let other = arena.axiom(fact("b", P, "c")).unwrap();
+        assert_ne!(
+            first,
+            arena.by_rule(fact("a", T, "c"), 0, &[left, other]).unwrap()
+        );
         assert!(!arena.is_empty());
     }
 
@@ -1829,10 +1967,12 @@ mod tests {
         // The SAME proof built through a different interning sequence — an unrelated term
         // interned first, so every arena id moves — encodes to the same bytes.
         let mut shifted = ProofArena::default();
-        let _unrelated = shifted.axiom(fact("z", P, "z"));
-        let second = shifted.axiom(fact("b", P, "c"));
-        let first = shifted.axiom(fact("a", P, "b"));
-        let shifted_root = shifted.by_rule(fact("a", T, "c"), 0, &[first, second]);
+        let _unrelated = shifted.axiom(fact("z", P, "z")).unwrap();
+        let second = shifted.axiom(fact("b", P, "c")).unwrap();
+        let first = shifted.axiom(fact("a", P, "b")).unwrap();
+        let shifted_root = shifted
+            .by_rule(fact("a", T, "c"), 0, &[first, second])
+            .unwrap();
         assert_ne!(
             shifted_root, root,
             "the arena ids genuinely differ, or the test proves nothing"
@@ -1865,8 +2005,10 @@ mod tests {
     #[test]
     fn a_shared_subproof_is_emitted_once() {
         let mut arena = ProofArena::default();
-        let shared = arena.axiom(fact("a", P, "a"));
-        let root = arena.by_rule(fact("a", T, "a"), 0, &[shared, shared]);
+        let shared = arena.axiom(fact("a", P, "a")).unwrap();
+        let root = arena
+            .by_rule(fact("a", T, "a"), 0, &[shared, shared])
+            .unwrap();
         let (decoded, decoded_root) =
             ProofArena::decode(&arena.encode(root)).expect("the encoding decodes");
         assert_eq!(decoded.len(), 2, "one axiom and one step, not three nodes");
@@ -2002,12 +2144,14 @@ mod tests {
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
         let mut arena = ProofArena::default();
-        let diagonal = arena.axiom(fact("a", P, "a"));
-        let ok = arena.by_rule(fact("a", T, "a"), 0, &[diagonal]);
+        let diagonal = arena.axiom(fact("a", P, "a")).unwrap();
+        let ok = arena.by_rule(fact("a", T, "a"), 0, &[diagonal]).unwrap();
         assert_eq!(arena.check(ok, &ctx), Ok(fact("a", T, "a")));
 
-        let off_diagonal = arena.axiom(fact("a", P, "b"));
-        let bad = arena.by_rule(fact("a", T, "a"), 0, &[off_diagonal]);
+        let off_diagonal = arena.axiom(fact("a", P, "b")).unwrap();
+        let bad = arena
+            .by_rule(fact("a", T, "a"), 0, &[off_diagonal])
+            .unwrap();
         assert_eq!(
             arena.check(bad, &ctx),
             Err(ProofError::PremiseMismatch {
@@ -2044,7 +2188,7 @@ mod tests {
         };
         let exe = compile(rules.clone()).expect("the fixture compiles");
         let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
-        let proofs = EvaluationProofs::of(&evaluation);
+        let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
         assert_eq!(proofs.roots().len(), 1);
@@ -2073,12 +2217,14 @@ mod tests {
         )];
         let seed = || {
             let mut store = RelationStore::new();
-            store.insert(&surface("a"), &surface(P), &surface("b"), &g1);
+            store
+                .insert(&surface("a"), &surface(P), &surface("b"), &g1)
+                .unwrap();
             store
         };
         let exe = compile(rules.clone()).expect("the fixture compiles");
         let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
-        let proofs = EvaluationProofs::of(&evaluation);
+        let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
         assert_eq!(proofs.roots().len(), 1);
@@ -2121,7 +2267,7 @@ mod tests {
         let ctx = ProofContext::new(&rules, &edb, &edb);
         let mut arena = ProofArena::default();
         let expected = fact("https://example.org/a", T, "https://example.org/b");
-        let root = arena.by_rule(expected.clone(), 0, &[]);
+        let root = arena.by_rule(expected.clone(), 0, &[]).unwrap();
         assert_eq!(arena.check(root, &ctx), Ok(expected));
     }
 
@@ -2144,7 +2290,7 @@ mod tests {
         let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
         let evaluation =
             evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
-        let proofs = EvaluationProofs::of(&evaluation);
+        let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let facts: Vec<&Fact> = proofs.roots().iter().map(|(fact, _)| fact).collect();
         let mut sorted = facts.clone();
         sorted.sort();
@@ -2168,7 +2314,7 @@ mod tests {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
             let evaluation =
                 evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
-            let proofs = EvaluationProofs::of(&evaluation);
+            let proofs = EvaluationProofs::of(&evaluation).unwrap();
             let encodings: Vec<(Fact, Vec<u8>, [u8; 32])> = proofs
                 .roots()
                 .iter()

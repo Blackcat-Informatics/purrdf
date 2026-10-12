@@ -6,11 +6,11 @@
 //! # Doctrine
 //!
 //! Every dense handle in the Datalog evaluator — an interned term, a predicate, a
-//! rule, a materialised row — is an [`Id<C>`]: a `NonZeroU32` wearing a
+//! rule, a materialised row — is an [`Id<C>`]: a `NonZeroU64` wearing a
 //! `PhantomData` brand. The brand `C` makes IDs of different classes DISTINCT
 //! TYPES, so a [`TermId`] can never be passed where a [`PartitionId`] is expected;
 //! cross-class ID confusion is a compile error, not a runtime bug. The
-//! `NonZeroU32` niche keeps `Option<Id<C>>` the same width as `Id<C>` itself, so a
+//! `NonZeroU64` niche keeps `Option<Id<C>>` the same width as `Id<C>` itself, so a
 //! vacant term/row slot costs no extra word.
 //!
 //! # Ordering (read this before sorting on an `Id`)
@@ -38,44 +38,84 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
-use core::num::NonZeroU32;
+use core::num::NonZeroU64;
+use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
 
 /// A dense, per-space handle for entity class `C`.
 ///
-/// Stored as a `NonZeroU32` (the niche makes `Option<Id<C>>` the same width as
+/// Stored as a `NonZeroU64` (the niche makes `Option<Id<C>>` the same width as
 /// `Id<C>`) branded by `PhantomData<fn() -> C>`. The `fn() -> C` form is covariant
 /// in `C` and imposes no auto-trait bound on `C`, so `Id<C>: Copy + Send + Sync`
 /// regardless of the brand — and the brand type never needs to be constructible,
 /// which is why the markers below are uninhabited.
-pub struct Id<C>(NonZeroU32, PhantomData<fn() -> C>);
+pub struct Id<C>(NonZeroU64, PhantomData<fn() -> C>);
 
 impl<C> Id<C> {
     /// The zero-based slot index this id addresses in its space.
     ///
-    /// The niche offset is `+1`: slot `0` is stored as `NonZeroU32(1)`.
+    /// The niche offset is `+1`: slot `0` is stored as `NonZeroU64(1)`.
     #[inline]
-    pub fn index(self) -> usize {
-        (self.0.get() - 1) as usize
+    pub fn index(self) -> u64 {
+        self.0.get() - 1
     }
 
-    /// Mint the id for zero-based slot `index`.
+    /// Checked physical address, separate from this handle's logical width.
     ///
-    /// The niche offset is `+1`, so slot `0` becomes `NonZeroU32(1)` and
-    /// `Option<Id<C>>` stays the width of `Id<C>`.
+    /// # Errors
+    /// Returns layout refusal when this target cannot address the logical slot.
+    pub fn address(self) -> Result<usize, StorageError> {
+        usize::try_from(self.index()).map_err(|_| StorageError::SizeOverflow)
+    }
+
+    /// Address of a handle already minted by an actual resident arena. Foreign
+    /// handles remain a programming error, distinct from a data-capacity refusal.
+    pub(crate) fn resident_index(self) -> usize {
+        self.address()
+            .expect("a resident arena minted this physical address")
+    }
+
+    /// Mint a logical slot independently of the target pointer width.
     ///
-    /// # Panics
-    ///
-    /// Panics if `index + 1` exceeds `u32::MAX` — an id space overflow, which is a
-    /// programming error (more than `u32::MAX - 1` distinct entities in one space),
-    /// never a reachable data state.
+    /// # Errors
+    /// Returns this brand's exact requested count and actual u64 niche limit.
     #[inline]
-    pub fn from_index(index: usize) -> Self {
-        let raw = u32::try_from(index + 1)
-            .expect("Id space overflow: more than u32::MAX - 1 distinct entities in one space");
-        Self(
-            NonZeroU32::new(raw).expect("index + 1 is nonzero by construction"),
+    pub fn from_index(index: u64) -> Result<Self, CapacityError>
+    where
+        C: IdClass,
+    {
+        Self::from_index_with_limit(index, u64::MAX)
+    }
+
+    /// The one logical mint, also used with an owner-local reduced test limit.
+    fn from_index_with_limit(index: u64, limit: u64) -> Result<Self, CapacityError>
+    where
+        C: IdClass,
+    {
+        CapacityError::slot(C::SPACE, index, limit)?;
+        Ok(Self(
+            NonZeroU64::new(index + 1).expect("checked nonzero id representation"),
             PhantomData,
-        )
+        ))
+    }
+
+    /// Mint the next logical handle from an actual resident arena length.
+    ///
+    /// # Errors
+    /// Returns physical address overflow or this brand's exact capacity refusal.
+    pub(crate) fn from_address(index: usize) -> Result<Self, StorageError>
+    where
+        C: IdClass,
+    {
+        Self::from_address_with_limit(index, u64::MAX)
+    }
+
+    /// Convert the real resident length and apply the same native mint check.
+    pub(crate) fn from_address_with_limit(index: usize, limit: u64) -> Result<Self, StorageError>
+    where
+        C: IdClass,
+    {
+        let index = u64::try_from(index).map_err(|_| StorageError::SizeOverflow)?;
+        Ok(Self::from_index_with_limit(index, limit)?)
     }
 
     /// The slot this id addresses in `slots`, the arena that minted it.
@@ -90,7 +130,7 @@ impl<C> Id<C> {
     /// foreign id is a programming error, never a data state.
     #[track_caller]
     pub(crate) fn slot_in<'a, T>(self, slots: &'a [T], kind: &str, noun: &str) -> &'a T {
-        slots.get(self.index()).unwrap_or_else(|| {
+        slots.get(self.resident_index()).unwrap_or_else(|| {
             panic!(
                 "{kind} {self:?} was not minted by this arena (len {}): {noun} ids are \
                  per-arena handles and must never cross arena boundaries",
@@ -102,7 +142,7 @@ impl<C> Id<C> {
 
 // Manual trait impls: deriving would place spurious `C: Trait` bounds on the brand,
 // which is uninhabited and can never satisfy them. The `fn() -> C` brand carries no
-// data, so every impl is over the `NonZeroU32` payload alone.
+// data, so every impl is over the `NonZeroU64` payload alone.
 
 impl<C> Clone for Id<C> {
     #[inline]
@@ -153,6 +193,12 @@ impl<C> fmt::Debug for Id<C> {
     }
 }
 
+/// The native logical space belonging to a dense Datalog brand.
+pub trait IdClass {
+    /// The producer's closed capacity identity.
+    const SPACE: CapacitySpace;
+}
+
 // ── Brand markers (uninhabited: pure type-level tags, never constructed) ─────────
 //
 // Each brand wraps `Infallible` in a private field rather than being an empty
@@ -190,6 +236,31 @@ pub struct Meta(Infallible);
 /// surface), distinct from `TermId`'s own atomic-fact-term interner. See [`SymId`].
 #[derive(Debug)]
 pub struct Sym(Infallible);
+
+impl IdClass for Term {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogTerms;
+}
+impl IdClass for Partition {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogPartitions;
+}
+impl IdClass for Rule {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogRules;
+}
+impl IdClass for Row {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogRows;
+}
+impl IdClass for Proof {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogProofs;
+}
+impl IdClass for Node {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogNodes;
+}
+impl IdClass for Meta {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogMetas;
+}
+impl IdClass for Sym {
+    const SPACE: CapacitySpace = CapacitySpace::DatalogSymbols;
+}
 
 /// A dense per-interner atomic-term handle.
 pub type TermId = Id<Term>;
@@ -260,16 +331,52 @@ impl fmt::Debug for TermRef {
 mod tests {
     use super::*;
 
+    #[test]
+    fn every_native_brand_preserves_exact_capacity_and_wide_logical_identity() {
+        fn check<C: IdClass>() {
+            let wide = Id::<C>::from_index(u64::from(u32::MAX) + 1).unwrap();
+            assert_eq!(wide.index(), u64::from(u32::MAX) + 1);
+            assert_eq!(
+                wide.address(),
+                usize::try_from(wide.index()).map_err(|_| StorageError::SizeOverflow)
+            );
+            assert_eq!(
+                Id::<C>::from_index(u64::MAX).unwrap_err(),
+                CapacityError {
+                    space: C::SPACE,
+                    attempted: u128::from(u64::MAX) + 1,
+                    limit: u128::from(u64::MAX)
+                }
+            );
+            assert_eq!(
+                Id::<C>::from_index(u64::MAX - 1).unwrap().index(),
+                u64::MAX - 1
+            );
+        }
+        check::<Term>();
+        check::<Partition>();
+        check::<Rule>();
+        check::<Row>();
+        check::<Proof>();
+        check::<Node>();
+        check::<Meta>();
+        check::<Sym>();
+    }
+
     /// An id resolves to its slot in the arena that minted it, up to the last slot.
     #[test]
     fn slot_in_resolves_every_minted_slot() {
         let slots = ["a", "b", "c"];
         assert_eq!(
-            *NodeId::from_index(0).slot_in(&slots, "NodeId", "term"),
+            *NodeId::from_index(0)
+                .unwrap()
+                .slot_in(&slots, "NodeId", "term"),
             "a"
         );
         assert_eq!(
-            *NodeId::from_index(2).slot_in(&slots, "NodeId", "term"),
+            *NodeId::from_index(2)
+                .unwrap()
+                .slot_in(&slots, "NodeId", "term"),
             "c"
         );
     }
@@ -281,7 +388,9 @@ mod tests {
     )]
     fn slot_in_refuses_an_id_past_the_arena() {
         let slots = ["a", "b", "c"];
-        let _ = SymId::from_index(3).slot_in(&slots, "SymId", "symbol");
+        let _ = SymId::from_index(3)
+            .unwrap()
+            .slot_in(&slots, "SymId", "symbol");
     }
 
     /// `index()`/`from_index()` round-trip the 0-based slot to the 1-based niche at
@@ -289,25 +398,59 @@ mod tests {
     /// every brand.
     #[test]
     fn id_niche_offset_round_trips_at_boundaries() {
-        for slot in [0usize, 1, (u32::MAX - 2) as usize] {
-            assert_eq!(TermId::from_index(slot).index(), slot, "slot {slot} term");
+        for slot in [
+            0u64,
+            1,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            u64::MAX - 1,
+        ] {
             assert_eq!(
-                PartitionId::from_index(slot).index(),
+                TermId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} term"
+            );
+            assert_eq!(
+                PartitionId::from_index(slot).unwrap().index(),
                 slot,
                 "slot {slot} partition"
             );
-            assert_eq!(RuleId::from_index(slot).index(), slot, "slot {slot} rule");
-            assert_eq!(RowId::from_index(slot).index(), slot, "slot {slot} row");
-            assert_eq!(ProofId::from_index(slot).index(), slot, "slot {slot} proof");
-            assert_eq!(NodeId::from_index(slot).index(), slot, "slot {slot} node");
-            assert_eq!(MetaId::from_index(slot).index(), slot, "slot {slot} meta");
-            assert_eq!(SymId::from_index(slot).index(), slot, "slot {slot} sym");
+            assert_eq!(
+                RuleId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} rule"
+            );
+            assert_eq!(
+                RowId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} row"
+            );
+            assert_eq!(
+                ProofId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} proof"
+            );
+            assert_eq!(
+                NodeId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} node"
+            );
+            assert_eq!(
+                MetaId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} meta"
+            );
+            assert_eq!(
+                SymId::from_index(slot).unwrap().index(),
+                slot,
+                "slot {slot} sym"
+            );
         }
-        // Slot 0 is stored as NonZeroU32(1) — the niche is genuinely used.
-        assert_eq!(PartitionId::from_index(0).index(), 0);
+        // Slot 0 is stored as NonZeroU64(1) — the niche is genuinely used.
+        assert_eq!(PartitionId::from_index(0).unwrap().index(), 0);
     }
 
-    /// The `NonZeroU32` niche makes `Option<Id<C>>` no wider than `Id<C>` (no
+    /// The `NonZeroU64` niche makes `Option<Id<C>>` no wider than `Id<C>` (no
     /// discriminant word), for EVERY brand.
     #[test]
     fn id_option_is_niche_packed() {
@@ -316,7 +459,7 @@ mod tests {
             size_of::<TermId>(),
             "Option<TermId> must be niche-packed to TermId's width"
         );
-        assert_eq!(size_of::<TermId>(), size_of::<u32>());
+        assert_eq!(size_of::<TermId>(), size_of::<u64>());
         assert_eq!(size_of::<Option<PartitionId>>(), size_of::<PartitionId>());
         assert_eq!(size_of::<Option<RowId>>(), size_of::<RowId>());
         assert_eq!(size_of::<Option<RuleId>>(), size_of::<RuleId>());
@@ -333,10 +476,10 @@ mod tests {
     /// `Ord` is by raw index (mint order) — earlier-minted sorts first.
     #[test]
     fn id_ord_is_mint_order() {
-        let a = PartitionId::from_index(0);
-        let b = PartitionId::from_index(1);
+        let a = PartitionId::from_index(0).unwrap();
+        let b = PartitionId::from_index(1).unwrap();
         assert!(a < b, "mint order: slot 0 precedes slot 1");
-        assert_eq!(a, PartitionId::from_index(0));
+        assert_eq!(a, PartitionId::from_index(0).unwrap());
     }
 
     /// Determinism: an id's identity and order depend on its slot alone, never on
@@ -344,11 +487,18 @@ mod tests {
     /// the same slot set yields the same ascending sequence.
     #[test]
     fn id_order_is_independent_of_construction_order() {
-        let slots: Vec<usize> = (0..64).collect();
-        let ascending: Vec<RowId> = slots.iter().copied().map(RowId::from_index).collect();
+        let slots: Vec<u64> = (0..64).collect();
+        let ascending: Vec<RowId> = slots
+            .iter()
+            .copied()
+            .map(|index| RowId::from_index(index).unwrap())
+            .collect();
         for seed in 0..16u64 {
             let permuted = crate::test_support::permute(&slots, seed);
-            let mut built: Vec<RowId> = permuted.into_iter().map(RowId::from_index).collect();
+            let mut built: Vec<RowId> = permuted
+                .into_iter()
+                .map(|index| RowId::from_index(index).unwrap())
+                .collect();
             built.sort_unstable();
             assert_eq!(
                 built, ascending,
@@ -361,9 +511,12 @@ mod tests {
     /// and a `TermRef` prints the term it wraps.
     #[test]
     fn debug_prints_zero_based_slots() {
-        assert_eq!(format!("{:?}", PartitionId::from_index(7)), "Id(7)");
         assert_eq!(
-            format!("{:?}", TermRef::term(TermId::from_index(7))),
+            format!("{:?}", PartitionId::from_index(7).unwrap()),
+            "Id(7)"
+        );
+        assert_eq!(
+            format!("{:?}", TermRef::term(TermId::from_index(7).unwrap())),
             "TermRef(7)"
         );
     }

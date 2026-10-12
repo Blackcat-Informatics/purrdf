@@ -57,7 +57,7 @@ fn fixture(wide: bool) -> (SegmentedImage, Arc<RdfDataset>, Arc<TextIndex>) {
         let s = purrdf_core::term_fixture::intern_value(&mut resident, &triple[0]);
         let p = purrdf_core::term_fixture::intern_value(&mut resident, &triple[1]);
         let o = purrdf_core::term_fixture::intern_value(&mut resident, &triple[2]);
-        resident.push_quad(s, p, o, None);
+        resident.push_quad(s, p, o, None).unwrap();
     }
     let resident = resident.freeze().unwrap();
     let config = TextIndexConfig::new(
@@ -128,10 +128,12 @@ fn run_text_focus(wide: bool) {
     let functions = binding_engine.bind_functions(functions, &env).unwrap();
     // The actual focus graph differs from the query source: the count must be one.
     let mut focus = RdfDatasetBuilder::new();
-    let s = focus.intern_iri("http://example.org/focus");
-    let p = focus.intern_iri(NOTE);
-    let o = focus.intern_literal(purrdf_core::RdfLiteral::simple("focus only"));
-    focus.push_quad(s, p, o, None);
+    let s = focus.intern_iri("http://example.org/focus").unwrap();
+    let p = focus.intern_iri(NOTE).unwrap();
+    let o = focus
+        .intern_literal(purrdf_core::RdfLiteral::simple("focus only"))
+        .unwrap();
+    focus.push_quad(s, p, o, None).unwrap();
     let focus = focus.freeze().unwrap();
     let options = QueryOptions::new()
         .with_env(&env)

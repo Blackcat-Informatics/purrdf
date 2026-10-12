@@ -177,13 +177,13 @@ mod tests {
         // :a :knows :b .   :x :refersTo :a .   DESCRIBE <a> keeps BOTH — the outgoing
         // edge and the incoming one (symmetric CBD, not a forward-only CBD).
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS);
-        let refers = b.intern_iri(REFERS);
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let x = b.intern_iri("http://ex/x");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(x, refers, a, None);
+        let knows = b.intern_iri(KNOWS).unwrap();
+        let refers = b.intern_iri(REFERS).unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(x, refers, a, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -204,12 +204,12 @@ mod tests {
         // :a :knows :b ; :a :knows :c .   DESCRIBE ?o WHERE { :a :knows ?o } describes
         // :b and :c — each pulls in its incoming :a :knows edge, union = the two edges.
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS);
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let cc = b.intern_iri("http://ex/c");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, knows, cc, None);
+        let knows = b.intern_iri(KNOWS).unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let cc = b.intern_iri("http://ex/c").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, knows, cc, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -232,10 +232,10 @@ mod tests {
     #[test]
     fn describe_unknown_iri_is_empty() {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS);
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        b.push_quad(a, knows, bb, None);
+        let knows = b.intern_iri(KNOWS).unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 

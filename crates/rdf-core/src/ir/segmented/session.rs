@@ -59,11 +59,17 @@ impl SegmentedReadLimits {
 /// One exact host read, retained even when the provider refuses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentedRequest {
+    snapshot: SegmentedSnapshot,
     position: u64,
     bytes: u32,
     completed: bool,
 }
 impl SegmentedRequest {
+    /// Certified source identity qualifying this provider-local byte address.
+    #[must_use]
+    pub const fn snapshot(self) -> SegmentedSnapshot {
+        self.snapshot
+    }
     /// Global encoded byte position, independent of pointer width.
     #[must_use]
     pub const fn position(self) -> u64 {
@@ -114,6 +120,7 @@ impl Budget {
             bytes,
             control: 0,
             cache: None,
+            base: None,
         })
     }
 }
@@ -130,8 +137,21 @@ pub struct SegmentedReservation {
     // Cache blocks themselves hold reservations. A weak account prevents their
     // reservations from keeping the cache alive through a reference cycle.
     cache: Option<std::sync::Weak<Mutex<State>>>,
+    // Escaping workspace owns the original account allocation. The base itself
+    // and cache-owned reservations leave this empty, preventing an owner cycle.
+    base: Option<Arc<Self>>,
 }
 impl SegmentedReservation {
+    #[cfg(test)]
+    pub(super) fn base_owner(&self) -> &Arc<Self> {
+        self.base
+            .as_ref()
+            .expect("workspace owns its original base")
+    }
+    #[cfg(test)]
+    pub(super) fn live_bytes(&self) -> u64 {
+        lock_read_state(&self.budget.state).live
+    }
     /// The admitted retained-capacity charge.
     #[must_use]
     pub const fn bytes(&self) -> u64 {
@@ -184,6 +204,7 @@ impl crate::WorkspaceReservation for [SegmentedReservation; 1] {
 impl Drop for SegmentedReservation {
     fn drop(&mut self) {
         lock_read_state(&self.budget.state).live -= self.bytes;
+        drop(self.base.take());
     }
 }
 
@@ -195,6 +216,7 @@ struct CachedBlock {
 }
 #[derive(Debug)]
 struct CacheEntry {
+    snapshot: SegmentedSnapshot,
     slot: u64,
     block: Arc<CachedBlock>,
 }
@@ -265,12 +287,26 @@ impl std::fmt::Debug for State {
     }
 }
 
+fn reserve_workspace(
+    state: &Arc<Mutex<State>>,
+    budget: &Arc<Budget>,
+    base: &Arc<SegmentedReservation>,
+    bytes: u64,
+) -> Result<SegmentedReservation, SegmentedError> {
+    make_room(&mut lock_read_state(state), budget, bytes, None)?;
+    budget.reserve(bytes).map(|mut reservation| {
+        reservation.cache = Some(Arc::downgrade(state));
+        reservation.base = Some(Arc::clone(base));
+        reservation
+    })
+}
+
 /// Snapshot evidence shares the bounded ledger allocation. Its exact prefix and
 /// digest are immutable even if the live session subsequently appends requests.
 /// Cloning/checkpointing evidence does not clone or expand the request vector.
 #[derive(Debug, Clone)]
-pub struct SegmentedEvidence {
-    snapshot: SegmentedSnapshot,
+pub struct SegmentedEvidence<Identity = SegmentedSnapshot> {
+    snapshot: Identity,
     state: Arc<Mutex<State>>,
     prefix: usize,
     hash: [u8; 32],
@@ -281,7 +317,7 @@ pub struct SegmentedEvidence {
     evictions: u64,
     _base: Arc<SegmentedReservation>,
 }
-impl PartialEq for SegmentedEvidence {
+impl<Identity: PartialEq> PartialEq for SegmentedEvidence<Identity> {
     fn eq(&self, other: &Self) -> bool {
         if self.snapshot != other.snapshot
             || self.prefix != other.prefix
@@ -313,11 +349,20 @@ impl PartialEq for SegmentedEvidence {
         a.requests[..first.prefix] == b.requests[..second.prefix]
     }
 }
-impl Eq for SegmentedEvidence {}
-impl SegmentedEvidence {
-    /// Immutable representation named by every request.
+impl<Identity: Eq> Eq for SegmentedEvidence<Identity> {}
+impl<Identity> SegmentedEvidence<Identity> {
+    /// Original immutable carrier identity retained by this checkpoint.
     #[must_use]
-    pub const fn snapshot(&self) -> SegmentedSnapshot {
+    pub const fn identity(&self) -> &Identity {
+        &self.snapshot
+    }
+    /// Descriptor anchoring this checkpoint. Each request carries its own source
+    /// identity when multiple descriptors share this operation.
+    #[must_use]
+    pub const fn snapshot(&self) -> Identity
+    where
+        Identity: Copy,
+    {
         self.snapshot
     }
     /// Number of exact retained requests at this checkpoint.
@@ -369,6 +414,225 @@ impl SegmentedEvidence {
     }
 }
 
+fn checkpoint<I>(
+    snapshot: I,
+    owner: &Arc<Mutex<State>>,
+    budget: &Arc<Budget>,
+    base: &Arc<SegmentedReservation>,
+) -> SegmentedEvidence<I> {
+    let state = lock_read_state(owner);
+    let residency = lock_read_state(&budget.state);
+    SegmentedEvidence {
+        snapshot,
+        state: Arc::clone(owner),
+        prefix: state.requests.len(),
+        hash: *state.hash.finalize().as_bytes(),
+        io_bytes: state.io_bytes,
+        live_bytes: residency.live,
+        // Disjoint charged reservations cannot sum past checked live residency.
+        unpinned_cache_bytes: state
+            .cache
+            .iter()
+            .filter(|entry| Arc::strong_count(&entry.block) == 1)
+            .map(|entry| entry.block.reservation.bytes())
+            .sum(),
+        peak_bytes: residency.peak,
+        evictions: state.evictions,
+        _base: Arc::clone(base),
+    }
+}
+
+fn owned_workspace(
+    bytes: u64,
+    reserve: impl FnOnce(u64) -> Result<SegmentedReservation, SegmentedError>,
+) -> Result<crate::OwnedWorkspaceReservation<SegmentedError>, SegmentedError> {
+    let control = u64::try_from(size_of::<SegmentedReservation>())
+        .map_err(|_| SegmentedError::AddressExhausted)?;
+    let total = bytes
+        .checked_add(control)
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let mut reservation = reserve(total)?;
+    reservation.control = control;
+    // The one-element allocation has the concrete box layout and is admitted
+    // before birth. Converting it to the erased capability needs no growth.
+    let boxed = crate::small::try_boxed_one(reservation)
+        .map_err(|_| SegmentedError::AllocationFailed("owned workspace reservation"))?;
+    Ok(boxed as crate::OwnedWorkspaceReservation<SegmentedError>)
+}
+
+/// The original live-byte/cache/request/first-fault owner shared by every
+/// descriptor read in one stack query. Opening an ordinary session uses the
+/// same owner with one descriptor.
+#[derive(Debug)]
+pub(super) struct SegmentedOperation {
+    limits: SegmentedReadLimits,
+    state: Arc<Mutex<State>>,
+    budget: Arc<Budget>,
+    base: Arc<SegmentedReservation>,
+}
+
+impl SegmentedOperation {
+    pub(super) fn new(limits: SegmentedReadLimits) -> Result<Self, SegmentedError> {
+        let cache_count =
+            usize::try_from(limits.cache_blocks).map_err(|_| SegmentedError::AddressExhausted)?;
+        let requests =
+            usize::try_from(limits.requests).map_err(|_| SegmentedError::AddressExhausted)?;
+        if cache_count == 0 {
+            return Err(SegmentedError::PinnedBlocks);
+        }
+        let base_bytes =
+            u64::try_from(size_of::<Self>() + size_of::<State>() + size_of::<Budget>() + 192)
+                .map_err(|_| SegmentedError::AddressExhausted)?
+                .checked_add(
+                    u64::from(limits.cache_blocks)
+                        * u64::try_from(size_of::<CacheEntry>())
+                            .map_err(|_| SegmentedError::AddressExhausted)?,
+                )
+                .and_then(|v| {
+                    v.checked_add(
+                        u64::from(limits.requests)
+                            * u64::try_from(size_of::<SegmentedRequest>()).ok()?,
+                    )
+                })
+                .ok_or(SegmentedError::AddressExhausted)?;
+        if base_bytes > limits.live_bytes {
+            return Err(SegmentedError::Residency {
+                requested: base_bytes,
+                limit: limits.live_bytes,
+            });
+        }
+        // Reserve before creating the session's heap owners or fixed capacities.
+        let budget = Arc::new(Budget {
+            state: Mutex::new(Residency {
+                live: base_bytes,
+                peak: base_bytes,
+                pins: 0,
+            }),
+            limit: limits.live_bytes,
+            max_pins: limits.pins,
+        });
+        let base = Arc::new(SegmentedReservation {
+            budget: Arc::clone(&budget),
+            bytes: base_bytes,
+            control: 0,
+            cache: None,
+            base: None,
+        });
+        let state = Arc::new(Mutex::new(State {
+            cache: Vec::with_capacity(cache_count),
+            requests: Vec::with_capacity(requests),
+            error: None,
+            io_bytes: 0,
+            evictions: 0,
+            hash: {
+                let mut hash = Hasher::new();
+                hash.update(super::SEGMENTED_REQUESTS_DOMAIN.as_bytes());
+                hash
+            },
+        }));
+        Ok(Self {
+            limits,
+            state,
+            budget,
+            base,
+        })
+    }
+
+    pub(super) fn ready(&self) -> Result<(), SegmentedError> {
+        let error = lock_read_state(&self.state).error.clone();
+        error.map_or(Ok(()), Err)
+    }
+
+    pub(super) fn evidence<I>(&self, identity: I) -> SegmentedEvidence<I> {
+        checkpoint(identity, &self.state, &self.budget, &self.base)
+    }
+
+    pub(super) fn live_limit(&self) -> u64 {
+        self.limits.live_bytes
+    }
+
+    pub(super) fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Result<crate::OwnedWorkspaceReservation<SegmentedError>, SegmentedError> {
+        owned_workspace(bytes, |bytes| self.reserve_workspace(bytes))
+    }
+
+    pub(super) fn fail<T>(&self, error: SegmentedError) -> Result<T, SegmentedError> {
+        latch_error(&self.state, error)
+    }
+
+    pub(super) fn reserve_workspace(
+        &self,
+        bytes: u64,
+    ) -> Result<SegmentedReservation, SegmentedError> {
+        self.ready()?;
+        reserve_workspace(&self.state, &self.budget, &self.base, bytes)
+    }
+
+    pub(super) fn open(
+        &self,
+        provider: Arc<dyn SegmentedProvider>,
+        receipt: &SegmentedReceipt,
+    ) -> Result<SegmentedSession, SegmentedError> {
+        let error = lock_read_state(&self.state).error.clone();
+        if let Some(error) = error {
+            return Err(error);
+        }
+        if provider.snapshot() != receipt.snapshot || provider.byte_len() != receipt.byte_len {
+            return latch_error(&self.state, SegmentedError::SnapshotMismatch);
+        }
+        let descriptor = (|| {
+            let bytes = u64::try_from(size_of::<SegmentedSession>())
+                .map_err(|_| SegmentedError::AddressExhausted)?;
+            make_room(&mut lock_read_state(&self.state), &self.budget, bytes, None)?;
+            self.budget.reserve(bytes)
+        })()
+        .or_else(|error| latch_error(&self.state, error))?;
+        let mut session = SegmentedSession {
+            provider,
+            receipt: receipt.clone(),
+            limits: self.limits,
+            header: Header {
+                block_bytes: receipt.block_bytes,
+                records_per_block: 1,
+                first_term_index: 0,
+                max_owned_term_bytes: 0,
+                terms: 0,
+                dictionary: Stream::default(),
+                reverse: Stream::default(),
+                streams: [Stream::default(); 3],
+                graphs: Stream::default(),
+                summaries: Stream::default(),
+                flags: 0,
+            },
+            state: Arc::clone(&self.state),
+            budget: Arc::clone(&self.budget),
+            base: Arc::clone(&self.base),
+            _descriptor: descriptor,
+        };
+        let header = session.block(0)?;
+        let decoded = Header::decode(&header.encoded).or_else(|error| session.fail(error))?;
+        decoded
+            .validate_addresses(receipt.block_count)
+            .or_else(|error| session.fail(error))?;
+        if decoded.block_bytes != receipt.block_bytes {
+            return session.fail(SegmentedError::Corrupt(
+                "receipt/header block size mismatch",
+            ));
+        }
+        session.header = decoded;
+        Ok(session)
+    }
+}
+
+fn latch_error<T>(state: &Mutex<State>, error: SegmentedError) -> Result<T, SegmentedError> {
+    let mut state = lock_read_state(state);
+    let error = state.error.get_or_insert(error).clone();
+    drop(state);
+    Err(error)
+}
+
 /// A certified immutable snapshot, read through one bounded operational session.
 /// Metadata and translations are not expanded into whole-dataset arrays. Every
 /// cached object and returned pin retains its live reservation through eviction.
@@ -381,6 +645,7 @@ pub struct SegmentedSession {
     state: Arc<Mutex<State>>,
     budget: Arc<Budget>,
     base: Arc<SegmentedReservation>,
+    _descriptor: SegmentedReservation,
 }
 
 impl SegmentedSession {
@@ -455,100 +720,11 @@ impl SegmentedSession {
         if provider.snapshot() != receipt.snapshot || provider.byte_len() != receipt.byte_len {
             return Err(SegmentedError::SnapshotMismatch);
         }
-        let cache_count =
-            usize::try_from(limits.cache_blocks).map_err(|_| SegmentedError::AddressExhausted)?;
-        let requests =
-            usize::try_from(limits.requests).map_err(|_| SegmentedError::AddressExhausted)?;
-        if cache_count == 0 {
-            return Err(SegmentedError::PinnedBlocks);
-        }
-        let base_bytes =
-            u64::try_from(size_of::<Self>() + size_of::<State>() + size_of::<Budget>() + 192)
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .checked_add(
-                    u64::from(limits.cache_blocks)
-                        * u64::try_from(size_of::<CacheEntry>())
-                            .map_err(|_| SegmentedError::AddressExhausted)?,
-                )
-                .and_then(|v| {
-                    v.checked_add(
-                        u64::from(limits.requests)
-                            * u64::try_from(size_of::<SegmentedRequest>()).ok()?,
-                    )
-                })
-                .ok_or(SegmentedError::AddressExhausted)?;
-        if base_bytes > limits.live_bytes {
-            return Err(SegmentedError::Residency {
-                requested: base_bytes,
-                limit: limits.live_bytes,
-            });
-        }
-        // Reserve before creating the session's heap owners or fixed capacities.
-        let budget = Arc::new(Budget {
-            state: Mutex::new(Residency {
-                live: base_bytes,
-                peak: base_bytes,
-                pins: 0,
-            }),
-            limit: limits.live_bytes,
-            max_pins: limits.pins,
-        });
-        let base = Arc::new(SegmentedReservation {
-            budget: Arc::clone(&budget),
-            bytes: base_bytes,
-            control: 0,
-            cache: None,
-        });
-        let state = Arc::new(Mutex::new(State {
-            cache: Vec::with_capacity(cache_count),
-            requests: Vec::with_capacity(requests),
-            error: None,
-            io_bytes: 0,
-            evictions: 0,
-            hash: {
-                let mut hash = Hasher::new();
-                hash.update(super::SEGMENTED_REQUESTS_DOMAIN.as_bytes());
-                hash
-            },
-        }));
-        let mut session = Self {
-            provider,
-            receipt: receipt.clone(),
-            limits,
-            header: Header {
-                block_bytes: receipt.block_bytes,
-                records_per_block: 1,
-                first_term_index: 0,
-                max_owned_term_bytes: 0,
-                terms: 0,
-                dictionary: Stream::default(),
-                reverse: Stream::default(),
-                streams: [Stream::default(); 3],
-                graphs: Stream::default(),
-                summaries: Stream::default(),
-                flags: 0,
-            },
-            state,
-            budget,
-            base,
-        };
-        let header = session.block(0)?;
-        let decoded = Header::decode(&header.encoded)?;
-        decoded.validate_addresses(receipt.block_count)?;
-        if decoded.block_bytes != receipt.block_bytes {
-            return Err(SegmentedError::Corrupt(
-                "receipt/header block size mismatch",
-            ));
-        }
-        session.header = decoded;
-        Ok(session)
+        SegmentedOperation::new(limits)?.open(provider, receipt)
     }
 
     fn fail<T>(&self, error: SegmentedError) -> Result<T, SegmentedError> {
-        let mut state = lock_read_state(&self.state);
-        let error = state.error.get_or_insert(error).clone();
-        drop(state);
-        Err(error)
+        latch_error(&self.state, error)
     }
     fn ready(&self) -> Result<(), SegmentedError> {
         let error = lock_read_state(&self.state).error.clone();
@@ -570,12 +746,7 @@ impl SegmentedSession {
     /// Refuses a sticky read failure or capacity blocked by live cache/pins.
     pub fn reserve_workspace(&self, bytes: u64) -> Result<SegmentedReservation, SegmentedError> {
         self.ready()?;
-        let mut state = lock_read_state(&self.state);
-        self.make_room(&mut state, bytes, false)?;
-        self.budget.reserve(bytes).map(|mut reservation| {
-            reservation.cache = Some(Arc::downgrade(&self.state));
-            reservation
-        })
+        reserve_workspace(&self.state, &self.budget, &self.base, bytes)
     }
 
     fn make_room(&self, state: &mut State, charge: u64, slot: bool) -> Result<(), SegmentedError> {
@@ -621,6 +792,7 @@ impl SegmentedSession {
             return Err(SegmentedError::Corrupt("range escapes certified provider"));
         }
         state.requests.push(SegmentedRequest {
+            snapshot: self.receipt.snapshot,
             position,
             bytes,
             completed: false,
@@ -634,6 +806,7 @@ impl SegmentedSession {
                 .expect("the admitted request was appended")
                 .completed = true;
         }
+        state.hash.update(self.receipt.snapshot.as_bytes());
         state.hash.update(&position.to_le_bytes());
         state.hash.update(&bytes.to_le_bytes());
         state.hash.update(&[u8::from(result.is_ok())]);
@@ -646,7 +819,11 @@ impl SegmentedSession {
             return self.fail(SegmentedError::Corrupt("block outside certified directory"));
         }
         let mut state = lock_read_state(&self.state);
-        if let Some(index) = state.cache.iter().position(|entry| entry.slot == slot) {
+        if let Some(index) = state
+            .cache
+            .iter()
+            .position(|entry| entry.snapshot == self.receipt.snapshot && entry.slot == slot)
+        {
             let entry = state.cache.remove(index);
             let block = Arc::clone(&entry.block);
             state.cache.push(entry);
@@ -774,6 +951,7 @@ impl SegmentedSession {
         match result {
             Ok(block) => {
                 state.cache.push(CacheEntry {
+                    snapshot: self.receipt.snapshot,
                     slot,
                     block: Arc::clone(&block),
                 });
@@ -982,6 +1160,10 @@ impl SegmentedSession {
         }
         Ok(lo..end)
     }
+    pub(super) const fn has_stream_rows(&self, table: usize) -> bool {
+        self.header.streams[table].rows != 0
+    }
+
     fn stream(&self, table: usize, pattern: Pattern) -> QuadIter<'_> {
         QuadIter {
             session: self,
@@ -995,27 +1177,7 @@ impl SegmentedSession {
     /// Current exact checkpoint evidence. Its request-prefix access performs no clone.
     #[must_use]
     pub fn evidence(&self) -> SegmentedEvidence {
-        let state = lock_read_state(&self.state);
-        let residency = lock_read_state(&self.budget.state);
-        SegmentedEvidence {
-            snapshot: self.receipt.snapshot,
-            state: Arc::clone(&self.state),
-            prefix: state.requests.len(),
-            hash: *state.hash.finalize().as_bytes(),
-            io_bytes: state.io_bytes,
-            live_bytes: residency.live,
-            // These disjoint reservations are already included in checked live
-            // residency, so their sum cannot exceed it or overflow.
-            unpinned_cache_bytes: state
-                .cache
-                .iter()
-                .filter(|entry| Arc::strong_count(&entry.block) == 1)
-                .map(|entry| entry.block.reservation.bytes())
-                .sum(),
-            peak_bytes: residency.peak,
-            evictions: state.evictions,
-            _base: Arc::clone(&self.base),
-        }
+        checkpoint(self.receipt.snapshot, &self.state, &self.budget, &self.base)
     }
 
     /// Stream RDF 1.2 TriG lines through the shared term emitter. Graph declaration
@@ -1125,7 +1287,9 @@ struct QuadIter<'a> {
     session: &'a SegmentedSession,
     table: usize,
     summaries: Option<core::ops::Range<u64>>,
-    rows: Option<Arc<CachedBlock>>,
+    // A yielded QuadIds is Copy and borrows no page. Keep only its certified
+    // address between yields so nested logical scans can evict the row block.
+    rows: Option<u64>,
     row: usize,
     pattern: Pattern,
 }
@@ -1136,7 +1300,10 @@ impl Iterator for QuadIter<'_> {
             return None;
         }
         loop {
-            if let Some(block) = &self.rows {
+            if let Some(page) = self.rows {
+                let Ok(block) = self.session.block(page) else {
+                    return None;
+                };
                 let data = match fixed_records(&block.encoded, format::QUADS, 32) {
                     Ok(data) => data,
                     Err(error) => {
@@ -1194,10 +1361,7 @@ impl Iterator for QuadIter<'_> {
             }
             let page =
                 crate::bytes::read_u64_le(&summary, 0).expect("certified summary block position");
-            self.rows = match self.session.block(page) {
-                Ok(block) => Some(block),
-                Err(_) => return None,
-            };
+            self.rows = Some(page);
             self.row = 0;
         }
     }
@@ -1252,21 +1416,9 @@ impl DatasetView for SegmentedSession {
         &self,
         bytes: u64,
     ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
-        Some((|| {
-            let control = u64::try_from(size_of::<SegmentedReservation>())
-                .map_err(|_| SegmentedError::AddressExhausted)?;
-            let total = bytes
-                .checked_add(control)
-                .ok_or(SegmentedError::AddressExhausted)?;
-            let mut reservation = Self::reserve_workspace(self, total)?;
-            reservation.control = control;
-            // One element has exactly the concrete box layout. The fallible Vec
-            // reserve happens after admission; conversion to a one-element boxed
-            // array reuses that allocation and performs no subsequent growth.
-            let boxed = crate::small::try_boxed_one(reservation)
-                .map_err(|_| SegmentedError::AllocationFailed("owned workspace reservation"))?;
-            Ok(boxed as crate::OwnedWorkspaceReservation<Self::ReadError>)
-        })())
+        Some(owned_workspace(bytes, |bytes| {
+            Self::reserve_workspace(self, bytes)
+        }))
     }
     fn storage_live_budget(&self) -> Option<u64> {
         Some(self.limits.live_bytes)
@@ -1460,5 +1612,151 @@ impl FallibleDatasetView for SegmentedSession {
             None => ViewOperationStatus::Ready { evidence },
             Some(error) => ViewOperationStatus::Failed { error, evidence },
         }
+    }
+}
+
+#[cfg(test)]
+mod operation_tests {
+    use super::*;
+    use crate::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
+
+    #[test]
+    fn workspace_outlives_session_with_original_budget_control_charge() {
+        use crate::WorkspaceReservation as _;
+        let (image, _) = image("urn:workspace");
+        let session = SegmentedSession::open(
+            Arc::new(image.provider()),
+            image.receipt(),
+            SegmentedReadLimits::new(2_000_000, 1, 100, 1_000_000, 2),
+        )
+        .unwrap();
+        let base = Arc::downgrade(&session.base);
+        let base_bytes = session.base.bytes();
+        let mut workspace = session.reserve_workspace(4096).unwrap();
+        let mut owned = DatasetView::reserve_owned_workspace(&session, 8192)
+            .unwrap()
+            .unwrap();
+        drop(session);
+        let control = u64::try_from(size_of::<SegmentedReservation>()).unwrap();
+        assert_eq!(workspace.live_bytes(), base_bytes + 4096 + 8192 + control);
+        workspace.resize(0).unwrap();
+        owned.resize(0).unwrap();
+        assert_eq!(workspace.live_bytes(), base_bytes + control);
+        drop(workspace);
+        assert!(base.upgrade().is_some());
+        drop(owned);
+        assert!(base.upgrade().is_none());
+    }
+
+    fn image(label: &str) -> (SegmentedImage, GlobalTermId) {
+        let limits = SegmentedBuildLimits::new(4096, 200_000, 4096, 1024, 4).unwrap();
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
+        let mut id = None;
+        builder
+            .intern_batch(&[TermValue::iri(label)], |_, term| id = Some(term))
+            .unwrap();
+        let id = id.unwrap();
+        builder
+            .push_quad(QuadIds {
+                s: id,
+                p: id,
+                o: id,
+                g: None,
+            })
+            .unwrap();
+        (builder.seal().unwrap(), id)
+    }
+
+    #[test]
+    fn composed_sources_share_cache_admission_and_qualified_requests() {
+        let (first, first_id) = image("urn:first");
+        let (second, second_id) = image("urn:second");
+        assert_eq!(
+            first_id, second_id,
+            "segment-local IDs deliberately overlap"
+        );
+        let operation =
+            SegmentedOperation::new(SegmentedReadLimits::new(2_000_000, 1, 2000, 10_000_000, 4))
+                .unwrap();
+        let a = operation
+            .open(Arc::new(first.provider()), first.receipt())
+            .unwrap();
+        let opened = a.evidence();
+        let b = operation
+            .open(Arc::new(second.provider()), second.receipt())
+            .unwrap();
+        assert_eq!(a.term_value(first_id).unwrap(), TermValue::iri("urn:first"));
+        assert_eq!(
+            b.term_value(second_id).unwrap(),
+            TermValue::iri("urn:second")
+        );
+        assert_eq!(a.term_value(first_id).unwrap(), TermValue::iri("urn:first"));
+        let evidence = b.evidence();
+        assert!(evidence.evictions() >= 3);
+        assert!(evidence.peak_bytes() <= 2_000_000);
+        assert!(evidence.request_count() > opened.request_count());
+        evidence.with_requests(|requests| {
+            assert!(
+                requests
+                    .iter()
+                    .any(|r| r.snapshot() == first.receipt().snapshot())
+            );
+            assert!(
+                requests
+                    .iter()
+                    .any(|r| r.snapshot() == second.receipt().snapshot())
+            );
+        });
+        opened.with_requests(|requests| {
+            assert!(
+                requests
+                    .iter()
+                    .all(|r| r.snapshot() == first.receipt().snapshot())
+            )
+        });
+        assert!(Arc::ptr_eq(&a.state, &b.state));
+        assert!(Arc::ptr_eq(&a.budget, &b.budget));
+    }
+
+    #[test]
+    fn second_source_exhaustion_is_first_fault_for_every_session() {
+        let (first, first_id) = image("urn:first");
+        let (second, _) = image("urn:second");
+        let probe = SegmentedSession::open(
+            Arc::new(first.provider()),
+            first.receipt(),
+            SegmentedReadLimits::new(2_000_000, 1, 2000, 10_000_000, 4),
+        )
+        .unwrap();
+        let count = u32::try_from(probe.evidence().request_count()).unwrap();
+        let operation =
+            SegmentedOperation::new(SegmentedReadLimits::new(2_000_000, 1, count, 10_000_000, 4))
+                .unwrap();
+        let a = operation
+            .open(Arc::new(first.provider()), first.receipt())
+            .unwrap();
+        assert!(matches!(
+            operation.open(Arc::new(second.provider()), second.receipt()),
+            Err(SegmentedError::EvidenceExhausted)
+        ));
+        assert_eq!(
+            a.term_value(first_id),
+            Err(crate::TermLookupError::Read(
+                SegmentedError::EvidenceExhausted
+            ))
+        );
+        assert!(matches!(
+            a.operation_status(),
+            ViewOperationStatus::Failed {
+                error: SegmentedError::EvidenceExhausted,
+                ..
+            }
+        ));
+        // A later descriptor mismatch cannot replace the original work refusal.
+        assert!(matches!(
+            operation.open(Arc::new(second.provider()), first.receipt()),
+            Err(SegmentedError::EvidenceExhausted)
+        ));
+        assert_eq!(a.evidence().request_count(), count as usize);
     }
 }

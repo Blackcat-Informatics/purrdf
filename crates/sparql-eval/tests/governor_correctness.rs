@@ -111,52 +111,56 @@ fn data_shape() -> impl Strategy<Value = DataShape> {
 /// Freeze `shape` into a dataset.
 fn build_dataset(shape: DataShape) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
-    let n = builder.intern_iri(&format!("{EX}n"));
-    let confidence = builder.intern_iri(&format!("{EX}confidence"));
-    let graph = builder.intern_iri(&format!("{EX}g"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+    let n = builder.intern_iri(&format!("{EX}n")).unwrap();
+    let confidence = builder.intern_iri(&format!("{EX}confidence")).unwrap();
+    let graph = builder.intern_iri(&format!("{EX}g")).unwrap();
     if shape.named_graph {
-        builder.declare_named_graph(graph);
+        builder.declare_named_graph(graph).unwrap();
     }
 
     let mut edge_ids: Vec<(TermId, TermId)> = Vec::with_capacity(shape.edges);
     for index in 0..shape.edges {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let o = builder.intern_iri(&format!("{EX}o{index}"));
-        let count = builder.intern_literal(RdfLiteral::typed(
-            index.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, p, o, None);
-        builder.push_quad(s, n, count, None);
+        let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}o{index}")).unwrap();
+        let count = builder
+            .intern_literal(RdfLiteral::typed(
+                index.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
+        builder.push_quad(s, n, count, None).unwrap();
         if shape.named_graph {
-            builder.push_quad(s, p, o, Some(graph));
+            builder.push_quad(s, p, o, Some(graph)).unwrap();
         }
         if index < shape.optional_edges {
-            let z = builder.intern_iri(&format!("{EX}z{index}"));
-            builder.push_quad(s, q, z, None);
+            let z = builder.intern_iri(&format!("{EX}z{index}")).unwrap();
+            builder.push_quad(s, q, z, None).unwrap();
         }
         edge_ids.push((s, o));
     }
     if shape.duplicate_edge {
         let (s, o) = edge_ids[0];
-        builder.push_quad(s, p, o, None);
+        builder.push_quad(s, p, o, None).unwrap();
     }
     if shape.reified {
         // RDF 1.2: each edge's triple term gets a reifier carrying one annotation. The
         // reified statements are NOT re-asserted as plain quads — they are already
         // asserted above — so `?r rdf:reifies <<( ?s ex:p ?o )>>` reads the side-tables.
         for (index, &(s, o)) in edge_ids.iter().enumerate() {
-            let statement = builder.intern_triple(s, p, o);
-            let reifier = builder.intern_iri(&format!("{EX}r{index}"));
-            let level = builder.intern_literal(RdfLiteral::simple(if index % 2 == 0 {
-                "high"
-            } else {
-                "low"
-            }));
-            builder.push_reifier(reifier, statement);
-            builder.push_annotation(reifier, confidence, level);
+            let statement = builder.intern_triple(s, p, o).unwrap();
+            let reifier = builder.intern_iri(&format!("{EX}r{index}")).unwrap();
+            let level = builder
+                .intern_literal(RdfLiteral::simple(if index % 2 == 0 {
+                    "high"
+                } else {
+                    "low"
+                }))
+                .unwrap();
+            builder.push_reifier(reifier, statement).unwrap();
+            builder.push_annotation(reifier, confidence, level).unwrap();
         }
     }
     builder.freeze().expect("the generated dataset is valid")
@@ -1112,14 +1116,14 @@ const PARALLEL_ROWS: usize = 1_500;
 /// `PARALLEL_ROWS` subjects on `ex:p`, half of them also on `ex:q`.
 fn wide_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
     for index in 0..PARALLEL_ROWS {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let o = builder.intern_iri(&format!("{EX}o{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}o{index}")).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         if index % 2 == 0 {
-            builder.push_quad(s, q, o, None);
+            builder.push_quad(s, q, o, None).unwrap();
         }
     }
     builder.freeze().expect("the wide dataset is valid")

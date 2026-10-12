@@ -194,7 +194,7 @@ impl ClassMembershipView {
     #[inline]
     #[cfg(test)]
     pub(crate) fn base(&self) -> &Arc<RdfDataset> {
-        self.base.materialized()
+        self.base.materialized().expect("authored native fixture")
     }
 
     /// Whether `subject` is directly or transitively an asserted SHACL instance
@@ -689,8 +689,8 @@ impl crate::sparql::FocusGraphSource for ClassMembershipView {
     /// `shnex:instancesOf` computes that closure for itself from the same base. A
     /// caller building a fresh view over this graph therefore gets the same answers
     /// this one gives.
-    fn focus_graph(&self) -> Option<&Arc<RdfDataset>> {
-        Some(self.base.materialized())
+    fn focus_graph(&self) -> Result<Option<&Arc<RdfDataset>>, crate::error::ShapesError> {
+        self.base.materialized().map(Some)
     }
 }
 
@@ -1042,19 +1042,19 @@ mod tests {
 
     fn fixture() -> (ClassMembershipView, [TermId; 8]) {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri(rdf::TYPE);
-        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-        let sub = builder.intern_iri(&format!("{EX}Sub"));
-        let mid = builder.intern_iri(&format!("{EX}Mid"));
-        let top = builder.intern_iri(&format!("{EX}Top"));
-        let other = builder.intern_iri(&format!("{EX}Other"));
-        let alice = builder.intern_iri(&format!("{EX}alice"));
-        let bob = builder.intern_iri(&format!("{EX}bob"));
-        builder.push_quad(sub, subclass, mid, None);
-        builder.push_quad(mid, subclass, top, None);
-        builder.push_quad(alice, rdf_type, sub, None);
-        builder.push_quad(alice, rdf_type, top, None);
-        builder.push_quad(bob, rdf_type, other, None);
+        let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+        let sub = builder.intern_iri(&format!("{EX}Sub")).unwrap();
+        let mid = builder.intern_iri(&format!("{EX}Mid")).unwrap();
+        let top = builder.intern_iri(&format!("{EX}Top")).unwrap();
+        let other = builder.intern_iri(&format!("{EX}Other")).unwrap();
+        let alice = builder.intern_iri(&format!("{EX}alice")).unwrap();
+        let bob = builder.intern_iri(&format!("{EX}bob")).unwrap();
+        builder.push_quad(sub, subclass, mid, None).unwrap();
+        builder.push_quad(mid, subclass, top, None).unwrap();
+        builder.push_quad(alice, rdf_type, sub, None).unwrap();
+        builder.push_quad(alice, rdf_type, top, None).unwrap();
+        builder.push_quad(bob, rdf_type, other, None).unwrap();
         let dataset = builder.freeze().expect("fixture freezes");
         (
             ClassMembershipView::new(dataset),
@@ -1118,18 +1118,18 @@ mod tests {
     #[test]
     fn cycles_terminate_and_named_graphs_do_not_contribute() {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri(rdf::TYPE);
-        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-        let a = builder.intern_iri(&format!("{EX}A"));
-        let b = builder.intern_iri(&format!("{EX}B"));
-        let hidden = builder.intern_iri(&format!("{EX}Hidden"));
-        let subject = builder.intern_iri(&format!("{EX}subject"));
-        let graph = builder.intern_iri(&format!("{EX}shapes"));
-        builder.push_quad(a, subclass, b, None);
-        builder.push_quad(b, subclass, a, None);
-        builder.push_quad(a, subclass, a, None);
-        builder.push_quad(a, subclass, hidden, Some(graph));
-        builder.push_quad(subject, rdf_type, a, None);
+        let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+        let a = builder.intern_iri(&format!("{EX}A")).unwrap();
+        let b = builder.intern_iri(&format!("{EX}B")).unwrap();
+        let hidden = builder.intern_iri(&format!("{EX}Hidden")).unwrap();
+        let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+        let graph = builder.intern_iri(&format!("{EX}shapes")).unwrap();
+        builder.push_quad(a, subclass, b, None).unwrap();
+        builder.push_quad(b, subclass, a, None).unwrap();
+        builder.push_quad(a, subclass, a, None).unwrap();
+        builder.push_quad(a, subclass, hidden, Some(graph)).unwrap();
+        builder.push_quad(subject, rdf_type, a, None).unwrap();
         let view = ClassMembershipView::new(builder.freeze().expect("fixture freezes"));
 
         assert!(view.is_instance(subject, a));
@@ -1146,23 +1146,33 @@ mod tests {
     #[test]
     fn unrelated_rdfs_and_owl_terms_never_create_membership() {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri(rdf::TYPE);
-        let person = builder.intern_iri(&format!("{EX}Person"));
-        let other = builder.intern_iri(&format!("{EX}Other"));
-        let alice = builder.intern_iri(&format!("{EX}alice"));
-        let bob = builder.intern_iri(&format!("{EX}bob"));
-        let property = builder.intern_iri(&format!("{EX}property"));
-        let value = builder.intern_iri(&format!("{EX}value"));
-        let domain = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#domain");
-        let range = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#range");
-        let subproperty = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subPropertyOf");
-        let equivalent = builder.intern_iri("http://www.w3.org/2002/07/owl#equivalentClass");
-        builder.push_quad(property, domain, person, None);
-        builder.push_quad(property, range, person, None);
-        builder.push_quad(property, subproperty, rdf_type, None);
-        builder.push_quad(other, equivalent, person, None);
-        builder.push_quad(alice, property, value, None);
-        builder.push_quad(bob, rdf_type, other, None);
+        let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+        let person = builder.intern_iri(&format!("{EX}Person")).unwrap();
+        let other = builder.intern_iri(&format!("{EX}Other")).unwrap();
+        let alice = builder.intern_iri(&format!("{EX}alice")).unwrap();
+        let bob = builder.intern_iri(&format!("{EX}bob")).unwrap();
+        let property = builder.intern_iri(&format!("{EX}property")).unwrap();
+        let value = builder.intern_iri(&format!("{EX}value")).unwrap();
+        let domain = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#domain")
+            .unwrap();
+        let range = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#range")
+            .unwrap();
+        let subproperty = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subPropertyOf")
+            .unwrap();
+        let equivalent = builder
+            .intern_iri("http://www.w3.org/2002/07/owl#equivalentClass")
+            .unwrap();
+        builder.push_quad(property, domain, person, None).unwrap();
+        builder.push_quad(property, range, person, None).unwrap();
+        builder
+            .push_quad(property, subproperty, rdf_type, None)
+            .unwrap();
+        builder.push_quad(other, equivalent, person, None).unwrap();
+        builder.push_quad(alice, property, value, None).unwrap();
+        builder.push_quad(bob, rdf_type, other, None).unwrap();
         let view = ClassMembershipView::new(builder.freeze().expect("fixture freezes"));
 
         assert!(!view.is_instance(alice, person));
@@ -1174,10 +1184,10 @@ mod tests {
     #[test]
     fn no_hierarchy_is_an_identity_view() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri(&format!("{EX}subject"));
-        let predicate = builder.intern_iri(&format!("{EX}predicate"));
-        let object = builder.intern_iri(&format!("{EX}object"));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+        let predicate = builder.intern_iri(&format!("{EX}predicate")).unwrap();
+        let object = builder.intern_iri(&format!("{EX}object")).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         let dataset = builder.freeze().expect("fixture freezes");
         let view = ClassMembershipView::new(Arc::clone(&dataset));
         assert_eq!(
@@ -1191,13 +1201,13 @@ mod tests {
     #[test]
     fn direct_root_types_do_not_retain_an_empty_index() {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri(rdf::TYPE);
-        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-        let child = builder.intern_iri(&format!("{EX}Child"));
-        let root = builder.intern_iri(&format!("{EX}Root"));
-        let subject = builder.intern_iri(&format!("{EX}subject"));
-        builder.push_quad(child, subclass, root, None);
-        builder.push_quad(subject, rdf_type, root, None);
+        let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+        let child = builder.intern_iri(&format!("{EX}Child")).unwrap();
+        let root = builder.intern_iri(&format!("{EX}Root")).unwrap();
+        let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+        builder.push_quad(child, subclass, root, None).unwrap();
+        builder.push_quad(subject, rdf_type, root, None).unwrap();
         let dataset = builder.freeze().expect("fixture freezes");
         let view = ClassMembershipView::new(Arc::clone(&dataset));
 
@@ -1217,21 +1227,25 @@ mod tests {
     #[test]
     fn mixed_abox_retains_only_membership_relevant_type_rows() {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri(rdf::TYPE);
-        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-        let leaf = builder.intern_iri(&format!("{EX}Leaf"));
-        let root = builder.intern_iri(&format!("{EX}Root"));
-        let active_a = builder.intern_iri(&format!("{EX}active-a"));
-        let active_b = builder.intern_iri(&format!("{EX}active-b"));
-        builder.push_quad(leaf, subclass, root, None);
-        builder.push_quad(active_a, rdf_type, leaf, None);
-        builder.push_quad(active_a, rdf_type, root, None);
-        builder.push_quad(active_b, rdf_type, leaf, None);
+        let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+        let leaf = builder.intern_iri(&format!("{EX}Leaf")).unwrap();
+        let root = builder.intern_iri(&format!("{EX}Root")).unwrap();
+        let active_a = builder.intern_iri(&format!("{EX}active-a")).unwrap();
+        let active_b = builder.intern_iri(&format!("{EX}active-b")).unwrap();
+        builder.push_quad(leaf, subclass, root, None).unwrap();
+        builder.push_quad(active_a, rdf_type, leaf, None).unwrap();
+        builder.push_quad(active_a, rdf_type, root, None).unwrap();
+        builder.push_quad(active_b, rdf_type, leaf, None).unwrap();
 
         for index in 0..512usize {
-            let class = builder.intern_iri(&format!("{EX}unrelated-class-{index}"));
-            let subject = builder.intern_iri(&format!("{EX}unrelated-subject-{index}"));
-            builder.push_quad(subject, rdf_type, class, None);
+            let class = builder
+                .intern_iri(&format!("{EX}unrelated-class-{index}"))
+                .unwrap();
+            let subject = builder
+                .intern_iri(&format!("{EX}unrelated-subject-{index}"))
+                .unwrap();
+            builder.push_quad(subject, rdf_type, class, None).unwrap();
         }
 
         let dataset = builder.freeze().expect("fixture freezes");
@@ -1258,15 +1272,19 @@ mod tests {
     #[test]
     fn rdf12_side_tables_are_forwarded_verbatim() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let o = builder.intern_iri(&format!("{EX}o"));
-        let triple = builder.intern_triple(s, p, o);
-        let reifier = builder.intern_iri(&format!("{EX}r"));
-        let annotation_p = builder.intern_iri(&format!("{EX}source"));
-        let annotation_o = builder.intern_literal(::purrdf_rdf::RdfLiteral::simple("test"));
-        builder.push_reifier(reifier, triple);
-        builder.push_annotation(reifier, annotation_p, annotation_o);
+        let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}o")).unwrap();
+        let triple = builder.intern_triple(s, p, o).unwrap();
+        let reifier = builder.intern_iri(&format!("{EX}r")).unwrap();
+        let annotation_p = builder.intern_iri(&format!("{EX}source")).unwrap();
+        let annotation_o = builder
+            .intern_literal(::purrdf_rdf::RdfLiteral::simple("test"))
+            .unwrap();
+        builder.push_reifier(reifier, triple).unwrap();
+        builder
+            .push_annotation(reifier, annotation_p, annotation_o)
+            .unwrap();
         let dataset = builder.freeze().expect("fixture freezes");
         let view = ClassMembershipView::new(Arc::clone(&dataset));
         assert_eq!(
@@ -1283,20 +1301,34 @@ mod tests {
     #[test]
     fn blank_resources_and_triple_term_classes_participate_in_membership() {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri(rdf::TYPE);
-        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-        let base_s = builder.intern_iri(&format!("{EX}embedded-subject"));
-        let base_p = builder.intern_iri(&format!("{EX}embedded-predicate"));
-        let base_o = builder.intern_iri(&format!("{EX}embedded-object"));
-        let iri_subject = builder.intern_iri(&format!("{EX}iri-subject"));
-        let triple_class = builder.intern_triple(base_o, base_p, base_s);
-        let blank_subject = builder.intern_blank("subject", BlankScope::DEFAULT);
-        let blank_class = builder.intern_blank("class", BlankScope::DEFAULT);
-        let leaf = builder.intern_iri(&format!("{EX}Leaf"));
-        builder.push_quad(leaf, subclass, triple_class, None);
-        builder.push_quad(leaf, subclass, blank_class, None);
-        builder.push_quad(iri_subject, rdf_type, leaf, None);
-        builder.push_quad(blank_subject, rdf_type, leaf, None);
+        let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+        let base_s = builder
+            .intern_iri(&format!("{EX}embedded-subject"))
+            .unwrap();
+        let base_p = builder
+            .intern_iri(&format!("{EX}embedded-predicate"))
+            .unwrap();
+        let base_o = builder.intern_iri(&format!("{EX}embedded-object")).unwrap();
+        let iri_subject = builder.intern_iri(&format!("{EX}iri-subject")).unwrap();
+        let triple_class = builder.intern_triple(base_o, base_p, base_s).unwrap();
+        let blank_subject = builder
+            .intern_blank("subject", BlankScope::DEFAULT)
+            .unwrap();
+        let blank_class = builder.intern_blank("class", BlankScope::DEFAULT).unwrap();
+        let leaf = builder.intern_iri(&format!("{EX}Leaf")).unwrap();
+        builder
+            .push_quad(leaf, subclass, triple_class, None)
+            .unwrap();
+        builder
+            .push_quad(leaf, subclass, blank_class, None)
+            .unwrap();
+        builder
+            .push_quad(iri_subject, rdf_type, leaf, None)
+            .unwrap();
+        builder
+            .push_quad(blank_subject, rdf_type, leaf, None)
+            .unwrap();
         let view = ClassMembershipView::new(builder.freeze().expect("fixture freezes"));
 
         assert!(view.is_instance(iri_subject, triple_class));
@@ -1341,13 +1373,13 @@ mod tests {
     fn diamond_derivations_and_insertion_order_are_unique_and_deterministic() {
         fn build(reverse: bool) -> ClassMembershipView {
             let mut builder = RdfDatasetBuilder::new();
-            let rdf_type = builder.intern_iri(rdf::TYPE);
-            let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-            let leaf = builder.intern_iri(&format!("{EX}Leaf"));
-            let left = builder.intern_iri(&format!("{EX}Left"));
-            let right = builder.intern_iri(&format!("{EX}Right"));
-            let top = builder.intern_iri(&format!("{EX}Top"));
-            let subject = builder.intern_iri(&format!("{EX}subject"));
+            let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+            let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+            let leaf = builder.intern_iri(&format!("{EX}Leaf")).unwrap();
+            let left = builder.intern_iri(&format!("{EX}Left")).unwrap();
+            let right = builder.intern_iri(&format!("{EX}Right")).unwrap();
+            let top = builder.intern_iri(&format!("{EX}Top")).unwrap();
+            let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
             let mut rows = vec![
                 (leaf, subclass, left),
                 (leaf, subclass, right),
@@ -1360,7 +1392,7 @@ mod tests {
                 rows.reverse();
             }
             for (s, p, o) in rows {
-                builder.push_quad(s, p, o, None);
+                builder.push_quad(s, p, o, None).unwrap();
             }
             ClassMembershipView::new(builder.freeze().expect("fixture freezes"))
         }
@@ -1473,18 +1505,17 @@ mod tests {
             reverse in any::<bool>(),
         ) {
             let mut builder = RdfDatasetBuilder::new();
-            let rdf_type = builder.intern_iri(rdf::TYPE);
-            let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-            let other_predicate = builder.intern_iri(&format!("{EX}other"));
-            let graph = builder.intern_iri(&format!("{EX}named"));
+            let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+            let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+            let other_predicate = builder.intern_iri(&format!("{EX}other")).unwrap();
+            let graph = builder.intern_iri(&format!("{EX}named")).unwrap();
             let classes: Vec<_> = (0..class_count)
-                .map(|index| builder.intern_iri(&format!("{EX}class-{index}")))
+                .map(|index| builder.intern_iri(&format!("{EX}class-{index}")).unwrap())
                 .collect();
             let subjects: Vec<_> = (0..subject_count)
-                .map(|index| builder.intern_iri(&format!("{EX}subject-{index}")))
+                .map(|index| builder.intern_iri(&format!("{EX}subject-{index}")).unwrap())
                 .collect();
-            builder.declare_named_graph(graph);
-
+            builder.declare_named_graph(graph).unwrap();
             let mut rows = Vec::new();
             for child in 0..class_count {
                 for parent in 0..class_count {
@@ -1513,7 +1544,7 @@ mod tests {
                 rows.reverse();
             }
             for (s, p, o, g) in rows {
-                builder.push_quad(s, p, o, g);
+                builder.push_quad(s, p, o, g).unwrap();
             }
 
             let dataset = builder.freeze().expect("generated dataset freezes");

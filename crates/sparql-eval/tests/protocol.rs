@@ -633,12 +633,12 @@ fn every_negotiated_format_has_its_media_type() {
 /// and `FROM ex:g2` ({b}) are all different.
 fn fixture() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     let quad = |builder: &mut RdfDatasetBuilder, s: &str, o: &str, g: Option<&str>| {
-        let s = builder.intern_iri(&format!("{EX}{s}"));
-        let o = builder.intern_iri(&format!("{EX}{o}"));
-        let g = g.map(|g| builder.intern_iri(&format!("{EX}{g}")));
-        builder.push_quad(s, p, o, g);
+        let s = builder.intern_iri(&format!("{EX}{s}")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}{o}")).unwrap();
+        let g = g.map(|g| builder.intern_iri(&format!("{EX}{g}")).unwrap());
+        builder.push_quad(s, p, o, g).unwrap();
     };
     quad(&mut builder, "a", "x1", None);
     quad(&mut builder, "c", "x0", None);

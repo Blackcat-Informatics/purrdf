@@ -31,35 +31,61 @@ struct RdfFixture {
 
 fn rdf_fixture() -> RdfFixture {
     let mut dataset = RdfDatasetBuilder::new();
-    let subject = dataset.intern_blank("source-label", BlankScope::DEFAULT);
-    let predicate = dataset.intern_iri("https://example.org/rdf12/predicate");
-    let graph_name = dataset.intern_iri("https://example.org/rdf12/graph");
-    let reifier_term = dataset.intern_iri("https://example.org/rdf12/reifier");
-    let annotation_predicate = dataset.intern_iri("https://example.org/rdf12/confidence");
-    let literal = dataset.intern_literal(RdfLiteral {
-        lexical_form: "bonjour".into(),
-        datatype: None,
-        language: Some("fr".into()),
-        direction: Some(RdfTextDirection::Ltr),
-    });
-    let annotation_object = dataset.intern_literal(RdfLiteral {
-        lexical_form: "0.9".into(),
-        datatype: Some("http://www.w3.org/2001/XMLSchema#decimal".into()),
-        language: None,
-        direction: None,
-    });
-    let inner_triple = dataset.intern_triple(subject, predicate, literal);
-    let outer_triple = dataset.intern_triple(subject, predicate, inner_triple);
-    dataset.push_quad(subject, predicate, literal, None);
-    dataset.push_quad(subject, predicate, literal, Some(graph_name));
-    dataset.push_quad(subject, predicate, outer_triple, Some(graph_name));
-    dataset.push_reifier_in_graph(reifier_term, inner_triple, Some(graph_name));
-    dataset.push_annotation_in_graph(
-        reifier_term,
-        annotation_predicate,
-        annotation_object,
-        Some(graph_name),
-    );
+    let subject = dataset
+        .intern_blank("source-label", BlankScope::DEFAULT)
+        .unwrap();
+    let predicate = dataset
+        .intern_iri("https://example.org/rdf12/predicate")
+        .unwrap();
+    let graph_name = dataset
+        .intern_iri("https://example.org/rdf12/graph")
+        .unwrap();
+    let reifier_term = dataset
+        .intern_iri("https://example.org/rdf12/reifier")
+        .unwrap();
+    let annotation_predicate = dataset
+        .intern_iri("https://example.org/rdf12/confidence")
+        .unwrap();
+    let literal = dataset
+        .intern_literal(RdfLiteral {
+            lexical_form: "bonjour".into(),
+            datatype: None,
+            language: Some("fr".into()),
+            direction: Some(RdfTextDirection::Ltr),
+        })
+        .unwrap();
+    let annotation_object = dataset
+        .intern_literal(RdfLiteral {
+            lexical_form: "0.9".into(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#decimal".into()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let inner_triple = dataset.intern_triple(subject, predicate, literal).unwrap();
+    let outer_triple = dataset
+        .intern_triple(subject, predicate, inner_triple)
+        .unwrap();
+    dataset
+        .push_quad(subject, predicate, literal, None)
+        .unwrap();
+    dataset
+        .push_quad(subject, predicate, literal, Some(graph_name))
+        .unwrap();
+    dataset
+        .push_quad(subject, predicate, outer_triple, Some(graph_name))
+        .unwrap();
+    dataset
+        .push_reifier_in_graph(reifier_term, inner_triple, Some(graph_name))
+        .unwrap();
+    dataset
+        .push_annotation_in_graph(
+            reifier_term,
+            annotation_predicate,
+            annotation_object,
+            Some(graph_name),
+        )
+        .unwrap();
     let dataset = dataset.freeze().expect("valid RDF 1.2 dataset");
     let canonical = try_canonicalize(&dataset).expect("canonical labels");
     let (source, source_bytes) =
@@ -422,18 +448,28 @@ fn multi_binding_fixture_with_annotation(
     let mut dataset = RdfDatasetBuilder::new();
     let terms: Vec<_> = iris
         .iter()
-        .map(|name| dataset.intern_iri(&format!("https://example.org/multiple/{name}")))
+        .map(|name| {
+            dataset
+                .intern_iri(&format!("https://example.org/multiple/{name}"))
+                .unwrap()
+        })
         .collect();
     let triples = [
-        dataset.intern_triple(terms[0], terms[1], terms[2]),
-        dataset.intern_triple(terms[0], terms[1], terms[3]),
+        dataset.intern_triple(terms[0], terms[1], terms[2]).unwrap(),
+        dataset.intern_triple(terms[0], terms[1], terms[3]).unwrap(),
     ];
     for graph in [None, Some(terms[7])] {
-        dataset.push_reifier_in_graph(terms[4], triples[0], graph);
+        dataset
+            .push_reifier_in_graph(terms[4], triples[0], graph)
+            .unwrap();
         if graph.is_none() {
-            dataset.push_reifier_in_graph(terms[4], triples[1], graph);
+            dataset
+                .push_reifier_in_graph(terms[4], triples[1], graph)
+                .unwrap();
         }
-        dataset.push_annotation_in_graph(terms[4], terms[5], terms[6], graph);
+        dataset
+            .push_annotation_in_graph(terms[4], terms[5], terms[6], graph)
+            .unwrap();
     }
     let dataset = dataset.freeze().expect("multiple RDF 1.2 bindings");
     let (source, source_bytes) =

@@ -865,6 +865,8 @@ pub enum SchemaCompilationInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SchemaCompileError {
+    /// Input graph materialization refused before schema compilation.
+    Materialization(crate::error::ShapesError),
     /// A SHACL pattern cannot be emitted with its accepted language intact.
     Pattern {
         /// Shape carrying the constraint.
@@ -925,6 +927,7 @@ pub enum SchemaCompileError {
 impl std::fmt::Display for SchemaCompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Materialization(error) => error.fmt(f),
             Self::Pattern {
                 shape,
                 property,
@@ -964,7 +967,20 @@ impl std::fmt::Display for SchemaCompileError {
     }
 }
 
-impl std::error::Error for SchemaCompileError {}
+impl std::error::Error for SchemaCompileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Materialization(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<purrdf_core::RdfDiagnostic> for SchemaCompileError {
+    fn from(error: purrdf_core::RdfDiagnostic) -> Self {
+        Self::Materialization(error.into())
+    }
+}
 
 /// Complete input contract for ontology-aware schema compilation.
 ///

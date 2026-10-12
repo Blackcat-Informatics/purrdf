@@ -5268,11 +5268,15 @@ mod seed_fast_path_tests {
         rewrite: fn(Query, Vec<(Variable, GroundTerm)>) -> Query,
     ) -> Vec<String> {
         let mut builder = RdfDatasetBuilder::new();
-        let p = builder.intern_iri(P);
+        let p = builder.intern_iri(P).unwrap();
         for (subject, object) in [("a", "o1"), ("a", "o2"), ("b", "o3")] {
-            let s = builder.intern_iri(&format!("http://example.org/{subject}"));
-            let o = builder.intern_iri(&format!("http://example.org/{object}"));
-            builder.push_quad(s, p, o, None);
+            let s = builder
+                .intern_iri(&format!("http://example.org/{subject}"))
+                .unwrap();
+            let o = builder
+                .intern_iri(&format!("http://example.org/{object}"))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
         let dataset = builder.freeze().expect("freeze");
         let parsed = SparqlParser::new()
@@ -6810,26 +6814,38 @@ mod walk_tests {
     fn ground_term_from_id_agrees_with_its_recursive_reference() {
         let mut builder = RdfDatasetBuilder::new();
         let mut ids = Vec::new();
-        let p = builder.intern_iri("http://example.org/p");
+        let p = builder.intern_iri("http://example.org/p").unwrap();
         ids.push(p);
-        ids.push(builder.intern_blank("b", BlankScope::DEFAULT));
-        ids.push(builder.intern_blank("b", BlankScope(1)));
-        ids.push(builder.intern_literal(RdfLiteral::simple("plain")));
-        ids.push(builder.intern_literal(RdfLiteral::typed("42", XSD_INTEGER)));
-        ids.push(builder.intern_literal(RdfLiteral::language_tagged("hi", "en")));
-        let mut nested = builder.intern_iri("http://example.org/leaf");
+        ids.push(builder.intern_blank("b", BlankScope::DEFAULT).unwrap());
+        ids.push(builder.intern_blank("b", BlankScope(1)).unwrap());
+        ids.push(builder.intern_literal(RdfLiteral::simple("plain")).unwrap());
+        ids.push(
+            builder
+                .intern_literal(RdfLiteral::typed("42", XSD_INTEGER))
+                .unwrap(),
+        );
+        ids.push(
+            builder
+                .intern_literal(RdfLiteral::language_tagged("hi", "en"))
+                .unwrap(),
+        );
+        let mut nested = builder.intern_iri("http://example.org/leaf").unwrap();
         ids.push(nested);
         for level in 0..8 {
             let subject = if level % 2 == 0 {
-                builder.intern_iri(&format!("http://example.org/s{level}"))
+                builder
+                    .intern_iri(&format!("http://example.org/s{level}"))
+                    .unwrap()
             } else {
-                builder.intern_blank(&format!("s{level}"), BlankScope::DEFAULT)
+                builder
+                    .intern_blank(&format!("s{level}"), BlankScope::DEFAULT)
+                    .unwrap()
             };
-            nested = builder.intern_triple(subject, p, nested);
+            nested = builder.intern_triple(subject, p, nested).unwrap();
             ids.push(nested);
         }
-        let graph_subject = builder.intern_iri("http://example.org/g");
-        builder.push_quad(graph_subject, p, nested, None);
+        let graph_subject = builder.intern_iri("http://example.org/g").unwrap();
+        builder.push_quad(graph_subject, p, nested, None).unwrap();
         let dataset = builder.freeze().expect("a valid dataset");
         for id in ids {
             assert_eq!(

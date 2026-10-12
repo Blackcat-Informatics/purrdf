@@ -56,16 +56,22 @@ impl Write for Chunks {
 /// `rows` quads whose rendering is far larger than one drain window.
 fn dataset(rows: usize) -> Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/predicate-with-a-deliberately-long-name");
+    let p = b
+        .intern_iri("https://example.org/predicate-with-a-deliberately-long-name")
+        .unwrap();
     for i in 0..rows {
-        let s = b.intern_owned_term(&RdfTerm::iri(format!(
-            "https://example.org/subject/{i}/with/a/deliberately/long/path/segment/run"
-        )));
-        let o = b.intern_literal(RdfLiteral::simple(format!(
-            "a deliberately long literal value for row {i}, padded out so that the \
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!(
+                "https://example.org/subject/{i}/with/a/deliberately/long/path/segment/run"
+            )))
+            .unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(format!(
+                "a deliberately long literal value for row {i}, padded out so that the \
              rendered document crosses the sink's staging window many times over"
-        )));
-        b.push_quad(s, p, o, None);
+            )))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("dataset freezes")
 }

@@ -84,15 +84,15 @@ fn drop_flat(value: TermValue) {
 /// `<a> <q> T` with `T` a [`DATASET_DEPTH`]-deep triple term over `<o>`.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let q = builder.intern_iri(&format!("{EX}q"));
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let mut o = builder.intern_iri(&format!("{EX}o"));
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let mut o = builder.intern_iri(&format!("{EX}o")).unwrap();
     for _ in 0..DATASET_DEPTH {
-        o = builder.intern_triple(s, p, o);
+        o = builder.intern_triple(s, p, o).unwrap();
     }
-    builder.push_quad(a, q, o, None);
+    builder.push_quad(a, q, o, None).unwrap();
     builder
         .freeze()
         .expect("a 16-deep triple term is within the dataset limit")
@@ -817,11 +817,11 @@ fn triple_calls_chained_at_run_time_answer_the_whole_term() {
 fn a_term_built_on_a_worker_answers_every_row() {
     purrdf_stack::on_stack(64 << 20, || {
             let mut builder = RdfDatasetBuilder::new();
-            let p = builder.intern_iri(&format!("{EX}p"));
-            let o = builder.intern_iri(&format!("{EX}o"));
+            let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+            let o = builder.intern_iri(&format!("{EX}o")).unwrap();
             for index in 0..4_000 {
-                let s = builder.intern_iri(&format!("{EX}s{index}"));
-                builder.push_quad(s, p, o, None);
+                let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+                builder.push_quad(s, p, o, None).unwrap();
             }
             let data = builder.freeze().expect("freezes");
             let evaluating = std::thread::current().id();

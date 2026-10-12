@@ -66,9 +66,13 @@ impl PurrdfError {
 
     /// Map a shapes-graph entry point's error onto the C error channel: the
     /// `owl:imports` refusal as [`PurrdfStatus::ShapesImportError`] carrying its kind and
-    /// IRIs, and anything else as a `ParseError` with the engine's message.
+    /// IRIs, native storage refusal with its diagnostic record, and other failures
+    /// as a `ParseError` with the engine's message.
     pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
         match error {
+            purrdf_validate::ShapesError::Storage(error) => {
+                Self::from_diagnostic(PurrdfStatus::StorageError, &error.into())
+            }
             purrdf_validate::ShapesError::Imports(error) => Self::shapes_import(&error),
             purrdf_validate::ShapesError::Invalid(message) => {
                 Self::new(PurrdfStatus::ParseError, message)
@@ -223,6 +227,18 @@ pub unsafe extern "C" fn purrdf_error_free(err: *mut PurrdfError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shapes_capacity_refusal_preserves_native_fields() {
+        let cause: purrdf_lex::allocation::StorageError = purrdf_core::TermId::from_index(u32::MAX)
+            .unwrap_err()
+            .into();
+        let error = PurrdfError::shapes(purrdf_validate::ShapesError::Storage(cause));
+        assert_eq!(error.code, PurrdfStatus::StorageError);
+        let expected = RdfDiagnostic::from(cause).to_json().to_string();
+        assert_eq!(error.diagnostic.unwrap().to_str().unwrap(), expected);
+        assert!(expected.contains("\"capacity\""));
+    }
 
     #[test]
     fn diagnostic_machine_record_preserves_typed_fields_and_large_anchors() {

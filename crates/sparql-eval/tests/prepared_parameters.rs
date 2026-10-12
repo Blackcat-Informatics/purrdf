@@ -516,10 +516,10 @@ const LINKED: &str = "https://example.org/pf/linked";
 /// One `LINKED` triple, so a data atom ahead of a call yields exactly one row.
 fn linked_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/d/s");
-    let predicate = builder.intern_iri(LINKED);
-    let object = builder.intern_iri("https://example.org/d/o");
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri("https://example.org/d/s").unwrap();
+    let predicate = builder.intern_iri(LINKED).unwrap();
+    let object = builder.intern_iri("https://example.org/d/o").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     builder.freeze().expect("the fixture dataset freezes")
 }
 
@@ -787,11 +787,15 @@ impl PropertyFunction for Owns {
 /// nodes as terms and a data atom over `LINKED` yields two rows.
 fn blank_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(LINKED);
+    let predicate = builder.intern_iri(LINKED).unwrap();
     for (label, object) in [("b1", "o1"), ("b2", "o2")] {
-        let subject = builder.intern_blank(label, purrdf_core::BlankScope::DEFAULT);
-        let object = builder.intern_iri(&format!("https://example.org/d/{object}"));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder
+            .intern_blank(label, purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        let object = builder
+            .intern_iri(&format!("https://example.org/d/{object}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset freezes")
 }

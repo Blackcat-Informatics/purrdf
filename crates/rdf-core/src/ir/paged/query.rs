@@ -674,7 +674,8 @@ impl<'dataset> PagedQueryView<'dataset> {
         // the wrong global ids. Compare each value before admitting any row.
         for local_index in 0..slot.translation.term_count() {
             let local =
-                TermId::from_index(u32::try_from(local_index).expect("page term index fits u32"));
+                TermId::from_index(u32::try_from(local_index).expect("page term index fits u32"))
+                    .expect("stored term index is representable");
             let global = slot.translation.to_global(local);
             if materialization.dataset.term_value(local).ok()
                 != Some(self.dataset.dictionary.term_value(global))
@@ -1193,14 +1194,18 @@ mod tests {
 
     fn stream_page(index: usize, stream: PageStream, named: bool) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("http://example.org/s{index}"));
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
-        let g = named.then(|| builder.intern_iri("http://example.org/g"));
+        let s = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder
+            .intern_value(&crate::term_fixture::triple_chain(1))
+            .unwrap();
+        let g = named.then(|| builder.intern_iri("http://example.org/g").unwrap());
         match stream {
-            PageStream::Base => builder.push_quad(s, p, o, g),
-            PageStream::Reifier => builder.push_reifier_in_graph(s, o, g),
-            PageStream::Annotation => builder.push_annotation_in_graph(s, p, o, g),
+            PageStream::Base => builder.push_quad(s, p, o, g).unwrap(),
+            PageStream::Reifier => builder.push_reifier_in_graph(s, o, g).unwrap(),
+            PageStream::Annotation => builder.push_annotation_in_graph(s, p, o, g).unwrap(),
         }
         builder.freeze().unwrap()
     }
@@ -1350,10 +1355,10 @@ mod tests {
 
     fn page() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/s");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let object = builder.intern_iri("http://example.org/o");
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder.intern_iri("http://example.org/o").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         builder.freeze().expect("valid test page")
     }
 

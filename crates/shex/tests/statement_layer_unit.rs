@@ -66,34 +66,34 @@ use purrdf_iri::vocab::rdf::REIFIES;
 /// merged neighbourhood is exercised.
 fn data() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let alice = b.intern_iri(ALICE);
-    let bob = b.intern_iri(BOB);
-    let doc = b.intern_iri(DOC);
-    let knows = b.intern_iri(KNOWS);
-    let name = b.intern_iri(NAME);
-    let label = b.intern_iri(LABEL);
-    let certainty = b.intern_iri(CERTAINTY);
-    let source = b.intern_iri(SOURCE);
-    let r1 = b.intern_iri(R1);
-    let r2 = b.intern_iri(R2);
-    let r3 = b.intern_iri(R3);
-    let alice_name = b.intern_literal(RdfLiteral::simple("Alice"));
-    let r3_label = b.intern_literal(RdfLiteral::simple("R3"));
-    let high = b.intern_literal(RdfLiteral::simple("0.9"));
-    let low = b.intern_literal(RdfLiteral::simple("0.4"));
+    let alice = b.intern_iri(ALICE).unwrap();
+    let bob = b.intern_iri(BOB).unwrap();
+    let doc = b.intern_iri(DOC).unwrap();
+    let knows = b.intern_iri(KNOWS).unwrap();
+    let name = b.intern_iri(NAME).unwrap();
+    let label = b.intern_iri(LABEL).unwrap();
+    let certainty = b.intern_iri(CERTAINTY).unwrap();
+    let source = b.intern_iri(SOURCE).unwrap();
+    let r1 = b.intern_iri(R1).unwrap();
+    let r2 = b.intern_iri(R2).unwrap();
+    let r3 = b.intern_iri(R3).unwrap();
+    let alice_name = b.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+    let r3_label = b.intern_literal(RdfLiteral::simple("R3")).unwrap();
+    let high = b.intern_literal(RdfLiteral::simple("0.9")).unwrap();
+    let low = b.intern_literal(RdfLiteral::simple("0.4")).unwrap();
 
-    b.push_quad(alice, knows, bob, None);
-    b.push_quad(alice, name, alice_name, None);
-    b.push_quad(r3, label, r3_label, None);
+    b.push_quad(alice, knows, bob, None).unwrap();
+    b.push_quad(alice, name, alice_name, None).unwrap();
+    b.push_quad(r3, label, r3_label, None).unwrap();
 
-    let t1 = b.intern_triple(alice, knows, bob);
-    let t2 = b.intern_triple(alice, name, alice_name);
-    b.push_reifier(r1, t1);
-    b.push_reifier(r2, t1);
-    b.push_reifier(r3, t2);
-    b.push_annotation(r1, certainty, high);
-    b.push_annotation(r1, source, doc);
-    b.push_annotation(r2, certainty, low);
+    let t1 = b.intern_triple(alice, knows, bob).unwrap();
+    let t2 = b.intern_triple(alice, name, alice_name).unwrap();
+    b.push_reifier(r1, t1).unwrap();
+    b.push_reifier(r2, t1).unwrap();
+    b.push_reifier(r3, t2).unwrap();
+    b.push_annotation(r1, certainty, high).unwrap();
+    b.push_annotation(r1, source, doc).unwrap();
+    b.push_annotation(r2, certainty, low).unwrap();
 
     b.freeze().expect("fixture dataset must validate")
 }
@@ -344,10 +344,10 @@ fn merged_arcs_are_order_stable_across_repeated_validations() {
 #[test]
 fn plain_dataset_validates_unchanged() {
     let mut b = RdfDatasetBuilder::new();
-    let alice = b.intern_iri(ALICE);
-    let name = b.intern_iri(NAME);
-    let alice_name = b.intern_literal(RdfLiteral::simple("Alice"));
-    b.push_quad(alice, name, alice_name, None);
+    let alice = b.intern_iri(ALICE).unwrap();
+    let name = b.intern_iri(NAME).unwrap();
+    let alice_name = b.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+    b.push_quad(alice, name, alice_name, None).unwrap();
     let plain = b.freeze().expect("fixture dataset must validate");
 
     let schema = parse_shexc(

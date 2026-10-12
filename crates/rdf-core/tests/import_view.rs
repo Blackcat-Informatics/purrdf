@@ -12,10 +12,12 @@ fn separate_imports_do_not_alias_source_local_ids_or_scoped_blanks() {
     let mut destination = RdfDatasetBuilder::new();
     for scope in [BlankScope(17), BlankScope(18)] {
         let mut source = RdfDatasetBuilder::new();
-        let subject = source.intern_blank("same", scope);
-        let predicate = source.intern_iri("http://example.org/p");
-        let object = source.intern_iri(&format!("http://example.org/value{}", scope.0));
-        source.push_quad(subject, predicate, object, None);
+        let subject = source.intern_blank("same", scope).unwrap();
+        let predicate = source.intern_iri("http://example.org/p").unwrap();
+        let object = source
+            .intern_iri(&format!("http://example.org/value{}", scope.0))
+            .unwrap();
+        source.push_quad(subject, predicate, object, None).unwrap();
         let source = source.freeze().unwrap();
         let mut importer = DatasetImporter::new(&mut destination, &source);
         importer.append();
@@ -37,21 +39,29 @@ fn separate_imports_do_not_alias_source_local_ids_or_scoped_blanks() {
 #[test]
 fn materialization_preserves_empty_graphs_and_the_complete_statement_layer() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_blank("subject", BlankScope(23));
-    let predicate = builder.intern_iri("http://example.org/p");
-    let literal = builder.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("claim", "ar")
-    });
-    let quoted = builder.intern_triple(subject, predicate, literal);
-    let nested = builder.intern_triple(subject, predicate, quoted);
-    let reifier = builder.intern_iri("http://example.org/claim");
-    let graph = builder.intern_iri("http://example.org/graph");
-    let empty = builder.intern_iri("http://example.org/empty");
-    builder.declare_named_graph(empty);
-    builder.push_quad(subject, predicate, nested, Some(graph));
-    builder.push_reifier_in_graph(reifier, nested, Some(graph));
-    builder.push_annotation_in_graph(reifier, predicate, literal, Some(graph));
+    let subject = builder.intern_blank("subject", BlankScope(23)).unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("claim", "ar")
+        })
+        .unwrap();
+    let quoted = builder.intern_triple(subject, predicate, literal).unwrap();
+    let nested = builder.intern_triple(subject, predicate, quoted).unwrap();
+    let reifier = builder.intern_iri("http://example.org/claim").unwrap();
+    let graph = builder.intern_iri("http://example.org/graph").unwrap();
+    let empty = builder.intern_iri("http://example.org/empty").unwrap();
+    builder.declare_named_graph(empty).unwrap();
+    builder
+        .push_quad(subject, predicate, nested, Some(graph))
+        .unwrap();
+    builder
+        .push_reifier_in_graph(reifier, nested, Some(graph))
+        .unwrap();
+    builder
+        .push_annotation_in_graph(reifier, predicate, literal, Some(graph))
+        .unwrap();
     let source = builder.freeze().unwrap();
     let restored = dataset_from_view(&source).unwrap();
     assert_eq!(

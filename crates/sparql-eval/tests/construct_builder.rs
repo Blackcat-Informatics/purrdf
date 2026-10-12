@@ -23,10 +23,10 @@ const VALUE: &str = "https://example.org/value";
 
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("c1", BlankScope::DEFAULT);
-    let p = b.intern_iri(VALUE);
-    let o = b.intern_literal(RdfLiteral::simple("value"));
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank("c1", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(VALUE).unwrap();
+    let o = b.intern_literal(RdfLiteral::simple("value")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("data")
 }
 
@@ -83,13 +83,13 @@ fn configured_rdf12_projection_loss_is_identical() {
         "https://example.org/lostReifies",
     ));
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("https://example.org/s");
-    let p = b.intern_iri(VALUE);
-    let o = b.intern_literal(RdfLiteral::simple("claim"));
-    let triple = b.intern_triple(s, p, o);
-    let r = b.intern_iri("https://example.org/r");
-    b.push_reifier(r, triple);
-    b.push_annotation(r, p, o);
+    let s = b.intern_iri("https://example.org/s").unwrap();
+    let p = b.intern_iri(VALUE).unwrap();
+    let o = b.intern_literal(RdfLiteral::simple("claim")).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_iri("https://example.org/r").unwrap();
+    b.push_reifier(r, triple).unwrap();
+    b.push_annotation(r, p, o).unwrap();
     let data = b.freeze().expect("data");
     let plan = engine.prepare_query("CONSTRUCT { ?s ?p ?o } WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s ?p ?o )>> }", None).expect("plan");
     let SparqlResult::Graph(expected) = engine
@@ -127,9 +127,9 @@ fn governor_trip_and_cancellation_leave_existing_builder_untouched() {
     }] {
         let state = Arc::new(GovernorState::new(&governors));
         let mut target = RdfDatasetBuilder::new();
-        let s = target.intern_iri("https://example.org/existing");
-        let p = target.intern_iri(VALUE);
-        target.push_quad(s, p, s, None);
+        let s = target.intern_iri("https://example.org/existing").unwrap();
+        let p = target.intern_iri(VALUE).unwrap();
+        target.push_quad(s, p, s, None).unwrap();
         assert!(matches!(
             engine.construct_prepared_in_operation_into_view(
                 data.as_ref(),
@@ -262,10 +262,14 @@ fn successive_appends_keep_minted_blanks_fresh_against_destination_only_nodes() 
     let data = dataset();
     let plan = engine.prepare_query("CONSTRUCT { _:fresh <https://example.org/value> ?o . ?s <https://example.org/carried> ?o } WHERE { ?s <https://example.org/value> ?o }", None).expect("plan");
     let mut target = RdfDatasetBuilder::new();
-    let original = target.intern_blank("append0_c1", BlankScope::DEFAULT);
-    let p = target.intern_iri(VALUE);
-    let o = target.intern_literal(RdfLiteral::simple("destination"));
-    target.push_quad(original, p, o, None);
+    let original = target
+        .intern_blank("append0_c1", BlankScope::DEFAULT)
+        .unwrap();
+    let p = target.intern_iri(VALUE).unwrap();
+    let o = target
+        .intern_literal(RdfLiteral::simple("destination"))
+        .unwrap();
+    target.push_quad(original, p, o, None).unwrap();
     for _ in 0..2 {
         engine
             .construct_prepared_into_view(
@@ -350,9 +354,11 @@ fn deeply_joined_construct_on_a_large_stack() {
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let before = state.evidence();
     let mut target = RdfDatasetBuilder::new();
-    let existing = target.intern_iri("https://example.org/existing");
-    let predicate = target.intern_iri(VALUE);
-    target.push_quad(existing, predicate, existing, None);
+    let existing = target.intern_iri("https://example.org/existing").unwrap();
+    let predicate = target.intern_iri(VALUE).unwrap();
+    target
+        .push_quad(existing, predicate, existing, None)
+        .unwrap();
     let result = purrdf_stack::on_stack_scoped(4 * 1024 * 1024, || {
         NativeSparqlEngine::new().construct_prepared_in_operation_into_view(
             data.as_ref(),
@@ -386,17 +392,19 @@ fn deeply_joined_construct_on_a_large_stack() {
 #[test]
 fn typed_publication_preserves_nested_directional_terms_and_named_statement_metadata() {
     let mut input = RdfDatasetBuilder::new();
-    let s = input.intern_blank("data", BlankScope(17));
-    let p = input.intern_iri(VALUE);
-    let o = input.intern_literal(RdfLiteral {
-        direction: Some(purrdf_core::RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("claim", "ar")
-    });
-    let inner = input.intern_triple(s, p, o);
-    let outer = input.intern_triple(s, p, inner);
-    let r = input.intern_blank("reifier", BlankScope(17));
-    input.push_reifier(r, outer);
-    input.push_annotation(r, p, o);
+    let s = input.intern_blank("data", BlankScope(17)).unwrap();
+    let p = input.intern_iri(VALUE).unwrap();
+    let o = input
+        .intern_literal(RdfLiteral {
+            direction: Some(purrdf_core::RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("claim", "ar")
+        })
+        .unwrap();
+    let inner = input.intern_triple(s, p, o).unwrap();
+    let outer = input.intern_triple(s, p, inner).unwrap();
+    let r = input.intern_blank("reifier", BlankScope(17)).unwrap();
+    input.push_reifier(r, outer).unwrap();
+    input.push_annotation(r, p, o).unwrap();
     let input = input.freeze().expect("input");
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query("CONSTRUCT { GRAPH <https://example.org/output> { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <https://example.org/value> ?inner )>> . ?r <https://example.org/value> ?o } } WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <https://example.org/value> ?inner )>> . ?r <https://example.org/value> ?o }", None).expect("plan");

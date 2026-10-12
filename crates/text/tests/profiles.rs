@@ -279,10 +279,14 @@ fn phonetics_read_surface_words_and_expose_refinement_evidence() {
 #[test]
 fn search_and_occurrence_relations_use_the_stored_analyzer() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/doc");
-    let predicate = builder.intern_iri("https://example.org/text");
-    let literal = builder.intern_literal(RdfLiteral::simple("CAFÉS running alpha\u{200b}beta"));
-    builder.push_quad(subject, predicate, literal, None);
+    let subject = builder.intern_iri("https://example.org/doc").unwrap();
+    let predicate = builder.intern_iri("https://example.org/text").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("CAFÉS running alpha\u{200b}beta"))
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, literal, None)
+        .unwrap();
     let dataset = builder.freeze().unwrap();
     let configuration = TextIndexConfig::new(
         vec![TermValue::iri("https://example.org/text")],

@@ -24,19 +24,19 @@ const EX: &str = "http://example.org/";
 /// `ex:h` holds `ex:a ex:p ex:c`; `ex:k` holds `ex:a ex:p ex:d`.
 fn fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let a = b.intern_iri(&format!("{EX}a"));
-    let p = b.intern_iri(&format!("{EX}p"));
-    let c = b.intern_iri(&format!("{EX}c"));
-    let d = b.intern_iri(&format!("{EX}d"));
-    let g = b.intern_iri(&format!("{EX}g"));
-    let h = b.intern_iri(&format!("{EX}h"));
-    let k = b.intern_iri(&format!("{EX}k"));
-    let bg = b.intern_blank("bg", BlankScope::DEFAULT);
-    b.push_quad(a, p, c, None);
-    b.declare_named_graph(g);
-    b.declare_named_graph(bg);
-    b.push_quad(a, p, c, Some(h));
-    b.push_quad(a, p, d, Some(k));
+    let a = b.intern_iri(&format!("{EX}a")).unwrap();
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let c = b.intern_iri(&format!("{EX}c")).unwrap();
+    let d = b.intern_iri(&format!("{EX}d")).unwrap();
+    let g = b.intern_iri(&format!("{EX}g")).unwrap();
+    let h = b.intern_iri(&format!("{EX}h")).unwrap();
+    let k = b.intern_iri(&format!("{EX}k")).unwrap();
+    let bg = b.intern_blank("bg", BlankScope::DEFAULT).unwrap();
+    b.push_quad(a, p, c, None).unwrap();
+    b.declare_named_graph(g).unwrap();
+    b.declare_named_graph(bg).unwrap();
+    b.push_quad(a, p, c, Some(h)).unwrap();
+    b.push_quad(a, p, d, Some(k)).unwrap();
     b.freeze().expect("fixture freezes")
 }
 

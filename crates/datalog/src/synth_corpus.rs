@@ -66,7 +66,9 @@ impl SynthWorkload {
     pub(crate) fn edb(&self) -> RelationStore {
         let mut store = RelationStore::new();
         for (subject, predicate, object, graph) in &self.triples {
-            store.insert(subject, predicate, object, graph);
+            store
+                .insert(subject, predicate, object, graph)
+                .expect("bounded authored corpus");
         }
         store
     }

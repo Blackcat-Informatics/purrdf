@@ -29,11 +29,13 @@ const OPERATORS: usize = 440;
 
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let v = builder.intern_iri(&format!("{EX}v"));
+    let v = builder.intern_iri(&format!("{EX}v")).unwrap();
     for n in 0..SUBJECTS {
-        let s = builder.intern_iri(&format!("{EX}s{n}"));
-        let value = builder.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER));
-        builder.push_quad(s, v, value, None);
+        let s = builder.intern_iri(&format!("{EX}s{n}")).unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(s, v, value, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset")
 }

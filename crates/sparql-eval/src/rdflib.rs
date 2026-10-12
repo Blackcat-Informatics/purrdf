@@ -47,9 +47,6 @@ pub fn select_query_dataset(
     // Keep the original content-addressing configuration in an empty frozen base.
     // Fresh delta insertion cannot resurrect excluded physical base occurrences.
     let mut selected = MutableDataset::new(emptied.freeze()?);
-    let insertion_error = |error: purrdf_iri::IriError| {
-        purrdf_core::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
-    };
     if dataset_scope {
         for graph in dataset.named_graphs() {
             selected.declare_named_graph(dataset.as_ref().term_value(graph))?;
@@ -57,12 +54,10 @@ pub fn select_query_dataset(
     }
     for quad in surface {
         if dataset_scope && quad.g.is_some() || default_graph.is_none() && quad.g.is_none() {
-            selected.insert(quad.clone()).map_err(insertion_error)?;
+            selected.insert(quad.clone())?;
         }
         if default_union || (quad.g.as_ref() == default_graph && default_graph.is_some()) {
-            selected
-                .insert(QuadValues::triple(quad.s, quad.p, quad.o))
-                .map_err(insertion_error)?;
+            selected.insert(QuadValues::triple(quad.s, quad.p, quad.o))?;
         }
     }
     selected.freeze()
@@ -1329,12 +1324,16 @@ mod tests {
         use purrdf_core::{BlankScope, RdfDatasetBuilder};
 
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("scoped", BlankScope(37));
-        let predicate = builder.intern_iri("http://example.org/p");
-        let object = builder.intern_iri("http://example.org/o");
-        let quoted = builder.intern_triple(subject, predicate, object);
-        let yes = builder.intern_literal(purrdf_core::RdfLiteral::typed("true", XSD_BOOLEAN));
-        let no = builder.intern_literal(purrdf_core::RdfLiteral::typed("false", XSD_BOOLEAN));
+        let subject = builder.intern_blank("scoped", BlankScope(37)).unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder.intern_iri("http://example.org/o").unwrap();
+        let quoted = builder.intern_triple(subject, predicate, object).unwrap();
+        let yes = builder
+            .intern_literal(purrdf_core::RdfLiteral::typed("true", XSD_BOOLEAN))
+            .unwrap();
+        let no = builder
+            .intern_literal(purrdf_core::RdfLiteral::typed("false", XSD_BOOLEAN))
+            .unwrap();
         let dataset = builder.freeze().unwrap();
         let name = Variable::new("name");
         let other = Variable::new("other");

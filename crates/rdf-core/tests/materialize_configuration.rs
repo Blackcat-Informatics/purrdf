@@ -22,12 +22,12 @@ const CONTENT_C: &str = "blake3:cccccccccccccccccccccccccccccccccccccccccccccccc
 fn configured(prefix: &str) -> Arc<RdfDataset> {
     let scheme = ContentIdScheme::new(prefix).expect("valid scheme");
     let mut b = RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.into()));
-    let a = b.intern_iri(CONTENT_A);
-    let bb = b.intern_iri(CONTENT_B);
-    let p = b.intern_iri("http://example.org/p");
-    let derived_from = b.intern_iri(DERIVED_FROM);
-    b.push_quad(a, p, bb, None);
-    b.push_annotation(a, derived_from, bb);
+    let a = b.intern_iri(CONTENT_A).unwrap();
+    let bb = b.intern_iri(CONTENT_B).unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+    b.push_quad(a, p, bb, None).unwrap();
+    b.push_annotation(a, derived_from, bb).unwrap();
     b.freeze().expect("configured base freezes")
 }
 

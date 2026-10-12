@@ -15,33 +15,49 @@ use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 fn cases() -> Vec<(&'static str, Arc<RdfDataset>)> {
     let empty = RdfDatasetBuilder::new().freeze().unwrap();
     let mut ground = RdfDatasetBuilder::new();
-    let predicate = ground.intern_iri("http://example.org/p");
-    let object = ground.intern_literal(RdfLiteral::simple("exact ground value"));
+    let predicate = ground.intern_iri("http://example.org/p").unwrap();
+    let object = ground
+        .intern_literal(RdfLiteral::simple("exact ground value"))
+        .unwrap();
     for index in 0..64 {
-        let subject = ground.intern_iri(&format!("http://example.org/s{index}"));
-        ground.push_quad(subject, predicate, object, None);
+        let subject = ground
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        ground.push_quad(subject, predicate, object, None).unwrap();
     }
     let mut asymmetric = RdfDatasetBuilder::new();
-    let predicate = asymmetric.intern_iri("http://example.org/p");
-    let mut previous = asymmetric.intern_blank("b0", BlankScope::DEFAULT);
+    let predicate = asymmetric.intern_iri("http://example.org/p").unwrap();
+    let mut previous = asymmetric.intern_blank("b0", BlankScope::DEFAULT).unwrap();
     for index in 1..32 {
-        let next = asymmetric.intern_blank(&format!("b{index}"), BlankScope::DEFAULT);
-        asymmetric.push_quad(previous, predicate, next, None);
+        let next = asymmetric
+            .intern_blank(&format!("b{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        asymmetric
+            .push_quad(previous, predicate, next, None)
+            .unwrap();
         previous = next;
     }
     let mut symmetric = RdfDatasetBuilder::new();
     for index in 0..32 {
-        let name = symmetric.intern_blank(&format!("g{index}"), BlankScope::DEFAULT);
-        symmetric.declare_named_graph(name);
+        let name = symmetric
+            .intern_blank(&format!("g{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        symmetric.declare_named_graph(name).unwrap();
     }
     let mut composite = RdfDatasetBuilder::new();
-    let subject = composite.intern_blank("shared", BlankScope::DEFAULT);
-    let predicate = composite.intern_iri("http://example.org/p");
-    let object = composite.intern_literal(RdfLiteral::typed(
-        "[ _:shared, [ _:shared ], \"text\" ]",
-        purrdf_cdt::CDT_LIST,
-    ));
-    composite.push_quad(subject, predicate, object, Some(subject));
+    let subject = composite
+        .intern_blank("shared", BlankScope::DEFAULT)
+        .unwrap();
+    let predicate = composite.intern_iri("http://example.org/p").unwrap();
+    let object = composite
+        .intern_literal(RdfLiteral::typed(
+            "[ _:shared, [ _:shared ], \"text\" ]",
+            purrdf_cdt::CDT_LIST,
+        ))
+        .unwrap();
+    composite
+        .push_quad(subject, predicate, object, Some(subject))
+        .unwrap();
     vec![
         ("empty_default", empty),
         ("ground_64_rows", ground.freeze().unwrap()),

@@ -34,45 +34,47 @@ const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/pa
 fn small_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let p1 = b.intern_iri("http://example.org/p1");
-    let o1 = b.intern_iri("http://example.org/o1");
-    b.push_quad(s1, p1, o1, None);
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
+    let o1 = b.intern_iri("http://example.org/o1").unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
 
-    let s2 = b.intern_iri("http://example.org/s2");
-    let p2 = b.intern_iri("http://example.org/p2");
-    let lit = b.intern_literal(RdfLiteral {
-        lexical_form: "hello".to_owned(),
-        datatype: None,
-        language: Some("en".to_owned()),
-        direction: None,
-    });
-    b.push_quad(s2, p2, lit, None);
+    let s2 = b.intern_iri("http://example.org/s2").unwrap();
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let lit = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "hello".to_owned(),
+            datatype: None,
+            language: Some("en".to_owned()),
+            direction: None,
+        })
+        .unwrap();
+    b.push_quad(s2, p2, lit, None).unwrap();
 
-    let blank_s = b.intern_blank("b1", BlankScope::default());
-    let p3 = b.intern_iri("http://example.org/p3");
-    let o3 = b.intern_iri("http://example.org/o3");
-    b.push_quad(blank_s, p3, o3, None);
+    let blank_s = b.intern_blank("b1", BlankScope::default()).unwrap();
+    let p3 = b.intern_iri("http://example.org/p3").unwrap();
+    let o3 = b.intern_iri("http://example.org/o3").unwrap();
+    b.push_quad(blank_s, p3, o3, None).unwrap();
 
     // A quoted triple term used as a base quad's object.
-    let triple1 = b.intern_triple(s1, p1, o1);
-    let s4 = b.intern_iri("http://example.org/s4");
-    let p4 = b.intern_iri("http://example.org/p4");
-    b.push_quad(s4, p4, triple1, None);
+    let triple1 = b.intern_triple(s1, p1, o1).unwrap();
+    let s4 = b.intern_iri("http://example.org/s4").unwrap();
+    let p4 = b.intern_iri("http://example.org/p4").unwrap();
+    b.push_quad(s4, p4, triple1, None).unwrap();
 
     // A named graph.
-    let g1 = b.intern_iri("http://example.org/g1");
-    let s5 = b.intern_iri("http://example.org/s5");
-    let p5 = b.intern_iri("http://example.org/p5");
-    let o5 = b.intern_iri("http://example.org/o5");
-    b.push_quad(s5, p5, o5, Some(g1));
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let s5 = b.intern_iri("http://example.org/s5").unwrap();
+    let p5 = b.intern_iri("http://example.org/p5").unwrap();
+    let o5 = b.intern_iri("http://example.org/o5").unwrap();
+    b.push_quad(s5, p5, o5, Some(g1)).unwrap();
 
     // A reifier binding `r1 rdf:reifies <<s1 p1 o1>>` plus one annotation.
-    let r1 = b.intern_iri("http://example.org/r1");
-    b.push_reifier(r1, triple1);
-    let ap1 = b.intern_iri("http://example.org/ap1");
-    let ao1 = b.intern_iri("http://example.org/ao1");
-    b.push_annotation(r1, ap1, ao1);
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    b.push_reifier(r1, triple1).unwrap();
+    let ap1 = b.intern_iri("http://example.org/ap1").unwrap();
+    let ao1 = b.intern_iri("http://example.org/ao1").unwrap();
+    b.push_annotation(r1, ap1, ao1).unwrap();
 
     b.freeze().expect("small fixture is a valid dataset")
 }
@@ -85,71 +87,75 @@ fn small_fixture() -> Arc<RdfDataset> {
 fn rich_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let p1 = b.intern_iri("http://example.org/p1");
-    let o1 = b.intern_iri("http://example.org/o1");
-    b.push_quad(s1, p1, o1, None);
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
+    let o1 = b.intern_iri("http://example.org/o1").unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
 
-    let s2 = b.intern_iri("http://example.org/s2");
-    let p2 = b.intern_iri("http://example.org/p2");
-    let lit_en = b.intern_literal(RdfLiteral {
-        lexical_form: "hello".to_owned(),
-        datatype: None,
-        language: Some("en".to_owned()),
-        direction: None,
-    });
-    b.push_quad(s2, p2, lit_en, None);
+    let s2 = b.intern_iri("http://example.org/s2").unwrap();
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let lit_en = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "hello".to_owned(),
+            datatype: None,
+            language: Some("en".to_owned()),
+            direction: None,
+        })
+        .unwrap();
+    b.push_quad(s2, p2, lit_en, None).unwrap();
 
-    let lit_typed = b.intern_literal(RdfLiteral {
-        lexical_form: "42".to_owned(),
-        datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
-        language: None,
-        direction: None,
-    });
-    let p2b = b.intern_iri("http://example.org/p2b");
-    b.push_quad(s2, p2b, lit_typed, None);
+    let lit_typed = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "42".to_owned(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let p2b = b.intern_iri("http://example.org/p2b").unwrap();
+    b.push_quad(s2, p2b, lit_typed, None).unwrap();
 
-    let blank1 = b.intern_blank("blank1", BlankScope::default());
-    let blank2 = b.intern_blank("blank2", BlankScope::default());
-    let p3 = b.intern_iri("http://example.org/p3");
-    b.push_quad(blank1, p3, blank2, None);
+    let blank1 = b.intern_blank("blank1", BlankScope::default()).unwrap();
+    let blank2 = b.intern_blank("blank2", BlankScope::default()).unwrap();
+    let p3 = b.intern_iri("http://example.org/p3").unwrap();
+    b.push_quad(blank1, p3, blank2, None).unwrap();
 
-    let triple1 = b.intern_triple(s1, p1, o1);
-    let s4 = b.intern_iri("http://example.org/s4");
-    let p4 = b.intern_iri("http://example.org/p4");
-    b.push_quad(s4, p4, triple1, None);
+    let triple1 = b.intern_triple(s1, p1, o1).unwrap();
+    let s4 = b.intern_iri("http://example.org/s4").unwrap();
+    let p4 = b.intern_iri("http://example.org/p4").unwrap();
+    b.push_quad(s4, p4, triple1, None).unwrap();
 
     // A second, side-table-only triple term (never a base quad's S/P/O).
-    let s6 = b.intern_iri("http://example.org/s6");
-    let p6 = b.intern_iri("http://example.org/p6");
-    let o6 = b.intern_iri("http://example.org/o6");
-    let triple2 = b.intern_triple(s6, p6, o6);
+    let s6 = b.intern_iri("http://example.org/s6").unwrap();
+    let p6 = b.intern_iri("http://example.org/p6").unwrap();
+    let o6 = b.intern_iri("http://example.org/o6").unwrap();
+    let triple2 = b.intern_triple(s6, p6, o6).unwrap();
 
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
-    let s5 = b.intern_iri("http://example.org/s5");
-    let p5 = b.intern_iri("http://example.org/p5");
-    let o5 = b.intern_iri("http://example.org/o5");
-    b.push_quad(s5, p5, o5, Some(g1));
-    b.push_quad(s5, p5, triple1, Some(g2));
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
+    let s5 = b.intern_iri("http://example.org/s5").unwrap();
+    let p5 = b.intern_iri("http://example.org/p5").unwrap();
+    let o5 = b.intern_iri("http://example.org/o5").unwrap();
+    b.push_quad(s5, p5, o5, Some(g1)).unwrap();
+    b.push_quad(s5, p5, triple1, Some(g2)).unwrap();
 
-    let r1 = b.intern_iri("http://example.org/r1");
-    let r2 = b.intern_iri("http://example.org/r2");
-    b.push_reifier(r1, triple1);
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    let r2 = b.intern_iri("http://example.org/r2").unwrap();
+    b.push_reifier(r1, triple1).unwrap();
     // r2 binds a side-table-only triple term, inside a named graph that owns
     // no base quad of its own.
-    let g3 = b.intern_iri("http://example.org/g3");
-    b.push_reifier_in_graph(r2, triple2, Some(g3));
+    let g3 = b.intern_iri("http://example.org/g3").unwrap();
+    b.push_reifier_in_graph(r2, triple2, Some(g3)).unwrap();
 
-    let ap1 = b.intern_iri("http://example.org/ap1");
-    let ao1 = b.intern_iri("http://example.org/ao1");
-    b.push_annotation(r1, ap1, ao1);
-    let ap2 = b.intern_iri("http://example.org/ap2");
-    let ao2 = b.intern_iri("http://example.org/ao2");
-    b.push_annotation_in_graph(r1, ap2, ao2, Some(g2));
-    let ap3 = b.intern_iri("http://example.org/ap3");
-    let ao3 = b.intern_iri("http://example.org/ao3");
-    b.push_annotation(r2, ap3, ao3);
+    let ap1 = b.intern_iri("http://example.org/ap1").unwrap();
+    let ao1 = b.intern_iri("http://example.org/ao1").unwrap();
+    b.push_annotation(r1, ap1, ao1).unwrap();
+    let ap2 = b.intern_iri("http://example.org/ap2").unwrap();
+    let ao2 = b.intern_iri("http://example.org/ao2").unwrap();
+    b.push_annotation_in_graph(r1, ap2, ao2, Some(g2)).unwrap();
+    let ap3 = b.intern_iri("http://example.org/ap3").unwrap();
+    let ao3 = b.intern_iri("http://example.org/ao3").unwrap();
+    b.push_annotation(r2, ap3, ao3).unwrap();
 
     b.freeze().expect("rich fixture is a valid dataset")
 }
@@ -309,21 +315,23 @@ fn from_bytes_rejects_truncated_input() {
 fn from_bytes_rejects_literal_datatype_not_referencing_an_iri() {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let p1 = b.intern_iri("http://example.org/p1");
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
     const MARKER: &str = "ZZZ_TAMPER_MARKER_LITERAL_LEXICAL_FORM_UNIQUE_0001";
-    let lit = b.intern_literal(RdfLiteral {
-        lexical_form: MARKER.to_owned(),
-        datatype: Some("http://example.org/customtype".to_owned()),
-        language: None,
-        direction: None,
-    });
-    b.push_quad(s1, p1, lit, None);
+    let lit = b
+        .intern_literal(RdfLiteral {
+            lexical_form: MARKER.to_owned(),
+            datatype: Some("http://example.org/customtype".to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    b.push_quad(s1, p1, lit, None).unwrap();
 
-    let blank = b.intern_blank("btamper", BlankScope::default());
-    let p2 = b.intern_iri("http://example.org/p2");
-    let o2 = b.intern_iri("http://example.org/o2");
-    b.push_quad(blank, p2, o2, None);
+    let blank = b.intern_blank("btamper", BlankScope::default()).unwrap();
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let o2 = b.intern_iri("http://example.org/o2").unwrap();
+    b.push_quad(blank, p2, o2, None).unwrap();
 
     let dataset = b.freeze().expect("valid dataset");
     let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -418,38 +426,40 @@ fn from_bytes_rejects_unsupported_version() {
 fn view_parity_dataset(with_addition: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    b.push_quad(s, p, o, None);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
 
-    let scoped = b.intern_blank("scoped", BlankScope(7));
-    let greeting = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    let g = b.intern_iri("http://example.org/g");
-    b.push_quad(scoped, p, greeting, Some(g));
+    let scoped = b.intern_blank("scoped", BlankScope(7)).unwrap();
+    let greeting = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    b.push_quad(scoped, p, greeting, Some(g)).unwrap();
 
-    let triple = b.intern_triple(s, p, o);
-    let h = b.intern_iri("http://example.org/h");
-    b.push_quad(s, p, triple, Some(h));
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let h = b.intern_iri("http://example.org/h").unwrap();
+    b.push_quad(s, p, triple, Some(h)).unwrap();
 
-    let reifier = b.intern_blank("statement", BlankScope(9));
-    b.push_reifier_in_graph(reifier, triple, Some(g));
-    let confidence = b.intern_iri("http://example.org/confidence");
-    b.push_annotation_in_graph(reifier, confidence, greeting, Some(g));
-    b.push_annotation(reifier, confidence, o);
+    let reifier = b.intern_blank("statement", BlankScope(9)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+    let confidence = b.intern_iri("http://example.org/confidence").unwrap();
+    b.push_annotation_in_graph(reifier, confidence, greeting, Some(g))
+        .unwrap();
+    b.push_annotation(reifier, confidence, o).unwrap();
 
     if with_addition {
-        let added = b.intern_iri("http://example.org/added");
-        b.push_quad(added, p, o, Some(g));
+        let added = b.intern_iri("http://example.org/added").unwrap();
+        b.push_quad(added, p, o, Some(g)).unwrap();
     }
 
     // Declared, and deliberately empty.
-    let empty = b.intern_iri("http://example.org/empty");
-    b.declare_named_graph(empty);
-
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze()
         .expect("the view-parity fixture is a valid dataset")
 }
@@ -465,26 +475,28 @@ fn view_parity_fixture() -> Arc<RdfDataset> {
 fn selected_graph_expectation() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let scoped = b.intern_blank("scoped", BlankScope(7));
-    let greeting = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    let g = b.intern_iri("http://example.org/g");
-    b.push_quad(scoped, p, greeting, Some(g));
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let scoped = b.intern_blank("scoped", BlankScope(7)).unwrap();
+    let greeting = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    b.push_quad(scoped, p, greeting, Some(g)).unwrap();
 
-    let triple = b.intern_triple(s, p, o);
-    let reifier = b.intern_blank("statement", BlankScope(9));
-    b.push_reifier_in_graph(reifier, triple, Some(g));
-    let confidence = b.intern_iri("http://example.org/confidence");
-    b.push_annotation_in_graph(reifier, confidence, greeting, Some(g));
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let reifier = b.intern_blank("statement", BlankScope(9)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+    let confidence = b.intern_iri("http://example.org/confidence").unwrap();
+    b.push_annotation_in_graph(reifier, confidence, greeting, Some(g))
+        .unwrap();
 
-    let empty = b.intern_iri("http://example.org/empty");
-    b.declare_named_graph(empty);
-
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze()
         .expect("the selection expectation is a valid dataset")
 }

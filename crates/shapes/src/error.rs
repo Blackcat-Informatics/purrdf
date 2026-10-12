@@ -6,7 +6,7 @@
 //! Most of what can go wrong while turning a shapes document into a verdict is a message for
 //! a human — a syntax error, an unsupported construct, a SPARQL body that does not parse —
 //! and is carried as one ([`ShapesError::Invalid`]). An incomplete `owl:imports` closure is
-//! different: it is the one refusal a caller can ACT on programmatically, by supplying the
+//! different: a caller can act on it programmatically, by supplying the
 //! documents it names, and it must read the same on every host. So it is its own variant,
 //! carrying the typed [`ShapesImportError`], and a caller branches on the variant rather
 //! than on message text. A shapes graph that uses the SHACL JavaScript Extensions is the
@@ -15,6 +15,10 @@
 //! ([`ShapesError::ShaclJs`]), naming the extension, the node and the term, rather than
 //! reading like a malformed graph. SHACL-JS that no shape reaches is declared vocabulary
 //! and loads.
+//!
+//! Materialization can refuse a logical capacity or physical allocation. Its original
+//! [`ShapesError::Storage`] cause survives query, expression and rule execution; it is
+//! not a malformed-shape verdict.
 //!
 //! Two refusals of SHACL-SPARQL and SHACL-AF declarations are typed as well, because they
 //! answer to two different sentences of the specifications and a caller must be able to
@@ -43,6 +47,8 @@ use crate::imports::ShapesImportError;
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesError {
+    /// Logical capacity or physical storage refused an operation.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table the
     /// caller supplied cannot be used. See [`crate::imports`].
     Imports(ShapesImportError),
@@ -68,6 +74,14 @@ pub enum ShapesError {
 }
 
 impl ShapesError {
+    /// Add evaluation context to a textual diagnostic while retaining typed refusals.
+    pub(crate) fn context(self, prefix: &str) -> Self {
+        match self {
+            Self::Invalid(message) => Self::Invalid(format!("{prefix}{message}")),
+            error => error,
+        }
+    }
+
     /// The import refusal, when this is one.
     #[must_use]
     pub const fn as_imports(&self) -> Option<&ShapesImportError> {
@@ -78,6 +92,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
+            | Self::Storage(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -92,6 +107,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
+            | Self::Storage(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -106,6 +122,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
+            | Self::Storage(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -120,6 +137,7 @@ impl ShapesError {
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::SparqlTargetDisagreement(_)
+            | Self::Storage(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -134,6 +152,7 @@ impl ShapesError {
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
+            | Self::Storage(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -148,6 +167,7 @@ impl ShapesError {
             | Self::IllFormed(_)
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
+            | Self::Storage(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -156,6 +176,7 @@ impl ShapesError {
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Imports(error) => error.fmt(f),
             Self::ShaclJs(refusal) => refusal.fmt(f),
             Self::IllFormed(refusal) => refusal.fmt(f),
@@ -170,6 +191,7 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Imports(error) => Some(error),
             Self::ShaclJs(refusal) => Some(refusal),
             Self::IllFormed(refusal) => Some(refusal),
@@ -178,6 +200,40 @@ impl std::error::Error for ShapesError {
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Invalid(_) => None,
         }
+    }
+}
+
+purrdf_lex::variant_from!(ShapesError { Storage(purrdf_lex::allocation::StorageError) });
+
+impl From<ShapesError> for purrdf_datalog::guard::CallbackError {
+    fn from(error: ShapesError) -> Self {
+        match error {
+            ShapesError::Storage(error) => Self::Storage(error),
+            error => Self::Evaluation(error.to_string()),
+        }
+    }
+}
+
+impl From<purrdf_core::RdfDiagnostic> for ShapesError {
+    fn from(error: purrdf_core::RdfDiagnostic) -> Self {
+        error
+            .storage_error()
+            .map_or_else(|| Self::Invalid(error.to_string()), Self::Storage)
+    }
+}
+
+impl From<purrdf_iri::IriReadError> for ShapesError {
+    fn from(error: purrdf_iri::IriReadError) -> Self {
+        match error {
+            purrdf_iri::IriReadError::Storage(error) => Self::Storage(error),
+            error => Self::Invalid(error.to_string()),
+        }
+    }
+}
+
+impl From<purrdf_core::ir::import::DatasetImportError<std::convert::Infallible>> for ShapesError {
+    fn from(error: purrdf_core::ir::import::DatasetImportError<std::convert::Infallible>) -> Self {
+        Self::Storage(error.into())
     }
 }
 
@@ -567,12 +623,5 @@ impl From<String> for ShapesError {
 impl From<&str> for ShapesError {
     fn from(message: &str) -> Self {
         Self::Invalid(message.to_owned())
-    }
-}
-
-/// The rendered message, for a caller whose own error type is a string.
-impl From<ShapesError> for String {
-    fn from(error: ShapesError) -> Self {
-        error.to_string()
     }
 }

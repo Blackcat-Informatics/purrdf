@@ -197,7 +197,10 @@ pub fn validate_complete_product(
 pub fn complete_report_payload(
     report: &CompleteValidationReport,
 ) -> Result<Value, purrdf_core::RdfDiagnostic> {
-    let graph = report.to_graph();
+    let graph = report.to_graph().map_err(|error| match error {
+        purrdf_shapes::ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(error),
+        error => purrdf_core::RdfDiagnostic::error("shacl-report-emission", error.to_string()),
+    })?;
     let context = graph.source_context();
     let shared = context.sources_share_identity();
     let encode = |dataset: &RdfDataset| {

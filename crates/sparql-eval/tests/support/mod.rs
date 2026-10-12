@@ -97,10 +97,10 @@ where
 {
     let mut builder = RdfDatasetBuilder::new();
     for (s, p, o) in triples {
-        let s = builder.intern_iri(&format!("{EX}{}", s.as_ref()));
-        let p = builder.intern_iri(&format!("{EX}{}", p.as_ref()));
-        let o = builder.intern_iri(&format!("{EX}{}", o.as_ref()));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}{}", s.as_ref())).unwrap();
+        let p = builder.intern_iri(&format!("{EX}{}", p.as_ref())).unwrap();
+        let o = builder.intern_iri(&format!("{EX}{}", o.as_ref())).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset")
 }
@@ -114,11 +114,11 @@ pub fn fan_out(
     object: impl Fn(usize) -> String,
 ) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(predicate);
+    let predicate = builder.intern_iri(predicate).unwrap();
     for index in 0..count {
-        let s = builder.intern_iri(&subject(index));
-        let o = builder.intern_iri(&object(index));
-        builder.push_quad(s, predicate, o, None);
+        let s = builder.intern_iri(&subject(index)).unwrap();
+        let o = builder.intern_iri(&object(index)).unwrap();
+        builder.push_quad(s, predicate, o, None).unwrap();
     }
     builder.freeze().expect("the fan-out fixture")
 }
@@ -126,14 +126,16 @@ pub fn fan_out(
 /// `<s1> <p> 1` and `<s2> <p> 2`, the objects `xsd:integer` literals.
 pub fn two_integer_objects() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     for n in 1..=2 {
-        let s = builder.intern_iri(&format!("{EX}s{n}"));
-        let o = builder.intern_literal(RdfLiteral::typed(
-            n.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}s{n}")).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(
+                n.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset")
 }
@@ -141,11 +143,13 @@ pub fn two_integer_objects() -> Arc<RdfDataset> {
 /// `ex:a`, `ex:b` and `ex:c`, each `ex:p ex:value`.
 pub fn three_subjects_one_value() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let value = builder.intern_iri("http://example.org/value");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let value = builder.intern_iri("http://example.org/value").unwrap();
     for name in ["a", "b", "c"] {
-        let subject = builder.intern_iri(&format!("http://example.org/{name}"));
-        builder.push_quad(subject, predicate, value, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, value, None).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -155,12 +159,12 @@ pub fn three_subjects_one_value() -> Arc<RdfDataset> {
 /// materially changes the intermediate-result sizes.
 pub fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let hub = b.intern_iri("http://ex/hub");
+    let hub = b.intern_iri("http://ex/hub").unwrap();
     for &(name, count) in spec {
-        let pred = b.intern_iri(&format!("http://ex/{name}"));
+        let pred = b.intern_iri(&format!("http://ex/{name}")).unwrap();
         for i in 0..count {
-            let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
-            b.push_quad(hub, pred, leaf, None);
+            let leaf = b.intern_iri(&format!("http://ex/{name}{i}")).unwrap();
+            b.push_quad(hub, pred, leaf, None).unwrap();
         }
     }
     b.freeze().expect("freeze")

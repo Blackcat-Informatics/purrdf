@@ -21,11 +21,11 @@ const EX: &str = "https://example.org/";
 /// A small class taxonomy: Dog ⊑ Mammal ⊑ Animal ⊑ Agent.
 fn taxonomy() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let sc = b.intern_iri(RDFS_SUBCLASS);
+    let sc = b.intern_iri(RDFS_SUBCLASS).unwrap();
     let edge = |s: &str, o: &str, b: &mut RdfDatasetBuilder| {
-        let s = b.intern_iri(&format!("{EX}{s}"));
-        let o = b.intern_iri(&format!("{EX}{o}"));
-        b.push_quad(s, sc, o, None);
+        let s = b.intern_iri(&format!("{EX}{s}")).unwrap();
+        let o = b.intern_iri(&format!("{EX}{o}")).unwrap();
+        b.push_quad(s, sc, o, None).unwrap();
     };
     edge("Dog", "Mammal", &mut b);
     edge("Mammal", "Animal", &mut b);

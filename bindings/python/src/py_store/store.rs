@@ -33,7 +33,7 @@ use super::query::{
 };
 use super::term::{PyQuad, extract_graph_name, rdf_quad_to_values, rdf_quad_to_values_scoped};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
-use crate::py_store::iri_value_error;
+use crate::py_store::{iri_read_value_error, iri_value_error};
 use crate::{
     BlankScope, DatasetMut, RdfQuad, RdfTerm, SerializeGraph, SerializeOptions, StatementLayer,
     serialize_dataset_with,
@@ -106,7 +106,7 @@ impl PyStore {
             for quad in quads {
                 inner
                     .insert(rdf_quad_to_values_scoped(&quad, scope))
-                    .map_err(|e| iri_value_error(&e))?;
+                    .map_err(|e| iri_read_value_error(&e))?;
             }
             declare_loaded_graphs(inner, declared, scope)?;
             Ok(prefixes)
@@ -139,7 +139,7 @@ impl PyStore {
         slf.as_super()
             .inner
             .insert(rdf_quad_to_values(&quad.inner))
-            .map_err(|e| iri_value_error(&e))?;
+            .map_err(|e| iri_read_value_error(&e))?;
         Ok(())
     }
 

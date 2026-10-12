@@ -140,8 +140,11 @@ impl Interner {
 ///
 /// The builder's own value interning ([`TermFactory::intern_value`]), which takes a
 /// triple term apart over a work list rather than the machine stack.
-pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    b.intern_value(v)
+pub(crate) fn intern_into(
+    b: &mut RdfDatasetBuilder,
+    v: &TermValue,
+) -> Result<TermId, crate::EntailError> {
+    Ok(b.intern_value(v)?)
 }
 
 #[cfg(test)]
@@ -208,10 +211,10 @@ mod tests {
     /// derived triple.
     fn round_trip(value: &TermValue) -> TermValue {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(EX_S);
-        let p = b.intern_iri(EX_HOLDS);
+        let s = b.intern_iri(EX_S).unwrap();
+        let p = b.intern_iri(EX_HOLDS).unwrap();
         let o = intern_into(&mut b, value);
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("the round-trip dataset freezes");
         let quad = ds.quads().next().expect("one quad");
         ds.term_value(quad.o)
@@ -334,24 +337,26 @@ mod term_walk_tests {
 
     fn reference(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
         match v {
-            TermValue::Iri(iri) => b.intern_iri(iri),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+            TermValue::Iri(iri) => b.intern_iri(iri).unwrap(),
+            TermValue::Blank { label, scope } => b.intern_blank(label, *scope).unwrap(),
             TermValue::Literal {
                 lexical_form,
                 datatype,
                 language,
                 direction,
-            } => b.intern_literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
+            } => b
+                .intern_literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                })
+                .unwrap(),
             TermValue::Triple { s, p, o } => {
                 let s = reference(b, s);
                 let p = reference(b, p);
                 let o = reference(b, o);
-                b.intern_triple(s, p, o)
+                b.intern_triple(s, p, o).unwrap()
             }
         }
     }
@@ -377,8 +382,8 @@ mod term_walk_tests {
             );
             let sentinel = "http://example.org/sentinel";
             assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
+                found.intern_iri(sentinel).unwrap(),
+                expected.intern_iri(sentinel).unwrap(),
                 "seed {seed}"
             );
         }

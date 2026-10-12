@@ -146,7 +146,7 @@ fn build_graph_page(triples: &[Triple], graph: &TermValue) -> Arc<RdfDataset> {
         let s = intern_value(&mut b, s);
         let p = intern_value(&mut b, p);
         let o = intern_value(&mut b, o);
-        b.push_quad(s, p, o, Some(g));
+        b.push_quad(s, p, o, Some(g)).unwrap();
     }
     b.freeze().expect("graph page freeze")
 }
@@ -163,7 +163,7 @@ fn build_multi_graph_dataset(graphs: &[(TermValue, Vec<Triple>)]) -> Arc<RdfData
             let s = intern_value(&mut b, s);
             let p = intern_value(&mut b, p);
             let o = intern_value(&mut b, o);
-            b.push_quad(s, p, o, Some(g));
+            b.push_quad(s, p, o, Some(g)).unwrap();
         }
     }
     b.freeze().expect("multi-graph dataset freeze")
@@ -212,7 +212,7 @@ fn build_declared_empty_page(graphs: &[TermValue]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for graph in graphs {
         let g = intern_value(&mut b, graph);
-        b.declare_named_graph(g);
+        b.declare_named_graph(g).unwrap();
     }
     b.freeze().expect("declared-empty page freeze")
 }
@@ -231,12 +231,12 @@ fn build_multi_graph_dataset_with_empties(
             let s = intern_value(&mut b, s);
             let p = intern_value(&mut b, p);
             let o = intern_value(&mut b, o);
-            b.push_quad(s, p, o, Some(g));
+            b.push_quad(s, p, o, Some(g)).unwrap();
         }
     }
     for graph in declared_empty {
         let g = intern_value(&mut b, graph);
-        b.declare_named_graph(g);
+        b.declare_named_graph(g).unwrap();
     }
     b.freeze().expect("multi-graph dataset freeze")
 }

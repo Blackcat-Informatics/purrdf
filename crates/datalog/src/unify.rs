@@ -46,6 +46,7 @@
 //! candidate mentions a bound variable that cannot be expressed outside the
 //! binders being stripped away.
 
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::id::{MetaId, NodeId};
@@ -69,24 +70,34 @@ pub struct Subst {
 
 impl Subst {
     /// Grow both backing vectors to hold index `idx`.
-    fn ensure(&mut self, idx: usize) {
+    fn ensure(&mut self, idx: usize) -> Result<(), StorageError> {
+        let len = idx.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        self.bindings
+            .try_reserve(len.saturating_sub(self.bindings.len()))
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.meta_sort
+            .try_reserve(len.saturating_sub(self.meta_sort.len()))
+            .map_err(|_| StorageError::AllocationFailed)?;
         if self.bindings.len() <= idx {
-            self.bindings.resize(idx + 1, None);
+            self.bindings.resize(len, None);
         }
         if self.meta_sort.len() <= idx {
-            self.meta_sort.resize(idx + 1, None);
+            self.meta_sort.resize(len, None);
         }
+        Ok(())
     }
 
     /// Bind `m` to `node`.
-    fn bind(&mut self, m: MetaId, node: NodeId) {
-        self.ensure(m.index());
-        self.bindings[m.index()] = Some(node);
+    fn bind(&mut self, m: MetaId, node: NodeId) -> Result<(), StorageError> {
+        let slot = m.address()?;
+        self.ensure(slot)?;
+        self.bindings[slot] = Some(node);
+        Ok(())
     }
 
     /// `m`'s current binding, if any.
     fn get(&self, m: MetaId) -> Option<NodeId> {
-        self.bindings.get(m.index()).copied().flatten()
+        self.bindings.get(m.address().ok()?).copied().flatten()
     }
 
     /// Record that `m` now stands for `node`.
@@ -96,24 +107,35 @@ impl Subst {
     /// metavariable `m`, as authored in the clause text, now stands for the fresh
     /// node minted for this firing" is exactly a binding, and giving it its own
     /// name at the call site documents that intent without a second mechanism.
-    pub fn bind_renaming(&mut self, m: MetaId, node: NodeId) {
-        self.bind(m, node);
+    pub fn bind_renaming(&mut self, m: MetaId, node: NodeId) -> Result<(), StorageError> {
+        self.bind(m, node)
     }
 
     /// Declare `m`'s sort, for order-sorted unification via [`unify_sorted`].
-    pub fn declare_meta_sort(&mut self, m: MetaId, sort: NodeId) {
-        self.set_meta_sort(m, Some(sort));
+    pub fn declare_meta_sort(&mut self, m: MetaId, sort: NodeId) -> Result<(), StorageError> {
+        self.set_meta_sort(m, Some(sort))
     }
 
     /// Set (or clear) `m`'s declared sort.
-    fn set_meta_sort(&mut self, m: MetaId, sort: Option<NodeId>) {
-        self.ensure(m.index());
-        self.meta_sort[m.index()] = sort;
+    fn set_meta_sort(&mut self, m: MetaId, sort: Option<NodeId>) -> Result<(), StorageError> {
+        let slot = m.address()?;
+        self.ensure(slot)?;
+        self.meta_sort[slot] = sort;
+        Ok(())
     }
 
     /// `m`'s declared sort, if any was recorded.
     pub fn meta_sort(&self, m: MetaId) -> Option<NodeId> {
-        self.meta_sort.get(m.index()).copied().flatten()
+        self.meta_sort.get(m.address().ok()?).copied().flatten()
+    }
+
+    fn try_clone(&self) -> Result<Self, StorageError> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        Ok(Self {
+            bindings: memory.collect(self.bindings.iter().copied())?,
+            meta_sort: memory.collect(self.meta_sort.iter().copied())?,
+        })
     }
 
     /// Whether `m` currently has a binding.
@@ -348,10 +370,15 @@ impl SortContext {
 ///
 /// Transactional: on any outcome other than [`Unified::Ok`], `s` is left exactly
 /// as it was found. See the [module docs](self).
-pub fn unify(dag: &mut TermDag, a: NodeId, b: NodeId, s: &mut Subst) -> Unified {
-    let checkpoint = s.clone();
+pub fn unify(
+    dag: &mut TermDag,
+    a: NodeId,
+    b: NodeId,
+    s: &mut Subst,
+) -> Result<Unified, StorageError> {
+    let checkpoint = s.try_clone()?;
     let result = unify_at(dag, a, b, s, 0, None);
-    if !matches!(result, Unified::Ok) {
+    if !matches!(result, Ok(Unified::Ok)) {
         *s = checkpoint;
     }
     result
@@ -367,10 +394,10 @@ pub fn unify_sorted(
     b: NodeId,
     s: &mut Subst,
     ctx: &SortContext,
-) -> Unified {
-    let checkpoint = s.clone();
+) -> Result<Unified, StorageError> {
+    let checkpoint = s.try_clone()?;
     let result = unify_at(dag, a, b, s, 0, Some(ctx));
-    if !matches!(result, Unified::Ok) {
+    if !matches!(result, Ok(Unified::Ok)) {
         *s = checkpoint;
     }
     result
@@ -391,14 +418,14 @@ fn unify_at(
     s: &mut Subst,
     depth: u32,
     ctx: Option<&SortContext>,
-) -> Unified {
-    let a = whnf(dag, s, a, depth);
-    let b = whnf(dag, s, b, depth);
+) -> Result<Unified, StorageError> {
+    let a = whnf(dag, s, a, depth)?;
+    let b = whnf(dag, s, b, depth)?;
     if a == b {
         // Hash-consing gives this short-circuit for free, including alpha-
         // equivalent binders: the locally-nameless encoding makes them literally
         // the same node.
-        return Unified::Ok;
+        return Ok(Unified::Ok);
     }
     if let NodeData::Meta(m) = *dag.data(a) {
         return bind_meta(dag, s, m, a, b, depth, ctx);
@@ -418,19 +445,19 @@ fn unify_at(
             },
         ) => {
             if op_a != op_b || args_a.len() != args_b.len() {
-                return Unified::Clash { left: a, right: b };
+                return Ok(Unified::Clash { left: a, right: b });
             }
-            let op_result = unify_at(dag, op_a, op_b, s, depth, ctx);
+            let op_result = unify_at(dag, op_a, op_b, s, depth, ctx)?;
             if !matches!(op_result, Unified::Ok) {
-                return op_result;
+                return Ok(op_result);
             }
             for (&x, &y) in args_a.iter().zip(args_b.iter()) {
-                let result = unify_at(dag, x, y, s, depth, ctx);
+                let result = unify_at(dag, x, y, s, depth, ctx)?;
                 if !matches!(result, Unified::Ok) {
-                    return result;
+                    return Ok(result);
                 }
             }
-            Unified::Ok
+            Ok(Unified::Ok)
         }
         (
             NodeData::Binder {
@@ -445,21 +472,21 @@ fn unify_at(
             },
         ) => {
             if op_a != op_b || sorts_a.len() != sorts_b.len() {
-                return Unified::Clash { left: a, right: b };
+                return Ok(Unified::Clash { left: a, right: b });
             }
-            let op_result = unify_at(dag, op_a, op_b, s, depth, ctx);
+            let op_result = unify_at(dag, op_a, op_b, s, depth, ctx)?;
             if !matches!(op_result, Unified::Ok) {
-                return op_result;
+                return Ok(op_result);
             }
             for (&x, &y) in sorts_a.iter().zip(sorts_b.iter()) {
-                let result = unify_at(dag, x, y, s, depth, ctx);
+                let result = unify_at(dag, x, y, s, depth, ctx)?;
                 if !matches!(result, Unified::Ok) {
-                    return result;
+                    return Ok(result);
                 }
             }
             unify_at(dag, body_a, body_b, s, depth + 1, ctx)
         }
-        _ => Unified::Clash { left: a, right: b },
+        _ => Ok(Unified::Clash { left: a, right: b }),
     }
 }
 
@@ -475,11 +502,11 @@ fn unify_at(
 /// still be compared against structure found several binders deep. If `node` was
 /// never a metavariable to begin with, [`Subst::resolve`] is the identity and no
 /// lift is applied.
-fn whnf(dag: &mut TermDag, s: &Subst, node: NodeId, depth: u32) -> NodeId {
+fn whnf(dag: &mut TermDag, s: &Subst, node: NodeId, depth: u32) -> Result<NodeId, StorageError> {
     let was_meta = matches!(dag.data(node), NodeData::Meta(_));
     let resolved = s.resolve(dag, node);
     if !was_meta || matches!(dag.data(resolved), NodeData::Meta(_)) {
-        return resolved;
+        return Ok(resolved);
     }
     shift(dag, resolved, depth)
 }
@@ -494,29 +521,29 @@ fn bind_meta(
     t: NodeId,
     depth: u32,
     ctx: Option<&SortContext>,
-) -> Unified {
+) -> Result<Unified, StorageError> {
     // Binding a meta to itself is vacuous.
     if let NodeData::Meta(m2) = *dag.data(t)
         && m2 == m
     {
-        return Unified::Ok;
+        return Ok(Unified::Ok);
     }
 
     if occurs_through(s, dag, m, t) {
-        return Unified::Occurs {
+        return Ok(Unified::Occurs {
             meta: m,
             in_node: t,
-        };
+        });
     }
 
     // `t` lives at ambient `depth`; `m`'s home is depth 0, so the candidate
     // solution must be lowered. Failure is a genuine scope escape: a sound
     // clash, not a bug.
-    let Some(lowered) = shift_down(dag, t, depth) else {
-        return Unified::Clash {
+    let Some(lowered) = shift_down(dag, t, depth)? else {
+        return Ok(Unified::Clash {
             left: meta_node,
             right: t,
-        };
+        });
     };
 
     // Unifying two metavariables yields a variable of their sorts' MEET; `m` is
@@ -532,10 +559,10 @@ fn bind_meta(
                 (Some(mine), Some(theirs)) => match ctx.order().meet(mine, theirs) {
                     Some(glb) => Some(glb),
                     None => {
-                        return Unified::Clash {
+                        return Ok(Unified::Clash {
                             left: meta_node,
                             right: t,
-                        };
+                        });
                     }
                 },
                 (Some(mine), None) => Some(mine),
@@ -547,18 +574,18 @@ fn bind_meta(
         } else if let (Some(mine), Some(theirs)) = (s.meta_sort(m), ctx.sort_of(dag, lowered, s))
             && !ctx.order().leq(theirs, mine)
         {
-            return Unified::Clash {
+            return Ok(Unified::Clash {
                 left: meta_node,
                 right: t,
-            };
+            });
         }
     }
 
-    s.bind(m, lowered);
+    s.bind(m, lowered)?;
     if let Some((m2, glb)) = propagate {
-        s.declare_meta_sort(m2, glb);
+        s.declare_meta_sort(m2, glb)?;
     }
-    Unified::Ok
+    Ok(Unified::Ok)
 }
 
 /// Whether `m` occurs anywhere in `node`, following the current bindings of `s`.
@@ -606,7 +633,7 @@ fn occurs_through(s: &Subst, dag: &TermDag, m: MetaId, node: NodeId) -> bool {
 /// meta's solution in at a depth that has crossed some binders since the
 /// top-level call requires [`shift`]-ing the solution up first, for the same
 /// capture-avoidance reason `whnf` does.
-pub fn apply(dag: &mut TermDag, s: &Subst, node: NodeId) -> NodeId {
+pub fn apply(dag: &mut TermDag, s: &Subst, node: NodeId) -> Result<NodeId, StorageError> {
     let mut memo = BTreeMap::new();
     apply_at(dag, s, node, 0, &mut memo)
 }
@@ -618,9 +645,9 @@ fn apply_at(
     node: NodeId,
     depth: u32,
     memo: &mut BTreeMap<(NodeId, u32), NodeId>,
-) -> NodeId {
+) -> Result<NodeId, StorageError> {
     if let Some(&cached) = memo.get(&(node, depth)) {
-        return cached;
+        return Ok(cached);
     }
     let result = match dag.data(node).clone() {
         NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => node,
@@ -629,30 +656,30 @@ fn apply_at(
             if resolved == node {
                 node
             } else {
-                let shifted = shift(dag, resolved, depth);
-                apply_at(dag, s, shifted, depth, memo)
+                let shifted = shift(dag, resolved, depth)?;
+                apply_at(dag, s, shifted, depth, memo)?
             }
         }
         NodeData::App { op, args } => {
-            let new_op = apply_at(dag, s, op, depth, memo);
+            let new_op = apply_at(dag, s, op, depth, memo)?;
             let new_args: Vec<NodeId> = args
                 .iter()
                 .map(|&arg| apply_at(dag, s, arg, depth, memo))
-                .collect();
-            dag.intern_app(new_op, new_args)
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            dag.intern_app(new_op, new_args)?
         }
         NodeData::Binder { op, sorts, body } => {
-            let new_op = apply_at(dag, s, op, depth, memo);
+            let new_op = apply_at(dag, s, op, depth, memo)?;
             let new_sorts: Vec<NodeId> = sorts
                 .iter()
                 .map(|&sort| apply_at(dag, s, sort, depth, memo))
-                .collect();
-            let new_body = apply_at(dag, s, body, depth + 1, memo);
-            dag.intern_binder(new_op, new_sorts, new_body)
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            let new_body = apply_at(dag, s, body, depth + 1, memo)?;
+            dag.intern_binder(new_op, new_sorts, new_body)?
         }
     };
     memo.insert((node, depth), result);
-    result
+    Ok(result)
 }
 
 /// Lift every occurrence of a `Bound` variable free at cutoff 0 (i.e. every
@@ -664,9 +691,9 @@ fn apply_at(
 /// `bind_meta`), which is exactly why `whnf` must shift a meta's stored
 /// solution by the CURRENT depth every time it unfolds one, rather than storing a
 /// separate copy per depth. Memoized by `(NodeId, cutoff)`.
-pub fn shift(dag: &mut TermDag, node: NodeId, by: u32) -> NodeId {
+pub fn shift(dag: &mut TermDag, node: NodeId, by: u32) -> Result<NodeId, StorageError> {
     if by == 0 {
-        return node;
+        return Ok(node);
     }
     let mut memo = BTreeMap::new();
     shift_at(dag, node, by, 0, &mut memo)
@@ -679,48 +706,51 @@ fn shift_at(
     by: u32,
     cutoff: u32,
     memo: &mut BTreeMap<(NodeId, u32), NodeId>,
-) -> NodeId {
+) -> Result<NodeId, StorageError> {
     if let Some(&cached) = memo.get(&(node, cutoff)) {
-        return cached;
+        return Ok(cached);
     }
     let result = match dag.data(node).clone() {
         NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => node,
         NodeData::Bound { debruijn, slot } => {
             if debruijn >= cutoff {
-                dag.intern_bound(debruijn + by, slot)
+                dag.intern_bound(
+                    debruijn.checked_add(by).ok_or(StorageError::SizeOverflow)?,
+                    slot,
+                )?
             } else {
                 node
             }
         }
         NodeData::App { op, args } => {
-            let new_op = shift_at(dag, op, by, cutoff, memo);
+            let new_op = shift_at(dag, op, by, cutoff, memo)?;
             let new_args: Vec<NodeId> = args
                 .iter()
                 .map(|&arg| shift_at(dag, arg, by, cutoff, memo))
-                .collect();
-            dag.intern_app(new_op, new_args)
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            dag.intern_app(new_op, new_args)?
         }
         NodeData::Binder { op, sorts, body } => {
-            let new_op = shift_at(dag, op, by, cutoff, memo);
+            let new_op = shift_at(dag, op, by, cutoff, memo)?;
             let new_sorts: Vec<NodeId> = sorts
                 .iter()
                 .map(|&sort| shift_at(dag, sort, by, cutoff, memo))
-                .collect();
-            let new_body = shift_at(dag, body, by, cutoff + 1, memo);
-            dag.intern_binder(new_op, new_sorts, new_body)
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            let new_body = shift_at(dag, body, by, cutoff + 1, memo)?;
+            dag.intern_binder(new_op, new_sorts, new_body)?
         }
     };
     memo.insert((node, cutoff), result);
-    result
+    Ok(result)
 }
 
 /// The inverse of [`shift`]: lower every `Bound` occurrence free at cutoff 0 by
 /// `by`, or report `None` if some such occurrence refers to one of the `by`
 /// binders being stripped away (a genuine scope escape — the bound variable
 /// cannot be expressed at the outer depth).
-fn shift_down(dag: &mut TermDag, node: NodeId, by: u32) -> Option<NodeId> {
+fn shift_down(dag: &mut TermDag, node: NodeId, by: u32) -> Result<Option<NodeId>, StorageError> {
     if by == 0 {
-        return Some(node);
+        return Ok(Some(node));
     }
     let mut memo = BTreeMap::new();
     shift_down_at(dag, node, by, 0, &mut memo)
@@ -733,41 +763,66 @@ fn shift_down_at(
     by: u32,
     cutoff: u32,
     memo: &mut BTreeMap<(NodeId, u32), Option<NodeId>>,
-) -> Option<NodeId> {
+) -> Result<Option<NodeId>, StorageError> {
     if let Some(&cached) = memo.get(&(node, cutoff)) {
-        return cached;
+        return Ok(cached);
     }
     let result = match dag.data(node).clone() {
         NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => Some(node),
         NodeData::Bound { debruijn, slot } => {
             if debruijn < cutoff {
                 Some(node)
-            } else if debruijn < cutoff + by {
+            } else if debruijn < cutoff.checked_add(by).ok_or(StorageError::SizeOverflow)? {
                 None
             } else {
-                Some(dag.intern_bound(debruijn - by, slot))
+                Some(dag.intern_bound(debruijn - by, slot)?)
             }
         }
         NodeData::App { op, args } => {
-            let new_op = shift_down_at(dag, op, by, cutoff, memo)?;
-            let mut new_args = Vec::with_capacity(args.len());
-            for &arg in &args {
-                new_args.push(shift_down_at(dag, arg, by, cutoff, memo)?);
+            let Some(new_op) = shift_down_at(dag, op, by, cutoff, memo)? else {
+                return Ok(None);
+            };
+            let mut new_args = Vec::new();
+            new_args
+                .try_reserve_exact(args.len())
+                .map_err(|_| StorageError::AllocationFailed)?;
+            for arg in args {
+                let Some(arg) = shift_down_at(dag, arg, by, cutoff, memo)? else {
+                    return Ok(None);
+                };
+                new_args.push(arg);
             }
-            Some(dag.intern_app(new_op, new_args))
+            Some(dag.intern_app(new_op, new_args)?)
         }
         NodeData::Binder { op, sorts, body } => {
-            let new_op = shift_down_at(dag, op, by, cutoff, memo)?;
-            let mut new_sorts = Vec::with_capacity(sorts.len());
-            for &sort in &sorts {
-                new_sorts.push(shift_down_at(dag, sort, by, cutoff, memo)?);
+            let Some(new_op) = shift_down_at(dag, op, by, cutoff, memo)? else {
+                return Ok(None);
+            };
+            let mut new_sorts = Vec::new();
+            new_sorts
+                .try_reserve_exact(sorts.len())
+                .map_err(|_| StorageError::AllocationFailed)?;
+            for sort in sorts {
+                let Some(sort) = shift_down_at(dag, sort, by, cutoff, memo)? else {
+                    return Ok(None);
+                };
+                new_sorts.push(sort);
             }
-            let new_body = shift_down_at(dag, body, by, cutoff + 1, memo)?;
-            Some(dag.intern_binder(new_op, new_sorts, new_body))
+            let Some(new_body) = shift_down_at(
+                dag,
+                body,
+                by,
+                cutoff.checked_add(1).ok_or(StorageError::SizeOverflow)?,
+                memo,
+            )?
+            else {
+                return Ok(None);
+            };
+            Some(dag.intern_binder(new_op, new_sorts, new_body)?)
         }
     };
     memo.insert((node, cutoff), result);
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -776,14 +831,14 @@ mod tests {
 
     /// A 2-arg application `f(x, y)`.
     fn app2(dag: &mut TermDag, f: &str, x: NodeId, y: NodeId) -> NodeId {
-        let op = dag.intern_leaf(f);
-        dag.intern_app(op, vec![x, y])
+        let op = dag.intern_leaf(f).unwrap();
+        dag.intern_app(op, vec![x, y]).unwrap()
     }
 
     /// A 1-arg application `f(x)`.
     fn app1(dag: &mut TermDag, f: &str, x: NodeId) -> NodeId {
-        let op = dag.intern_leaf(f);
-        dag.intern_app(op, vec![x])
+        let op = dag.intern_leaf(f).unwrap();
+        dag.intern_app(op, vec![x]).unwrap()
     }
 
     // ── 1/2: occurs-check ────────────────────────────────────────────────────
@@ -793,19 +848,22 @@ mod tests {
     #[test]
     fn occurs_check_rejects_cyclic_and_accepts_well_founded() {
         let mut dag = TermDag::default();
-        let (_, meta) = dag.fresh_meta();
-        let a = dag.intern_leaf("a");
+        let (_, meta) = dag.fresh_meta().unwrap();
+        let a = dag.intern_leaf("a").unwrap();
         let cyclic = app1(&mut dag, "f", meta);
         let mut s = Subst::default();
         assert!(matches!(
-            unify(&mut dag, meta, cyclic, &mut s),
+            unify(&mut dag, meta, cyclic, &mut s).unwrap(),
             Unified::Occurs { .. }
         ));
         assert_eq!(s.bound_count(), 0);
 
         let mut s2 = Subst::default();
         let acyclic = app1(&mut dag, "f", a);
-        assert_eq!(unify(&mut dag, meta, acyclic, &mut s2), Unified::Ok);
+        assert_eq!(
+            unify(&mut dag, meta, acyclic, &mut s2).unwrap(),
+            Unified::Ok
+        );
     }
 
     /// Meta `a` bound to something containing meta `b`; unifying `b` with
@@ -814,16 +872,16 @@ mod tests {
     #[test]
     fn occurs_check_is_sound_through_substitution() {
         let mut dag = TermDag::default();
-        let (_, meta_a) = dag.fresh_meta();
-        let (meta_b_id, meta_b) = dag.fresh_meta();
+        let (_, meta_a) = dag.fresh_meta().unwrap();
+        let (meta_b_id, meta_b) = dag.fresh_meta().unwrap();
         let mut s = Subst::default();
         // a := f(b)
         let f_b = app1(&mut dag, "f", meta_b);
-        assert_eq!(unify(&mut dag, meta_a, f_b, &mut s), Unified::Ok);
+        assert_eq!(unify(&mut dag, meta_a, f_b, &mut s).unwrap(), Unified::Ok);
         // now unify b against g(a) — a's binding contains b, so this is cyclic.
         let g_a = app1(&mut dag, "g", meta_a);
         assert_eq!(
-            unify(&mut dag, meta_b, g_a, &mut s),
+            unify(&mut dag, meta_b, g_a, &mut s).unwrap(),
             Unified::Occurs {
                 meta: meta_b_id,
                 in_node: g_a
@@ -838,15 +896,15 @@ mod tests {
     #[test]
     fn failed_unification_after_partial_bind_leaves_no_bindings() {
         let mut dag = TermDag::default();
-        let (_, meta) = dag.fresh_meta();
-        let a = dag.intern_leaf("a");
-        let b = dag.intern_leaf("b");
-        let c = dag.intern_leaf("c");
+        let (_, meta) = dag.fresh_meta().unwrap();
+        let a = dag.intern_leaf("a").unwrap();
+        let b = dag.intern_leaf("b").unwrap();
+        let c = dag.intern_leaf("c").unwrap();
         let left = app2(&mut dag, "f", meta, b);
         let right = app2(&mut dag, "f", a, c);
         let mut s = Subst::default();
         assert!(matches!(
-            unify(&mut dag, left, right, &mut s),
+            unify(&mut dag, left, right, &mut s).unwrap(),
             Unified::Clash { .. }
         ));
         assert_eq!(
@@ -861,21 +919,21 @@ mod tests {
     #[test]
     fn deep_nested_clash_after_partial_bind_leaves_no_bindings() {
         let mut dag = TermDag::default();
-        let (_, meta) = dag.fresh_meta();
+        let (_, meta) = dag.fresh_meta().unwrap();
         let h_x = app1(&mut dag, "h", meta);
         let g_h_x = app1(&mut dag, "g", h_x);
-        let b = dag.intern_leaf("b");
+        let b = dag.intern_leaf("b").unwrap();
         let left = app2(&mut dag, "f", g_h_x, b);
 
-        let a = dag.intern_leaf("a");
+        let a = dag.intern_leaf("a").unwrap();
         let h_a = app1(&mut dag, "h", a);
         let g_h_a = app1(&mut dag, "g", h_a);
-        let c = dag.intern_leaf("c");
+        let c = dag.intern_leaf("c").unwrap();
         let right = app2(&mut dag, "f", g_h_a, c);
 
         let mut s = Subst::default();
         assert!(matches!(
-            unify(&mut dag, left, right, &mut s),
+            unify(&mut dag, left, right, &mut s).unwrap(),
             Unified::Clash { .. }
         ));
         assert_eq!(s.bound_count(), 0);
@@ -887,11 +945,11 @@ mod tests {
     #[test]
     fn apply_is_identity_on_ground_terms() {
         let mut dag = TermDag::default();
-        let a = dag.intern_leaf("a");
-        let b = dag.intern_leaf("b");
+        let a = dag.intern_leaf("a").unwrap();
+        let b = dag.intern_leaf("b").unwrap();
         let ground = app2(&mut dag, "f", a, b);
         let s = Subst::default();
-        assert_eq!(apply(&mut dag, &s, ground), ground);
+        assert_eq!(apply(&mut dag, &s, ground).unwrap(), ground);
     }
 
     // ── 6/7: shift ────────────────────────────────────────────────────────────
@@ -901,14 +959,14 @@ mod tests {
     #[test]
     fn shift_lifts_only_free_bound_occurrences() {
         let mut dag = TermDag::default();
-        let sort = dag.intern_leaf("s");
-        let bound0 = dag.intern_bound(0, 0); // bound by the binder itself
-        let bound1 = dag.intern_bound(1, 0); // refers past the binder
+        let sort = dag.intern_leaf("s").unwrap();
+        let bound0 = dag.intern_bound(0, 0).unwrap(); // bound by the binder itself
+        let bound1 = dag.intern_bound(1, 0).unwrap(); // refers past the binder
         let inner = app2(&mut dag, "pair", bound0, bound1);
-        let op = dag.intern_leaf("forall");
-        let binder = dag.intern_binder(op, vec![sort], inner);
+        let op = dag.intern_leaf("forall").unwrap();
+        let binder = dag.intern_binder(op, vec![sort], inner).unwrap();
 
-        let shifted = shift(&mut dag, binder, 5);
+        let shifted = shift(&mut dag, binder, 5).unwrap();
         let NodeData::Binder { body, .. } = dag.data(shifted).clone() else {
             panic!("shift must preserve the Binder shape");
         };
@@ -937,21 +995,21 @@ mod tests {
     #[test]
     fn apply_under_binders_avoids_capture() {
         let mut dag = TermDag::default();
-        let a = dag.intern_leaf("a");
-        let (m, meta) = dag.fresh_meta();
+        let a = dag.intern_leaf("a").unwrap();
+        let (m, meta) = dag.fresh_meta().unwrap();
         let mut s = Subst::default();
-        s.bind_renaming(m, a); // meta := a (a ground constant, at home depth 0)
+        s.bind_renaming(m, a).unwrap(); // meta := a (a ground constant, at home depth 0)
 
         // Build `binder[sort]. pair(Bound{0,0}, meta)`: the meta occurs one
         // binder deep, so applying the substitution must not touch the `Bound{0}`
         // occurrence and must correctly splice in `a` for the meta.
-        let sort = dag.intern_leaf("s");
-        let bound0 = dag.intern_bound(0, 0);
+        let sort = dag.intern_leaf("s").unwrap();
+        let bound0 = dag.intern_bound(0, 0).unwrap();
         let body = app2(&mut dag, "pair", bound0, meta);
-        let op = dag.intern_leaf("forall");
-        let binder = dag.intern_binder(op, vec![sort], body);
+        let op = dag.intern_leaf("forall").unwrap();
+        let binder = dag.intern_binder(op, vec![sort], body).unwrap();
 
-        let result = apply(&mut dag, &s, binder);
+        let result = apply(&mut dag, &s, binder).unwrap();
         let NodeData::Binder { body, .. } = dag.data(result).clone() else {
             panic!("apply must preserve the Binder shape");
         };
@@ -982,20 +1040,20 @@ mod tests {
     #[test]
     fn alpha_equivalent_binders_unify_trivially() {
         let mut dag = TermDag::default();
-        let op = dag.intern_leaf("forall");
-        let sort = dag.intern_leaf("s");
-        let body1 = dag.intern_bound(0, 0);
-        let first = dag.intern_binder(op, vec![sort], body1);
+        let op = dag.intern_leaf("forall").unwrap();
+        let sort = dag.intern_leaf("s").unwrap();
+        let body1 = dag.intern_bound(0, 0).unwrap();
+        let first = dag.intern_binder(op, vec![sort], body1).unwrap();
 
-        let body2 = dag.intern_bound(0, 0);
-        let second = dag.intern_binder(op, vec![sort], body2);
+        let body2 = dag.intern_bound(0, 0).unwrap();
+        let second = dag.intern_binder(op, vec![sort], body2).unwrap();
 
         assert_eq!(
             first, second,
             "alpha-equivalent binders hash-cons to one node"
         );
         let mut s = Subst::default();
-        assert_eq!(unify(&mut dag, first, second, &mut s), Unified::Ok);
+        assert_eq!(unify(&mut dag, first, second, &mut s).unwrap(), Unified::Ok);
         assert_eq!(s.bound_count(), 0, "no metas involved, nothing to bind");
     }
 
@@ -1004,16 +1062,16 @@ mod tests {
     #[test]
     fn binder_with_metavar_body_unifies_by_binding() {
         let mut dag = TermDag::default();
-        let op = dag.intern_leaf("forall");
-        let sort = dag.intern_leaf("s");
-        let (m, meta) = dag.fresh_meta();
-        let left = dag.intern_binder(op, vec![sort], meta);
+        let op = dag.intern_leaf("forall").unwrap();
+        let sort = dag.intern_leaf("s").unwrap();
+        let (m, meta) = dag.fresh_meta().unwrap();
+        let left = dag.intern_binder(op, vec![sort], meta).unwrap();
 
-        let leaf = dag.intern_leaf("c");
-        let right = dag.intern_binder(op, vec![sort], leaf);
+        let leaf = dag.intern_leaf("c").unwrap();
+        let right = dag.intern_binder(op, vec![sort], leaf).unwrap();
 
         let mut s = Subst::default();
-        assert_eq!(unify(&mut dag, left, right, &mut s), Unified::Ok);
+        assert_eq!(unify(&mut dag, left, right, &mut s).unwrap(), Unified::Ok);
         assert_eq!(s.get(m), Some(leaf));
     }
 
@@ -1024,18 +1082,18 @@ mod tests {
     #[test]
     fn binder_body_capturing_bound_var_clashes() {
         let mut dag = TermDag::default();
-        let op = dag.intern_leaf("forall");
-        let sort = dag.intern_leaf("s");
-        let (_, meta) = dag.fresh_meta();
+        let op = dag.intern_leaf("forall").unwrap();
+        let sort = dag.intern_leaf("s").unwrap();
+        let (_, meta) = dag.fresh_meta().unwrap();
         // left: binder[s]. meta   (meta lives at depth 0, home outside the binder)
-        let left = dag.intern_binder(op, vec![sort], meta);
+        let left = dag.intern_binder(op, vec![sort], meta).unwrap();
         // right: binder[s]. Bound{0,0}   (a variable genuinely local to the binder)
-        let bound = dag.intern_bound(0, 0);
-        let right = dag.intern_binder(op, vec![sort], bound);
+        let bound = dag.intern_bound(0, 0).unwrap();
+        let right = dag.intern_binder(op, vec![sort], bound).unwrap();
 
         let mut s = Subst::default();
         assert!(matches!(
-            unify(&mut dag, left, right, &mut s),
+            unify(&mut dag, left, right, &mut s).unwrap(),
             Unified::Clash { .. }
         ));
         assert_eq!(s.bound_count(), 0);
@@ -1048,31 +1106,31 @@ mod tests {
     #[test]
     fn subsort_metavar_binds_a_narrower_term_but_not_a_wider_one() {
         let mut dag = TermDag::default();
-        let cat = dag.intern_leaf("Cat");
-        let animal = dag.intern_leaf("Animal");
-        let thing = dag.intern_leaf("Thing");
-        let rock = dag.intern_leaf("Rock"); // an unrelated, incomparable sort
+        let cat = dag.intern_leaf("Cat").unwrap();
+        let animal = dag.intern_leaf("Animal").unwrap();
+        let thing = dag.intern_leaf("Thing").unwrap();
+        let rock = dag.intern_leaf("Rock").unwrap(); // an unrelated, incomparable sort
         let order = SortOrder::from_subclass_edges(&[(cat, animal), (animal, thing)]);
 
-        let felix = dag.intern_leaf("felix");
-        let pebble = dag.intern_leaf("pebble");
+        let felix = dag.intern_leaf("felix").unwrap();
+        let pebble = dag.intern_leaf("pebble").unwrap();
         let mut term_sorts = BTreeMap::new();
         term_sorts.insert(felix, cat);
         term_sorts.insert(pebble, rock);
         let ctx = SortContext::new(order, term_sorts, BTreeMap::new());
 
-        let (m, meta) = dag.fresh_meta();
+        let (m, meta) = dag.fresh_meta().unwrap();
         let mut s = Subst::default();
-        s.declare_meta_sort(m, animal);
+        s.declare_meta_sort(m, animal).unwrap();
         assert_eq!(
-            unify_sorted(&mut dag, meta, felix, &mut s, &ctx),
+            unify_sorted(&mut dag, meta, felix, &mut s, &ctx).unwrap(),
             Unified::Ok
         );
 
         let mut s2 = Subst::default();
-        s2.declare_meta_sort(m, animal);
+        s2.declare_meta_sort(m, animal).unwrap();
         assert!(matches!(
-            unify_sorted(&mut dag, meta, pebble, &mut s2, &ctx),
+            unify_sorted(&mut dag, meta, pebble, &mut s2, &ctx).unwrap(),
             Unified::Clash { .. }
         ));
     }
@@ -1082,10 +1140,10 @@ mod tests {
     #[test]
     fn sort_order_closure_and_meet() {
         let mut dag = TermDag::default();
-        let cat = dag.intern_leaf("Cat");
-        let dog = dag.intern_leaf("Dog");
-        let animal = dag.intern_leaf("Animal");
-        let thing = dag.intern_leaf("Thing");
+        let cat = dag.intern_leaf("Cat").unwrap();
+        let dog = dag.intern_leaf("Dog").unwrap();
+        let animal = dag.intern_leaf("Animal").unwrap();
+        let thing = dag.intern_leaf("Thing").unwrap();
         let order =
             SortOrder::from_subclass_edges(&[(cat, animal), (dog, animal), (animal, thing)]);
         assert!(order.leq(cat, thing), "transitive closure: Cat <: Thing");
@@ -1104,18 +1162,18 @@ mod tests {
     #[test]
     fn incomparable_sorts_clash() {
         let mut dag = TermDag::default();
-        let cat = dag.intern_leaf("Cat");
-        let rock = dag.intern_leaf("Rock");
+        let cat = dag.intern_leaf("Cat").unwrap();
+        let rock = dag.intern_leaf("Rock").unwrap();
         let order = SortOrder::from_subclass_edges(&[]); // no relation at all
         let ctx = SortContext::new(order, BTreeMap::new(), BTreeMap::new());
 
-        let (m1, meta1) = dag.fresh_meta();
-        let (m2, meta2) = dag.fresh_meta();
+        let (m1, meta1) = dag.fresh_meta().unwrap();
+        let (m2, meta2) = dag.fresh_meta().unwrap();
         let mut s = Subst::default();
-        s.declare_meta_sort(m1, cat);
-        s.declare_meta_sort(m2, rock);
+        s.declare_meta_sort(m1, cat).unwrap();
+        s.declare_meta_sort(m2, rock).unwrap();
         assert!(matches!(
-            unify_sorted(&mut dag, meta1, meta2, &mut s, &ctx),
+            unify_sorted(&mut dag, meta1, meta2, &mut s, &ctx).unwrap(),
             Unified::Clash { .. }
         ));
     }
@@ -1127,10 +1185,10 @@ mod tests {
     #[test]
     fn validate_flags_a_non_meet_semilattice_pair() {
         let mut dag = TermDag::default();
-        let a = dag.intern_leaf("A");
-        let b = dag.intern_leaf("B");
-        let c1 = dag.intern_leaf("C1");
-        let c2 = dag.intern_leaf("C2");
+        let a = dag.intern_leaf("A").unwrap();
+        let b = dag.intern_leaf("B").unwrap();
+        let c1 = dag.intern_leaf("C1").unwrap();
+        let c2 = dag.intern_leaf("C2").unwrap();
         // C1 and C2 are each below both A and B, and are mutually incomparable.
         let order = SortOrder::from_subclass_edges(&[(c1, a), (c1, b), (c2, a), (c2, b)]);
         assert_eq!(order.meet(a, b), None, "two maximal glbs — ambiguous meet");
@@ -1142,8 +1200,8 @@ mod tests {
 
         // A proper meet-semilattice validates clean, even though disjoint sorts
         // (no shared subsort) still have a `None` meet that is NOT a violation.
-        let d = dag.intern_leaf("D");
-        let e = dag.intern_leaf("E");
+        let d = dag.intern_leaf("D").unwrap();
+        let e = dag.intern_leaf("E").unwrap();
         let lattice = SortOrder::from_subclass_edges(&[(c1, a), (c1, b), (d, e)]);
         assert_eq!(lattice.validate(), Ok(()));
         assert_eq!(lattice.meet(a, e), None, "disjoint sorts, not a violation");
@@ -1157,20 +1215,20 @@ mod tests {
     #[test]
     fn ambiguous_meet_clashes_like_disjoint_sorts() {
         let mut dag = TermDag::default();
-        let a = dag.intern_leaf("A");
-        let b = dag.intern_leaf("B");
-        let c1 = dag.intern_leaf("C1");
-        let c2 = dag.intern_leaf("C2");
+        let a = dag.intern_leaf("A").unwrap();
+        let b = dag.intern_leaf("B").unwrap();
+        let c1 = dag.intern_leaf("C1").unwrap();
+        let c2 = dag.intern_leaf("C2").unwrap();
         let order = SortOrder::from_subclass_edges(&[(c1, a), (c1, b), (c2, a), (c2, b)]);
         let ctx = SortContext::new(order, BTreeMap::new(), BTreeMap::new());
 
-        let (m1, meta1) = dag.fresh_meta();
-        let (m2, meta2) = dag.fresh_meta();
+        let (m1, meta1) = dag.fresh_meta().unwrap();
+        let (m2, meta2) = dag.fresh_meta().unwrap();
         let mut s = Subst::default();
-        s.declare_meta_sort(m1, a);
-        s.declare_meta_sort(m2, b);
+        s.declare_meta_sort(m1, a).unwrap();
+        s.declare_meta_sort(m2, b).unwrap();
         assert!(matches!(
-            unify_sorted(&mut dag, meta1, meta2, &mut s, &ctx),
+            unify_sorted(&mut dag, meta1, meta2, &mut s, &ctx).unwrap(),
             Unified::Clash { .. }
         ));
     }
@@ -1181,32 +1239,32 @@ mod tests {
     fn empty_sort_context_matches_the_unsorted_path() {
         let mut dag = TermDag::default();
         let ctx = SortContext::default();
-        let a = dag.intern_leaf("a");
-        let b = dag.intern_leaf("b");
+        let a = dag.intern_leaf("a").unwrap();
+        let b = dag.intern_leaf("b").unwrap();
 
         // ok
-        let (_, meta) = dag.fresh_meta();
+        let (_, meta) = dag.fresh_meta().unwrap();
         let mut plain = Subst::default();
         let mut sorted = Subst::default();
         assert_eq!(
-            unify(&mut dag, meta, a, &mut plain),
-            unify_sorted(&mut dag, meta, a, &mut sorted, &ctx)
+            unify(&mut dag, meta, a, &mut plain).unwrap(),
+            unify_sorted(&mut dag, meta, a, &mut sorted, &ctx).unwrap()
         );
 
         // clash
         let mut plain2 = Subst::default();
         let mut sorted2 = Subst::default();
-        let r1 = unify(&mut dag, a, b, &mut plain2);
-        let r2 = unify_sorted(&mut dag, a, b, &mut sorted2, &ctx);
+        let r1 = unify(&mut dag, a, b, &mut plain2).unwrap();
+        let r2 = unify_sorted(&mut dag, a, b, &mut sorted2, &ctx).unwrap();
         assert_eq!(r1, r2);
 
         // occurs
-        let (_, meta2) = dag.fresh_meta();
+        let (_, meta2) = dag.fresh_meta().unwrap();
         let cyclic = app1(&mut dag, "f", meta2);
         let mut plain3 = Subst::default();
         let mut sorted3 = Subst::default();
-        let r3 = unify(&mut dag, meta2, cyclic, &mut plain3);
-        let r4 = unify_sorted(&mut dag, meta2, cyclic, &mut sorted3, &ctx);
+        let r3 = unify(&mut dag, meta2, cyclic, &mut plain3).unwrap();
+        let r4 = unify_sorted(&mut dag, meta2, cyclic, &mut sorted3, &ctx).unwrap();
         assert_eq!(r3, r4);
     }
 }

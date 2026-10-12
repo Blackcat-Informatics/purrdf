@@ -193,17 +193,17 @@ fn lpg_limits() -> ProjectionLimits {
 }
 
 fn push_iri(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, object: &str) {
-    let subject = builder.intern_iri(subject);
-    let predicate = builder.intern_iri(predicate);
-    let object = builder.intern_iri(object);
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri(subject).unwrap();
+    let predicate = builder.intern_iri(predicate).unwrap();
+    let object = builder.intern_iri(object).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
 }
 
 fn push_literal(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, value: &str) {
-    let subject = builder.intern_iri(subject);
-    let predicate = builder.intern_iri(predicate);
-    let object = builder.intern_literal(RdfLiteral::simple(value));
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri(subject).unwrap();
+    let predicate = builder.intern_iri(predicate).unwrap();
+    let object = builder.intern_literal(RdfLiteral::simple(value)).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
 }
 
 fn graph_dataset() -> Arc<RdfDataset> {
@@ -235,24 +235,40 @@ fn graph_dataset() -> Arc<RdfDataset> {
 
 fn large_multigraph_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(&format!("{EX}type"));
-    let relation = builder.intern_iri(&format!("{EX}relation"));
-    let label = builder.intern_iri(&format!("{EX}label"));
+    let rdf_type = builder.intern_iri(&format!("{EX}type")).unwrap();
+    let relation = builder.intern_iri(&format!("{EX}relation")).unwrap();
+    let label = builder.intern_iri(&format!("{EX}label")).unwrap();
     for graph_index in 0..LARGE_GRAPHS {
-        let graph = builder.intern_iri(&format!("{EX}graph-{graph_index}"));
+        let graph = builder
+            .intern_iri(&format!("{EX}graph-{graph_index}"))
+            .unwrap();
         for row in 0..LARGE_ROWS_PER_GRAPH {
-            let subject = builder.intern_iri(&format!("{EX}g{graph_index}-node-{row}"));
-            let object = builder.intern_iri(&format!(
-                "{EX}g{graph_index}-node-{}",
-                (row * 17 + 3) % LARGE_ROWS_PER_GRAPH
-            ));
-            let class = builder.intern_iri(&format!("{EX}Class-{}", row % 8));
-            let text = builder.intern_literal(RdfLiteral::simple(format!(
-                "Graph {graph_index} node {row}"
-            )));
-            builder.push_quad(subject, rdf_type, class, Some(graph));
-            builder.push_quad(subject, relation, object, Some(graph));
-            builder.push_quad(subject, label, text, Some(graph));
+            let subject = builder
+                .intern_iri(&format!("{EX}g{graph_index}-node-{row}"))
+                .unwrap();
+            let object = builder
+                .intern_iri(&format!(
+                    "{EX}g{graph_index}-node-{}",
+                    (row * 17 + 3) % LARGE_ROWS_PER_GRAPH
+                ))
+                .unwrap();
+            let class = builder
+                .intern_iri(&format!("{EX}Class-{}", row % 8))
+                .unwrap();
+            let text = builder
+                .intern_literal(RdfLiteral::simple(format!(
+                    "Graph {graph_index} node {row}"
+                )))
+                .unwrap();
+            builder
+                .push_quad(subject, rdf_type, class, Some(graph))
+                .unwrap();
+            builder
+                .push_quad(subject, relation, object, Some(graph))
+                .unwrap();
+            builder
+                .push_quad(subject, label, text, Some(graph))
+                .unwrap();
         }
     }
     let dataset = builder.freeze().expect("large multi-graph dataset");

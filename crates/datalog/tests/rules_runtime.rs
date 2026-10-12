@@ -12,7 +12,10 @@ use purrdf_datalog::store::RelationStore;
 struct Distinct;
 
 impl GuardEvaluator for Distinct {
-    fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+    fn evaluate(
+        &self,
+        call: &GuardCall<'_>,
+    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
         assert_eq!(call.inputs.len(), 2);
         Ok(if call.inputs[0] == call.inputs[1] {
             Vec::new()

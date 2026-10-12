@@ -152,10 +152,12 @@ fn equal_graph_bytes_from_independent_acquisitions_do_not_share_identity() {
 #[test]
 fn native_data_blanks_keep_scoped_identity_without_shapes_blanks() {
     let mut data = purrdf_rdf::RdfDatasetBuilder::new();
-    let subject = data.intern_blank("original", purrdf_rdf::BlankScope(48));
-    let predicate = data.intern_iri("http://example.org/p");
-    let object = data.intern_iri("http://example.org/o");
-    data.push_quad(subject, predicate, object, None);
+    let subject = data
+        .intern_blank("original", purrdf_rdf::BlankScope(48))
+        .unwrap();
+    let predicate = data.intern_iri("http://example.org/p").unwrap();
+    let object = data.intern_iri("http://example.org/o").unwrap();
+    data.push_quad(subject, predicate, object, None).unwrap();
     let report = validate_complete_dataset(
         data.freeze().unwrap(),
         shapes("ex:S a sh:NodeShape; sh:targetSubjectsOf ex:p; sh:nodeKind sh:IRI ."),
@@ -508,13 +510,16 @@ fn isomorphic_report_only_blanks_do_not_authorize_changed_source_identity() {
 fn nested_rdf12_blanks_keep_independent_original_scopes() {
     use purrdf_rdf::{BlankScope, RdfDatasetBuilder};
     let mut data = RdfDatasetBuilder::new();
-    let subject = data.intern_iri("http://example.org/n");
-    let predicate = data.intern_iri("http://example.org/p");
-    let inner_subject = data.intern_blank("same", BlankScope(4));
-    let inner_object = data.intern_blank("same", BlankScope(5));
-    let triple = data.intern_triple(inner_subject, predicate, inner_object);
-    let graph = data.intern_iri("http://example.org/partition");
-    data.push_quad(subject, predicate, triple, Some(graph));
+    let subject = data.intern_iri("http://example.org/n").unwrap();
+    let predicate = data.intern_iri("http://example.org/p").unwrap();
+    let inner_subject = data.intern_blank("same", BlankScope(4)).unwrap();
+    let inner_object = data.intern_blank("same", BlankScope(5)).unwrap();
+    let triple = data
+        .intern_triple(inner_subject, predicate, inner_object)
+        .unwrap();
+    let graph = data.intern_iri("http://example.org/partition").unwrap();
+    data.push_quad(subject, predicate, triple, Some(graph))
+        .unwrap();
     let report = validate_complete_dataset(
         data.freeze().unwrap(),
         shapes("ex:S a sh:NodeShape; sh:targetNode ex:n; sh:property [ sh:path ex:p; sh:nodeKind sh:IRI ] ."),
@@ -710,11 +715,13 @@ fn repeated_detail_query_acquisitions_mint_distinct_blanks() {
 #[test]
 fn fresh_query_identity_is_stable_across_focus_execution() {
     let mut data = purrdf_rdf::RdfDatasetBuilder::new();
-    let p = data.intern_iri("http://example.org/p");
-    let o = data.intern_iri("http://example.org/o");
+    let p = data.intern_iri("http://example.org/p").unwrap();
+    let o = data.intern_iri("http://example.org/o").unwrap();
     for index in 0..129 {
-        let s = data.intern_iri(&format!("http://example.org/n{index}"));
-        data.push_quad(s, p, o, None);
+        let s = data
+            .intern_iri(&format!("http://example.org/n{index}"))
+            .unwrap();
+        data.push_quad(s, p, o, None).unwrap();
     }
     let binding = PreparedShapes::new(shapes(
         r#"
@@ -747,13 +754,13 @@ fn fresh_query_identity_is_stable_across_focus_execution() {
 #[test]
 fn warm_complete_core_allocation_count_has_no_per_focus_growth() {
     let mut data = purrdf_rdf::RdfDatasetBuilder::new();
-    let p = data.intern_iri("http://example.org/p");
-    let o = data.intern_iri("http://example.org/o");
+    let p = data.intern_iri("http://example.org/p").unwrap();
+    let o = data.intern_iri("http://example.org/o").unwrap();
     let mut terms = Vec::new();
     for index in 0..32 {
         let iri = format!("http://example.org/n{index}");
-        let s = data.intern_iri(&iri);
-        data.push_quad(s, p, o, None);
+        let s = data.intern_iri(&iri).unwrap();
+        data.push_quad(s, p, o, None).unwrap();
         terms.push(Term::NamedNode(
             purrdf_shapes::term::NamedNode::new_unchecked(iri),
         ));

@@ -70,11 +70,13 @@ fn relations() -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
 /// Two typed nodes, and nothing that could tell them apart.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-    let thing = builder.intern_iri(&format!("{EX}Thing"));
+    let rdf_type = builder
+        .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        .unwrap();
+    let thing = builder.intern_iri(&format!("{EX}Thing")).unwrap();
     for local in ["ada", "brian"] {
-        let s = builder.intern_iri(&format!("{EX}{local}"));
-        builder.push_quad(s, rdf_type, thing, None);
+        let s = builder.intern_iri(&format!("{EX}{local}")).unwrap();
+        builder.push_quad(s, rdf_type, thing, None).unwrap();
     }
     builder.freeze().expect("freeze fixture")
 }

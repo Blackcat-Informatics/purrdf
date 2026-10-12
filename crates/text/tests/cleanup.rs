@@ -229,14 +229,18 @@ fn reusable_streaming_storage_obeys_the_same_control_law() {
 #[test]
 fn index_queries_and_substring_evidence_share_corrected_cleanup() {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/text");
+    let predicate = builder.intern_iri("https://example.org/text").unwrap();
     for (number, input) in ["👩\u{200d}", "👩\u{e0020}", "☕\u{200c}", "🧠\u{200d}👩"]
         .into_iter()
         .enumerate()
     {
-        let subject = builder.intern_iri(&format!("https://example.org/{number}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(input));
-        builder.push_quad(subject, predicate, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{number}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(input)).unwrap();
+        builder
+            .push_quad(subject, predicate, literal, None)
+            .unwrap();
     }
     let dataset = builder.freeze().unwrap();
     let config = TextIndexConfig::new(

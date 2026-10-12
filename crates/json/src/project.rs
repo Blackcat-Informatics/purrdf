@@ -22,56 +22,56 @@ pub fn project(document: &Document<'_>, profile: &Profile) -> Result<Arc<RdfData
     if document.profile_id != profile.identity() {
         return Err(JsonError::ProfileMismatch);
     }
-    let mut writer = Writer::new(profile);
-    let root = writer.builder.intern_iri(document.id());
-    writer.class(root, "Document");
-    writer.iri(root, "source", document.source.id);
+    let mut writer = Writer::new(profile)?;
+    let root = writer.builder.intern_iri(document.id())?;
+    writer.class(root, "Document")?;
+    writer.iri(root, "source", document.source.id)?;
     writer.typed(
         root,
         "sourceDigest",
         &format!("sha256:{}", document.digest.to_hex()),
         "digest",
-    );
-    writer.number(root, "byteLength", document.text.len());
-    writer.string(root, "profile", &profile.identity().to_hex());
+    )?;
+    writer.number(root, "byteLength", document.text.len())?;
+    writer.string(root, "profile", &profile.identity().to_hex())?;
     let value_ids: Vec<_> = (0..document.values.len())
         .map(|index| writer.builder.intern_iri(&value_id(document.id(), index)))
-        .collect();
+        .collect::<Result<_, _>>()?;
     for (index, value) in document.values.iter().enumerate() {
         let node = value_ids[index];
-        writer.class(node, "Value");
-        writer.link(node, "document", root);
-        writer.number(node, "byteStart", value.span.start);
-        writer.number(node, "byteEnd", value.span.end);
-        writer.number(node, "occurrence", index);
-        writer.number(node, "ordinal", value.ordinal);
+        writer.class(node, "Value")?;
+        writer.link(node, "document", root)?;
+        writer.number(node, "byteStart", value.span.start)?;
+        writer.number(node, "byteEnd", value.span.end)?;
+        writer.number(node, "occurrence", index)?;
+        writer.number(node, "ordinal", value.ordinal)?;
         writer.link(
             node,
             "parent",
             value.parent.map_or(root, |parent| value_ids[parent]),
-        );
-        writer.string(node, "path", &value.path);
-        writer.string(node, "kind", value.kind.name());
+        )?;
+        writer.string(node, "path", &value.path)?;
+        writer.string(node, "kind", value.kind.name())?;
         if value.kind.is_scalar() {
-            writer.string(node, "text", &document.text[value.span.clone()]);
+            writer.string(node, "text", &document.text[value.span.clone()])?;
         } else {
-            writer.number(node, "size", value.size as usize);
+            writer.number(node, "size", value.size as usize)?;
         }
     }
     for (index, run) in document.runs.iter().enumerate() {
         let node = writer
             .builder
-            .intern_iri(&structure_id(document.id(), index));
-        writer.class(node, "Structure");
-        writer.link(node, "document", root);
-        writer.number(node, "byteStart", run.start);
-        writer.number(node, "byteEnd", run.end);
+            .intern_iri(&structure_id(document.id(), index))?;
+        writer.class(node, "Structure")?;
+        writer.link(node, "document", root)?;
+        writer.number(node, "byteStart", run.start)?;
+        writer.number(node, "byteEnd", run.end)?;
         writer.typed(
             node,
             "verbatim",
             &document.text[run.clone()],
             "verbatimText",
-        );
+        )?;
     }
     writer.builder.freeze().map_err(JsonError::Rdf)
 }
@@ -91,16 +91,20 @@ struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    fn new(profile: &'a Profile) -> Self {
+    fn new(profile: &'a Profile) -> Result<Self, JsonError> {
         let mut builder = RdfDatasetBuilder::new();
-        let terms = TERMS.map(|name| (name, builder.intern_iri(profile.vocabulary().iri(name))));
-        let rdf_type = builder.intern_iri(RDF_TYPE);
-        Self {
+        let first = builder.intern_iri(profile.vocabulary().iri(TERMS[0]))?;
+        let mut terms = TERMS.map(|name| (name, first));
+        for (name, id) in terms.iter_mut().skip(1) {
+            *id = builder.intern_iri(profile.vocabulary().iri(name))?;
+        }
+        let rdf_type = builder.intern_iri(RDF_TYPE)?;
+        Ok(Self {
             builder,
             terms,
             rdf_type,
             vocabulary: profile.vocabulary(),
-        }
+        })
     }
 
     fn term(&self, local: &str) -> TermId {
@@ -111,37 +115,45 @@ impl<'a> Writer<'a> {
             .1
     }
 
-    fn class(&mut self, subject: TermId, class: &str) {
+    fn class(&mut self, subject: TermId, class: &str) -> Result<(), JsonError> {
         self.builder
-            .push_quad(subject, self.rdf_type, self.term(class), None);
+            .push_quad(subject, self.rdf_type, self.term(class), None)?;
+        Ok(())
     }
 
-    fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    fn link(&mut self, subject: TermId, predicate: &str, object: TermId) -> Result<(), JsonError> {
         self.builder
-            .push_quad(subject, self.term(predicate), object, None);
+            .push_quad(subject, self.term(predicate), object, None)?;
+        Ok(())
     }
 
-    fn iri(&mut self, subject: TermId, predicate: &str, object: &str) {
-        let object = self.builder.intern_iri(object);
-        self.link(subject, predicate, object);
+    fn iri(&mut self, subject: TermId, predicate: &str, object: &str) -> Result<(), JsonError> {
+        let object = self.builder.intern_iri(object)?;
+        self.link(subject, predicate, object)
     }
 
-    fn string(&mut self, subject: TermId, predicate: &str, value: &str) {
-        let object = self.builder.intern_literal(RdfLiteral::simple(value));
-        self.link(subject, predicate, object);
+    fn string(&mut self, subject: TermId, predicate: &str, value: &str) -> Result<(), JsonError> {
+        let object = self.builder.intern_literal(RdfLiteral::simple(value))?;
+        self.link(subject, predicate, object)
     }
 
-    fn typed(&mut self, subject: TermId, predicate: &str, value: &str, datatype: &str) {
+    fn typed(
+        &mut self,
+        subject: TermId,
+        predicate: &str,
+        value: &str,
+        datatype: &str,
+    ) -> Result<(), JsonError> {
         let object = self
             .builder
-            .intern_literal(RdfLiteral::typed(value, self.vocabulary.iri(datatype)));
-        self.link(subject, predicate, object);
+            .intern_literal(RdfLiteral::typed(value, self.vocabulary.iri(datatype)))?;
+        self.link(subject, predicate, object)
     }
 
-    fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    fn number(&mut self, subject: TermId, predicate: &str, value: usize) -> Result<(), JsonError> {
         let object = self
             .builder
-            .intern_literal(RdfLiteral::typed(value.to_string(), XSD_INTEGER));
-        self.link(subject, predicate, object);
+            .intern_literal(RdfLiteral::typed(value.to_string(), XSD_INTEGER))?;
+        self.link(subject, predicate, object)
     }
 }

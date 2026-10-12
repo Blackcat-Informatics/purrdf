@@ -389,7 +389,7 @@ fn project(
         } else {
             value
         };
-        let subject = builder.intern_value(&subject);
+        let subject = builder.intern_value(&subject)?;
         for quad in
             dataset.quads_for_pattern(Some(node), None, None, purrdf_core::GraphMatch::Default)
         {
@@ -436,7 +436,7 @@ fn project(
                 }
             } else if predicate == sh::RESULT_PATH {
                 if policy.format == ReportFormat::Exact {
-                    copy_path(dataset, quad.o, &mut builder);
+                    copy_path(dataset, quad.o, &mut builder)?;
                     object
                 } else {
                     clone_path(dataset, quad.o, &mut builder, &mut occupied, &mut fresh)?
@@ -444,14 +444,12 @@ fn project(
             } else {
                 object
             };
-            let predicate = builder.intern_iri(&predicate);
-            let object = builder.intern_value(&object);
-            builder.push_quad(subject, predicate, object, None);
+            let predicate = builder.intern_iri(&predicate)?;
+            let object = builder.intern_value(&object)?;
+            builder.push_quad(subject, predicate, object, None)?;
         }
     }
-    builder
-        .freeze()
-        .map_err(|error| GradeError::Malformed(error.to_string()))
+    builder.freeze().map_err(GradeError::from)
 }
 
 fn expected_predicate(expectation: Option<&RdfDataset>, id: TermId, predicate: &str) -> bool {
@@ -503,7 +501,7 @@ fn clone_path(
                     return Err(GradeError::Malformed("cyclic result path".to_owned()));
                 }
                 work.push(Step::Leave(id));
-                let subject = builder.intern_value(&value);
+                let subject = builder.intern_value(&value)?;
                 let edges: Vec<_> = dataset.quads_for_pattern(Some(id), None, None, purrdf_core::GraphMatch::Default)
                     .filter(|quad| matches!(dataset.term_value(quad.p), TermValue::Iri(ref predicate) if path_predicate(predicate))).collect();
                 if edges.is_empty() {
@@ -520,9 +518,9 @@ fn clone_path(
                     } else {
                         object
                     };
-                    let predicate = builder.intern_value(&dataset.term_value(quad.p));
-                    let object = builder.intern_value(&object);
-                    builder.push_quad(subject, predicate, object, None);
+                    let predicate = builder.intern_value(&dataset.term_value(quad.p))?;
+                    let object = builder.intern_value(&object)?;
+                    builder.push_quad(subject, predicate, object, None)?;
                 }
             }
         }
@@ -530,7 +528,11 @@ fn clone_path(
     Ok(root_value)
 }
 
-fn copy_path(dataset: &RdfDataset, root: TermId, builder: &mut RdfDatasetBuilder) {
+fn copy_path(
+    dataset: &RdfDataset,
+    root: TermId,
+    builder: &mut RdfDatasetBuilder,
+) -> Result<(), GradeError> {
     let mut work: WorkList<TermId, 16> = WorkList::with(root);
     let mut visited = BTreeSet::new();
     while let Some(node) = work.pop() {
@@ -539,11 +541,12 @@ fn copy_path(dataset: &RdfDataset, root: TermId, builder: &mut RdfDatasetBuilder
         }
         for quad in dataset.quads_for_pattern(Some(node), None, None, purrdf_core::GraphMatch::Default)
             .filter(|quad| matches!(dataset.term_value(quad.p), TermValue::Iri(ref predicate) if path_predicate(predicate))) {
-            let s = builder.intern_value(&dataset.term_value(quad.s));
-            let p = builder.intern_value(&dataset.term_value(quad.p));
-            let o = builder.intern_value(&dataset.term_value(quad.o));
-            builder.push_quad(s, p, o, None);
+            let s = builder.intern_value(&dataset.term_value(quad.s))?;
+            let p = builder.intern_value(&dataset.term_value(quad.p))?;
+            let o = builder.intern_value(&dataset.term_value(quad.o))?;
+            builder.push_quad(s, p, o, None)?;
             if matches!(dataset.term_value(quad.o), TermValue::Blank { .. }) { work.push(quad.o); }
         }
     }
+    Ok(())
 }

@@ -945,21 +945,30 @@ mod tests {
     fn linear_contains_matches_the_slice_scan_at_every_size() {
         for len in 0..=FrontierDedup::LINEAR_MAX + 4 {
             let ids: Vec<TermId> = (0..len)
-                .map(|i| TermId::from_index(u32::try_from(3 * i + 1).unwrap()))
+                .map(|i| {
+                    TermId::from_index(u32::try_from(3 * i + 1).unwrap())
+                        .expect("stored term index is representable")
+                })
                 .collect();
             for (position, &id) in ids.iter().enumerate() {
                 assert!(linear_contains(&ids, id), "len {len}: position {position}");
                 assert!(reference_linear_contains(&ids, id));
             }
             for miss in [0, 2, 3, 3 * u32::try_from(len).unwrap() + 1, u32::MAX - 1] {
-                let id = TermId::from_index(miss);
+                let id = TermId::from_index(miss).expect("stored term index is representable");
                 assert_eq!(
                     linear_contains(&ids, id),
                     reference_linear_contains(&ids, id),
                     "len {len}: probe {miss}"
                 );
             }
-            assert!(!linear_contains(&ids, TermId::from_index(0)), "len {len}");
+            assert!(
+                !linear_contains(
+                    &ids,
+                    TermId::from_index(0).expect("stored term index is representable")
+                ),
+                "len {len}"
+            );
         }
     }
 
@@ -971,10 +980,13 @@ mod tests {
         for len in 0..=FrontierDedup::LINEAR_MAX {
             for _ in 0..64 {
                 let ids: Vec<TermId> = (0..len)
-                    .map(|_| TermId::from_index((mix(&mut state) % 20) as u32))
+                    .map(|_| {
+                        TermId::from_index((mix(&mut state) % 20) as u32)
+                            .expect("stored term index is representable")
+                    })
                     .collect();
                 for probe in 0..22 {
-                    let id = TermId::from_index(probe);
+                    let id = TermId::from_index(probe).expect("stored term index is representable");
                     assert_eq!(
                         linear_contains(&ids, id),
                         reference_linear_contains(&ids, id),
@@ -1000,7 +1012,8 @@ mod tests {
                     let mut out: Vec<TermId> = Vec::new();
                     let mut expected: Vec<TermId> = Vec::new();
                     for _ in 0..48 {
-                        let id = TermId::from_index((mix(&mut state) % space) as u32);
+                        let id = TermId::from_index((mix(&mut state) % space) as u32)
+                            .expect("stored term index is representable");
                         let fresh = dedup.insert(&out, id);
                         assert_eq!(
                             fresh,
@@ -1028,7 +1041,10 @@ mod tests {
         let max = FrontierDedup::LINEAR_MAX;
         for admitted in [max - 1, max, max + 1] {
             let ids: Vec<TermId> = (0..admitted)
-                .map(|i| TermId::from_index(u32::try_from(i).unwrap()))
+                .map(|i| {
+                    TermId::from_index(u32::try_from(i).unwrap())
+                        .expect("stored term index is representable")
+                })
                 .collect();
             for (position, &repeat) in ids.iter().enumerate() {
                 let mut dedup = FrontierDedup::default();
@@ -1038,7 +1054,8 @@ mod tests {
                 );
                 assert_eq!(dedup.hashed.is_some(), admitted >= max);
             }
-            let fresh = TermId::from_index(u32::try_from(admitted).unwrap());
+            let fresh = TermId::from_index(u32::try_from(admitted).unwrap())
+                .expect("stored term index is representable");
             let mut dedup = FrontierDedup::default();
             assert!(dedup.insert(&ids, fresh), "{admitted} admitted: fresh id");
             assert_eq!(dedup.hashed.is_some(), admitted >= max);

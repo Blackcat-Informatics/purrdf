@@ -21,7 +21,7 @@ const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
 const EX: &str = "http://example.org/obographs-oracle/";
 
 fn iri(builder: &mut RdfDatasetBuilder, value: &str) -> TermId {
-    builder.intern_iri(value)
+    builder.intern_iri(value).unwrap()
 }
 
 fn push_iri(
@@ -33,7 +33,7 @@ fn push_iri(
     let subject = iri(builder, subject);
     let predicate = iri(builder, predicate);
     let object = iri(builder, object);
-    builder.push_quad(subject, predicate, object, None);
+    builder.push_quad(subject, predicate, object, None).unwrap();
     (subject, predicate, object)
 }
 
@@ -137,21 +137,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let a = iri(&mut builder, &class_a);
     let label = iri(&mut builder, &format!("{RDFS}label"));
-    let alpha = builder.intern_literal(RdfLiteral {
-        lexical_form: "Alpha".to_owned(),
-        datatype: None,
-        language: None,
-        direction: None,
-    });
-    builder.push_quad(a, label, alpha, None);
+    let alpha = builder
+        .intern_literal(RdfLiteral {
+            lexical_form: "Alpha".to_owned(),
+            datatype: None,
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    builder.push_quad(a, label, alpha, None).unwrap();
     let definition = iri(&mut builder, &format!("{EX}definition"));
-    let definition_text = builder.intern_literal(RdfLiteral {
-        lexical_form: "The alpha class".to_owned(),
-        datatype: None,
-        language: None,
-        direction: None,
-    });
-    builder.push_quad(a, definition, definition_text, None);
+    let definition_text = builder
+        .intern_literal(RdfLiteral {
+            lexical_form: "The alpha class".to_owned(),
+            datatype: None,
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    builder
+        .push_quad(a, definition, definition_text, None)
+        .unwrap();
     push_iri(
         &mut builder,
         &class_a,
@@ -160,39 +166,61 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let basic_edge = push_iri(&mut builder, &class_a, &subclass, &class_b);
-    let basic_edge_term = builder.intern_triple(basic_edge.0, basic_edge.1, basic_edge.2);
+    let basic_edge_term = builder
+        .intern_triple(basic_edge.0, basic_edge.1, basic_edge.2)
+        .unwrap();
     let reifier = iri(&mut builder, &format!("{EX}axiom"));
-    builder.push_reifier(reifier, basic_edge_term);
+    builder.push_reifier(reifier, basic_edge_term).unwrap();
     let confidence = iri(&mut builder, &format!("{EX}confidence"));
     let high = iri(&mut builder, &format!("{EX}high"));
-    builder.push_annotation(reifier, confidence, high);
+    builder.push_annotation(reifier, confidence, high).unwrap();
 
     push_iri(&mut builder, &class_a, &equivalent, &class_b);
-    let expression = builder.intern_blank("expression", BlankScope::DEFAULT);
-    let list_one = builder.intern_blank("intersection-1", BlankScope::DEFAULT);
-    let list_two = builder.intern_blank("intersection-2", BlankScope::DEFAULT);
-    let restriction = builder.intern_blank("restriction", BlankScope::DEFAULT);
+    let expression = builder
+        .intern_blank("expression", BlankScope::DEFAULT)
+        .unwrap();
+    let list_one = builder
+        .intern_blank("intersection-1", BlankScope::DEFAULT)
+        .unwrap();
+    let list_two = builder
+        .intern_blank("intersection-2", BlankScope::DEFAULT)
+        .unwrap();
+    let restriction = builder
+        .intern_blank("restriction", BlankScope::DEFAULT)
+        .unwrap();
     let c = iri(&mut builder, &class_c);
     let equivalent_id = iri(&mut builder, &equivalent);
-    builder.push_quad(c, equivalent_id, expression, None);
+    builder
+        .push_quad(c, equivalent_id, expression, None)
+        .unwrap();
     let intersection = iri(&mut builder, &format!("{OWL}intersectionOf"));
-    builder.push_quad(expression, intersection, list_one, None);
+    builder
+        .push_quad(expression, intersection, list_one, None)
+        .unwrap();
     let first = iri(&mut builder, &rdf_first);
     let rest = iri(&mut builder, &rdf_rest);
-    builder.push_quad(list_one, first, a, None);
-    builder.push_quad(list_one, rest, list_two, None);
-    builder.push_quad(list_two, first, restriction, None);
+    builder.push_quad(list_one, first, a, None).unwrap();
+    builder.push_quad(list_one, rest, list_two, None).unwrap();
+    builder
+        .push_quad(list_two, first, restriction, None)
+        .unwrap();
     let nil = iri(&mut builder, &rdf_nil);
-    builder.push_quad(list_two, rest, nil, None);
+    builder.push_quad(list_two, rest, nil, None).unwrap();
     let rdf_type_id = iri(&mut builder, &rdf_type);
     let restriction_type_id = iri(&mut builder, &restriction_type);
-    builder.push_quad(restriction, rdf_type_id, restriction_type_id, None);
+    builder
+        .push_quad(restriction, rdf_type_id, restriction_type_id, None)
+        .unwrap();
     let on_property_id = iri(&mut builder, &on_property);
     let p = iri(&mut builder, &property_p);
-    builder.push_quad(restriction, on_property_id, p, None);
+    builder
+        .push_quad(restriction, on_property_id, p, None)
+        .unwrap();
     let some_values_id = iri(&mut builder, &some_values);
     let b = iri(&mut builder, &class_b);
-    builder.push_quad(restriction, some_values_id, b, None);
+    builder
+        .push_quad(restriction, some_values_id, b, None)
+        .unwrap();
 
     push_iri(
         &mut builder,
@@ -202,16 +230,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     push_iri(&mut builder, &property_p, &format!("{RDFS}range"), &class_b);
 
-    let chain_head = builder.intern_blank("chain-1", BlankScope::DEFAULT);
-    let chain_tail = builder.intern_blank("chain-2", BlankScope::DEFAULT);
+    let chain_head = builder
+        .intern_blank("chain-1", BlankScope::DEFAULT)
+        .unwrap();
+    let chain_tail = builder
+        .intern_blank("chain-2", BlankScope::DEFAULT)
+        .unwrap();
     let r = iri(&mut builder, &property_r);
     let chain = iri(&mut builder, &format!("{OWL}propertyChainAxiom"));
-    builder.push_quad(r, chain, chain_head, None);
-    builder.push_quad(chain_head, first, p, None);
-    builder.push_quad(chain_head, rest, chain_tail, None);
+    builder.push_quad(r, chain, chain_head, None).unwrap();
+    builder.push_quad(chain_head, first, p, None).unwrap();
+    builder
+        .push_quad(chain_head, rest, chain_tail, None)
+        .unwrap();
     let q = iri(&mut builder, &property_q);
-    builder.push_quad(chain_tail, first, q, None);
-    builder.push_quad(chain_tail, rest, nil, None);
+    builder.push_quad(chain_tail, first, q, None).unwrap();
+    builder.push_quad(chain_tail, rest, nil, None).unwrap();
 
     let dataset = builder.freeze()?;
     let configuration = config()?;

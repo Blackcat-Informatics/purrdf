@@ -52,104 +52,104 @@ fn iri(local: &str) -> String {
 /// The fixture dataset described in the module doc.
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&iri("p"));
-    let label = b.intern_iri(RDFS_LABEL);
-    let has_child = b.intern_iri(&iri("hasChild"));
-    let name = b.intern_iri(&iri("name"));
-    let q = b.intern_iri(&iri("q"));
-    let c_obj = b.intern_iri(&iri("c"));
-    let tagged = b.intern_iri(&iri("tagged"));
-    let uses_pred = b.intern_iri(&iri("usesPred"));
-    let uses_graph = b.intern_iri(&iri("usesGraph"));
-    let has_subject = b.intern_iri(&iri("hasSubject"));
+    let p = b.intern_iri(&iri("p")).unwrap();
+    let label = b.intern_iri(RDFS_LABEL).unwrap();
+    let has_child = b.intern_iri(&iri("hasChild")).unwrap();
+    let name = b.intern_iri(&iri("name")).unwrap();
+    let q = b.intern_iri(&iri("q")).unwrap();
+    let c_obj = b.intern_iri(&iri("c")).unwrap();
+    let tagged = b.intern_iri(&iri("tagged")).unwrap();
+    let uses_pred = b.intern_iri(&iri("usesPred")).unwrap();
+    let uses_graph = b.intern_iri(&iri("usesGraph")).unwrap();
+    let has_subject = b.intern_iri(&iri("hasSubject")).unwrap();
 
-    let a = b.intern_iri(&iri("a"));
-    let bb = b.intern_iri(&iri("b"));
-    let z = b.intern_iri(&iri("z"));
-    let oa = b.intern_iri(&iri("oa"));
-    let ob = b.intern_iri(&iri("ob"));
-    let oz = b.intern_iri(&iri("oz"));
+    let a = b.intern_iri(&iri("a")).unwrap();
+    let bb = b.intern_iri(&iri("b")).unwrap();
+    let z = b.intern_iri(&iri("z")).unwrap();
+    let oa = b.intern_iri(&iri("oa")).unwrap();
+    let ob = b.intern_iri(&iri("ob")).unwrap();
+    let oz = b.intern_iri(&iri("oz")).unwrap();
 
-    b.push_quad(a, p, oa, None);
-    b.push_quad(bb, p, ob, None);
-    b.push_quad(z, p, oz, None);
+    b.push_quad(a, p, oa, None).unwrap();
+    b.push_quad(bb, p, ob, None).unwrap();
+    b.push_quad(z, p, oz, None).unwrap();
 
-    let a1 = b.intern_literal(RdfLiteral::simple("a1"));
-    let a2 = b.intern_literal(RdfLiteral::simple("a2"));
-    let b1 = b.intern_literal(RdfLiteral::simple("b1"));
-    let b2 = b.intern_literal(RdfLiteral::simple("b2"));
-    b.push_quad(a, label, a1, None);
-    b.push_quad(a, label, a2, None);
-    b.push_quad(bb, label, b1, None);
-    b.push_quad(bb, label, b2, None);
+    let a1 = b.intern_literal(RdfLiteral::simple("a1")).unwrap();
+    let a2 = b.intern_literal(RdfLiteral::simple("a2")).unwrap();
+    let b1 = b.intern_literal(RdfLiteral::simple("b1")).unwrap();
+    let b2 = b.intern_literal(RdfLiteral::simple("b2")).unwrap();
+    b.push_quad(a, label, a1, None).unwrap();
+    b.push_quad(a, label, a2, None).unwrap();
+    b.push_quad(bb, label, b1, None).unwrap();
+    b.push_quad(bb, label, b2, None).unwrap();
 
-    let c1 = b.intern_iri(&iri("c1"));
-    let c2 = b.intern_iri(&iri("c2"));
-    let c3 = b.intern_iri(&iri("c3"));
-    b.push_quad(a, has_child, c1, None);
-    b.push_quad(a, has_child, c2, None);
-    b.push_quad(bb, has_child, c3, None);
-    let n1 = b.intern_literal(RdfLiteral::simple("Carol1"));
-    let n2 = b.intern_literal(RdfLiteral::simple("Carol2"));
-    let n3 = b.intern_literal(RdfLiteral::simple("Carol3"));
-    b.push_quad(c1, name, n1, None);
-    b.push_quad(c2, name, n2, None);
-    b.push_quad(c3, name, n3, None);
+    let c1 = b.intern_iri(&iri("c1")).unwrap();
+    let c2 = b.intern_iri(&iri("c2")).unwrap();
+    let c3 = b.intern_iri(&iri("c3")).unwrap();
+    b.push_quad(a, has_child, c1, None).unwrap();
+    b.push_quad(a, has_child, c2, None).unwrap();
+    b.push_quad(bb, has_child, c3, None).unwrap();
+    let n1 = b.intern_literal(RdfLiteral::simple("Carol1")).unwrap();
+    let n2 = b.intern_literal(RdfLiteral::simple("Carol2")).unwrap();
+    let n3 = b.intern_literal(RdfLiteral::simple("Carol3")).unwrap();
+    b.push_quad(c1, name, n1, None).unwrap();
+    b.push_quad(c2, name, n2, None).unwrap();
+    b.push_quad(c3, name, n3, None).unwrap();
 
     // `:a :q :c` only — used by the MINUS-under-substitution and
     // shared-variable-constant-injection tests.
-    b.push_quad(a, q, c_obj, None);
+    b.push_quad(a, q, c_obj, None).unwrap();
 
     // Literal-injection: two tags carrying LITERAL values that match two of the
     // `rdfs:label` literals above exactly.
-    let tag1 = b.intern_iri(&iri("tag1"));
-    let tag2 = b.intern_iri(&iri("tag2"));
-    let tagged_a1 = b.intern_literal(RdfLiteral::simple("a1"));
-    let tagged_b2 = b.intern_literal(RdfLiteral::simple("b2"));
-    b.push_quad(tag1, tagged, tagged_a1, None);
-    b.push_quad(tag2, tagged, tagged_b2, None);
+    let tag1 = b.intern_iri(&iri("tag1")).unwrap();
+    let tag2 = b.intern_iri(&iri("tag2")).unwrap();
+    let tagged_a1 = b.intern_literal(RdfLiteral::simple("a1")).unwrap();
+    let tagged_b2 = b.intern_literal(RdfLiteral::simple("b2")).unwrap();
+    b.push_quad(tag1, tagged, tagged_a1, None).unwrap();
+    b.push_quad(tag2, tagged, tagged_b2, None).unwrap();
 
     // Predicate-position injection: `:a` names `:p` as "its own" predicate.
-    b.push_quad(a, uses_pred, p, None);
+    b.push_quad(a, uses_pred, p, None).unwrap();
 
     // GRAPH-scoping: `:x` carries DIFFERENT labels in two DIFFERENT named
     // graphs, and two "callers" each name which graph they want.
-    let r1 = b.intern_iri(&iri("r1"));
-    let r2 = b.intern_iri(&iri("r2"));
-    let g1 = b.intern_iri(&iri("g1"));
-    let g2 = b.intern_iri(&iri("g2"));
-    let x = b.intern_iri(&iri("x"));
-    b.push_quad(r1, uses_graph, g1, None);
-    b.push_quad(r1, has_subject, x, None);
-    b.push_quad(r2, uses_graph, g2, None);
-    b.push_quad(r2, has_subject, x, None);
-    let alpha1 = b.intern_literal(RdfLiteral::simple("alpha1"));
-    let alpha2 = b.intern_literal(RdfLiteral::simple("alpha2"));
-    let beta1 = b.intern_literal(RdfLiteral::simple("beta1"));
-    let beta2 = b.intern_literal(RdfLiteral::simple("beta2"));
-    b.push_quad(x, label, alpha1, Some(g1));
-    b.push_quad(x, label, alpha2, Some(g1));
-    b.push_quad(x, label, beta1, Some(g2));
-    b.push_quad(x, label, beta2, Some(g2));
+    let r1 = b.intern_iri(&iri("r1")).unwrap();
+    let r2 = b.intern_iri(&iri("r2")).unwrap();
+    let g1 = b.intern_iri(&iri("g1")).unwrap();
+    let g2 = b.intern_iri(&iri("g2")).unwrap();
+    let x = b.intern_iri(&iri("x")).unwrap();
+    b.push_quad(r1, uses_graph, g1, None).unwrap();
+    b.push_quad(r1, has_subject, x, None).unwrap();
+    b.push_quad(r2, uses_graph, g2, None).unwrap();
+    b.push_quad(r2, has_subject, x, None).unwrap();
+    let alpha1 = b.intern_literal(RdfLiteral::simple("alpha1")).unwrap();
+    let alpha2 = b.intern_literal(RdfLiteral::simple("alpha2")).unwrap();
+    let beta1 = b.intern_literal(RdfLiteral::simple("beta1")).unwrap();
+    let beta2 = b.intern_literal(RdfLiteral::simple("beta2")).unwrap();
+    b.push_quad(x, label, alpha1, Some(g1)).unwrap();
+    b.push_quad(x, label, alpha2, Some(g1)).unwrap();
+    b.push_quad(x, label, beta1, Some(g2)).unwrap();
+    b.push_quad(x, label, beta2, Some(g2)).unwrap();
 
     // Blank-node injection: `:a` carries a blank node that itself carries a
     // literal, so an outer row can bind a variable to a `TermValue::Blank` —
     // the term kind an `Expression` cannot spell as a constant — for the
     // `BOUND(?bn)`-in-a-`LATERAL`-`FILTER` test.
-    let has_anon = b.intern_iri(&iri("hasAnon"));
-    let anon = b.intern_blank("anon1", BlankScope::DEFAULT);
-    let note = b.intern_iri(&iri("note"));
-    let noted = b.intern_literal(RdfLiteral::simple("noted"));
-    b.push_quad(a, has_anon, anon, None);
-    b.push_quad(anon, note, noted, None);
+    let has_anon = b.intern_iri(&iri("hasAnon")).unwrap();
+    let anon = b.intern_blank("anon1", BlankScope::DEFAULT).unwrap();
+    let note = b.intern_iri(&iri("note")).unwrap();
+    let noted = b.intern_literal(RdfLiteral::simple("noted")).unwrap();
+    b.push_quad(a, has_anon, anon, None).unwrap();
+    b.push_quad(anon, note, noted, None).unwrap();
 
     // RDF 1.2 reification: `:reifierA` reifies `:a :p :oa` as a quoted triple
     // term, so `?r rdf:reifies ?tt` binds `?tt` to a `TermValue::Triple` — the
     // other term kind an `Expression` cannot spell as a constant — for the
     // `sameTerm`-in-a-`LATERAL`-`FILTER` test.
-    let reifier_a = b.intern_iri(&iri("reifierA"));
-    let statement_a = b.intern_triple(a, p, oa);
-    b.push_reifier(reifier_a, statement_a);
+    let reifier_a = b.intern_iri(&iri("reifierA")).unwrap();
+    let statement_a = b.intern_triple(a, p, oa).unwrap();
+    b.push_reifier(reifier_a, statement_a).unwrap();
 
     b.freeze().expect("freeze fixture")
 }

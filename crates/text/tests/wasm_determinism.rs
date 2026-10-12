@@ -69,11 +69,13 @@ const EXPECTED: [(&str, &str); 2] = [("d1", "1.646224553827"), ("d2", "1.3862943
 /// An index over [`CORPUS`].
 fn corpus_index() -> TextIndex {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text) in CORPUS {
-        let subject = builder.intern_iri(&format!("https://example.org/{local}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{local}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
     TextIndex::from_dataset(

@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use crate::native_codecs::parse::{FoldNode, FoldRow, fold_statement_layer};
-use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm};
 
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
@@ -33,8 +33,8 @@ use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// (the builder's scoped interner recurses).
 ///
 /// # Errors
-/// Returns the diagnostic string if the folded quads fail dataset validation.
-pub fn dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDataset>, String> {
+/// Returns the original typed diagnostic if the folded quads fail dataset validation.
+pub fn dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     freeze_quad_sources(sources, &[])
 }
 
@@ -46,34 +46,46 @@ pub fn dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDatase
 pub(crate) fn dataset_from_quads_declaring(
     quads: &[RdfQuad],
     declared_graphs: &[RdfTerm],
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     freeze_quad_sources(&[quads], declared_graphs)
+}
+
+fn source_scope(index: usize) -> Result<BlankScope, purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+    CapacityError::check(
+        CapacitySpace::ImportBlankScopes,
+        index as u128 + 1,
+        u128::from(u32::MAX) + 1,
+    )?;
+    Ok(BlankScope(
+        u32::try_from(index).map_err(|_| StorageError::SizeOverflow)?,
+    ))
 }
 
 fn freeze_quad_sources(
     sources: &[&[RdfQuad]],
     declared_graphs: &[RdfTerm],
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let total: usize = sources.iter().map(|source| source.len()).sum();
     let mut builder = RdfDatasetBuilder::new();
     let mut rows: Vec<FoldRow> = Vec::with_capacity(total);
     for (index, quads) in sources.iter().enumerate() {
-        let scope = BlankScope(index as u32);
+        let scope = source_scope(index)?;
         for quad in *quads {
             // The owned-model DOCUMENT ingress (JSON-LD / YAML-LD reaches the IR
             // through here), so an ill-formed composite literal refuses the
             // document exactly as it does on every text codec.
             let bind = |b: &mut RdfDatasetBuilder, t: &RdfTerm| {
                 b.intern_owned_term_bound(t, scope)
-                    .map_err(|err| err.to_string())
+                    .map_err(RdfDiagnostic::from)
             };
             let subject = bind(&mut builder, &quad.subject)?;
             let is_reifies = quad.predicate == RDF_REIFIES;
-            let predicate = builder.intern_iri(&quad.predicate);
+            let predicate = builder.intern_iri(&quad.predicate)?;
             let object = match &quad.object {
                 RdfTerm::Triple(triple) => {
                     let s = bind(&mut builder, &triple.subject)?;
-                    let p = builder.intern_iri(&triple.predicate);
+                    let p = builder.intern_iri(&triple.predicate)?;
                     let o = bind(&mut builder, &triple.object)?;
                     FoldNode::Triple { s, p, o }
                 }
@@ -93,14 +105,14 @@ fn freeze_quad_sources(
         }
     }
 
-    fold_statement_layer(&mut builder, rows).map_err(|e| e.to_string())?;
+    fold_statement_layer(&mut builder, rows)?;
     for name in declared_graphs {
         let id = builder
             .intern_owned_term_bound(name, BlankScope::DEFAULT)
-            .map_err(|err| err.to_string())?;
-        builder.declare_named_graph(id);
+            .map_err(RdfDiagnostic::from)?;
+        builder.declare_named_graph(id)?;
     }
-    builder.freeze().map_err(|e| e.to_string())
+    builder.freeze()
 }
 
 /// Freeze already-built native [`RdfQuad`]s into a validated [`RdfDataset`], folding the
@@ -113,8 +125,8 @@ fn freeze_quad_sources(
 /// so their blanks standardize apart rather than collapse.
 ///
 /// # Errors
-/// Returns the diagnostic string if the folded quads fail dataset validation.
-pub fn dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> {
+/// Returns the original typed diagnostic if the folded quads fail dataset validation.
+pub fn dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     dataset_from_quad_sources(&[quads])
 }
 
@@ -169,8 +181,10 @@ pub fn flat_rdf_quads(dataset: &RdfDataset) -> impl Iterator<Item = RdfQuad> + '
 /// so a single-source load stays byte-identical to the prior flat canonical path.
 ///
 /// # Errors
-/// Returns the diagnostic string if the quads fail dataset validation.
-pub fn flat_dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfDataset>, String> {
+/// Returns the original typed diagnostic if the quads fail dataset validation.
+pub fn flat_dataset_from_quad_sources(
+    sources: &[&[RdfQuad]],
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     freeze_flat_sources(sources, &[])
 }
 
@@ -182,33 +196,33 @@ pub fn flat_dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfD
 /// freezes exactly as [`flat_dataset_from_quads`] does.
 ///
 /// # Errors
-/// Returns the diagnostic string if the quads fail dataset validation or a declared
+/// Returns the original typed diagnostic if the quads fail dataset validation or a declared
 /// graph is neither an IRI nor a blank node.
 pub fn flat_dataset_from_quads_declaring(
     quads: &[RdfQuad],
     declared_graphs: &[RdfTerm],
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     freeze_flat_sources(&[quads], declared_graphs)
 }
 
 fn freeze_flat_sources(
     sources: &[&[RdfQuad]],
     declared_graphs: &[RdfTerm],
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     for (index, quads) in sources.iter().enumerate() {
-        let scope = BlankScope(index as u32);
+        let scope = source_scope(index)?;
         for quad in *quads {
-            builder.push_owned_quad_scoped(quad, scope);
+            builder.push_owned_quad_scoped(quad, scope)?;
         }
     }
     for graph in declared_graphs {
         let id = builder
             .intern_owned_term_bound(graph, BlankScope::DEFAULT)
-            .map_err(|err| err.to_string())?;
-        builder.declare_named_graph(id);
+            .map_err(RdfDiagnostic::from)?;
+        builder.declare_named_graph(id)?;
     }
-    builder.freeze().map_err(|e| e.to_string())
+    builder.freeze()
 }
 
 /// Freeze a flat owned-[`RdfQuad`] stream into a dataset WITHOUT folding the RDF 1.2
@@ -228,8 +242,8 @@ fn freeze_flat_sources(
 /// `rdf:reifies` / annotation triples as ordinary quads.
 ///
 /// # Errors
-/// Returns the diagnostic string if the quads fail dataset validation.
-pub fn flat_dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> {
+/// Returns the original typed diagnostic if the quads fail dataset validation.
+pub fn flat_dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     flat_dataset_from_quad_sources(&[quads])
 }
 
@@ -295,6 +309,29 @@ pub fn canonical_flat_nquads_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_scope_preserves_terminal_identity_and_refuses_wraparound() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+
+        assert_eq!(source_scope(0).unwrap(), BlankScope::DEFAULT);
+        let last = usize::try_from(u32::MAX).unwrap();
+        assert_eq!(source_scope(last).unwrap(), BlankScope(u32::MAX));
+        if let Some(next) = last.checked_add(1) {
+            let refused = source_scope(next).unwrap_err();
+            assert_eq!(
+                refused,
+                StorageError::Capacity(CapacityError {
+                    space: CapacitySpace::ImportBlankScopes,
+                    attempted: u128::from(u32::MAX) + 2,
+                    limit: u128::from(u32::MAX) + 1
+                })
+            );
+            let diagnostic = RdfDiagnostic::from(refused);
+            assert_eq!(diagnostic.storage_error(), Some(refused));
+            assert_eq!(source_scope(last).unwrap(), BlankScope(u32::MAX));
+        }
+    }
 
     #[test]
     fn quads_roundtrip_through_dataset() {
@@ -557,10 +594,10 @@ ex:g {
     /// A dataset carrying a reserved-vocabulary IRI ([`crate::RESERVED_NAMESPACE`]).
     fn reserved_vocabulary_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let bad = b.intern_iri(crate::RESERVED_NAMESPACE);
-        b.push_quad(s, p, bad, None);
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let bad = b.intern_iri(crate::RESERVED_NAMESPACE).unwrap();
+        b.push_quad(s, p, bad, None).unwrap();
         b.freeze().expect("valid")
     }
 

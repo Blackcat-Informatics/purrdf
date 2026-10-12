@@ -22,7 +22,7 @@ use super::term::{
     rdf_term_to_value, values_to_rdf_quad,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
-use crate::py_store::iri_value_error;
+use crate::py_store::iri_read_value_error;
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, RdfQuad, SerializeGraph, SerializeOptions,
     StatementLayer, TermValue, serialize_dataset_with,
@@ -79,7 +79,7 @@ impl PyMutableDataset {
             for quad in quads {
                 inner
                     .insert(rdf_quad_to_values_scoped(&quad, blank_scope))
-                    .map_err(|e| iri_value_error(&e))?;
+                    .map_err(|e| iri_read_value_error(&e))?;
             }
             declare_loaded_graphs(inner, declared, blank_scope)?;
             Ok(prefixes)
@@ -96,7 +96,7 @@ impl PyMutableDataset {
         slf.as_super()
             .inner
             .insert(rdf_quad_to_values(&quad.inner))
-            .map_err(|e| iri_value_error(&e))
+            .map_err(|e| iri_read_value_error(&e))
     }
 
     /// Remove a single quad. Returns whether the effective set changed.

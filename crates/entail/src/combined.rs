@@ -338,7 +338,7 @@ pub fn materialize_combined_until<D: DatasetView>(
         let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
 
         let mut b = RdfDatasetBuilder::new();
-        b.push_dataset(&named_dataset);
+        b.push_dataset(&named_dataset)?;
         let mut surrogates: BTreeSet<String> = BTreeSet::new();
         let mut witness_terms: BTreeMap<String, TermValue> = BTreeMap::new();
 
@@ -362,15 +362,13 @@ pub fn materialize_combined_until<D: DatasetView>(
                     surrogates.insert(witness_label(surface));
                 }
             }
-            let s_id = intern_into(&mut b, &s);
-            let p_id = intern_into(&mut b, &p);
-            let o_id = intern_into(&mut b, &o);
-            b.push_quad(s_id, p_id, o_id, None);
+            let s_id = intern_into(&mut b, &s)?;
+            let p_id = intern_into(&mut b, &p)?;
+            let o_id = intern_into(&mut b, &o)?;
+            b.push_quad(s_id, p_id, o_id, None)?;
         }
 
-        let dataset = b
-            .freeze()
-            .map_err(|error| EntailError::Build(format!("freeze combined dataset: {error}")))?;
+        let dataset = b.freeze().map_err(EntailError::from)?;
         Ok(Some(CombinedMaterialization {
             dataset,
             report,
@@ -606,25 +604,27 @@ mod tests {
     /// asserted `r`-related to anything.
     fn some_values_from_ontology() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let class = b.intern_iri(OWL_CLASS);
-        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let big_b = b.intern_iri(&format!("{NS}B"));
-        let r = b.intern_iri(&format!("{NS}r"));
-        let little_a = b.intern_iri(&format!("{NS}a"));
-        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI);
-        let on_property = b.intern_iri(OWL_ON_PROPERTY);
-        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{NS}B")).unwrap();
+        let r = b.intern_iri(&format!("{NS}r")).unwrap();
+        let little_a = b.intern_iri(&format!("{NS}a")).unwrap();
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI).unwrap();
+        let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
 
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(restriction, ty, restriction_class, None);
-        b.push_quad(restriction, on_property, r, None);
-        b.push_quad(restriction, some_values_from, big_b, None);
-        b.push_quad(a, subclass_of, restriction, None);
-        b.push_quad(little_a, ty, a, None);
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(restriction, ty, restriction_class, None)
+            .unwrap();
+        b.push_quad(restriction, on_property, r, None).unwrap();
+        b.push_quad(restriction, some_values_from, big_b, None)
+            .unwrap();
+        b.push_quad(a, subclass_of, restriction, None).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
 
         b.freeze().expect("freeze")
     }
@@ -685,14 +685,16 @@ mod tests {
     #[test]
     fn an_equivalent_class_axiom_is_outside_the_fragment() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let class = b.intern_iri(OWL_CLASS);
-        let equiv = b.intern_iri("http://www.w3.org/2002/07/owl#equivalentClass");
-        let a = b.intern_iri(&format!("{NS}A"));
-        let big_b = b.intern_iri(&format!("{NS}B"));
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(a, equiv, big_b, None);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let equiv = b
+            .intern_iri("http://www.w3.org/2002/07/owl#equivalentClass")
+            .unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{NS}B")).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(a, equiv, big_b, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         assert!(lower_horn_tbox(&ds).expect("source read").is_none());
@@ -709,20 +711,21 @@ mod tests {
     #[test]
     fn a_cyclic_existential_schema_is_not_applicable() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let class = b.intern_iri(OWL_CLASS);
-        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let r = b.intern_iri(&format!("{NS}r"));
-        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI);
-        let on_property = b.intern_iri(OWL_ON_PROPERTY);
-        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
-        b.push_quad(a, ty, class, None);
-        b.push_quad(restriction, ty, restriction_class, None);
-        b.push_quad(restriction, on_property, r, None);
-        b.push_quad(restriction, some_values_from, a, None);
-        b.push_quad(a, subclass_of, restriction, None);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let r = b.intern_iri(&format!("{NS}r")).unwrap();
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI).unwrap();
+        let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(restriction, ty, restriction_class, None)
+            .unwrap();
+        b.push_quad(restriction, on_property, r, None).unwrap();
+        b.push_quad(restriction, some_values_from, a, None).unwrap();
+        b.push_quad(a, subclass_of, restriction, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let clauses = lower_horn_tbox(&ds)
@@ -741,10 +744,10 @@ mod tests {
     #[test]
     fn an_ontology_with_no_existential_axiom_succeeds_with_no_witnesses() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let little_a = b.intern_iri(&format!("{NS}a"));
-        b.push_quad(little_a, ty, a, None);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let little_a = b.intern_iri(&format!("{NS}a")).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let combined = materialize_combined(&ds, &[])
@@ -759,14 +762,14 @@ mod tests {
     /// class assertion so the dataset is never trivially empty.
     fn one_statement(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let little_a = b.intern_iri(&format!("{NS}a"));
-        b.push_quad(little_a, ty, a, None);
-        let s = b.intern_iri(subject);
-        let p = b.intern_iri(predicate);
-        let o = b.intern_iri(object);
-        b.push_quad(s, p, o, None);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let little_a = b.intern_iri(&format!("{NS}a")).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
+        let s = b.intern_iri(subject).unwrap();
+        let p = b.intern_iri(predicate).unwrap();
+        let o = b.intern_iri(object).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -871,17 +874,19 @@ mod tests {
         assert!(lower_horn_tbox(&ds).expect("source read").is_some());
 
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let class = b.intern_iri(OWL_CLASS);
-        let label = b.intern_iri(RDFS_LABEL);
-        let text = b.intern_literal(purrdf_core::RdfLiteral::typed("A", XSD_STRING));
-        let named_individual = b.intern_iri(OWL_NAMEDINDIVIDUAL);
-        let little_a = b.intern_iri(&format!("{NS}a"));
-        b.push_quad(a, ty, class, None);
-        b.push_quad(a, label, text, None);
-        b.push_quad(little_a, ty, named_individual, None);
-        b.push_quad(little_a, ty, a, None);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let label = b.intern_iri(RDFS_LABEL).unwrap();
+        let text = b
+            .intern_literal(purrdf_core::RdfLiteral::typed("A", XSD_STRING))
+            .unwrap();
+        let named_individual = b.intern_iri(OWL_NAMEDINDIVIDUAL).unwrap();
+        let little_a = b.intern_iri(&format!("{NS}a")).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(a, label, text, None).unwrap();
+        b.push_quad(little_a, ty, named_individual, None).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert!(
             lower_horn_tbox(&ds).expect("source read").is_some(),
@@ -911,22 +916,24 @@ mod tests {
     #[test]
     fn a_builtin_role_in_a_restriction_disqualifies() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let class = b.intern_iri(OWL_CLASS);
-        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let big_b = b.intern_iri(&format!("{NS}B"));
-        let top = b.intern_iri(OWL_TOPOBJECTPROPERTY);
-        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI);
-        let on_property = b.intern_iri(OWL_ON_PROPERTY);
-        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(restriction, ty, restriction_class, None);
-        b.push_quad(restriction, on_property, top, None);
-        b.push_quad(restriction, some_values_from, big_b, None);
-        b.push_quad(a, subclass_of, restriction, None);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{NS}B")).unwrap();
+        let top = b.intern_iri(OWL_TOPOBJECTPROPERTY).unwrap();
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI).unwrap();
+        let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(restriction, ty, restriction_class, None)
+            .unwrap();
+        b.push_quad(restriction, on_property, top, None).unwrap();
+        b.push_quad(restriction, some_values_from, big_b, None)
+            .unwrap();
+        b.push_quad(a, subclass_of, restriction, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert!(lower_horn_tbox(&ds).expect("source read").is_none());
     }
@@ -938,11 +945,11 @@ mod tests {
     #[test]
     fn a_quad_outside_the_default_graph_disqualifies() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let little_a = b.intern_iri(&format!("{NS}a"));
-        let g = b.intern_iri(&format!("{NS}g"));
-        b.push_quad(little_a, ty, a, Some(g));
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let little_a = b.intern_iri(&format!("{NS}a")).unwrap();
+        let g = b.intern_iri(&format!("{NS}g")).unwrap();
+        b.push_quad(little_a, ty, a, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
         assert!(lower_horn_tbox(&ds).expect("source read").is_none());
     }

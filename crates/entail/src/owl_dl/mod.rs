@@ -867,11 +867,11 @@ mod tests {
     const NS: &str = "http://example.org/test#";
 
     fn iri(b: &mut RdfDatasetBuilder, local: &str) -> TermId {
-        b.intern_iri(&format!("{NS}{local}"))
+        b.intern_iri(&format!("{NS}{local}")).unwrap()
     }
 
     fn vocab(b: &mut RdfDatasetBuilder, full: &str) -> TermId {
-        b.intern_iri(full)
+        b.intern_iri(full).unwrap()
     }
 
     use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
@@ -920,11 +920,11 @@ mod tests {
         // Class / property declarations.
         for c in ["A", "B", "C"] {
             let s = iri(&mut b, c);
-            b.push_quad(s, ty, class, None);
+            b.push_quad(s, ty, class, None).unwrap();
         }
         let p = iri(&mut b, "p");
-        b.push_quad(p, ty, objp, None);
-        b.push_quad(p, ty, funcp, None);
+        b.push_quad(p, ty, objp, None).unwrap();
+        b.push_quad(p, ty, funcp, None).unwrap();
         // Individuals.
         let a = iri(&mut b, "a");
         let bb = iri(&mut b, "b");
@@ -933,16 +933,16 @@ mod tests {
         let acls = iri(&mut b, "A");
         let bcls = iri(&mut b, "B");
         let ccls = iri(&mut b, "C");
-        b.push_quad(a, ty, acls, None);
-        b.push_quad(a, ty, bcls, None);
-        b.push_quad(a, p, bb, None);
-        b.push_quad(bb, ty, bcls, None);
-        b.push_quad(bb, p, cc, None);
-        b.push_quad(cc, ty, ccls, None);
-        b.push_quad(cc, p, dd, None);
-        b.push_quad(dd, ty, acls, None);
-        b.push_quad(dd, ty, bcls, None);
-        b.push_quad(dd, ty, ccls, None);
+        b.push_quad(a, ty, acls, None).unwrap();
+        b.push_quad(a, ty, bcls, None).unwrap();
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_quad(bb, ty, bcls, None).unwrap();
+        b.push_quad(bb, p, cc, None).unwrap();
+        b.push_quad(cc, ty, ccls, None).unwrap();
+        b.push_quad(cc, p, dd, None).unwrap();
+        b.push_quad(dd, ty, acls, None).unwrap();
+        b.push_quad(dd, ty, bcls, None).unwrap();
+        b.push_quad(dd, ty, ccls, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -1006,8 +1006,12 @@ mod tests {
         let a = iri(&mut b, "a");
         let bb = iri(&mut b, "b");
         let c = iri(&mut b, "c");
-        let cell0 = b.intern_blank("cell0", purrdf_core::BlankScope::DEFAULT);
-        let cell1 = b.intern_blank("cell1", purrdf_core::BlankScope::DEFAULT);
+        let cell0 = b
+            .intern_blank("cell0", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        let cell1 = b
+            .intern_blank("cell1", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         let first = vocab(&mut b, RDF_FIRST);
         let rest = vocab(&mut b, RDF_REST);
         let nil = vocab(&mut b, RDF_NIL);
@@ -1021,16 +1025,18 @@ mod tests {
             (a, r, bb),
             (bb, p, c),
         ] {
-            b.push_quad(s, predicate, o, None);
+            b.push_quad(s, predicate, o, None).unwrap();
         }
-        let restriction = b.intern_blank("restriction", purrdf_core::BlankScope::DEFAULT);
+        let restriction = b
+            .intern_blank("restriction", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
         let filler = iri(&mut b, "C");
         let on = vocab(&mut b, purrdf_iri::vocab::owl::ON_PROPERTY);
         let all = vocab(&mut b, purrdf_iri::vocab::owl::ALL_VALUES_FROM);
         let ty = vocab(&mut b, RDF_TYPE);
-        b.push_quad(restriction, on, r, None);
-        b.push_quad(restriction, all, filler, None);
-        b.push_quad(a, ty, restriction, None);
+        b.push_quad(restriction, on, r, None).unwrap();
+        b.push_quad(restriction, all, filler, None).unwrap();
+        b.push_quad(a, ty, restriction, None).unwrap();
         let dataset = b.freeze().expect("regular source");
         let mut kb = Kb::from_dataset(&dataset).expect("regular recursive hierarchy");
         for decide in [hyper::decide, tableau::decide] {
@@ -1077,13 +1083,13 @@ mod tests {
         let left = iri(&mut b, "left");
         let right = iri(&mut b, "right");
         let value = iri(&mut b, "value");
-        b.push_quad(class, has_key, list, None);
-        b.push_quad(list, first, property, None);
-        b.push_quad(list, rest, nil, None);
-        b.push_quad(left, ty, class, None);
-        b.push_quad(right, ty, class, None);
-        b.push_quad(left, property, value, None);
-        b.push_quad(right, property, value, None);
+        b.push_quad(class, has_key, list, None).unwrap();
+        b.push_quad(list, first, property, None).unwrap();
+        b.push_quad(list, rest, nil, None).unwrap();
+        b.push_quad(left, ty, class, None).unwrap();
+        b.push_quad(right, ty, class, None).unwrap();
+        b.push_quad(left, property, value, None).unwrap();
+        b.push_quad(right, property, value, None).unwrap();
         let dataset = b.freeze().expect("key fixture freezes");
 
         // Measure the parser's deterministic poll count, then let the API preflight, every
@@ -1106,7 +1112,7 @@ mod tests {
         let mut ids: BTreeMap<&'static str, u32> = BTreeMap::new();
         let mut id = |kb: &mut Kb, name: &'static str| -> u32 {
             *ids.entry(name)
-                .or_insert_with(|| kb.interner.intern_iri(&format!("{NS}{name}")))
+                .or_insert_with(|| kb.interner.intern_iri(&format!("{NS}{name}")).unwrap())
         };
         let male = id(&mut kb, "Male");
         let female = id(&mut kb, "Female");
@@ -1317,24 +1323,24 @@ mod absorption_tests {
     #[test]
     fn an_existential_antecedent_fires_from_the_edge_and_not_from_a_label() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-        let restriction = b.intern_iri(OWL_RESTRICTION);
-        let on_property = b.intern_iri(OWL_ONPROPERTY);
-        let some_values = b.intern_iri(OWL_SOMEVALUESFROM);
-        let thing = b.intern_iri(OWL_THING);
-        let nothing = b.intern_iri(OWL_NOTHING);
-        let r = b.intern_iri(EX_R);
-        let a_class = b.intern_iri(EX_A);
-        let subject = b.intern_iri(EX_SUBJECT);
-        let object = b.intern_iri(EX_OBJECT);
-        let node = b.intern_blank("restriction", BlankScope::DEFAULT);
-        b.push_quad(node, ty, restriction, None);
-        b.push_quad(node, on_property, r, None);
-        b.push_quad(node, some_values, thing, None);
-        b.push_quad(node, sub_class, a_class, None);
-        b.push_quad(a_class, sub_class, nothing, None);
-        b.push_quad(subject, r, object, None);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        let restriction = b.intern_iri(OWL_RESTRICTION).unwrap();
+        let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+        let some_values = b.intern_iri(OWL_SOMEVALUESFROM).unwrap();
+        let thing = b.intern_iri(OWL_THING).unwrap();
+        let nothing = b.intern_iri(OWL_NOTHING).unwrap();
+        let r = b.intern_iri(EX_R).unwrap();
+        let a_class = b.intern_iri(EX_A).unwrap();
+        let subject = b.intern_iri(EX_SUBJECT).unwrap();
+        let object = b.intern_iri(EX_OBJECT).unwrap();
+        let node = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        b.push_quad(node, ty, restriction, None).unwrap();
+        b.push_quad(node, on_property, r, None).unwrap();
+        b.push_quad(node, some_values, thing, None).unwrap();
+        b.push_quad(node, sub_class, a_class, None).unwrap();
+        b.push_quad(a_class, sub_class, nothing, None).unwrap();
+        b.push_quad(subject, r, object, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert!(
             !consistent_by_both(&ds),
@@ -1359,20 +1365,20 @@ mod absorption_tests {
     fn a_tbox_clause_does_not_fire_on_a_node_of_the_data_domain() {
         let build = |literal_object: bool| {
             let mut b = RdfDatasetBuilder::new();
-            let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-            let range = b.intern_iri(RDFS_RANGE);
-            let nothing = b.intern_iri(OWL_NOTHING);
-            let r = b.intern_iri(EX_R);
-            let a_class = b.intern_iri(EX_A);
-            let subject = b.intern_iri(EX_SUBJECT);
+            let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+            let range = b.intern_iri(RDFS_RANGE).unwrap();
+            let nothing = b.intern_iri(OWL_NOTHING).unwrap();
+            let r = b.intern_iri(EX_R).unwrap();
+            let a_class = b.intern_iri(EX_A).unwrap();
+            let subject = b.intern_iri(EX_SUBJECT).unwrap();
             let object = if literal_object {
                 crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat"))
             } else {
-                b.intern_iri(EX_OBJECT)
+                b.intern_iri(EX_OBJECT).unwrap()
             };
-            b.push_quad(r, range, a_class, None);
-            b.push_quad(a_class, sub_class, nothing, None);
-            b.push_quad(subject, r, object, None);
+            b.push_quad(r, range, a_class, None).unwrap();
+            b.push_quad(a_class, sub_class, nothing, None).unwrap();
+            b.push_quad(subject, r, object, None).unwrap();
             b.freeze().expect("freeze")
         };
         assert!(
@@ -1394,24 +1400,24 @@ mod absorption_tests {
         // The object domain cannot disappear merely because no named individual
         // was stated. The two cores must reject the same empty-domain equation.
         let mut b = RdfDatasetBuilder::new();
-        let thing = b.intern_iri(OWL_THING);
-        let nothing = b.intern_iri(OWL_NOTHING);
-        let equivalent = b.intern_iri(EQUIVALENT_CLASS);
-        b.push_quad(thing, equivalent, nothing, None);
+        let thing = b.intern_iri(OWL_THING).unwrap();
+        let nothing = b.intern_iri(OWL_NOTHING).unwrap();
+        let equivalent = b.intern_iri(EQUIVALENT_CLASS).unwrap();
+        b.push_quad(thing, equivalent, nothing, None).unwrap();
         assert!(!consistent_by_both(
             &b.freeze().expect("empty-domain fixture")
         ));
 
         for asserted in [false, true] {
             let mut b = RdfDatasetBuilder::new();
-            let role = b.intern_iri(BOTTOM_OBJECT_PROPERTY);
-            let kind = b.intern_iri(OWL_OBJECTPROPERTY);
-            let ty = b.intern_iri(RDF_TYPE);
-            b.push_quad(role, ty, kind, None);
+            let role = b.intern_iri(BOTTOM_OBJECT_PROPERTY).unwrap();
+            let kind = b.intern_iri(OWL_OBJECTPROPERTY).unwrap();
+            let ty = b.intern_iri(RDF_TYPE).unwrap();
+            b.push_quad(role, ty, kind, None).unwrap();
             if asserted {
-                let source = b.intern_iri(EX_SUBJECT);
-                let target = b.intern_iri(EX_OBJECT);
-                b.push_quad(source, role, target, None);
+                let source = b.intern_iri(EX_SUBJECT).unwrap();
+                let target = b.intern_iri(EX_OBJECT).unwrap();
+                b.push_quad(source, role, target, None).unwrap();
             }
             assert_eq!(
                 consistent_by_both(&b.freeze().expect("empty-role fixture")),
@@ -1421,21 +1427,21 @@ mod absorption_tests {
 
         for complement in [false, true] {
             let mut b = RdfDatasetBuilder::new();
-            let c = b.intern_iri(EX_A);
-            let equivalent = b.intern_iri(EQUIVALENT_CLASS);
-            b.push_quad(c, equivalent, c, None);
+            let c = b.intern_iri(EX_A).unwrap();
+            let equivalent = b.intern_iri(EQUIVALENT_CLASS).unwrap();
+            b.push_quad(c, equivalent, c, None).unwrap();
             if complement {
-                let predicate = b.intern_iri(COMPLEMENT_OF);
-                b.push_quad(c, predicate, c, None);
+                let predicate = b.intern_iri(COMPLEMENT_OF).unwrap();
+                b.push_quad(c, predicate, c, None).unwrap();
             } else {
-                let predicate = b.intern_iri(UNION_OF);
-                let list = b.intern_blank("list", BlankScope::DEFAULT);
-                let first = b.intern_iri(RDF_FIRST);
-                let rest = b.intern_iri(RDF_REST);
-                let nil = b.intern_iri(RDF_NIL);
-                b.push_quad(c, predicate, list, None);
-                b.push_quad(list, first, c, None);
-                b.push_quad(list, rest, nil, None);
+                let predicate = b.intern_iri(UNION_OF).unwrap();
+                let list = b.intern_blank("list", BlankScope::DEFAULT).unwrap();
+                let first = b.intern_iri(RDF_FIRST).unwrap();
+                let rest = b.intern_iri(RDF_REST).unwrap();
+                let nil = b.intern_iri(RDF_NIL).unwrap();
+                b.push_quad(c, predicate, list, None).unwrap();
+                b.push_quad(list, first, c, None).unwrap();
+                b.push_quad(list, rest, nil, None).unwrap();
             }
             assert_eq!(
                 consistent_by_both(&b.freeze().expect("finite-cycle fixture")),
@@ -1477,20 +1483,20 @@ mod boundary_tests {
     #[test]
     fn a_regular_property_chain_is_compiled_without_inventing_a_role_assertion() {
         let mut b = RdfDatasetBuilder::new();
-        let chained = b.intern_iri(EX_CHAINED);
-        let chain = b.intern_iri(OWL_PROPERTYCHAINAXIOM);
-        let first = b.intern_iri(RDF_FIRST);
-        let rest = b.intern_iri(RDF_REST);
-        let nil = b.intern_iri(RDF_NIL);
-        let q = b.intern_iri(EX_Q);
-        let r = b.intern_iri(EX_R);
-        let cell1 = b.intern_blank("cell1", BlankScope::DEFAULT);
-        let cell0 = b.intern_blank("cell0", BlankScope::DEFAULT);
-        b.push_quad(cell1, first, r, None);
-        b.push_quad(cell1, rest, nil, None);
-        b.push_quad(cell0, first, q, None);
-        b.push_quad(cell0, rest, cell1, None);
-        b.push_quad(chained, chain, cell0, None);
+        let chained = b.intern_iri(EX_CHAINED).unwrap();
+        let chain = b.intern_iri(OWL_PROPERTYCHAINAXIOM).unwrap();
+        let first = b.intern_iri(RDF_FIRST).unwrap();
+        let rest = b.intern_iri(RDF_REST).unwrap();
+        let nil = b.intern_iri(RDF_NIL).unwrap();
+        let q = b.intern_iri(EX_Q).unwrap();
+        let r = b.intern_iri(EX_R).unwrap();
+        let cell1 = b.intern_blank("cell1", BlankScope::DEFAULT).unwrap();
+        let cell0 = b.intern_blank("cell0", BlankScope::DEFAULT).unwrap();
+        b.push_quad(cell1, first, r, None).unwrap();
+        b.push_quad(cell1, rest, nil, None).unwrap();
+        b.push_quad(cell0, first, q, None).unwrap();
+        b.push_quad(cell0, rest, cell1, None).unwrap();
+        b.push_quad(chained, chain, cell0, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let kb = Kb::from_dataset(&ds).expect("the chain axiom parses");
@@ -1524,25 +1530,25 @@ mod boundary_tests {
     fn a_number_restriction_over_a_transitive_role_is_bounded() {
         let build = |transitive: bool| {
             let mut b = RdfDatasetBuilder::new();
-            let ty = b.intern_iri(RDF_TYPE);
-            let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-            let restriction = b.intern_iri(crate::vocab::OWL_RESTRICTION);
-            let on_property = b.intern_iri(crate::vocab::OWL_ONPROPERTY);
-            let max_card = b.intern_iri(crate::vocab::OWL_MAXCARDINALITY);
-            let c = b.intern_iri(EX_C);
-            let r = b.intern_iri(EX_R);
-            let node = b.intern_blank("restriction", BlankScope::DEFAULT);
+            let ty = b.intern_iri(RDF_TYPE).unwrap();
+            let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+            let restriction = b.intern_iri(crate::vocab::OWL_RESTRICTION).unwrap();
+            let on_property = b.intern_iri(crate::vocab::OWL_ONPROPERTY).unwrap();
+            let max_card = b.intern_iri(crate::vocab::OWL_MAXCARDINALITY).unwrap();
+            let c = b.intern_iri(EX_C).unwrap();
+            let r = b.intern_iri(EX_R).unwrap();
+            let node = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
             let one: TermId = crate::interner::intern_into(
                 &mut b,
                 &TermValue::typed_literal("1", XSD_NONNEGATIVEINTEGER),
             );
-            b.push_quad(c, sub_class, node, None);
-            b.push_quad(node, ty, restriction, None);
-            b.push_quad(node, on_property, r, None);
-            b.push_quad(node, max_card, one, None);
+            b.push_quad(c, sub_class, node, None).unwrap();
+            b.push_quad(node, ty, restriction, None).unwrap();
+            b.push_quad(node, on_property, r, None).unwrap();
+            b.push_quad(node, max_card, one, None).unwrap();
             if transitive {
-                let trans = b.intern_iri(OWL_TRANSITIVEPROPERTY);
-                b.push_quad(r, ty, trans, None);
+                let trans = b.intern_iri(OWL_TRANSITIVEPROPERTY).unwrap();
+                b.push_quad(r, ty, trans, None).unwrap();
             }
             b.freeze().expect("freeze")
         };
@@ -1566,15 +1572,15 @@ mod boundary_tests {
     #[test]
     fn the_role_characteristics_reach_the_knowledge_base() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let r = b.intern_iri(EX_R);
-        let q = b.intern_iri(EX_Q);
-        let transitive = b.intern_iri(OWL_TRANSITIVEPROPERTY);
-        let symmetric = b.intern_iri(crate::vocab::OWL_SYMMETRICPROPERTY);
-        let asymmetric = b.intern_iri(crate::vocab::OWL_ASYMMETRICPROPERTY);
-        b.push_quad(r, ty, transitive, None);
-        b.push_quad(r, ty, symmetric, None);
-        b.push_quad(q, ty, asymmetric, None);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let r = b.intern_iri(EX_R).unwrap();
+        let q = b.intern_iri(EX_Q).unwrap();
+        let transitive = b.intern_iri(OWL_TRANSITIVEPROPERTY).unwrap();
+        let symmetric = b.intern_iri(crate::vocab::OWL_SYMMETRICPROPERTY).unwrap();
+        let asymmetric = b.intern_iri(crate::vocab::OWL_ASYMMETRICPROPERTY).unwrap();
+        b.push_quad(r, ty, transitive, None).unwrap();
+        b.push_quad(r, ty, symmetric, None).unwrap();
+        b.push_quad(q, ty, asymmetric, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let kb = Kb::from_dataset(&ds).expect("parse");
         assert!(kb.boundaries().is_empty(), "{:?}", kb.boundaries());
@@ -1596,10 +1602,10 @@ mod boundary_tests {
     #[test]
     fn a_data_property_assertion_is_ingested_without_naming_its_literal() {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri(EX_A);
-        let r = b.intern_iri(EX_R);
+        let a = b.intern_iri(EX_A).unwrap();
+        let r = b.intern_iri(EX_R).unwrap();
         let value = crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat"));
-        b.push_quad(a, r, value, None);
+        b.push_quad(a, r, value, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let kb = Kb::from_dataset(&ds).expect("parse");
         assert_eq!(kb.abox_roles.len(), 1, "the assertion is ingested");
@@ -1628,10 +1634,10 @@ mod boundary_tests {
         use crate::vocab::RDFS_RANGE;
 
         let mut b = RdfDatasetBuilder::new();
-        let r = b.intern_iri(EX_R);
-        let range = b.intern_iri(RDFS_RANGE);
-        let c = b.intern_iri(EX_C);
-        b.push_quad(r, range, c, None);
+        let r = b.intern_iri(EX_R).unwrap();
+        let range = b.intern_iri(RDFS_RANGE).unwrap();
+        let c = b.intern_iri(EX_C).unwrap();
+        b.push_quad(r, range, c, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let kb = Kb::from_dataset(&ds).expect("parse");
 

@@ -152,10 +152,15 @@ impl Fresh {
         Self { next: 0 }
     }
 
-    fn blank(&mut self, b: &mut RdfDatasetBuilder) -> TermId {
+    fn blank(&mut self, b: &mut RdfDatasetBuilder) -> Result<TermId, EntailError> {
         let label = format!("purrdfDLq{}", self.next);
-        self.next += 1;
-        b.intern_blank(&label, purrdf_core::BlankScope::DEFAULT)
+        let next = self
+            .next
+            .checked_add(1)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        let id = b.intern_blank(&label, purrdf_core::BlankScope::DEFAULT)?;
+        self.next = next;
+        Ok(id)
     }
 }
 
@@ -346,7 +351,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     inject_classification(&mut b, &kb, &named_cid, &taxonomy)?;
     inject_realization(&mut b, &kb, &named_cid)?;
     inject_roles(&mut b, &kb, &roles, &data_index)?;
-    inject_same_as(&mut b, &kb, &data_index);
+    inject_same_as(&mut b, &kb, &data_index)?;
     inject_tasks(&mut b, &kb, &q_index, &named_cid, &tasks, &mut fresh)?;
 
     let dataset = b
@@ -608,7 +613,7 @@ fn inject_roles(
         let asserted: BTreeSet<(u32, u32)> = asserted
             .flat_map(|(s, objs)| objs.iter().map(move |&o| (s, o)))
             .collect();
-        let property = intern_into(b, kb.interner.value(role.property));
+        let property = intern_into(b, kb.interner.value(role.property))?;
         for &subject in &kb.individuals {
             for &(target, reach) in &role.reaches {
                 if asserted.contains(&(subject, target)) {
@@ -624,9 +629,9 @@ fn inject_roles(
                 )? {
                     continue;
                 }
-                let s = intern_into(b, kb.interner.value(subject));
-                let o = intern_into(b, kb.interner.value(target));
-                b.push_quad(s, property, o, None);
+                let s = intern_into(b, kb.interner.value(subject))?;
+                let o = intern_into(b, kb.interner.value(target))?;
+                b.push_quad(s, property, o, None)?;
             }
         }
     }
@@ -757,16 +762,16 @@ fn inject_classification(
     named_cid: &BTreeMap<u32, u32>,
     taxonomy: &Taxonomy,
 ) -> Result<(), EntailError> {
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF)?;
     let complete = taxonomy.is_complete();
     for (&c_iri, &c_cid) in named_cid {
         for (&d_iri, &d_cid) in named_cid {
             let holds = taxonomy.derives(c_cid, d_cid)
                 || (!complete && kb.entails_subclass(c_cid, d_cid)?);
             if holds {
-                let s = intern_into(b, kb.interner.value(c_iri));
-                let o = intern_into(b, kb.interner.value(d_iri));
-                b.push_quad(s, sub_class, o, None);
+                let s = intern_into(b, kb.interner.value(c_iri))?;
+                let o = intern_into(b, kb.interner.value(d_iri))?;
+                b.push_quad(s, sub_class, o, None)?;
             }
         }
     }
@@ -779,13 +784,13 @@ fn inject_realization(
     kb: &Kb,
     named_cid: &BTreeMap<u32, u32>,
 ) -> Result<(), EntailError> {
-    let ty = b.intern_iri(RDF_TYPE);
+    let ty = b.intern_iri(RDF_TYPE)?;
     for &ind in &kb.individuals {
         for (&c_iri, &c_cid) in named_cid {
             if kb.entails_instance(ind, c_cid)? {
-                let s = intern_into(b, kb.interner.value(ind));
-                let o = intern_into(b, kb.interner.value(c_iri));
-                b.push_quad(s, ty, o, None);
+                let s = intern_into(b, kb.interner.value(ind))?;
+                let o = intern_into(b, kb.interner.value(c_iri))?;
+                b.push_quad(s, ty, o, None)?;
             }
         }
     }
@@ -794,16 +799,20 @@ fn inject_realization(
 
 /// Inject the `owl:sameAs` equality closure over individuals: reflexive `i sameAs i`,
 /// every equal pair, and every asserted data triple re-stated over equal endpoints.
-fn inject_same_as(b: &mut RdfDatasetBuilder, kb: &Kb, data_index: &TripleIndex) {
-    let same_as = b.intern_iri(OWL_SAMEAS);
+fn inject_same_as(
+    b: &mut RdfDatasetBuilder,
+    kb: &Kb,
+    data_index: &TripleIndex,
+) -> Result<(), EntailError> {
+    let same_as = b.intern_iri(OWL_SAMEAS)?;
     let uf = EqClasses::build(&kb.individuals, &kb.same_as);
 
     // Reflexive + symmetric-transitive closure as explicit sameAs triples.
     for &i in &kb.individuals {
         for &j in &uf.members(i) {
-            let s = intern_into(b, kb.interner.value(i));
-            let o = intern_into(b, kb.interner.value(j));
-            b.push_quad(s, same_as, o, None);
+            let s = intern_into(b, kb.interner.value(i))?;
+            let o = intern_into(b, kb.interner.value(j))?;
+            b.push_quad(s, same_as, o, None)?;
         }
     }
 
@@ -816,7 +825,7 @@ fn inject_same_as(b: &mut RdfDatasetBuilder, kb: &Kb, data_index: &TripleIndex) 
                 if s_class.len() == 1 && o_class.len() == 1 {
                     continue; // nothing new to state
                 }
-                let p_id = intern_into(b, kb.interner.value(p));
+                let p_id = intern_into(b, kb.interner.value(p))?;
                 for &s2 in &s_class {
                     // An `owl:sameAs` between an individual and a LITERAL puts the literal
                     // in the individual's equality class, so re-stating the individual's
@@ -833,14 +842,15 @@ fn inject_same_as(b: &mut RdfDatasetBuilder, kb: &Kb, data_index: &TripleIndex) 
                         if s2 == s && o2 == o {
                             continue;
                         }
-                        let s_id = intern_into(b, kb.interner.value(s2));
-                        let o_id = intern_into(b, kb.interner.value(o2));
-                        b.push_quad(s_id, p_id, o_id, None);
+                        let s_id = intern_into(b, kb.interner.value(s2))?;
+                        let o_id = intern_into(b, kb.interner.value(o2))?;
+                        b.push_quad(s_id, p_id, o_id, None)?;
                     }
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// Inject every query-directed class-expression / domain / range task.
@@ -852,10 +862,10 @@ fn inject_tasks(
     tasks: &[Task],
     fresh: &mut Fresh,
 ) -> Result<(), EntailError> {
-    let ty = b.intern_iri(RDF_TYPE);
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-    let domain = b.intern_iri(RDFS_DOMAIN);
-    let range = b.intern_iri(RDFS_RANGE);
+    let ty = b.intern_iri(RDF_TYPE)?;
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF)?;
+    let domain = b.intern_iri(RDFS_DOMAIN)?;
+    let range = b.intern_iri(RDFS_RANGE)?;
     for task in tasks {
         match *task {
             Task::TypeCe { ce_node, concept } => {
@@ -863,10 +873,10 @@ fn inject_tasks(
                 if instances.is_empty() {
                     continue;
                 }
-                let x = reconstruct(b, &kb.interner, q_index, ce_node, fresh);
+                let x = reconstruct(b, &kb.interner, q_index, ce_node, fresh)?;
                 for i in instances {
-                    let s = intern_into(b, kb.interner.value(i));
-                    b.push_quad(s, ty, x, None);
+                    let s = intern_into(b, kb.interner.value(i))?;
+                    b.push_quad(s, ty, x, None)?;
                 }
             }
             Task::SubOfCe { ce_node, concept } => {
@@ -874,10 +884,10 @@ fn inject_tasks(
                 if subs.is_empty() {
                     continue;
                 }
-                let x = reconstruct(b, &kb.interner, q_index, ce_node, fresh);
+                let x = reconstruct(b, &kb.interner, q_index, ce_node, fresh)?;
                 for c_iri in subs {
-                    let s = intern_into(b, kb.interner.value(c_iri));
-                    b.push_quad(s, sub_class, x, None);
+                    let s = intern_into(b, kb.interner.value(c_iri))?;
+                    b.push_quad(s, sub_class, x, None)?;
                 }
             }
             Task::SuperOfCe { ce_node, concept } => {
@@ -885,27 +895,27 @@ fn inject_tasks(
                 if sups.is_empty() {
                     continue;
                 }
-                let x = reconstruct(b, &kb.interner, q_index, ce_node, fresh);
+                let x = reconstruct(b, &kb.interner, q_index, ce_node, fresh)?;
                 for c_iri in sups {
-                    let o = intern_into(b, kb.interner.value(c_iri));
-                    b.push_quad(x, sub_class, o, None);
+                    let o = intern_into(b, kb.interner.value(c_iri))?;
+                    b.push_quad(x, sub_class, o, None)?;
                 }
             }
             Task::Domain { prop, exists } => {
-                let prop_id = intern_into(b, kb.interner.value(prop));
+                let prop_id = intern_into(b, kb.interner.value(prop))?;
                 for (&c_iri, &c_cid) in named_cid {
                     if kb.entails_subclass(exists, c_cid)? {
-                        let o = intern_into(b, kb.interner.value(c_iri));
-                        b.push_quad(prop_id, domain, o, None);
+                        let o = intern_into(b, kb.interner.value(c_iri))?;
+                        b.push_quad(prop_id, domain, o, None)?;
                     }
                 }
             }
             Task::Range { prop, ref ranges } => {
-                let prop_id = intern_into(b, kb.interner.value(prop));
+                let prop_id = intern_into(b, kb.interner.value(prop))?;
                 for &(c_iri, all_id) in ranges {
                     if kb.entails_subclass(kb.top, all_id)? {
-                        let o = intern_into(b, kb.interner.value(c_iri));
-                        b.push_quad(prop_id, range, o, None);
+                        let o = intern_into(b, kb.interner.value(c_iri))?;
+                        b.push_quad(prop_id, range, o, None)?;
                     }
                 }
             }
@@ -944,14 +954,14 @@ fn reconstruct(
     q_index: &TripleIndex,
     root: u32,
     fresh: &mut Fresh,
-) -> TermId {
+) -> Result<TermId, EntailError> {
     // The blank scaffold nodes reachable from `root` (only blanks are renamed).
     let mut scaffold: BTreeSet<u32> = BTreeSet::new();
     collect_scaffold(interner, q_index, root, &mut scaffold);
     // Assign fresh blanks in id order (deterministic labelling).
     let mut rename: BTreeMap<u32, TermId> = BTreeMap::new();
     for &n in &scaffold {
-        let fb = fresh.blank(b);
+        let fb = fresh.blank(b)?;
         rename.insert(n, fb);
     }
     // Re-state the defining triples of each scaffold node.
@@ -959,13 +969,13 @@ fn reconstruct(
         let s_id = rename[&n];
         if let Some(preds) = q_index.get(&n) {
             for (&p, objs) in preds {
-                let p_id = intern_into(b, interner.value(p));
+                let p_id = intern_into(b, interner.value(p))?;
                 for &o in objs {
                     let o_id = rename
                         .get(&o)
                         .copied()
-                        .unwrap_or_else(|| intern_into(b, interner.value(o)));
-                    b.push_quad(s_id, p_id, o_id, None);
+                        .map_or_else(|| intern_into(b, interner.value(o)), Ok)?;
+                    b.push_quad(s_id, p_id, o_id, None)?;
                 }
             }
         }
@@ -976,7 +986,7 @@ fn reconstruct(
     rename
         .get(&root)
         .copied()
-        .unwrap_or_else(|| intern_into(b, interner.value(root)))
+        .map_or_else(|| intern_into(b, interner.value(root)), Ok)
 }
 
 /// A union-find over individuals, seeded by `owl:sameAs` pairs, exposing each
@@ -1062,13 +1072,13 @@ mod tests {
     /// whether the instance assertion sits in the default graph or outside it.
     fn ontology(graph: Option<&str>) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let class = b.intern_iri(OWL_CLASS);
-        let a = b.intern_iri(&format!("{NS}A"));
-        let x = b.intern_iri(&format!("{NS}x"));
-        let g = graph.map(|g| b.intern_iri(g));
-        b.push_quad(a, ty, class, None);
-        b.push_quad(x, ty, a, g);
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let x = b.intern_iri(&format!("{NS}x")).unwrap();
+        let g = graph.map(|g| b.intern_iri(g).unwrap());
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(x, ty, a, g).unwrap();
         b.freeze().expect("freeze")
     }
 

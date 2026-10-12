@@ -575,6 +575,7 @@ fn triple_is_ground_native<S: purrdf_lex::allocation::Admission + ?Sized>(
 
 fn call_storage(error: purrdf_lex::allocation::StorageError) -> EvalError {
     match error {
+        purrdf_lex::allocation::StorageError::Capacity(error) => EvalError::Capacity(error),
         purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
         purrdf_lex::allocation::StorageError::AllocationFailed => EvalError::AllocationFailed {
             construct: "property-function producer",
@@ -4491,16 +4492,18 @@ mod tests {
     /// `ex:d1 ex:kind "report"`.
     fn documents() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let section = b.intern_iri(&format!("{EX}section"));
-        let kind = b.intern_iri(&format!("{EX}kind"));
-        let d1 = b.intern_iri(&format!("{EX}d1"));
-        let d2 = b.intern_iri(&format!("{EX}d2"));
-        let intro = b.intern_iri(&format!("{EX}intro"));
-        let appendix = b.intern_iri(&format!("{EX}appendix"));
-        b.push_quad(d1, section, intro, None);
-        b.push_quad(d2, section, appendix, None);
-        let report = b.intern_literal(RdfLiteral::simple("report".to_owned()));
-        b.push_quad(d1, kind, report, None);
+        let section = b.intern_iri(&format!("{EX}section")).unwrap();
+        let kind = b.intern_iri(&format!("{EX}kind")).unwrap();
+        let d1 = b.intern_iri(&format!("{EX}d1")).unwrap();
+        let d2 = b.intern_iri(&format!("{EX}d2")).unwrap();
+        let intro = b.intern_iri(&format!("{EX}intro")).unwrap();
+        let appendix = b.intern_iri(&format!("{EX}appendix")).unwrap();
+        b.push_quad(d1, section, intro, None).unwrap();
+        b.push_quad(d2, section, appendix, None).unwrap();
+        let report = b
+            .intern_literal(RdfLiteral::simple("report".to_owned()))
+            .unwrap();
+        b.push_quad(d1, kind, report, None).unwrap();
         b.freeze().expect("freeze")
     }
 

@@ -68,13 +68,13 @@ fn assert_backends_agree_store(label: &str, shapes_ttl: &str, dataset: &Arc<RdfD
 
     let mut builder = RdfDatasetBuilder::new();
     for quad in dataset.owned_quads() {
-        builder.push_owned_quad(&quad);
+        builder.push_owned_quad(&quad).unwrap();
     }
     for reifier in dataset.owned_reifiers() {
-        builder.push_owned_reifier(&reifier);
+        builder.push_owned_reifier(&reifier).unwrap();
     }
     for annotation in dataset.owned_annotations() {
-        builder.push_owned_annotation(&annotation);
+        builder.push_owned_annotation(&annotation).unwrap();
     }
     let round_trip = builder.freeze().expect("dataset re-freezes");
 

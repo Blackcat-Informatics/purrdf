@@ -351,6 +351,19 @@ pub enum IriReadError {
 }
 purrdf_lex::variant_from!(IriReadError { Lexical(IriError) });
 purrdf_lex::variant_from!(IriReadError { Storage(purrdf_lex::allocation::StorageError) });
+impl IriReadError {
+    /// Stable classification of the original grammar or storage failure.
+    #[must_use]
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Lexical(error) => error.diagnostic_code(),
+            Self::Storage(purrdf_lex::allocation::StorageError::Capacity(_)) => {
+                "rdf-capacity-exhausted"
+            }
+            Self::Storage(_) => "rdf-storage-refused",
+        }
+    }
+}
 impl core::fmt::Display for IriReadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

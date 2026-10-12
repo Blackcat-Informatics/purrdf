@@ -133,14 +133,16 @@ fn corpus() -> Arc<RdfDataset> {
         ("d5", "lazy dog sleeps late"),
     ];
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
-    let kind = builder.intern_iri(KIND);
-    let document = builder.intern_iri("http://example.org/doc");
+    let note = builder.intern_iri(NOTE).unwrap();
+    let kind = builder.intern_iri(KIND).unwrap();
+    let document = builder.intern_iri("http://example.org/doc").unwrap();
     for (local, text) in ROWS {
-        let s = builder.intern_iri(&format!("http://example.org/{local}"));
-        let o = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(s, note, o, None);
-        builder.push_quad(s, kind, document, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let o = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(s, note, o, None).unwrap();
+        builder.push_quad(s, kind, document, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }

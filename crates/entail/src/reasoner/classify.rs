@@ -435,17 +435,19 @@ mod tests {
 
         /// `example.org/{local}`.
         fn iri(&mut self, local: &str) -> TermId {
-            self.builder.intern_iri(&format!("{EX}{local}"))
+            self.builder.intern_iri(&format!("{EX}{local}")).unwrap()
         }
 
         /// A reserved-vocabulary IRI, verbatim.
         fn vocab(&mut self, iri: &str) -> TermId {
-            self.builder.intern_iri(iri)
+            self.builder.intern_iri(iri).unwrap()
         }
 
         /// A default-scope blank node.
         fn blank(&mut self, label: &str) -> TermId {
-            self.builder.intern_blank(label, BlankScope::DEFAULT)
+            self.builder
+                .intern_blank(label, BlankScope::DEFAULT)
+                .unwrap()
         }
 
         /// A non-negative-integer literal, for a cardinality restriction.
@@ -457,7 +459,7 @@ mod tests {
         }
 
         fn push(&mut self, s: TermId, p: TermId, o: TermId) {
-            self.builder.push_quad(s, p, o, None);
+            self.builder.push_quad(s, p, o, None).unwrap();
         }
 
         /// Declare `local` an `owl:Class`.
