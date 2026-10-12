@@ -197,7 +197,7 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
 /// answer `purrdf_abi_version` the way `0.8.0` does.
 ///
-/// # `0.9.0` → `0.10.0`: added symbols and one appended status
+/// # `0.9.0` → `0.10.0`: added symbols and appended statuses
 ///
 /// `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
 /// `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
@@ -242,6 +242,13 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// every existing prototype is unchanged. `PurrdfStatus::GeoError = 14` is appended
 /// for their typed geographic refusals, without renumbering any existing status.
 /// The wildcard-free status test pins that deliberate addition.
+///
+/// Shapes entry points report native storage refusal through the appended
+/// `PurrdfStatus::StorageError = 15` in this unshipped bump. It distinguishes
+/// logical capacity or physical allocation and admission refusal from a malformed
+/// shapes graph; the existing error accessors retain the diagnostic. No earlier
+/// status value or function signature changes, and the wildcard-free status test
+/// pins the new value.
 pub const PURRDF_ABI_MINOR: u32 = 10;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
