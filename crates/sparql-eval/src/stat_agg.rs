@@ -872,6 +872,12 @@ enum MomentsKind {
     Variance,
     VarPop,
 }
+// The original accumulator box admits this inline state through WorkspaceAccumulator;
+// boxing either parsed value separately would add an unadmitted allocation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the inline aggregate state is admitted as one box"
+)]
 enum MomentsState {
     Empty,
     Ok {

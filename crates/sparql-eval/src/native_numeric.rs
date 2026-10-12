@@ -153,10 +153,10 @@ impl<'a> NumericFrame<'a> {
         })
     }
 
-    pub(crate) fn finish_calendar_text<'v>(
+    pub(crate) fn finish_calendar_text(
         self,
-        result: Result<Option<purrdf_xsd::temporal::PreparedCalendarText<'v>>, LimbScratchError>,
-    ) -> Result<Option<CalendarText<'v>>, EvalError> {
+        result: Result<Option<purrdf_xsd::temporal::PreparedCalendarText<'_>>, LimbScratchError>,
+    ) -> Result<Option<CalendarText<'_>>, EvalError> {
         self.finish_prepared(
             result,
             purrdf_xsd::temporal::PreparedCalendarText::temporary_bytes,
@@ -169,10 +169,10 @@ impl<'a> NumericFrame<'a> {
         })
     }
 
-    pub(crate) fn finish_duration_text<'v>(
+    pub(crate) fn finish_duration_text(
         self,
-        result: Result<purrdf_xsd::temporal::PreparedDurationText<'v>, LimbScratchError>,
-    ) -> Result<DurationText<'v>, EvalError> {
+        result: Result<purrdf_xsd::temporal::PreparedDurationText<'_>, LimbScratchError>,
+    ) -> Result<DurationText<'_>, EvalError> {
         self.finish_prepared(
             result.map(Some),
             purrdf_xsd::temporal::PreparedDurationText::temporary_bytes,
