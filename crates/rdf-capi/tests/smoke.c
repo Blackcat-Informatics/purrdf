@@ -862,6 +862,16 @@ static int check_division_policy(PurrdfDataset *dataset) {
     CHECK(contains_bytes(bytes, len, "\"0.38\""), "3/8 ties upward to an even cent");
     purrdf_buffer_free(buffer);
 
+    rc = purrdf_dataset_set_division_policy(dataset, "2", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "set bare scale policy");
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "bare scale quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.66\""), "bare scale truncates toward zero");
+    purrdf_buffer_free(buffer);
+
     PurrdfQueryGovernors governors;
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
           "governor initializer");
@@ -886,7 +896,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
         purrdf_rowcursor_free(rows);
     }
 
-    rc = purrdf_dataset_set_division_policy(dataset, "18", &error);
+    rc = purrdf_dataset_set_division_policy(dataset, "exact-or-18:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "restore the default division policy");
     printf("division: policy set, refused, applied and counted\n");
     return 0;
