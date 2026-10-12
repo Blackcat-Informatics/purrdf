@@ -3622,7 +3622,19 @@ pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
             .get_or_insert_with(|| crate::AdmittedVec::new(&ctx.growth))
             .push(crate::evidence_exec::RowEvidence::default())?;
     }
-    let mut evaluated = eval_evaluated_inner_with(pattern, ctx, evaluate);
+    let evaluated = eval_evaluated_inner_with(pattern, ctx, evaluate);
+    finish_node_evaluation(ctx, evaluated, local_cap, tracking_search)
+}
+
+/// Keep evidence coalescing and its larger temporaries off the recursive node frame.
+/// Pop even when evaluation failed, then preserve the original cap, read-error and
+/// evidence precedence before returning the node's result.
+fn finish_node_evaluation<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    mut evaluated: Result<Evaluated<D::Id>, EvalError>,
+    local_cap: bool,
+    tracking_search: bool,
+) -> Result<Evaluated<D::Id>, EvalError> {
     let search = if tracking_search {
         ctx.evidence_search
             .as_mut()

@@ -262,7 +262,7 @@ const EVALUATION_STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*eval
  */
 const REGION_FAULT = /outside its stack region|ran past the base of its stack region/;
 
-test("a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included", async () => {
+test("a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included", async (t) => {
   // The shipped module is linked stack-first: its shadow stack is `[0, idle pointer)`, and
   // a job's region is exactly that large.
   assert.equal(REGION_BYTES, IDLE, "the region is the size of the synchronous lane's stack");
@@ -354,12 +354,14 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
   assert.equal(treeFalse.isComplete, true);
   assert.equal(treeFalse.result.rowCount, 0, "its false neighbour answers nothing on the region too");
   assert.equal(stackPointer(), IDLE);
-  // The same answer when the job gives the event loop back at every poll: the region's
-  // floor is put back on every resumption, so every measurement is against the region.
-  const yielding = await new QueryEngine().queryGovernedAsync(chain, deepChain, { yieldEveryPolls: 0 });
+  // The same answer across many resumptions, with the region's floor restored each time.
+  const started = performance.now();
+  const yielding = await new QueryEngine().queryGovernedAsync(chain, deepChain, { yieldEveryPolls: 4096 });
   assert.equal(yielding.isComplete, true);
   assert.equal(yielding.result.rowCount, 200);
-  assert.ok(yielding.evidence.async.yields > 16, `${yielding.evidence.async.yields} yields`);
+  const { polls, yields } = yielding.evidence.async;
+  assert.ok(yields > 16 && polls >= yields * 10, `${polls} polls, ${yields} yields`);
+  t.diagnostic(`deep no-poll-frame proof: ${polls} polls, ${yields} timer yields, ${Math.round(performance.now() - started)} ms nonexclusive`);
   assert.equal(stackPointer(), IDLE);
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
 });
@@ -368,11 +370,7 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
 // EXISTS` reaches the first of the evaluator's shadow-stack and host-depth guards:
 // each lane's real end is found by
 // bisection, the deepest level answers on both lanes with the rows its semantics give,
-// and one level past the deeper of the two ends is the evaluator's typed refusal on both,
-// the same typed code and statement, with the instance not poisoned. A job's
-// region is exactly as large as the synchronous lane's shadow stack, but the synchronous
-// call enters the evaluator beneath the export's own frames, so a job's end may sit one
-// level deeper; never shallower, and never more than one level apart. 40 nested
+// and the same next level refuses with identical typed code and wording. 40 nested
 // `LATERAL` and 63 nested `FILTER NOT EXISTS` — a nested `EXISTS` body is substituted when
 // it is evaluated — are shallow valid neighbours too.
 const NEST_DATA = [1, 2, 3, 4]
@@ -428,16 +426,11 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   }
   const { synchronous, job } = ends;
   t.diagnostic(`admitted nesting endpoints: ${JSON.stringify(ends)}`);
-  assert.ok(job >= synchronous && job - synchronous <= 1, `the lanes end together: ${JSON.stringify(ends)}`);
-  // A floor, measured with `query.test.mjs`'s: 182 levels of this shape answer
-  // synchronously on the build measured.
-  assert.ok(synchronous >= 181, `${synchronous} levels answer synchronously; 182 did on the build measured`);
+  assert.equal(job, synchronous, `the lanes must end at the same depth: ${JSON.stringify(ends)}`);
 
   // The refusal, one level past both ends: the synchronous lane's typed refusal, and the
-  // job's, twice — a trap or a region fault would poison the instance or fail the job,
-  // and the second job would reject with something else. The actual first guard must
-  // agree on both lanes. A shadow refusal may name a different construct at each lane's
-  // last frame; the host-depth refusal has the exact shared budget statement.
+  // job's, twice — a trap or region fault would poison the instance. Both errors must
+  // retain the same statement, not merely the same guard family.
   const deep = notExists(job + 1);
   let syncRefusal;
   assert.throws(() => engine.select(data, deep), (error) => {
@@ -454,7 +447,7 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
     await assert.rejects(
       engine.selectAsync(data, deep),
       (error) => {
-        assert.match(error.message, guardStatement);
+        assert.equal(error.message, syncRefusal, "the first refusal has identical wording");
         assert.equal(error.code, guardCode, "the job's refusal carries the synchronous lane's code");
         assert.doesNotMatch(error.message, REGION_FAULT);
         return true;
@@ -463,16 +456,15 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
     );
     assert.equal(stackPointer(), IDLE);
   }
-  // A governed job, whose frames may admit one level more (the lanes' own tolerance),
-  // reports the same refusal past that with its evidence: its polls stayed in the region.
+  // A governed job also refuses with its polls inside the region.
   let governed;
   try {
-    await engine.queryGovernedAsync(data, notExists(job + 2));
+    await engine.queryGovernedAsync(data, notExists(job + 1));
   } catch (error) {
     governed = error;
   }
   assert.ok(governed instanceof Error, "the governed twin refuses it too");
-  assert.match(governed.message, guardStatement);
+  assert.equal(governed.message, syncRefusal);
   assert.equal(governed.code, guardCode);
   const depth = governed.evidence.async.stackHighWaterBytes;
   assert.ok(depth > 0 && depth < REGION_BYTES, `${depth} bytes deep in a ${REGION_BYTES}-byte region`);
