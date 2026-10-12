@@ -292,6 +292,17 @@ fn cost_is_charged_for_every_tower_operation() {
     let near = int(&"9".repeat(300));
     assert!(numeric_cost(&near, &dbl("1"), CostOp::Add).work() > 100);
     assert_eq!(numeric_cost(&small, &dbl("1"), CostOp::Add).work(), 0);
+    // Bounded inputs can produce an exact-tower result. Charge the computation
+    // before running it, including scale alignment and a fractional product.
+    let max = int(&i128::MAX.to_string());
+    assert!(numeric_cost(&max, &int("1"), CostOp::Add).work() > 0);
+    assert!(numeric_cost(&max, &int("2"), CostOp::Mul).work() > 0);
+    assert_eq!(
+        numeric_cost(&dec("1.0"), &dec("0.1"), CostOp::Add).work(),
+        0
+    );
+    assert!(numeric_cost(&max, &dec("0.000000000000000001"), CostOp::Add).work() > 0);
+    assert!(numeric_cost(&dec("0.0000000001"), &dec("0.0000000001"), CostOp::Mul).work() > 0);
     // Every exact-value division, including the default, runs on the tower.
     let exact = DivisionPolicy::Exact;
     assert!(numeric_cost(&small, &int("3"), CostOp::Div(exact)).work() > 0);

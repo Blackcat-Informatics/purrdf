@@ -17,11 +17,13 @@ pub(crate) mod exact_path;
 pub use exact_path::CostOp;
 
 /// The cost of one numeric operation over `a` and `b`, for a governor to charge
-/// before the operation runs, computed in constant time from the operands' sizes:
+/// before the operation runs, computed in constant time from bounded words or
+/// the operands' sizes:
 ///
-/// * two `xsd:integer`/`xsd:decimal` operands of which one is
-///   [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] run on the exact tower,
-///   and cost what [`crate::exact::cost`] states for the operation;
+/// * two `xsd:integer`/`xsd:decimal` operands run on the exact tower when one
+///   is [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`], or when their
+///   bounded result cannot be represented exactly; the cost follows
+///   [`crate::exact::cost`];
 /// * every division of two exact numeric operands runs on the tower under its
 ///   caller's [`DivisionPolicy`] and costs the same;
 /// * one such big operand meeting an `xsd:float`/`xsd:double` costs its correctly
@@ -35,20 +37,63 @@ pub use exact_path::CostOp;
 #[inline]
 pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cost {
     let tower_division = matches!(op, CostOp::Div(_));
-    // The other operations keep the machine-word fast path for bounded operands.
-    if !tower_division && !is_big(a) && !is_big(b) {
+    let has_big_operand = is_big(a) || is_big(b);
+    // A bounded pair can still overflow into the tower. Classify it before
+    // returning zero, so the caller admits the fallback computation.
+    let bounded_fallback = matches!(op, CostOp::Add | CostOp::Mul)
+        && !has_big_operand
+        && bounded_needs_tower(a, b, op);
+    if !tower_division && !has_big_operand && !bounded_fallback {
         return crate::exact::Cost::ZERO;
     }
-    tower_cost(a, b, op, tower_division)
+    tower_cost(a, b, op, tower_division || bounded_fallback)
 }
 
-/// [`numeric_cost`] once an operand is past the machine words or the division runs on
-/// the tower. Out of line, so the fast path above stays one match.
+/// Whether bounded exact arithmetic can leave its machine-word representation.
+/// `CostOp::Add` covers both addition and subtraction, so either overflow is
+/// conservatively charged. A comparison of bounded exact values stays bounded.
+fn bounded_needs_tower(a: &XsdValue, b: &XsdValue, op: CostOp) -> bool {
+    if !a.is_exact_numeric() || !b.is_exact_numeric() {
+        return false;
+    }
+    match (a, b, op) {
+        (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }, CostOp::Add) => {
+            x.checked_add(*y).is_none() || x.checked_sub(*y).is_none()
+        }
+        (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }, CostOp::Mul) => {
+            x.checked_mul(*y).is_none()
+        }
+        (_, _, CostOp::Add) => {
+            let x = bounded_decimal(a);
+            let y = bounded_decimal(b);
+            align_decimals(&x, &y)
+                .is_none_or(|(x, y, _)| x.checked_add(y).is_none() || x.checked_sub(y).is_none())
+        }
+        (_, _, CostOp::Mul) => {
+            let x = bounded_decimal(a);
+            let y = bounded_decimal(b);
+            u32::from(x.scale()) + u32::from(y.scale()) > u32::from(MAX_DECIMAL_SCALE)
+                || x.mantissa().checked_mul(y.mantissa()).is_none()
+        }
+        (_, _, CostOp::Compare | CostOp::Div(_)) => false,
+    }
+}
+
+fn bounded_decimal(value: &XsdValue) -> Decimal {
+    match value {
+        XsdValue::Integer { value, .. } => Decimal::from_integer(*value),
+        XsdValue::Decimal(value) => *value,
+        _ => unreachable!("bounded exact operands were checked before dispatch"),
+    }
+}
+
+/// [`numeric_cost`] once a big operand, a bounded overflow, or division runs on
+/// the tower. Out of line, so the fast path above stays small.
 #[cold]
 #[inline(never)]
-fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, tower_division: bool) -> crate::exact::Cost {
+fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, force_exact: bool) -> crate::exact::Cost {
     match (exact_path::shape_of(a), exact_path::shape_of(b)) {
-        (Some(x), Some(y)) if exact_path::involves_big(a, b) || tower_division => {
+        (Some(x), Some(y)) if exact_path::involves_big(a, b) || force_exact => {
             let integer =
                 |v: &XsdValue| matches!(v, XsdValue::Integer { .. } | XsdValue::BigInteger { .. });
             let integers = integer(a) && integer(b) && !matches!(op, CostOp::Div(_));
