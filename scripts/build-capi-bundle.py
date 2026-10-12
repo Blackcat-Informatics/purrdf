@@ -33,31 +33,15 @@ def run(*arguments: str) -> None:
     subprocess.run(arguments, cwd=ROOT, check=True)
 
 
-def validate_install_capture(messages: str, build: Path, install: Path) -> None:
-    """Require installed bytes from this invocation's private compiler outputs."""
-    generated = GENERATED_HEADER(
-        messages, ROOT / "crates/rdf-capi/Cargo.toml", build
-    ).resolve()
-    directory = generated.parents[2]
+def validate_install_capture(messages: str, install: Path) -> None:
+    """Require a successful C artifact and outputs in this invocation's new install root."""
+    GENERATED_HEADER(messages, ROOT / "crates/rdf-capi/Cargo.toml")
     header = install / "include/purrdf/purrdf.h"
-    if generated.read_bytes() != header.read_bytes():
-        raise ValueError("installed C header differs from the reported private build")
-    libraries = [
-        path
-        for path in directory.glob("libpurrdf*")
-        if path.suffix in {".a", ".so", ".dylib", ".dll", ".lib"}
-    ]
+    if not header.is_file() or header.stat().st_size == 0:
+        raise ValueError("cargo-c did not install a C header")
     installed = list((install / "lib").glob("libpurrdf*"))
-    if not libraries or not installed:
-        raise ValueError("cargo-c did not report and install native C libraries")
-
-    def digest(path: Path) -> bytes:
-        with path.open("rb") as source:
-            return hashlib.file_digest(source, "sha256").digest()
-
-    expected = {digest(path) for path in libraries}
-    if any(digest(path) not in expected for path in installed):
-        raise ValueError("installed C library differs from the reported private build")
+    if not installed or any(not path.is_file() or path.stat().st_size == 0 for path in installed):
+        raise ValueError("cargo-c did not install native C libraries")
 
 
 class CaptureTests(unittest.TestCase):
@@ -98,22 +82,21 @@ class CaptureTests(unittest.TestCase):
         stale = self.root / "shared-target/release/libpurrdf.so"
         stale.parent.mkdir(parents=True)
         stale.write_bytes(b"previous candidate")
-        validate_install_capture(self.messages(), self.build, self.install)
+        validate_install_capture(self.messages(), self.install)
 
-    def test_ignored_private_target_is_refused(self) -> None:
-        stale = self.root / "shared-target/release/libpurrdf.so"
-        with self.assertRaisesRegex(ValueError, "ignored the private"):
-            validate_install_capture(self.messages(stale), self.build, self.install)
+    def test_missing_reported_artifact_cannot_reuse_an_installed_library(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_install_capture('{"reason":"build-finished","success":true}', self.install)
 
-    def test_installed_stale_library_is_refused(self) -> None:
-        self.installed_library.write_bytes(b"previous candidate")
-        with self.assertRaisesRegex(ValueError, "installed C library differs"):
-            validate_install_capture(self.messages(), self.build, self.install)
+    def test_missing_installed_library_is_refused(self) -> None:
+        self.installed_library.unlink()
+        with self.assertRaisesRegex(ValueError, "did not install native"):
+            validate_install_capture(self.messages(), self.install)
 
-    def test_installed_stale_header_is_refused(self) -> None:
-        self.installed_header.write_bytes(b"previous header")
-        with self.assertRaisesRegex(ValueError, "installed C header differs"):
-            validate_install_capture(self.messages(), self.build, self.install)
+    def test_missing_installed_header_is_refused(self) -> None:
+        self.installed_header.unlink()
+        with self.assertRaisesRegex(ValueError, "did not install a C header"):
+            validate_install_capture(self.messages(), self.install)
 
 
 def qualify_bundle(archive_path: Path, directory: Path, name: str) -> None:
@@ -202,40 +185,21 @@ def main() -> int:
     name = f"purrdf-capi-{version}-{host}"
     with tempfile.TemporaryDirectory(prefix="capi-bundle-", dir=output) as raw:
         install = Path(raw) / "install"
-        build = Path(raw) / "build"
         built = subprocess.run(
             [
-                "cargo",
-                "capi",
-                "install",
-                "-p",
-                "purrdf-capi",
-                "--locked",
-                "--release",
-                "--message-format=json",
-                "--target-dir",
-                str(build),
-                "--prefix",
-                "/",
-                "--libdir",
-                "lib",
-                "--pkgconfigdir",
-                "lib/pkgconfig",
-                "--destdir",
-                str(install),
+                "cargo", "capi", "install", "-p", "purrdf-capi",
+                "--locked", "--release", "--message-format=json",
+                "--prefix", "/", "--libdir", "lib",
+                "--pkgconfigdir", "lib/pkgconfig", "--destdir", str(install),
             ],
             cwd=ROOT,
-            stdout=subprocess.PIPE,
-            text=True,
-            check=True,
+            stdout=subprocess.PIPE, text=True, check=True,
         )
-        # cargo-c prints installation actions after Cargo's JSON stream. Keep
-        # the exact compiler messages, without treating those actions as JSON.
-        messages = "\n".join(
-            line for line in built.stdout.splitlines() if line.lstrip().startswith("{")
-        )
-        validate_install_capture(messages, build, install)
-        print("Verified private cargo-c outputs against installed header and libraries")
+        # cargo-c installs into a newly created destination after its build
+        # record; these files are owned by this invocation, not the build slot.
+        messages = "\n".join(line for line in built.stdout.splitlines() if line.lstrip().startswith("{"))
+        validate_install_capture(messages, install)
+        print("Verified cargo-c build record and installed header and libraries")
         header = install / "include/purrdf/purrdf.h"
         if (
             header.read_bytes()

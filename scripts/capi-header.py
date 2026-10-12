@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 
-def generated_header(messages: str, manifest: Path, build: Path | None = None) -> Path:
+def generated_header(messages: str, manifest: Path) -> Path:
     """Resolve one successful cargo-c output, never an unrelated target-tree file."""
     directories: set[Path] = set()
     finished = False
@@ -38,8 +38,6 @@ def generated_header(messages: str, manifest: Path, build: Path | None = None) -
     if not finished or len(directories) != 1:
         raise ValueError("cargo-c did not report one successful libpurrdf artifact directory")
     directory = directories.pop().resolve()
-    if build is not None and not directory.is_relative_to(build.resolve()):
-        raise ValueError("cargo-c ignored the private C artifact directory")
     return directory / "include" / "purrdf" / "purrdf.h"
 
 
@@ -90,24 +88,6 @@ class HeaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             generated_header(messages, manifest)
 
-    def test_ignored_private_target_is_refused_even_with_successful_build(self):
-        manifest = Path("crates/rdf-capi/Cargo.toml").resolve()
-        messages = "\n".join(
-            json.dumps(message)
-            for message in [
-                {
-                    "reason": "compiler-artifact",
-                    "manifest_path": str(manifest),
-                    "target": {"kind": ["cdylib"]},
-                    "filenames": ["target/debug/libpurrdf.so"],
-                },
-                {"reason": "build-finished", "success": True},
-            ]
-        )
-        with self.assertRaisesRegex(ValueError, "ignored the private"):
-            generated_header(messages, manifest, Path("target/private-header-build"))
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -119,22 +99,20 @@ def main() -> int:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(HeaderTests)
         return 0 if unittest.TextTestRunner().run(suite).wasSuccessful() else 1
     root = Path(__file__).resolve().parent.parent
-    # An exact JSON path can still name a shared compiler slot that is reused
-    # after Cargo returns. Keep regeneration and capture in our own directory.
-    # Refuse a wrapper that routes the build elsewhere instead of reading it.
+    # cargo-c writes the header after Cargo's build-finished record. Install it
+    # into a new destination owned by this command, not a reusable build slot.
     with tempfile.TemporaryDirectory(prefix="purrdf-header-") as temporary:
-        private_build = Path(temporary) / "build"
+        install = Path(temporary) / "install"
         built = subprocess.run(
             [
-                "cargo", "capi", "build", "-p", "purrdf-capi",
-                "--target-dir", str(private_build), "--message-format=json",
+                "cargo", "capi", "install", "-p", "purrdf-capi",
+                "--message-format=json", "--prefix", "/", "--libdir", "lib",
+                "--pkgconfigdir", "lib/pkgconfig", "--destdir", str(install),
             ],
-            cwd=root,
-            stdout=subprocess.PIPE,
-            text=True,
-            check=False,
+            cwd=root, stdout=subprocess.PIPE, text=True,
         )
-        for line in built.stdout.splitlines():
+        lines = [line for line in built.stdout.splitlines() if line.lstrip().startswith("{")]
+        for line in lines:
             message = json.loads(line)
             if message.get("reason") == "compiler-message":
                 diagnostic = message.get("message", {})
@@ -143,20 +121,19 @@ def main() -> int:
         if built.returncode != 0:
             return built.returncode
         try:
-            generated = generated_header(
-                built.stdout, root / "crates" / "rdf-capi" / "Cargo.toml", private_build
-            )
+            generated_header("\n".join(lines), root / "crates/rdf-capi/Cargo.toml")
         except (ValueError, json.JSONDecodeError) as error:
             print(f"FAIL: {error}", file=sys.stderr)
             return 1
-        if not generated.is_file():
-            print(f"FAIL: cargo-c did not emit {generated}", file=sys.stderr)
+        installed = install / "include/purrdf/purrdf.h"
+        if not installed.is_file():
+            print(f"FAIL: cargo-c did not install {installed}", file=sys.stderr)
             return 1
-        current = generated.read_bytes()
+        current = installed.read_bytes()
     committed = root / (args.write or args.check)
     if args.write:
         committed.write_bytes(current)
-        print(f"regenerated {committed.relative_to(root)} from the private cargo-c build")
+        print(f"regenerated {committed.relative_to(root)} from the reported cargo-c build")
         return 0
     if current != committed.read_bytes():
         print(f"FAIL: {committed.relative_to(root)} is stale; run 'make capi-header'", file=sys.stderr)
@@ -164,11 +141,11 @@ def main() -> int:
             committed.read_text().splitlines(),
             current.decode().splitlines(),
             fromfile=str(committed),
-            tofile=str(generated),
+            tofile=str(installed),
         )
         print("\n".join(list(diff)[:40]), file=sys.stderr)
         return 1
-    print("OK: committed purrdf.h matches the captured private cargo-c artifact")
+    print("OK: committed purrdf.h matches the current cargo-c installation")
     return 0
 
 

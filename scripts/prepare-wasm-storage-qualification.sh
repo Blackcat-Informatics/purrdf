@@ -31,8 +31,8 @@ command -v wasm-dis >/dev/null
 mkdir "$output_dir"
 output_dir="$(realpath "$output_dir")"
 # Cargo's published target path may be shared across concurrent flag variants.
-# The shared capture home requests a private Cargo target and validates the
-# selected JSON artifact inside it before copying the bytes to this directory.
+# The shared capture home validates Cargo's selected JSON artifact and copies
+# its bytes to this directory while Cargo still owns the build slot.
 module="$output_dir/compiler-module.wasm"
 qualification_rustflags="${RUSTFLAGS:-} -D warnings -C link-arg=--max-memory=$linear_max"
 RUSTFLAGS="$qualification_rustflags" \

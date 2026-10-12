@@ -19,47 +19,24 @@ trap 'rm -rf "$scratch"' EXIT
 python3 - "$scratch" <<'CAPTURE'
 import hashlib
 import json
-import os
 import runpy
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 scratch = Path(sys.argv[1]).resolve()
-private_target = scratch / "compiler-target"
-log = scratch / "compiler.jsonl"
-# Cargo stores test executables in build-dir, unlike final cdylib outputs.
-# Keep both owned artifact directories private. A host wrapper that overrides
-# either setting is refused by the common containment proof below.
-child_env = os.environ.copy()
-child_env["CARGO_TARGET_DIR"] = str(private_target)
-child_env["CARGO_BUILD_BUILD_DIR"] = str(private_target / "build")
-with log.open("x") as output:
-    result = subprocess.run([
-        "cargo", "test", "--locked", "--target", "wasm32-unknown-unknown",
-        "-p", "purrdf-wasm", "--lib", "--no-run", "--message-format=json",
-        "--target-dir", str(private_target),
-    ], stdout=output, env=child_env)
-records = [json.loads(line) for line in log.read_text().splitlines()]
-if result.returncode:
-    for record in records:
-        if record.get("reason") == "compiler-message":
-            diagnostic = record.get("message", {})
-            if diagnostic.get("level") == "error":
-                print(diagnostic.get("rendered") or diagnostic.get("message"), file=sys.stderr)
-    raise SystemExit(result.returncode)
-units = [record for record in records if record.get("profile", {}).get("test")]
-validate = runpy.run_path("scripts/build-private-wasm.py")["validate_capture"]
-registered, fresh = validate(units, "purrdf_wasm", private_target)
-shutil.copyfile(registered, scratch / "fixture.wasm")
+# Copy the compiler's reported test module while ordinary cargo still owns its
+# host-managed build slot. A released slot cannot be read safely afterward.
+capture = runpy.run_path("scripts/build-private-wasm.py")["capture_cargo"]
+registered, fresh, digest = capture([
+    "test", "--locked", "--target", "wasm32-unknown-unknown",
+    "-p", "purrdf-wasm", "--lib", "--no-run",
+], "purrdf_wasm", scratch / "fixture.wasm", test_only=True)
 receipt = {
-    "schema": "purrdf-wasm-identity-abi-v1",
+    "schema": "purrdf-wasm-identity-abi-v2",
     "registered_output": str(registered),
-    "private_target_directory": str(private_target),
-    "private_build_directory": child_env["CARGO_BUILD_BUILD_DIR"],
     "cargo_fresh": fresh,
-    "wasm_sha256": hashlib.sha256((scratch / "fixture.wasm").read_bytes()).hexdigest(),
+    "wasm_sha256": digest,
     "rustc": subprocess.run(["rustc", "--version"], check=True, capture_output=True, text=True).stdout.strip(),
 }
 (scratch / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
