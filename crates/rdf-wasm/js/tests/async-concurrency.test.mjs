@@ -576,7 +576,7 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   const POISON =
     "the wasm instance trapped (RangeError: Maximum call stack size exceeded) and cannot be used again; " +
     "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
-  const REJECTED = { settled: "rejected", name: "Error", message: POISON };
+  const REJECTED = { settled: "rejected", name: "Error", message: POISON, code: "purrdf-wasm-poisoned" };
 
   // The valid neighbours, on the very objects the trap later poisons: a job that
   // finishes, one whose host rejects (its invocation fails as the host's fault) and one
@@ -590,7 +590,7 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   assert.match(report.faulted.message, /the example\.org endpoint refused/, "the handler's own words reach the host that wrote it");
   assert.deepEqual(report.typedFailure, {
     settled: "rejected",
-    name: "Error",
+    name: "Error", code: "native-sparql-service-failed",
     message:
       "error native-sparql-service-failed: SERVICE federation error: SERVICE <http://example.org/sparql>: " +
       "transport: the example.org endpoint is unreachable",
