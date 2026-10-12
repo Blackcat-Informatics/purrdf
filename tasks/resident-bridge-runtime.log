@@ -1,0 +1,122 @@
+Running as unit: run-p2048667-i31381787.scope; invocation ID: 10c7905a29c94de89b456a772842a1b3
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/hnsw)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/sparql-eval)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/retrieval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.33s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/sparql-eval)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/hnsw)
+    Finished `test` profile [optimized] target(s) in 51.21s
+     Running unittests src/lib.rs (/opt/.cargo/4c/fb5a3f5fcfe98d/debug/build/purrdf-hnsw/c837f31f66ff3161/out/purrdf_hnsw-c837f31f66ff3161)
+
+running 77 tests
+test builder::tests::a_zero_norm_row_is_refused_under_cosine ... ok
+test graph::tests::a_canonical_image_round_trips_byte_for_byte ... ok
+test error::tests::every_variant_renders_without_its_debug_representation ... ok
+test graph::tests::a_matrix_rejects_ragged_and_non_finite_input ... ok
+test graph::tests::commit_sorts_truncates_and_dedups_neighbours ... ok
+test graph::tests::entry_point_is_the_min_row_at_the_max_level ... ok
+test graph::tests::only_a_reassociated_header_carries_a_build_shape ... ok
+test graph::tests::the_header_code_is_decoded_only_by_its_own_arithmetic ... ok
+test graph::tests::truncated_and_corrupt_images_are_refused ... ok
+test guard::tests::the_profile_identifier_is_recognised_by_its_name ... ok
+test level::tests::bits_per_level_is_floor_log2 ... ok
+test level::tests::level_cap_is_the_smallest_power_reaching_n ... ok
+test level::tests::every_level_is_attained_within_the_cap ... ok
+test level::tests::level_cap_rejects_m_below_two_in_debug - should panic ... ok
+test params::tests::a_beam_too_narrow_for_layer_zero_is_refused ... ok
+test params::tests::degree_bound_splits_at_layer_zero ... ok
+test params::tests::a_well_formed_set_round_trips ... ok
+test level::tests::level_from_index_stays_within_the_cap_and_follows_the_formula ... ok
+test params::tests::ef_construction_below_m_is_refused ... ok
+test params::tests::ef_search_zero_is_refused ... ok
+test params::tests::m0_below_m_is_refused ... ok
+test params::tests::m_below_two_is_refused ... ok
+test params::tests::the_boundaries_are_admitted_not_merely_approached ... ok
+test params::tests::the_thirty_two_bit_estimate_is_the_same_on_every_host ... ok
+test params::tests::zero_rows_and_zero_dimensions_are_refused ... ok
+test profile::tests::a_missing_parameter_is_refused ... ok
+test params::tests::the_thirty_two_bit_admission_check_refuses_and_admits ... ok
+test profile::tests::a_non_ascending_tag_is_refused ... ok
+test profile::tests::a_non_critical_parameter_is_refused ... ok
+test profile::tests::non_zero_padding_is_refused ... ok
+test profile::tests::every_image_code_has_a_published_row ... ok
+test profile::tests::parameters_round_trip_through_the_canonical_block ... ok
+test profile::tests::the_profile_declaration_binds_the_arithmetic ... ok
+test profile::tests::the_loss_contract_is_approximate_and_non_transforming ... ok
+test profile::tests::the_implementation_identity_carries_the_evidence ... ok
+test profile::tests::zeroed_padding_passes_the_block_check ... ok
+test profile::tests::the_reassociated_declaration_binds_its_arithmetic_and_path ... ok
+test profile::tests::the_reassociated_evidence_is_pinned ... ok
+test relation::tests::a_negative_count_and_a_free_seed_are_refused ... ok
+test relation::tests::a_ceiling_that_prevents_the_first_pull_charges_no_work ... ok
+test relation::tests::a_search_charges_its_distance_evaluations_exactly_once ... ok
+test relation::tests::a_space_assembled_from_an_index_is_held_to_the_guards_candidate_bound ... ok
+test relation::tests::the_space_generation_is_frozen ... ok
+test relation::tests::the_relation_is_registered_under_the_callers_iri ... ok
+test relation::tests::a_zero_count_is_an_empty_answer_with_zero_work ... ok
+test search::tests::a_greedy_descent_walks_toward_the_query ... ok
+test search::tests::the_beam_returns_the_nearest_first ... ok
+test search::tests::the_distance_cache_is_value_neutral ... ok
+test search::tests::visited_stamps_clear_on_a_new_generation ... ok
+test select::tests::a_beam_within_the_budget_is_kept_whole ... ok
+test select::tests::a_near_duplicate_loses_its_place_to_a_new_direction ... ok
+test select::tests::an_over_strict_pass_is_topped_up_to_the_budget ... ok
+test builder::tests::the_same_input_builds_the_same_graph_twice ... ok
+test select::tests::selection_is_a_pure_function_of_the_beam ... ok
+test select::tests::the_nearest_m_would_have_spent_both_edges_on_one_direction ... ok
+test tests::a_batch_query_preserves_input_order ... ok
+test tests::a_foreign_build_identity_is_refused_named ... ok
+test tests::a_batch_answers_every_query_exactly_as_a_single_search_does ... ok
+test tests::a_foreign_build_shape_is_refused_named ... ok
+test tests::a_path_this_build_cannot_run_is_refused ... ok
+test tests::a_query_finds_itself_and_respects_k ... ok
+test tests::a_portable_path_image_decodes_only_on_a_portable_path_host ... ok
+test tests::a_zero_request_is_an_empty_answer_not_an_error ... ok
+test tests::a_version_one_image_is_refused_by_name_rather_than_answered_false ... ok
+test tests::an_extension_metric_is_refused ... ok
+test tests::an_exact_image_resolves_its_one_code ... ok
+test tests::an_index_verifies_its_own_rebuild_and_round_trips_through_bytes ... ok
+test tests::decode_refuses_exact_code_as_fast ... ok
+test tests::decode_refuses_fast_code_as_exact ... ok
+test tests::loss_contract_unchanged_for_both_arithmetics ... ok
+test tests::a_narrower_recorded_path_is_run_not_refused ... ok
+test tests::a_tampered_distance_is_false_for_both_arithmetics ... ok
+test tests::an_index_runs_on_every_host_path_and_every_required_one ... ok
+test tests::other_path_refused_named ... ok
+test tests::the_versions_and_identifier_name_the_exact_arithmetic ... ok
+test tests::same_path_rebuild_verifies ... ok
+test tests::one_distance_per_pair_across_call_sites ... ok
+
+test result: ok. 77 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 27.82s
+     Running tests/real_producers.rs (/opt/.cargo/4c/fb5a3f5fcfe98d/debug/build/purrdf-retrieval/ea5c4ef543bc8fd8/out/real_producers-ea5c4ef543bc8fd8)
+
+running 21 tests
+test scoped_native_owner_refusal_precedes_original_producer_open ... ok
+test scoped_native_admission_refusal_invalidates_before_any_ranked_row ... ok
+test native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test scoped_fused_acceptance_retains_original_two_stratum_scores_and_order ... ok
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+terminal_status=0

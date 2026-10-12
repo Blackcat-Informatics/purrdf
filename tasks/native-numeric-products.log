@@ -1,0 +1,12 @@
+Running as unit: run-p1849010-i31197040.scope; invocation ID: be0170bdd1f5429b813ded5462f4f9bc
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 9.32s
+     Running unittests src/lib.rs (/opt/.cargo/4c/fb5a3f5fcfe98d/debug/build/purrdf-xsd/1faeafff57fb3cc8/out/purrdf_xsd-1faeafff57fb3cc8)
+
+running 1 test
+test math::floating::packed::tests::forced_available_paths_preserve_every_product_and_outward_endpoint_bit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 413 filtered out; finished in 0.00s
+
+
+terminal_status=0

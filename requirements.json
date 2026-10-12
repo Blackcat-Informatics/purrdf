@@ -1,0 +1,22 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "These failures were observed on PR #535 head `96f8c5f63`, whose source delta is confined to packaging scripts and Makefile comments; both named Rust files are unchanged from its main base. PR #535 was rejected and closed without merging. Its discarded tooling changes must not be revived. The hosted job logs are the source of these observations, not evidence that their fixes have been implemented.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": [
+    {
+      "comment": 1,
+      "author": "paudley",
+      "date": "2026-10-12T05:01:27Z"
+    }
+  ]
+}

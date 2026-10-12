@@ -1,0 +1,12 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Full-gate retrieval test adapter: bounded source review
+
+**VERDICT: PASS for the bounded source/ownership correction; full gate remains OPEN.** Read-only review of the one-file current diff in `crates/retrieval/tests/real_producers.rs`, the four exact trait/type errors in `tasks/full-gate.log`, `WorkspaceCursor` and `PropertyFunction` source in `crates/sparql-eval/src/property_fn.rs`, and the original 21-test target receipt. No reviewer build, source or tooling edit was made. `git diff --check` has no error.
+
+The old `CountingTextRelation::open_admitted` returned `Box<dyn PfCursor>` while the real trait returns `WorkspaceCursor`. Its wrapped path attempted to place a `WorkspaceCursor` in a field typed `Box<dyn PfCursor>`, and `open` returned the admitted cursor where a resident box was required. The diff corrects all four type mismatches without changing the producer's arguments, ceiling, suffix refusal, attachment decisions or assertions.
+
+On the admitted path, the unwrapped inner `WorkspaceCursor` returns directly. The wrapped path keeps that exact inner owner inside `PrefixRefusalCursor`, then `WorkspaceCursor::new` charges and boxes the concrete wrapper through the production ownership API. The wrapper's former manual `WorkspaceAllocation` field and raw `try_boxed` path are removed; the inner and outer grants remain live until their respective cursors drop. The resident `open` passes a resident workspace and explicitly calls `WorkspaceCursor::into_resident`, which refuses extraction only for bounded ownership. This is consistent with the trait's resident return type and does not silently extract a bounded native cursor. No original row/evidence or first-error method body changed.
+
+The retained `tasks/real-producers-adapter.log` shows the **original full `real_producers` target 21/21, terminal 0** on this adapter source, including scoped native owner/refusal, suffix settlement and real producer fusion controls. This is focused runtime evidence, not proof of the full workspace gate. The last `make check` in `tasks/full-gate.log` failed before this correction; it has not passed on the current head. Hooks/commit, hosted pinned MSRV and Arm numeric paths, affected hosted shards, PR and merge remain **OPEN**. This test adapter is a local gate prerequisite, not a replacement for either #536 production fix or a #531/#533 closure claim.

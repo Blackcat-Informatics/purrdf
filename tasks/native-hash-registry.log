@@ -1,0 +1,13 @@
+Running as unit: run-p1846370-i31260820.scope; invocation ID: 957d7b2cfd3c48a0a33923cdb7c865fa
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/alloc-probe)
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/hash)
+    Finished `test` profile [optimized] target(s) in 6.01s
+     Running unittests src/lib.rs (/opt/.cargo/4c/fb5a3f5fcfe98d/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c)
+
+running 1 test
+test dispatch::tests::numeric_endpoint_paths_are_registered_without_accepting_unknown_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.00s
+
+
+terminal_status=0

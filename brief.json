@@ -1,0 +1,125 @@
+{
+  "issue": 536,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Restore MSRV shapes build and Arm64 numerical replay gates",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "535": "Use host-managed Cargo outputs for WASM and C packaging",
+    "531": "Evaluator delivery follow-up: relocated test artifact and unqualified performance evidence",
+    "533": "Complete geo qualification and repair final-round findings",
+    "515": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+    "516": "Loss ledger as queryable RDF 1.2: content-identified reasons, and merging accepted reasons into the answer",
+    "511": "retrieval: field scoping applied inside each stratum's candidate generation, before depth, with undecided counts",
+    "518": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+    "512": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+    "408": "geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)",
+    "409": "geo: deterministic hierarchical spatial cell index for CRS84 points (assignment, parent/child, covering)"
+  },
+  "link_relations": {
+    "535": "mentions",
+    "531": "mentions",
+    "533": "mentions",
+    "515": "2-hop",
+    "516": "2-hop",
+    "511": "2-hop",
+    "518": "2-hop",
+    "512": "2-hop",
+    "408": "2-hop",
+    "409": "2-hop"
+  },
+  "related": [
+    {
+      "number": 531,
+      "title": "Evaluator delivery follow-up: relocated test artifact and unqualified performance evidence",
+      "state": "OPEN"
+    },
+    {
+      "number": 323,
+      "title": "perf(sparql-eval,shapes): audit SHACL validation allocation profile on the change path",
+      "state": "CLOSED"
+    },
+    {
+      "number": 317,
+      "title": "perf(shapes): restore prepared SHACL products across processes without reparsing",
+      "state": "CLOSED"
+    },
+    {
+      "number": 402,
+      "title": "SHACL dated profile selection and complete validation reports (additive)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 348,
+      "title": "SHACL-AF sh:SPARQLFunction bodies cannot reach a registered relation",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 467,
+      "title": "XPath regex: large finite counted repetitions are refused on 1\u20134 MiB input",
+      "state": "CLOSED"
+    },
+    {
+      "number": 424,
+      "title": "gts: incremental MMR accumulator (append a frame id in O(log n), root from peaks)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 382,
+      "title": "SHACL pre-binding leaves `$this` unbound in a triple pattern inside `OPTIONAL`",
+      "state": "CLOSED"
+    },
+    {
+      "number": 345,
+      "title": "perf(sparql-eval): remove the per-query execution setup allocations on the SHACL change path",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 479,
+      "title": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 393,
+      "title": "EXPLAIN aborts the process on a large join",
+      "state": "CLOSED"
+    },
+    {
+      "number": 392,
+      "title": "A pattern after OPTIONAL or BIND, or an OPTIONAL body, is evaluated without the bindings before it",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 25,
+    "semantic-identity-loss": 2,
+    "performance": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/536-restore-msrv-shapes-build-and-arm64"
+  },
+  "coverage": [
+    "issue #536 + 1 comment(s) via github",
+    "link crawl: 10 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Restore', 'shapes', 'build']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #536 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #536: 0",
+    "requirement candidates: 1 line(s); 1 comment(s) matched no rule",
+    "referenced artifacts: 4 path(s) (4 on disk), 7 identifier(s), 2 workspace package(s), 0 URL(s)"
+  ]
+}

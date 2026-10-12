@@ -1,0 +1,108 @@
+{
+  "paths": [
+    {
+      "ref": "crates/shapes/src/schema_surface.rs:3462",
+      "path": "/home/paudley/Active/purrdf/crates/shapes/src/schema_surface.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 6801,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "0088bc920 Make datatype ranges and OWL schema coverage exact",
+        "c170fce26 fix(shapes)!: every OWL property takes a node or a checked literal (OWL 2 Full floor)",
+        "00f20cc81 fix(shapes): the complement of a restriction every individual meets admits no instance",
+        "0e07eb3da fix(shapes): an empty qualifier bounds nothing, and an empty range states its cell exactly",
+        "fe6916280 fix(shapes)!: read object-property data ranges by OWL 2 Full, and project owl:Nothing as false",
+        "5526b23a2 fix(shapes): widen class fillers too, report widened and self-restricted cells as approximations",
+        "2c78b616e fix(shapes): cross-kind values are a property-level fact, and cross-kind hasValue and hasSelf are read",
+        "97617c43e fix(shapes): an object property restricted to a data range takes its literals",
+        "c90227340 fix(shapes): judge string facets exactly, read cross-kind ranges, empty unions",
+        "6aa0b4b91 fix(shapes): read a datatype property over a class by OWL 2 Full"
+      ]
+    },
+    {
+      "ref": "crates/hash/src/dispatch.rs:285",
+      "path": "/home/paudley/Active/purrdf/crates/hash/src/dispatch.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 467,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "b8b661d2a refactor: one body per job across the foundation crates",
+        "f9757ee7a refactor!: one Backend trait across hash, deflate and CSV kernels; PURRDF_REQUIRE_SIMD_PATHS (#366)"
+      ]
+    },
+    {
+      "ref": "crates/shapes/src/schema_surface.rs",
+      "path": "/home/paudley/Active/purrdf/crates/shapes/src/schema_surface.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 6801,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "0088bc920 Make datatype ranges and OWL schema coverage exact",
+        "c170fce26 fix(shapes)!: every OWL property takes a node or a checked literal (OWL 2 Full floor)",
+        "00f20cc81 fix(shapes): the complement of a restriction every individual meets admits no instance",
+        "0e07eb3da fix(shapes): an empty qualifier bounds nothing, and an empty range states its cell exactly",
+        "fe6916280 fix(shapes)!: read object-property data ranges by OWL 2 Full, and project owl:Nothing as false",
+        "5526b23a2 fix(shapes): widen class fillers too, report widened and self-restricted cells as approximations",
+        "2c78b616e fix(shapes): cross-kind values are a property-level fact, and cross-kind hasValue and hasSelf are read",
+        "97617c43e fix(shapes): an object property restricted to a data range takes its literals",
+        "c90227340 fix(shapes): judge string facets exactly, read cross-kind ranges, empty unions",
+        "6aa0b4b91 fix(shapes): read a datatype property over a class by OWL 2 Full"
+      ]
+    },
+    {
+      "ref": "crates/hash/src/dispatch.rs",
+      "path": "/home/paudley/Active/purrdf/crates/hash/src/dispatch.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 467,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "b8b661d2a refactor: one body per job across the foundation crates",
+        "f9757ee7a refactor!: one Backend trait across hash, deflate and CSV kernels; PURRDF_REQUIRE_SIMD_PATHS (#366)"
+      ]
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "msrv",
+      "files": 8
+    },
+    {
+      "name": "E0275",
+      "files": 1
+    },
+    {
+      "name": "scc_component_index",
+      "files": 5
+    },
+    {
+      "name": "aarch64",
+      "files": 64
+    },
+    {
+      "name": "directed_endpoint_product_replay",
+      "files": 2
+    },
+    {
+      "name": "numeric",
+      "files": 664
+    },
+    {
+      "name": "PURRDF_REQUIRE_SIMD_PATHS",
+      "files": 16
+    }
+  ],
+  "packages": [
+    "purrdf-shapes",
+    "purrdf-xsd"
+  ],
+  "urls": [],
+  "truncated": []
+}

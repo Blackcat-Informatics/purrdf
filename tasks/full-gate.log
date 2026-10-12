@@ -1,0 +1,127 @@
+Running as unit: run-p1992584-i31397278.scope; invocation ID: 9f5c2478b7044d2c8ff05a7e5a3da06a
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/columnar)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/text)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/entail)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/geo)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/mime)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling heck v0.5.0
+    Checking utf8parse v0.2.2
+    Checking anstyle-parse v1.0.0
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking is_terminal_polyfill v1.70.2
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/conformance-kit)
+    Checking anstream v1.0.0
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/bench)
+   Compiling wasm-bindgen-shared v0.2.125
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/retrieval)
+    Checking clap_builder v4.6.0
+   Compiling rustversion v1.0.22
+   Compiling target-lexicon v0.13.5
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/hash-conformance)
+    Checking once_cell v1.21.4
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+    Checking leb128fmt v0.1.0
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/envelope-probe)
+   Compiling pyo3-build-config v0.29.0
+   Compiling syn v2.0.118
+    Checking wasm-encoder v0.259.0
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/wasm-link)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/validate)
+   Compiling clap_derive v4.6.1
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-macros-backend v0.29.0
+    Checking clap v4.6.1
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/bindings/python)
+error[E0053]: method `open_admitted` has an incompatible type for trait
+    --> crates/retrieval/tests/real_producers.rs:2273:10
+     |
+2273 |     ) -> Result<Box<dyn PfCursor>, EvalError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `purrdf_sparql_eval::WorkspaceCursor`, found `Box<dyn PfCursor>`
+     |
+     = note: expected signature `fn(&CountingTextRelation, &PfArgs<'_>, Option<_>, WorkspaceCapability) -> Result<purrdf_sparql_eval::WorkspaceCursor, _>`
+                found signature `fn(&CountingTextRelation, &PfArgs<'_>, Option<_>, WorkspaceCapability) -> Result<std::boxed::Box<(dyn purrdf_sparql_eval::PfCursor + 'static)>, _>`
+help: change the output type to match the trait
+     |
+2273 -     ) -> Result<Box<dyn PfCursor>, EvalError> {
+2273 +     ) -> std::result::Result<purrdf_sparql_eval::WorkspaceCursor, purrdf_sparql_eval::EvalError> {
+     |
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/real_producers.rs:2277:23
+     |
+2277 |             return Ok(cursor);
+     |                    -- ^^^^^^ expected `Box<dyn PfCursor>`, found `WorkspaceCursor`
+     |                    |
+     |                    arguments to this enum variant are incorrect
+     |
+     = note: expected struct `std::boxed::Box<dyn purrdf_sparql_eval::PfCursor>`
+                found struct `purrdf_sparql_eval::WorkspaceCursor`
+help: the type constructed contains `purrdf_sparql_eval::WorkspaceCursor` due to the type of the argument passed
+    --> crates/retrieval/tests/real_producers.rs:2277:20
+     |
+2277 |             return Ok(cursor);
+     |                    ^^^------^
+     |                       |
+     |                       this argument influences the type of `Ok`
+note: tuple variant defined here
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+     |
+ 562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/real_producers.rs:2284:13
+     |
+2284 |             cursor,
+     |             ^^^^^^ expected `Box<dyn PfCursor>`, found `WorkspaceCursor`
+     |
+     = note: expected struct `std::boxed::Box<(dyn purrdf_sparql_eval::PfCursor + 'static)>`
+                found struct `purrdf_sparql_eval::WorkspaceCursor`
+
+error[E0308]: mismatched types
+    --> crates/retrieval/tests/real_producers.rs:2315:9
+     |
+2314 |       ) -> Result<Box<dyn PfCursor>, EvalError> {
+     |            ------------------------------------ expected `Result<Box<dyn PfCursor>, EvalError>` because of return type
+2315 | /         self.open_admitted(
+2316 | |             args,
+2317 | |             ceiling,
+2318 | |             purrdf_sparql_eval::WorkspaceCapability::resident(),
+2319 | |         )
+     | |_________^ expected `Result<Box<dyn PfCursor>, EvalError>`, found `Result<WorkspaceCursor, EvalError>`
+     |
+     = note: expected enum `Result<std::boxed::Box<(dyn purrdf_sparql_eval::PfCursor + 'static)>, _>`
+                found enum `Result<purrdf_sparql_eval::WorkspaceCursor, _>`
+     = note: the full name for the type has been written to '/opt/.cargo/4c/fb5a3f5fcfe98d/debug/build/purrdf-retrieval/d1002b00992d6d03/out/real_producers-d1002b00992d6d03.long-type-17758805055049378988.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+Some errors have detailed explanations: E0053, E0308.
+For more information about an error, try `rustc --explain E0053`.
+error: could not compile `purrdf-retrieval` (test "real_producers") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:94: check] Error 101
+terminal_status=2

@@ -1,0 +1,34 @@
+Running as unit: run-p1847070-i31196948.scope; invocation ID: aa1818c7dcf44df79149006ed2d499d5
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/hash)
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling regex-syntax v0.8.11
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 14.83s
+     Running tests/certified_numerical.rs (/opt/.cargo/4c/fb5a3f5fcfe98d/debug/build/purrdf-xsd/81957a1da0ecbcdc/out/certified_numerical-81957a1da0ecbcdc)
+
+running 9 tests
+determinism-digest case=directed_endpoint_product_replay digest=f1508ddac398273b corpus_len=8
+test directed_endpoint_product_replay ... ok
+test numerical_refusals_are_complete ... ok
+test bounded_ieee_canonical_allocation_replay ... ok
+test bounded_rational_ownership_and_rounding_replay ... ok
+test integer_difference_interval_admission_and_original_limb_replay ... ok
+test admitted_comparison_branches_and_original_limb_replay ... ok
+test finite_decimal_scale_admission_and_original_limb_replay ... ok
+determinism-digest case=certified_elementary_replay digest=8268aff8be7630be corpus_len=7
+test certified_elementary_replay ... ok
+test reusable_taylor_pool_admission_and_allocation_replay ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+terminal_status=0

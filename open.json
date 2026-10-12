@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 536,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64",
+  "branch": "paudley/536-restore-msrv-shapes-build-and-arm64",
+  "slug": "restore-msrv-shapes-build-and-arm64",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/.stage/restore-msrv-shapes-build-and-arm64",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "dd79ef77e94212314adc9db5af42fdd72ec18222",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64",
+    "branch:paudley/536-restore-msrv-shapes-build-and-arm64",
+    "stage:/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/.stage/restore-msrv-shapes-build-and-arm64",
+    "issue:/home/paudley/Active/purrdf/.worktrees/536-restore-msrv-shapes-build-and-arm64/.stage/restore-msrv-shapes-build-and-arm64/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-12T16:41:35-0600"
+}

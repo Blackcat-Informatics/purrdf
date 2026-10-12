@@ -1,0 +1,3 @@
+Running as unit: run-p2027305-i31329948.scope; invocation ID: 59bfacf41a344a7089203704dacc378c
+FAIL: isomorphic body group body:d3296d7513fe6e45 is sanctioned by no variant or [[distinct]] row: purrdf_hnsw::relation::HnswRelation::open, purrdf_retrieval::test_crate::real_producers::CountingTextRelation::open
+terminal_status=1
