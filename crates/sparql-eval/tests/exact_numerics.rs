@@ -289,7 +289,7 @@ fn sum_count_and_avg_agree_under_every_policy() {
         }
         let pairs: Vec<(&str, &str)> = owned.iter().map(|(t, d)| (t.as_str(), *d)).collect();
         let data = values(&pairs);
-        // The exact oracle's sum, and its mean at eighteen digits.
+        // The exact oracle's sum and mean; only a repeating mean is rounded.
         let sum = owned.iter().fold(Oracle::from_i128(0), |acc, (text, _)| {
             acc.add(&Oracle::parse(text).expect("numeral"))
         });
@@ -325,11 +325,12 @@ fn sum_count_and_avg_agree_under_every_policy() {
                 row[2], row[3],
                 "round {round}: AVG must equal SUM/COUNT ({policy:?})"
             );
-            let expected = if policy == DivisionPolicy::Exact {
-                mean.clone()
-            } else {
-                mean.round_to_scale(18, Direction::TowardZero)
-            };
+            let expected =
+                if policy == DivisionPolicy::Exact || mean.to_canonical_decimal().is_some() {
+                    mean.clone()
+                } else {
+                    mean.round_to_scale(18, Direction::HalfEven)
+                };
             assert!(
                 Oracle::parse(&lexical(&row[2]))
                     .expect("mean")
@@ -351,7 +352,7 @@ fn the_division_policy_is_the_query_s_and_leaves_only_non_terminating_quotients_
     );
     // A quotient with no finite expansion is an expression error: unbound.
     assert_eq!(eval_with("1 / 3", exact), "-");
-    // The default policy answers the same quotient at eighteen digits.
+    // The default policy rounds a repeating quotient at eighteen digits.
     assert_eq!(eval("1 / 3"), "0.333333333333333333^^decimal");
     // A scale policy rounds as stated.
     let rounded = QueryOptions::EMPTY.with_division(DivisionPolicy::scale(

@@ -91,8 +91,9 @@
 //! machine-word values that overflows them returns the exact result in the
 //! big variants rather than failing. Addition, subtraction and multiplication are
 //! exact; division follows a caller-chosen [`exact::DivisionPolicy`]
-//! ([`numeric::numeric_div_with_policy`]), by default eighteen fractional digits
-//! truncated toward zero. [`numeric::numeric_cost`] reports what a tower operation
+//! ([`numeric::numeric_div_with_policy`]): by default a terminating quotient is
+//! exact, and a repeating quotient is rounded to eighteen fractional digits,
+//! half to even. [`numeric::numeric_cost`] reports what a tower operation
 //! costs, for a governor to charge before running it.
 //!
 //! [`exact`] is also usable on its own: an `xsd:integer` with an inline `i128`
@@ -116,7 +117,8 @@
 //!
 //! * a quotient of integers or decimals keeps the precision of a caller-chosen
 //!   [`exact::DivisionPolicy`] (F&O §4.2 leaves it to the implementation): by
-//!   default eighteen fractional digits, truncated toward zero, at every magnitude;
+//!   default an exact terminating quotient or a repeating quotient rounded to
+//!   eighteen fractional digits, half to even;
 //! * a conversion to `xsd:float`/`xsd:double` rounds once, to nearest with ties to
 //!   even, from the exact value at any size (F&O §19.1.2.2);
 //! * a conversion from `xsd:float`/`xsd:double` to `xsd:decimal` is exact, which is

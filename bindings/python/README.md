@@ -928,9 +928,11 @@ its own reasoning limits, independently of the query's governors.
 Every query and UPDATE entry point — `query`, `query_governed`,
 `query_entailment_governed`, `update`, `update_governed` and `Store.prepare` —
 takes `division=`, the precision of an `xsd:integer`/`xsd:decimal` quotient (`/`
-and `AVG`): `"exact"`, `"N"` (N fractional digits, truncated toward zero) or
-`"N:ROUNDING"` (e.g. `"5:half-even"`), the same text the CLI's `--division` reads.
-Unset is 18 digits truncated toward zero. Under `"exact"` a quotient with no
+and `AVG`): `"exact"`, `"N"` (N fractional digits, truncated toward zero),
+`"N:ROUNDING"` (e.g. `"5:half-even"`), `"exact-or-N"`, or
+`"exact-or-N:ROUNDING"`, the same text the CLI's `--division` reads.
+Unset keeps terminating quotients exact and rounds repeating quotients to 18
+fractional digits, half to even. Under `"exact"` a quotient with no
 finite decimal expansion is a SPARQL expression error: unbound, like `1/0`, and
 counted under `err:FOAR0002` in a governed call's evidence. A governed
 call's `evidence.expression_errors` counts every XPath F&O numeric error the

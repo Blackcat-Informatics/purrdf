@@ -248,7 +248,8 @@ ownership, and all limits. Complete examples are in
   truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
   `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
   `half-toward-zero`, `half-ceiling` or `half-floor` — the CLI's `--division` text.
-  The default is `"18:toward-zero"`. Under `"exact"`, `1/8` answers `0.125` while `1/3`,
+  The default is `"exact-or-18:half-even"`: terminating quotients stay exact,
+  and repeating ones are rounded. Under `"exact"`, `1/8` answers `0.125` while `1/3`,
   which has no finite decimal expansion, is a SPARQL expression error: unbound, like
   `1/0`, and counted as `err:FOAR0002` in a governed outcome's
   `evidence.expressionErrors`; `"5:half-even"` answers `2/3` as

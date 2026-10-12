@@ -120,12 +120,13 @@ fn tower_refusals_name_their_code() {
     assert_eq!(fine.to_bounded().unwrap_err().code(), ErrorCode::Foca0001);
     let coarse: exact::Decimal = "0.000000000000000001".parse().expect("a decimal");
     assert!(coarse.to_bounded().is_ok());
-    // The bounded parsers keep their codes.
+    // The public integer reader keeps the exact value; explicit narrowing owns
+    // the integer range code. Decimal's bounded reader is migrated separately.
     assert_eq!(
         purrdf_xsd::numeric::parse_integer(&past)
-            .unwrap_err()
-            .code(),
-        Some(ErrorCode::Foca0003)
+            .expect("an exact integer")
+            .canonical_lexical(),
+        past
     );
     assert_eq!(
         purrdf_xsd::numeric::parse_decimal("0.1000000000000000001")

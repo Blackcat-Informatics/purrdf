@@ -493,9 +493,10 @@ is the one form the CLI's `--division`, the WebAssembly `divisionPolicy` and Pyt
 
 | Policy | Quotient |
 |---|---|
-| `18` (default, read back as `18:toward-zero`) | eighteen fractional digits, truncated toward zero |
+| `exact-or-18:half-even` (default) | exact when terminating; otherwise eighteen fractional digits rounded half to even |
 | `N` | `N` fractional digits, truncated toward zero |
 | `N:ROUNDING` | `N` digits rounded `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`, `half-toward-zero`, `half-ceiling` or `half-floor` |
+| `exact-or-N[:ROUNDING]` | exact when terminating; otherwise `N` fractional digits with the selected rounding direction (toward zero if omitted) |
 | `exact` | the exact quotient; one with no finite expansion (`1/3`) is a SPARQL expression error: unbound, counted as `err:FOAR0002` in the governed evidence |
 
 An unparseable policy returns `PURRDF_STATUS_INVALID_ARGUMENT` and leaves the policy in

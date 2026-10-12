@@ -1095,10 +1095,10 @@ export class QueryEngine {
   /**
    * The precision of every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
    * engine forms, in its one text form: `"exact"`, `"N"` (`N` fractional digits
-   * truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
+   * truncated toward zero), `"N:ROUNDING"` or `"exact-or-N[:ROUNDING]"`, with `ROUNDING` one of `toward-zero`,
    * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
-   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers `"exact"` or
-   * `"N:ROUNDING"`. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
+   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers the selected
+   * policy. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
    * is a SPARQL expression error — unbound, like `1/0`, and counted as `err:FOAR0002` in
    * a governed outcome's `evidence.expressionErrors` — while a terminating one (`1/8`)
    * answers exactly.
@@ -1109,7 +1109,7 @@ export class QueryEngine {
    * accepted form throws, with the code `purrdf-wasm-options`, and leaves the policy
    * unchanged.
    *
-   * @defaultValue `"18:toward-zero"`
+   * @defaultValue `"exact-or-18:half-even"`
    */
   divisionPolicy: string;
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;

@@ -335,11 +335,8 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         | D::NonNegativeInteger
         | D::PositiveInteger
         | D::NonPositiveInteger
-        | D::NegativeInteger => match crate::numeric::parse_integer_typed(lexical, datatype) {
-            Ok(value) => Ok(XsdValue::Integer { value, datatype }),
-            Err(error @ XsdError::OutOfRange { .. }) => parse_big_integer(lexical, datatype, error),
-            Err(error) => Err(error),
-        },
+        | D::NegativeInteger => crate::numeric::parse_integer_typed(lexical, datatype)
+            .map(|value| XsdValue::from_exact_integer(value, datatype)),
         D::Decimal => match crate::numeric::read_decimal(lexical) {
             Ok(decimal) => Ok(XsdValue::Decimal(decimal)),
             Err(crate::numeric::NumericReadError::OutOfRange(_)) => lexical
@@ -368,36 +365,6 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         D::Base64Binary => {
             crate::binary::parse_base64(lexical).map(|bytes| XsdValue::Binary { bytes, datatype })
         }
-    }
-}
-
-/// The integer-family value of a lexical form the `i128` parse refused with
-/// `bounded_error`: the exact value when it lies outside `i128` and inside
-/// `datatype`'s value space, the original refusal otherwise (a value inside `i128`
-/// was refused for its derived range, and every bounded derived datatype lies
-/// inside `i128`).
-fn parse_big_integer(
-    lexical: &str,
-    datatype: XsdDatatype,
-    bounded_error: XsdError,
-) -> Result<XsdValue, XsdError> {
-    let Ok(value) = lexical.parse::<exact::Integer>() else {
-        return Err(bounded_error);
-    };
-    if value.as_i128().is_some() {
-        return Err(bounded_error);
-    }
-    if datatype.admits_integer(&value) {
-        Ok(XsdValue::BigInteger { value, datatype })
-    } else {
-        // Read exactly, the value is outside the datatype's value space — of the wrong
-        // sign for a sign-restricted type, or past a bounded type's facets — which is
-        // `err:FORG0001` at every magnitude, never the `i128` reader's own limit.
-        Err(XsdError::OutOfRange {
-            datatype,
-            lexical: lexical.to_owned(),
-            reason: reason::OUTSIDE_DATATYPE,
-        })
     }
 }
 
@@ -762,8 +729,7 @@ impl XsdError {
     /// * [`ErrorCode::Foca0001`] / [`ErrorCode::Foca0003`] / [`ErrorCode::Foca0006`]
     ///   — a value narrowed to a machine-word representation that cannot hold it
     ///   ([`exact::Decimal::to_bounded`], [`exact::Integer::to_i128`], and the bounded
-    ///   parsers [`crate::numeric::parse_integer`] and
-    ///   [`crate::numeric::parse_decimal`]); [`parse`] itself never raises them, since
+    ///   decimal parser [`crate::numeric::parse_decimal`]); [`parse`] itself never raises them, since
     ///   `xsd:integer` and `xsd:decimal` are unbounded;
     /// * [`ErrorCode::Xpty0004`] — an operand of the wrong type.
     ///

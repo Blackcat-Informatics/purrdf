@@ -222,7 +222,7 @@ entailment-aware SPARQL run alongside the materialization regimes. See
 Query governors bound execution and return evidence about a trip, including
 which rows can be certified under non-monotone operators. Governed Update
 commits entirely or not at all. Prepared execution and scoped callbacks reuse
-the same evaluator. The charge schedule and the frozen 50-case governor corpus
+the same evaluator. The charge schedule and the frozen 52-case governor corpus
 are published in the [governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md).
 Structured diagnostics preserve stable codes and readable English, with named
 parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
@@ -402,7 +402,7 @@ explicitly recorded boundaries. The full scoreboard and commands are in
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC toRDF + compaction (`crates/rdf/tests/fixtures/jsonld-w3c-rec/`) | **73 / 73** applicable toRDF · **13 / 13** exact compaction |
 | SPARQL 1.0/1.1/1.2 | full W3C sparql10 (data-r2) + sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **1393** pass · 0 ledgered |
 | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
-| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
+| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **52 / 52**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **262 / 262** agreeing, 0 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |

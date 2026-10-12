@@ -169,10 +169,10 @@ unsafe fn decode_aggregate_namespace(
 /// exact quotient, leaving a quotient with no finite decimal expansion (`1/3`) unbound
 /// as a SPARQL expression error (`err:FOAR0002` in the governed evidence), as division
 /// by zero is; `N`, `N` fractional digits truncated toward zero;
-/// or `N:ROUNDING`, rounded in direction `ROUNDING` — one of `toward-zero`,
+/// `N:ROUNDING`, or `exact-or-N[:ROUNDING]`, rounded in direction `ROUNDING` — one of `toward-zero`,
 /// `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
-/// `half-toward-zero`, `half-ceiling` or `half-floor`. Every handle starts at `18`
-/// (eighteen digits toward zero, read back as `18:toward-zero`), and a dataset handle a
+/// `half-toward-zero`, `half-ceiling` or `half-floor`. Every handle starts at
+/// `exact-or-18:half-even` (exact when terminating, otherwise rounded), and a dataset handle a
 /// query returns (a CONSTRUCT/DESCRIBE graph) starts there too.
 ///
 /// A policy that does not parse fails with `PURRDF_STATUS_INVALID_ARGUMENT` and a

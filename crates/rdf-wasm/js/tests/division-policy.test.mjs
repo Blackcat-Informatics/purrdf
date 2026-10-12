@@ -41,12 +41,12 @@ function zeroes() {
   return Object.fromEntries(CODES.map((code) => [code, 0n]));
 }
 
-test("an engine starts at eighteen digits truncated toward zero", () => {
+test("an engine starts exact for terminating quotients and rounds repeating ones", () => {
   const engine = new QueryEngine();
-  assert.equal(engine.divisionPolicy, "18:toward-zero");
-  assert.equal(quotient(engine, "2/3"), "0.666666666666666666");
+  assert.equal(engine.divisionPolicy, "exact-or-18:half-even");
+  assert.equal(quotient(engine, "2/3"), "0.666666666666666667");
+  assert.equal(quotient(engine, "1/1048576"), "0.00000095367431640625");
 });
-
 test("exact answers a terminating quotient and leaves a non-terminating one unbound", () => {
   const engine = new QueryEngine();
   engine.divisionPolicy = "exact";

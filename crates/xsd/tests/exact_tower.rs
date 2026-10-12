@@ -632,6 +632,111 @@ fn non_terminating_quotients_are_refused_and_terminating_ones_are_exact() {
 }
 
 #[test]
+fn default_division_keeps_terminating_digits_and_rounds_only_repeating_results() {
+    let default = DivisionPolicy::default();
+    assert_eq!(default, "exact-or-18:half-even".parse().expect("policy"));
+    assert_eq!(default.to_string(), "exact-or-18:half-even");
+    assert_eq!(
+        "18".parse(),
+        Ok(DivisionPolicy::scale(18, Rounding::TowardZero))
+    );
+
+    let one = Decimal::ONE;
+    let deep_divisor = Decimal::from_integer(Integer::from(2_i128).pow(80));
+    let deep = one
+        .div(&deep_divisor, default)
+        .expect("terminating quotient");
+    assert_eq!(deep.scale(), 80);
+    assert_eq!(
+        deep,
+        one.div(&deep_divisor, DivisionPolicy::Exact)
+            .expect("exact")
+    );
+    assert_eq!(
+        one.try_div_fallible(&deep_divisor, default)
+            .expect("fallible exact quotient"),
+        deep
+    );
+    assert_eq!(
+        one.div(&Decimal::from(3), default)
+            .expect("rounded repeating quotient")
+            .to_string(),
+        "0.333333333333333333"
+    );
+    assert_eq!(
+        Decimal::from(2)
+            .div(&Decimal::from(3), default)
+            .expect("half-even rounded quotient")
+            .to_string(),
+        "0.666666666666666667"
+    );
+    let two_value = parse("2", XsdDatatype::Integer).expect("integer");
+    let three_value = parse("3", XsdDatatype::Integer).expect("integer");
+    assert_eq!(
+        numeric_div(&two_value, &three_value)
+            .expect("numeric production quotient")
+            .canonical_lexical(),
+        "0.666666666666666667"
+    );
+    let charged = purrdf_xsd::numeric::numeric_cost(
+        &two_value,
+        &three_value,
+        purrdf_xsd::numeric::CostOp::Div(default),
+    );
+    assert!(charged.work() > 0, "the default tower path must be charged");
+    assert_eq!(
+        Decimal::from(-2)
+            .div(&Decimal::from(3), default)
+            .expect("symmetric rounded quotient")
+            .to_string(),
+        "-0.666666666666666667"
+    );
+    assert_eq!(
+        Decimal::from(3)
+            .div(&Decimal::from(6), default)
+            .expect("reduced terminating quotient")
+            .to_string(),
+        "0.5"
+    );
+    assert_eq!(
+        one.div(
+            &Decimal::from(8),
+            DivisionPolicy::scale(2, Rounding::HalfEven)
+        )
+        .expect("explicit tie")
+        .to_string(),
+        "0.12"
+    );
+}
+
+#[test]
+fn exact_first_division_preserves_physical_admission_refusal() {
+    use purrdf_xsd::bigint::LimbScratchError;
+    use purrdf_xsd::exact::ExactOperationError;
+
+    let one = Decimal::ONE;
+    let three = Decimal::from(3);
+    let mut calls = 0;
+    let refused = one.try_div_admitted(&three, DivisionPolicy::default(), &mut |_| {
+        calls += 1;
+        Err(LimbScratchError::Capacity {
+            required_limbs: 2,
+            admitted_limbs: 1,
+        })
+    });
+    assert_eq!(calls, 1, "the exact attempt must refuse before fallback");
+    assert_eq!(
+        refused,
+        Err(ExactOperationError::Storage(LimbScratchError::Capacity {
+            required_limbs: 2,
+            admitted_limbs: 1,
+        }))
+    );
+    assert_eq!(one, Decimal::ONE);
+    assert_eq!(three, Decimal::from(3));
+}
+
+#[test]
 fn lexical_refusals_have_valid_neighbours() {
     for refused in [
         "", "+", "-", "1.2.3", "1e5", " 1", "1 ", "0x10", "\u{0661}", "--1", "1/2",

@@ -619,7 +619,7 @@ pub(crate) enum Command {
         /// digits truncated toward zero, and `N:ROUNDING` rounds them instead
         /// (`toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
         /// `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`).
-        /// Omitted, eighteen digits truncated toward zero.
+        /// Omitted, exact when terminating or eighteen digits rounded half to even.
         #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
         division: Option<purrdf_sparql_eval::DivisionPolicy>,
         /// The SPARQL query text.
@@ -687,7 +687,7 @@ pub(crate) enum Command {
         xpath_regex: Option<Profile>,
         /// The precision of an `xsd:integer`/`xsd:decimal` quotient in the request's
         /// `WHERE` clauses and expressions — identical to `query --division`. Omitted,
-        /// eighteen digits truncated toward zero.
+        /// exact when terminating or eighteen digits rounded half to even.
         #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
         division: Option<purrdf_sparql_eval::DivisionPolicy>,
         /// The SPARQL UPDATE text.

@@ -72,3 +72,5 @@ aggregate-custom-fuel-over-bound	cases/aggregate-accumulation.ttl	cases/aggregat
 aggregate-custom-scratch-bytes-boundary	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92280	boundary	complete
 aggregate-custom-scratch-bytes-over-bound	cases/aggregate-custom-scratch.ttl	cases/aggregate-custom.rq	aggregate	scratch-bytes=92279	over-bound	budget-exhausted scratch-bytes
 exists-inner-counters	cases/exists-inner-counters.ttl	cases/exists-inner-counters.rq	none	fuel=1000	n/a	complete
+numeric-default-fuel-boundary	cases/numeric-default.ttl	cases/numeric-default.rq	none	fuel=1763	boundary	complete
+numeric-default-fuel-over-bound	cases/numeric-default.ttl	cases/numeric-default.rq	none	fuel=1762	over-bound	budget-exhausted fuel

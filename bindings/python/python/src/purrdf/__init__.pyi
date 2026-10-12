@@ -741,10 +741,11 @@ class _QuadStore:
     #
     # `division` is the precision of every `xsd:integer`/`xsd:decimal` quotient
     # (`/` and `AVG`), in the one text form every PurRDF surface reads: `"exact"`,
-    # `"N"` (N fractional digits, truncated toward zero) or `"N:ROUNDING"` (ROUNDING one
-    # of `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
+    # `"N"` (N fractional digits, truncated toward zero), `"N:ROUNDING"`,
+    # `"exact-or-N"`, or `"exact-or-N:ROUNDING"` (ROUNDING one of `toward-zero`,
+    # `away-from-zero`, `floor`, `ceiling`, `half-even`,
     # `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`). Unset is
-    # `"18:toward-zero"`. Under `"exact"` a quotient with no finite decimal expansion
+    # `"exact-or-18:half-even"`. Under `"exact"` a quotient with no finite decimal expansion
     # raises the query's `ValueError`, naming `err:FOAR0002`. An unreadable policy
     # raises `ValueError` before anything is evaluated. Every query, UPDATE, governed,
     # entailment and prepared entry point takes it.

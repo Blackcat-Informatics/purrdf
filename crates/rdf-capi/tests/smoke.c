@@ -784,8 +784,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
     int32_t rc = purrdf_dataset_division_policy(dataset, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "read the default division policy");
     purrdf_buffer_data(buffer, &bytes, &len);
-    CHECK(len == strlen("18:toward-zero") && memcmp(bytes, "18:toward-zero", len) == 0,
-          "the default division policy is 18:toward-zero");
+    CHECK(len == strlen("exact-or-18:half-even") && memcmp(bytes, "exact-or-18:half-even", len) == 0,
+          "the default division policy is exact-or-18:half-even");
     purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "exact", &error);

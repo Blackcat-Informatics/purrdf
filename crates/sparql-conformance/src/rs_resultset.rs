@@ -229,8 +229,10 @@ fn solution_groups(dataset: &Arc<purrdf_core::RdfDataset>) -> Result<SolutionGro
                     purrdf::xsd::numeric::parse_integer(lexical_form)
                         .map_err(|_| "rs:index must be an xsd:integer lexical form")
                         .and_then(|index| {
-                            usize::try_from(index)
-                                .map_err(|_| "rs:index must be a positive bounded integer")
+                            index
+                                .as_i128()
+                                .and_then(|value| usize::try_from(value).ok())
+                                .ok_or("rs:index must be a positive bounded integer")
                         })
                 } else {
                     Err("rs:index must be an xsd:integer literal")

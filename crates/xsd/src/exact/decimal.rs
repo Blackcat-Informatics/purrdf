@@ -1059,6 +1059,19 @@ impl Decimal {
                 &crate::bigint::scratch::Fallible,
                 admit,
             ),
+            DivisionPolicy::ExactOrScale { scale, rounding } => {
+                match self.try_div_exact_admitted(rhs, admit) {
+                    Err(super::ExactOperationError::Value(ExactError::NonTerminating)) => self
+                        .div_rounded_admitted_using(
+                            rhs,
+                            scale,
+                            rounding,
+                            &crate::bigint::scratch::Fallible,
+                            admit,
+                        ),
+                    result => result,
+                }
+            }
         }
     }
 
@@ -1079,6 +1092,14 @@ impl Decimal {
                 self.div_rounded_using(rhs, scale, rounding, storage)
             }
             DivisionPolicy::Exact => self.div_exact_using(rhs, storage),
+            DivisionPolicy::ExactOrScale { scale, rounding } => {
+                match self.div_exact_using(rhs, storage) {
+                    Err(super::ExactOperationError::Value(ExactError::NonTerminating)) => {
+                        self.div_rounded_using(rhs, scale, rounding, storage)
+                    }
+                    result => result,
+                }
+            }
         }
     }
 
@@ -1434,6 +1455,32 @@ impl Decimal {
                     &crate::bigint::scratch::Fallible,
                     admit,
                 )
+            }
+            DivisionPolicy::ExactOrScale { scale, rounding } => {
+                admit(cost::decimal_exact_initial_layout(
+                    left.limb_len(),
+                    right.limb_len(),
+                )?)?;
+                match div_exact_parts_admitted_using(
+                    left,
+                    ls,
+                    right,
+                    rs,
+                    &crate::bigint::scratch::Fallible,
+                    admit,
+                ) {
+                    Err(super::ExactOperationError::Value(ExactError::NonTerminating)) => {
+                        div_rounded_parts_admitted_using(
+                            (left, ls),
+                            (right, rs),
+                            scale,
+                            rounding,
+                            &crate::bigint::scratch::Fallible,
+                            admit,
+                        )
+                    }
+                    result => result,
+                }
             }
         }
     }

@@ -136,7 +136,7 @@ publishes nothing, including declarations made by earlier operations.
   with certified rows rather than a wrong answer, and `explain_query` returns
   a `QueryExplanation` whose ledger decomposes the fuel spent per algebra node
   and per charge point, beside the cost planner's estimate for each basic
-  graph pattern. The normative charge schedule and the frozen 50-case governor
+  graph pattern. The normative charge schedule and the frozen 52-case governor
   corpus are documented in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
@@ -164,14 +164,14 @@ Three results are rounded, as XPath and XQuery Functions and Operators 3.1
 allows:
 
 - **Division.** F&O leaves the precision of a decimal quotient to the
-  implementation. By default PurRDF keeps 18 digits after the point and truncates
-  toward zero: `7 / 3` is `2.333333333333333333`. A quotient that ends within 18
-  digits is exact, at any size: `"170141183460469231731687303715884105727"^^xsd:integer / 2`
-  is `85070591730234615865843651857942052863.5`. The caller chooses another
+  implementation. By default PurRDF keeps every digit of a terminating quotient,
+  even beyond 18 places: `1 / 1048576` is `0.00000095367431640625`. A repeating
+  quotient is rounded to 18 fractional digits, half to even: `2 / 3` is
+  `0.666666666666666667`. The caller chooses another
   precision with `QueryOptions::with_division` in Rust, `--division` in the
   command line, or the division setting of the C, WebAssembly and Python
-  bindings. The setting is written `exact`, `N` (N digits, truncated toward zero)
-  or `N:ROUNDING` (for example `5:half-even`). Under `exact` every quotient that
+  bindings. The setting is written `exact`, `N` (N digits, truncated toward zero),
+  `N:ROUNDING` (for example `5:half-even`) or `exact-or-N[:ROUNDING]`. Under `exact` every quotient that
   ends is exact, and one that does not end, such as `1 / 3`, is an error like
   `1 / 0`: the expression is unbound, with `err:FOAR0002`. `AVG` divides under
   the same setting.

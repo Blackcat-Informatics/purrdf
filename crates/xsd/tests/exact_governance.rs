@@ -340,10 +340,22 @@ fn division_is_charged_at_its_policy() {
     assert_bounded("1 / 3 at 200000 digits", cost, measurement);
     let quotient = quotient.expect("a quotient");
     assert_eq!(quotient.canonical_lexical().len(), 200_002);
-    // Neighbour: the default policy over bounded operands is machine arithmetic.
+    // The exact-first default must also charge its tower attempt and fallback.
+    let default = DivisionPolicy::xsd_default();
+    let default_cost = numeric_cost(&one, &three, CostOp::Div(default));
+    assert!(default_cost.work() > 0);
+    let (default_result, default_measurement) =
+        measured(|| purrdf_xsd::numeric::numeric_div_with_policy(&one, &three, default));
+    assert_bounded(
+        "1 / 3 under the exact-first default",
+        default_cost,
+        default_measurement,
+    );
     assert_eq!(
-        numeric_cost(&one, &three, CostOp::Div(DivisionPolicy::xsd_default())),
-        Cost::ZERO
+        default_result
+            .expect("default quotient")
+            .canonical_lexical(),
+        "0.333333333333333333"
     );
 }
 

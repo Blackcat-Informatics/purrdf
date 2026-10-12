@@ -22,8 +22,8 @@ pub use exact_path::CostOp;
 /// * two `xsd:integer`/`xsd:decimal` operands of which one is
 ///   [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] run on the exact tower,
 ///   and cost what [`crate::exact::cost`] states for the operation;
-/// * a division under any [`DivisionPolicy`] other than the default runs on the
-///   tower whatever its operands' size, and costs the same;
+/// * every division of two exact numeric operands runs on the tower under its
+///   caller's [`DivisionPolicy`] and costs the same;
 /// * one such big operand meeting an `xsd:float`/`xsd:double` costs its correctly
 ///   rounded conversion or its exact comparison with the binary value;
 /// * everything else computes in machine words: [`crate::exact::Cost::ZERO`].
@@ -34,10 +34,8 @@ pub use exact_path::CostOp;
 #[must_use]
 #[inline]
 pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cost {
-    let tower_division =
-        matches!(op, CostOp::Div(policy) if policy != DivisionPolicy::xsd_default());
-    // Two machine-word operands under the default division: decided by the variants
-    // alone, so the operators' fast path pays one match here and nothing else.
+    let tower_division = matches!(op, CostOp::Div(_));
+    // The other operations keep the machine-word fast path for bounded operands.
     if !tower_division && !is_big(a) && !is_big(b) {
         return crate::exact::Cost::ZERO;
     }
@@ -431,32 +429,46 @@ pub fn is_decimal_lexical(lexical: &str) -> bool {
         && frac.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits.
-/// Returns the raw `i128` value without any subtype range check — for range-checked
-/// integer-family parsing use [`parse_integer_typed`].
-pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
-    let dt = XsdDatatype::Integer;
-    if !is_integer_lexical(s) {
-        return Err(XsdError::invalid(
-            dt,
-            s,
-            "expected an optional sign then digits",
-        ));
-    }
-    s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
-        datatype: dt,
-        lexical: s.to_string(),
-        reason: crate::value::reason::INTEGER_TOO_LARGE,
-    })
+/// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits of
+/// any length. A derived integer type uses [`parse_integer_typed`] for its facets.
+///
+/// # Errors
+/// Returns a lexical error for a non-integer spelling.
+pub fn parse_integer(s: &str) -> Result<crate::exact::Integer, XsdError> {
+    parse_integer_typed(s, XsdDatatype::Integer)
 }
 
-/// Parse a lexical integer form for the given `datatype`, hard-failing with
-/// [`XsdError::OutOfRange`] if the value is outside the datatype's inclusive bounds.
+/// Parse an integer-family value exactly, hard-failing with
+/// [`XsdError::OutOfRange`] if it is outside `datatype`'s inclusive bounds.
 ///
 /// This is the unified entry point for all integer-family datatypes; `parse` in
 /// `value.rs` routes every integer-family IRI through here.
-pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128, XsdError> {
-    read_integer_typed(lexical, datatype).map_err(|error| error.owned(datatype, lexical))
+///
+/// # Errors
+/// Returns a lexical error for a non-integer spelling or an out-of-range
+/// error for a derived-type facet violation.
+pub fn parse_integer_typed(
+    lexical: &str,
+    datatype: XsdDatatype,
+) -> Result<crate::exact::Integer, XsdError> {
+    if !is_integer_lexical(lexical) {
+        return Err(XsdError::invalid(
+            datatype,
+            lexical,
+            "expected an optional sign then digits",
+        ));
+    }
+    let value = lexical
+        .parse::<crate::exact::Integer>()
+        .map_err(XsdError::Exact)?;
+    if !datatype.admits_integer(&value) {
+        return Err(XsdError::OutOfRange {
+            datatype,
+            lexical: lexical.to_owned(),
+            reason: crate::value::reason::OUTSIDE_DATATYPE,
+        });
+    }
+    Ok(value)
 }
 
 pub(crate) fn read_integer_typed(
@@ -1549,9 +1561,7 @@ pub fn numeric_binary_admitted(
                 exact_path::binary_admitted(a, b, op, policy, admit)
             };
         }
-        if op == NumericBinaryOperator::Divide
-            && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b))
-        {
+        if op == NumericBinaryOperator::Divide {
             return exact_path::binary_admitted(a, b, op, policy, admit);
         }
     }
@@ -1559,16 +1569,9 @@ pub fn numeric_binary_admitted(
         NumericBinaryOperator::Add => numeric_add_bounded(a, b),
         NumericBinaryOperator::Subtract => numeric_sub_bounded(a, b),
         NumericBinaryOperator::Multiply => numeric_mul_bounded(a, b),
-        NumericBinaryOperator::Divide => numeric_div_bounded(a, b),
+        NumericBinaryOperator::Divide => numeric_div_ieee(a, b),
     };
     match bounded {
-        Ok(XsdValue::Decimal(quotient))
-            if exact_pair
-                && op == NumericBinaryOperator::Divide
-                && quotient.scale() != MAX_DECIMAL_SCALE =>
-        {
-            exact_path::binary_admitted(a, b, op, policy, admit)
-        }
         Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. }) if exact_pair => {
             exact_path::binary_admitted(a, b, op, policy, admit)
         }
@@ -2123,12 +2126,10 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// ([`DivisionPolicy`]); `float`/`double` operands divide in IEEE arithmetic as
 /// before.
 ///
-/// Under [`DivisionPolicy::xsd_default`] — eighteen fractional digits, truncated
-/// toward zero — the quotient of two bounded operands is the bounded quotient
-/// whenever that holds the result at eighteen digits, and the same quotient
-/// computed on the tower otherwise; [`numeric_div`] is this function at that
-/// policy. Under any other policy every exact-branch quotient is computed on the
-/// tower.
+/// Under [`DivisionPolicy::xsd_default`] a terminating decimal quotient stays
+/// exact; a repeating quotient is rounded to eighteen fractional digits,
+/// half to even. Every exact-branch quotient uses the same tower operation,
+/// including inputs that fit the older bounded representation.
 ///
 /// # Errors
 ///
@@ -2155,24 +2156,16 @@ pub fn numeric_div_with_policy(
     b: &XsdValue,
     policy: DivisionPolicy,
 ) -> Result<XsdValue, XsdError> {
-    let exact_pair = a.is_exact_numeric() && b.is_exact_numeric();
-    if exact_pair && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b)) {
+    if a.is_exact_numeric() && b.is_exact_numeric() {
         return exact_path::div(a, b, policy);
     }
-    match numeric_div_bounded(a, b) {
-        // The bounded quotient keeps eighteen digits only while its mantissa fits;
-        // a coarser one is recomputed exactly at the policy's eighteen digits.
-        Ok(XsdValue::Decimal(quotient)) if exact_pair && quotient.scale() != MAX_DECIMAL_SCALE => {
-            exact_path::div(a, b, policy)
-        }
-        Err(XsdError::OutOfRange { .. }) if exact_pair => exact_path::div(a, b, policy),
-        other => other,
-    }
+    numeric_div_ieee(a, b)
 }
 
-/// [`numeric_div`] over the bounded variants only.
-fn numeric_div_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    use XsdValue::{Decimal as Dec, Double, Float, Integer};
+/// The IEEE tiers of [`numeric_div`]. Exact pairs were dispatched to the tower
+/// before this function, so no bounded decimal quotient is reachable here.
+fn numeric_div_ieee(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    use XsdValue::{Double, Float};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
             let x = num_f64(a).ok_or(XsdError::TypeMismatch {
@@ -2192,67 +2185,18 @@ fn numeric_div_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
             })?;
             Ok(Float(ieee::f32_div(x, y)))
         }
-        // Integer ÷ Integer → Decimal (XPath op:numeric-divide spec rule)
-        (Integer { value: x, .. }, Integer { value: y, .. }) => {
-            if *y == 0 {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Integer,
-                });
-            }
-            decimal_div(&integer_to_decimal(*x), &integer_to_decimal(*y))
-        }
-        (Dec(x), Dec(y)) => {
-            if y.is_zero() {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Decimal,
-                });
-            }
-            decimal_div(x, y)
-        }
-        (Integer { value: x, .. }, Dec(y)) => {
-            if y.is_zero() {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Decimal,
-                });
-            }
-            decimal_div(&integer_to_decimal(*x), y)
-        }
-        (Dec(x), Integer { value: y, .. }) => {
-            if *y == 0 {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Decimal,
-                });
-            }
-            decimal_div(x, &integer_to_decimal(*y))
-        }
         _ => Err(XsdError::TypeMismatch {
             reason: "non-numeric operand in div",
         }),
     }
 }
 
-/// Exact decimal long division, producing up to `MAX_DECIMAL_SCALE` (18) fractional
-/// digits by truncation toward zero — the precision rule for `op:numeric-divide` on
-/// decimals, which XPath F&O 3.1 §4.2 (the arithmetic rules §4.2.4
-/// `op:numeric-divide` follows) leaves implementation-defined.
-///
-/// The quotient is `trunc(dividend × 10^S / divisor)` at the finest scale
-/// `S ≤ 18` whose mantissa fits the `i128` the value space holds: the exact quotient
-/// whenever it is representable (`10^21 / 2` is `5 × 10^20`, although its scale-18
-/// mantissa would not fit), otherwise the quotient truncated toward zero at that
-/// scale. The intermediate `dividend_m × 10^shift` is formed in 256 bits
-/// ([`crate::wide::mul_div`]), so it never overflows; only a quotient whose integer
-/// part exceeds `i128` is refused, with [`XsdError::OutOfRange`] (`err:FOAR0002`).
-fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdError> {
-    decimal_div_raw(dividend, divisor).map(XsdValue::Decimal)
-}
-
-/// The exact-decimal-division math behind [`decimal_div`], returning the raw
-/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ÷
+/// The retained bounded temporal-division math, returning raw [`Decimal`].
+/// Used by `temporal.rs` (duration ÷
 /// numeric and `dayTimeDuration` ÷ `dayTimeDuration`, XPath F&O
 /// `op:divide-dayTimeDuration`/`op:divide-dayTimeDuration-by-dayTimeDuration`).
 ///
-/// Every current caller (in this module and in `temporal.rs`) already checks its own
+/// Every current caller in `temporal.rs` already checks its own
 /// divisor and returns a datatype-specific `Err(DivisionByZero)` before ever reaching
 /// here, so this function's own zero check normally never fires. It is not, however,
 /// a `debug_assert!`: this is `pub(crate)` and reachable from more than one call
@@ -2275,9 +2219,9 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
     // scale S is trunc(dm × 10^(S + vs - ds) / vm). The result is that mantissa at the
     // finest scale S ≤ MAX_DECIMAL_SCALE whose mantissa fits the i128 the value space
     // holds: the exact quotient whenever it is representable, else the quotient
-    // truncated toward zero at that scale (XPath F&O 3.1 §4.2, which §4.2.4 follows,
-    // leaves the precision of a decimal quotient implementation-defined; this crate
-    // truncates, as documented on `decimal_div`). Only a quotient whose integer part
+    // truncated toward zero at that scale. This bounded arithmetic remains for
+    // temporal durations; exact numeric division uses the tower above. Only a
+    // quotient whose integer part
     // alone exceeds i128 is an overflow (`err:FOAR0002`).
     let dm = dividend.mantissa();
     let vm = divisor.mantissa();
@@ -3208,16 +3152,17 @@ mod tests {
 
     #[test]
     fn integer_parse_and_bounds() {
-        assert_eq!(parse_integer("42").unwrap(), 42);
-        assert_eq!(parse_integer("-7").unwrap(), -7);
-        assert_eq!(parse_integer("+7").unwrap(), 7);
-        assert_eq!(parse_integer("007").unwrap(), 7);
-        assert_eq!(parse_integer(&i128::MAX.to_string()).unwrap(), i128::MAX);
-        // i128::MAX + 1 overflows -> hard OutOfRange, not saturation.
-        assert!(matches!(
-            parse_integer("170141183460469231731687303715884105728"),
-            Err(XsdError::OutOfRange { .. })
-        ));
+        let small = |text| parse_integer(text).unwrap().as_i128();
+        assert_eq!(small("42"), Some(42));
+        assert_eq!(small("-7"), Some(-7));
+        assert_eq!(small("+7"), Some(7));
+        assert_eq!(small("007"), Some(7));
+        assert_eq!(small(&i128::MAX.to_string()), Some(i128::MAX));
+        // The public reader keeps the first value past i128 exactly.
+        let past = "170141183460469231731687303715884105728";
+        let parsed = parse_integer(past).unwrap();
+        assert_eq!(parsed.as_i128(), None);
+        assert_eq!(parsed.canonical_lexical(), past);
         assert!(parse_integer("1.0").is_err());
         assert!(parse_integer("").is_err());
         assert!(parse_integer("abc").is_err());
@@ -3225,48 +3170,55 @@ mod tests {
 
     #[test]
     fn parse_integer_typed_range_checks() {
+        let small = |text, datatype| parse_integer_typed(text, datatype).unwrap().as_i128();
         // xsd:byte: -128..127
-        assert_eq!(parse_integer_typed("127", D::Byte).unwrap(), 127);
-        assert_eq!(parse_integer_typed("-128", D::Byte).unwrap(), -128);
+        assert_eq!(small("127", D::Byte), Some(127));
+        assert_eq!(small("-128", D::Byte), Some(-128));
         assert!(parse_integer_typed("128", D::Byte).is_err());
         assert!(parse_integer_typed("-129", D::Byte).is_err());
 
         // xsd:unsignedByte: 0..255
-        assert_eq!(parse_integer_typed("255", D::UnsignedByte).unwrap(), 255);
-        assert_eq!(parse_integer_typed("0", D::UnsignedByte).unwrap(), 0);
+        assert_eq!(small("255", D::UnsignedByte), Some(255));
+        assert_eq!(small("0", D::UnsignedByte), Some(0));
         assert!(parse_integer_typed("256", D::UnsignedByte).is_err());
         assert!(parse_integer_typed("-1", D::UnsignedByte).is_err());
 
         // xsd:positiveInteger: >= 1
-        assert_eq!(parse_integer_typed("1", D::PositiveInteger).unwrap(), 1);
+        assert_eq!(small("1", D::PositiveInteger), Some(1));
         assert!(parse_integer_typed("0", D::PositiveInteger).is_err());
 
         // xsd:negativeInteger: <= -1
-        assert_eq!(parse_integer_typed("-1", D::NegativeInteger).unwrap(), -1);
+        assert_eq!(small("-1", D::NegativeInteger), Some(-1));
         assert!(parse_integer_typed("0", D::NegativeInteger).is_err());
 
         // xsd:nonNegativeInteger: >= 0
-        assert_eq!(parse_integer_typed("0", D::NonNegativeInteger).unwrap(), 0);
+        assert_eq!(small("0", D::NonNegativeInteger), Some(0));
         assert!(parse_integer_typed("-1", D::NonNegativeInteger).is_err());
 
         // xsd:nonPositiveInteger: <= 0
-        assert_eq!(parse_integer_typed("0", D::NonPositiveInteger).unwrap(), 0);
+        assert_eq!(small("0", D::NonPositiveInteger), Some(0));
         assert!(parse_integer_typed("1", D::NonPositiveInteger).is_err());
 
         // xsd:unsignedLong boundary: u64::MAX should pass; u64::MAX+1 should fail
         let u64max = u64::MAX.to_string();
-        assert_eq!(
-            parse_integer_typed(&u64max, D::UnsignedLong).unwrap(),
-            i128::from(u64::MAX)
-        );
+        assert_eq!(small(&u64max, D::UnsignedLong), Some(i128::from(u64::MAX)));
         assert!(parse_integer_typed("18446744073709551616", D::UnsignedLong).is_err());
 
         // xsd:int: 2147483647 ok, 2147483648 fails
-        assert_eq!(
-            parse_integer_typed("2147483647", D::Int).unwrap(),
-            2_147_483_647
-        );
+        assert_eq!(small("2147483647", D::Int), Some(2_147_483_647));
         assert!(parse_integer_typed("2147483648", D::Int).is_err());
+
+        let past = "170141183460469231731687303715884105728";
+        assert_eq!(
+            parse_integer_typed(past, D::NonNegativeInteger)
+                .unwrap()
+                .canonical_lexical(),
+            past
+        );
+        assert!(matches!(
+            parse_integer_typed(past, D::NegativeInteger),
+            Err(XsdError::OutOfRange { .. })
+        ));
     }
 
     #[test]
@@ -4209,7 +4161,7 @@ mod tests {
         Some(decimal.canonical_lexical())
     }
 
-    /// The decimal quotient the division rule defines, from the exact rational
+    /// The former bounded decimal quotient, from the exact rational
     /// `dividend / divisor` with integer arithmetic only
     /// ([`purrdf_testkit::exact`]): truncated toward zero at the finest scale `S ≤ 18`
     /// whose mantissa fits an `i128`, as `(mantissa, S)`; `None` when none does.
@@ -4228,12 +4180,17 @@ mod tests {
         })
     }
 
-    /// Hold `numeric_div` on two decimals to the oracle: the same value, or the
-    /// typed overflow when no representable quotient exists.
+    /// Hold the explicit legacy `18:toward-zero` policy on two decimals to the
+    /// oracle. This preserves the original baseline independently of the new
+    /// exact-or-rounded default.
     fn assert_decimal_quotient(dividend: Decimal, divisor: Decimal) {
         use purrdf_testkit::exact::{Direction, Rational as Oracle};
-        let got = numeric_div(&XsdValue::Decimal(dividend), &XsdValue::Decimal(divisor))
-            .unwrap_or_else(|error| panic!("{dividend:?} / {divisor:?}: {error}"));
+        let got = numeric_div_with_policy(
+            &XsdValue::Decimal(dividend),
+            &XsdValue::Decimal(divisor),
+            DivisionPolicy::scale(18, crate::exact::Rounding::TowardZero),
+        )
+        .unwrap_or_else(|error| panic!("{dividend:?} / {divisor:?}: {error}"));
         // The quotient at eighteen digits, truncated — from the oracle, at any size.
         let exact = Oracle::from_decimal(dividend.mantissa(), u32::from(dividend.scale()))
             .div(&Oracle::from_decimal(
@@ -4260,7 +4217,7 @@ mod tests {
     }
 
     #[test]
-    fn decimal_division_matches_the_exact_oracle() {
+    fn explicit_legacy_decimal_division_matches_the_exact_oracle() {
         let mut state = 0xD1F1_DE5A_u64;
         let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
         let int = |next: &mut dyn FnMut() -> u64| {

@@ -3006,7 +3006,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Set the precision an `xsd:integer`/`xsd:decimal` quotient is formed at — for
     /// `/` and for `AVG` alike. The default,
     /// [`DivisionPolicy::xsd_default`](purrdf_xsd::exact::DivisionPolicy::xsd_default),
-    /// is eighteen fractional digits truncated toward zero.
+    /// keeps terminating quotients exact and rounds repeating ones to eighteen
+    /// fractional digits, half to even.
     #[must_use]
     pub const fn with_division_policy(
         mut self,

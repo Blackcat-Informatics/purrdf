@@ -3633,8 +3633,7 @@ pub(crate) fn aggregate_numeric_cost(
     // which the tower adds in five limbs — a constant per row that the row's own
     // aggregate-accumulation charge already covers.
     let machine_words = survivors.iter().all(crate::expr::machine_word_lexical);
-    let tower_mean =
-        matches!(function, AggregateFunction::Avg) && division != DivisionPolicy::xsd_default();
+    let tower_mean = matches!(function, AggregateFunction::Avg);
     if machine_words && !tower_mean {
         return purrdf_xsd::exact::Cost::ZERO;
     }
@@ -3645,7 +3644,7 @@ pub(crate) fn aggregate_numeric_cost(
             let Some(total) = total else {
                 return chain;
             };
-            if total.is_bounded() && division == DivisionPolicy::xsd_default() {
+            if total.is_bounded() && matches!(function, AggregateFunction::Sum) {
                 return chain;
             }
             chain.then(aggregate_numeric_tail_cost::<false>(
@@ -3672,7 +3671,7 @@ fn aggregate_numeric_tail_cost<const CHECK_FAST_PATH: bool>(
     division: DivisionPolicy,
 ) -> purrdf_xsd::exact::Cost {
     use purrdf_xsd::exact::{Cost, cost::Shape};
-    if CHECK_FAST_PATH && total.is_bounded() && division == DivisionPolicy::xsd_default() {
+    if CHECK_FAST_PATH && total.is_bounded() && matches!(function, AggregateFunction::Sum) {
         return Cost::ZERO;
     }
     if matches!(function, AggregateFunction::Sum) {

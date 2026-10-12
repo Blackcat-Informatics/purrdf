@@ -67,11 +67,18 @@ fn query_answers_past_machine_words_exactly() {
 #[test]
 fn division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbound() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
-    // The default: eighteen digits, truncated.
-    let out = query(dir.path(), &[], "SELECT (1 / 3 AS ?q) WHERE {}");
+    // The default keeps terminating digits and rounds repeating quotients.
+    let out = query(dir.path(), &[], "SELECT (2 / 3 AS ?q) WHERE {}");
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("0.333333333333333333"),
+        stdout(&out).contains("0.666666666666666667"),
+        "{}",
+        stdout(&out)
+    );
+    let out = query(dir.path(), &[], "SELECT (1 / 1048576 AS ?q) WHERE {}");
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("0.00000095367431640625"),
         "{}",
         stdout(&out)
     );

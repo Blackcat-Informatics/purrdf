@@ -29,8 +29,8 @@
 //! let b: Decimal = "-0.1".parse()?;
 //! assert_eq!((&a + &b).canonical_lexical(), "0.0000000000000000000000000000000000000001");
 //!
-//! // Division under a stated precision policy; the default matches the bounded
-//! // machine-word quotient (18 digits, truncated).
+//! // The default keeps terminating quotients exact and rounds repeating ones
+//! // to eighteen fractional digits, half to even.
 //! let third = Decimal::ONE.div(&Decimal::from(3), DivisionPolicy::default())?;
 //! assert_eq!(third.canonical_lexical(), "0.333333333333333333");
 //! let rounded = Decimal::from(2).div(&Decimal::from(3), DivisionPolicy::scale(5, Rounding::HalfEven))?;
@@ -72,9 +72,8 @@
 //! stated [`Rounding`] direction; [`DivisionPolicy::Exact`] returns the exact
 //! expansion or refuses a non-terminating quotient with
 //! [`ExactError::NonTerminating`]. The default, [`DivisionPolicy::xsd_default`],
-//! is eighteen digits truncated toward zero — the quotient the bounded
-//! [`crate::numeric::Decimal`] produces wherever its `i128` coefficient holds the
-//! result.
+//! keeps a terminating quotient exact and otherwise rounds to eighteen
+//! fractional digits, half to even.
 //!
 //! # Why an exact rational type
 //!

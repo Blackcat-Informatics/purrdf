@@ -59,6 +59,13 @@ Several cases share one `(data, query)` pair — that is the point of the band
 matrix: the *only* thing that differs between `fuel-zero`, `fuel-boundary` and
 `fuel-over-bound` is the ceiling.
 
+The `numeric-default-fuel-*` pair pins profile v17's exact-first division:
+`1 / 2^70` retains its full terminating decimal, while `1 / 6` rounds half to
+even at eighteen fractional digits. Its fuel ceiling is measured from the same
+query and checked at the completing boundary and one unit below it. A scratch
+ceiling cannot use the metered retained-byte total as its boundary for this
+query because transient numeric working storage also needs admission.
+
 ## Three records, not one
 
 Each case pins three facts, and keeping them apart is deliberate:

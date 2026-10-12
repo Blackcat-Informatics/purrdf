@@ -149,7 +149,7 @@ fn division_follows_the_policy_and_refuses_only_what_it_must() {
     let one = int("1");
     let three = int("3");
     let eight = int("8");
-    // The default: eighteen digits, truncated — the bounded quotient.
+    // The default rounds a repeating quotient to eighteen digits, half to even.
     assert_eq!(
         numeric_div(&one, &three)
             .expect("default")
@@ -292,13 +292,10 @@ fn cost_is_charged_for_every_tower_operation() {
     let near = int(&"9".repeat(300));
     assert!(numeric_cost(&near, &dbl("1"), CostOp::Add).work() > 100);
     assert_eq!(numeric_cost(&small, &dbl("1"), CostOp::Add).work(), 0);
-    // A division under a non-default policy runs on the tower for any operands.
+    // Every exact-value division, including the default, runs on the tower.
     let exact = DivisionPolicy::Exact;
     assert!(numeric_cost(&small, &int("3"), CostOp::Div(exact)).work() > 0);
-    assert_eq!(
-        numeric_cost(&small, &int("3"), CostOp::Div(DivisionPolicy::default())).work(),
-        0
-    );
+    assert!(numeric_cost(&small, &int("3"), CostOp::Div(DivisionPolicy::default())).work() > 0);
     assert!(
         numeric_cost(&big, &small, CostOp::Div(DivisionPolicy::default())).work()
             >= numeric_cost(&big, &small, CostOp::Add).work()

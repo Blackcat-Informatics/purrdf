@@ -3,7 +3,7 @@
 """`division=` and `GovernorEvidence.expression_errors` on the Python surface.
 
 `division` is the precision of every `xsd:integer`/`xsd:decimal` quotient, in the
-one text form every PurRDF surface reads (`exact`, `N`, `N:ROUNDING`). Under
+one text form every PurRDF surface reads (`exact`, `N`, `N:ROUNDING`, `exact-or-N[:ROUNDING]`). Under
 `exact` a quotient with no finite decimal expansion is a SPARQL expression error:
 unbound, like `1/0`, never a raised error. Each refusal and each unbound value here
 sits beside a valid neighbour that must still answer.
@@ -71,11 +71,11 @@ def test_a_scale_and_rounding_policy_rounds_the_quotient() -> None:
     assert _value(store.query(_select("2/3"), division="5")) == "0.66666"
 
 
-def test_the_default_is_eighteen_digits_truncated_toward_zero() -> None:
+def test_the_default_keeps_terminating_digits_and_rounds_repeating_quotients() -> None:
     store = _store()
 
-    assert _value(store.query(_select("1/3"))) == "0.333333333333333333"
-    assert _value(store.query(_select("1/3"), division=None)) == "0.333333333333333333"
+    assert _value(store.query(_select("1/1048576"))) == "0.00000095367431640625"
+    assert _value(store.query(_select("2/3"), division=None)) == "0.666666666666666667"
 
 
 @pytest.mark.parametrize("text", ["5:sideways", "", "exactly", "-1", "5:"])
