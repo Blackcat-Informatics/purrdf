@@ -133,6 +133,7 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
+// Native allocation primitives confine unsafe code to their storage modules.
 #![deny(unsafe_code)]
 
 pub mod allocation;

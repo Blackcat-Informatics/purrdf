@@ -415,6 +415,8 @@ pub struct QueryExplanation {
     /// this is taken from verbatim, so the list is a function of what was registered
     /// rather than of registration order.
     aggregates: AdmittedRecords<AggDescriptor>,
+    /// Exact selected strategies at original logical nodes, with actual work.
+    shapes: AdmittedVec<crate::shapes::ShapeReport>,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
@@ -491,6 +493,7 @@ impl Clone for QueryExplanation {
             self.relations.to_vec(),
             self.aggregates.to_vec(),
             self.evidence.clone(),
+            self.shapes.to_vec(),
         )
     }
 }
@@ -502,6 +505,7 @@ impl QueryExplanation {
         relations: Vec<PfDescriptor>,
         aggregates: Vec<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
+        shapes: Vec<crate::shapes::ShapeReport>,
     ) -> Self {
         Self {
             profile: ProfileIdentity::current(),
@@ -509,6 +513,7 @@ impl QueryExplanation {
             ledger: AdmittedVec::from_parts(ledger, None, &crate::WorkspaceCapability::resident()),
             relations: AdmittedRecords::resident(relations),
             aggregates: AdmittedRecords::resident(aggregates),
+            shapes: AdmittedVec::from_parts(shapes, None, &crate::WorkspaceCapability::resident()),
             evidence,
             _profile_allocation: None,
         }
@@ -522,6 +527,7 @@ impl QueryExplanation {
         relations: AdmittedRecords<PfDescriptor>,
         aggregates: AdmittedRecords<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
+        shapes: AdmittedVec<crate::shapes::ShapeReport>,
     ) -> Self {
         Self {
             profile: profile.0,
@@ -529,6 +535,7 @@ impl QueryExplanation {
             ledger,
             relations,
             aggregates,
+            shapes,
             evidence,
             _profile_allocation: Some(profile.1),
         }
@@ -586,6 +593,12 @@ impl QueryExplanation {
     #[must_use]
     pub const fn evidence(&self) -> &purrdf_core::GovernorEvidence {
         &self.evidence
+    }
+
+    /// Physical strategies and measured work; estimates remain distinct.
+    #[must_use]
+    pub fn shapes(&self) -> &[crate::shapes::ShapeReport] {
+        &self.shapes
     }
 
     /// The stable text rendering: a profile header, the charge schedule, the per-node
@@ -677,6 +690,30 @@ impl QueryExplanation {
         let _ = writeln!(out, "join-orders");
         for pattern in self.join_orders.iter() {
             let _ = writeln!(out, "  {pattern}");
+        }
+        if !self.shapes.is_empty() {
+            let _ = writeln!(out, "physical-shapes");
+            for shape in &self.shapes {
+                let _ = writeln!(
+                    out,
+                    "  #{} {}:{} estimate={:?} visits={} transitions={} rows={}",
+                    shape.node.unwrap_or(0),
+                    shape.provider.unwrap_or("host"),
+                    shape.operator.unwrap_or("declined"),
+                    shape.estimate.access,
+                    shape.work.source_visits,
+                    shape.work.transitions,
+                    shape.work.output_rows
+                );
+                if let Some(cost) = shape.estimate.access {
+                    let _ = writeln!(
+                        out,
+                        "    estimated-work={} estimated-rows={}",
+                        cost.work(),
+                        cost.rows()
+                    );
+                }
+            }
         }
         let _ = writeln!(out, "consumed");
         for dimension in purrdf_core::ResourceDimension::ALL {

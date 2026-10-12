@@ -471,6 +471,15 @@ impl RenderedQuery {
     /// ceiling (or, for a self-bounding producer, the depth argument in its call)
     /// and the unit's outer bound. Neither is stored, so neither can be replaced.
     fn text(&self, depth: ProbedDepth, declared_rows: Option<u64>) -> String {
+        self.text_retaining_outputs(depth, declared_rows, false)
+    }
+
+    fn text_retaining_outputs(
+        &self,
+        depth: ProbedDepth,
+        declared_rows: Option<u64>,
+        retain: bool,
+    ) -> String {
         let render = |position: usize, argument: &UnitArgument| match argument {
             UnitArgument::Placed(text) => text.clone(),
             // The variable the projections below read the candidate and the block
@@ -498,7 +507,7 @@ impl RenderedQuery {
         let candidate = self.candidate;
         // One projection per position the unit reads back, in the order the executor
         // reads them: the candidate, then the block where the producer declared one.
-        let (projected, projections) = match self.block {
+        let (mut projected, mut projections) = match self.block {
             None => (
                 format!("?{CANDIDATE_NAME}"),
                 format!("(?c{candidate} AS ?{CANDIDATE_NAME})"),
@@ -508,6 +517,15 @@ impl RenderedQuery {
                 format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})"),
             ),
         };
+        if retain {
+            for (position, argument) in self.arguments().enumerate() {
+                if matches!(argument, UnitArgument::Free) {
+                    use core::fmt::Write as _;
+                    write!(projected, " ?c{position}").expect("string formatting");
+                    write!(projections, " ?c{position}").expect("string formatting");
+                }
+            }
+        }
         // A producer that took the depth as an argument bounds itself, with the
         // number rendered into that argument above — which carries the probe row
         // wherever its own declaration leaves room for it. One that did not is
@@ -1315,6 +1333,17 @@ impl StratumUnit {
         }
     }
 
+    /// The same original bounded invocation with its authored output columns
+    /// retained for scoped score/distance receipts. Ordinary emission is unchanged.
+    pub(crate) fn sparql_scoped(&self) -> String {
+        match &self.query {
+            UnitQuery::Rendered(rendered) => {
+                rendered.text_retaining_outputs(self.depth, self.declared_rows, true)
+            }
+            UnitQuery::Supplied { .. } => self.sparql(),
+        }
+    }
+
     /// The query text a caller supplied, or `None` for a query this layer rendered.
     ///
     /// Read-only, and the read is not the hazard: a caller may look at, log or re-run
@@ -1521,6 +1550,7 @@ impl UnitAttribution {
 /// and reporting the first shifted tag would name a unit nothing was done to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
+    constraints: Vec<crate::RequestTerm>,
     /// Per-stratum query units, ordered by stratum IRI.
     ///
     /// Writable, and checked rather than sealed: a caller may substitute a unit's
@@ -1588,6 +1618,11 @@ pub(crate) mod sealed {
 pub trait CompiledRead: sealed::Sealed {
     /// The output carrier belonging to this bundle's requested stage.
     type Output<'d>;
+    /// Original admitted hard membership conditions, independent of rank terms.
+    #[doc(hidden)]
+    fn constraints(&self) -> &[crate::RequestTerm] {
+        &[]
+    }
     /// The actual native units to execute.
     #[doc(hidden)]
     fn units(&self) -> &[StratumUnit];
@@ -1604,14 +1639,17 @@ pub trait CompiledRead: sealed::Sealed {
     #[doc(hidden)]
     fn finish<'d>(
         &self,
-        streams: Vec<crate::execute::ReadStratum<'d>>,
-        statuses: purrdf_core::FastMap<Iri, crate::fusion_stream::ProducerStatus>,
-    ) -> Self::Output<'d>;
+        streams: purrdf_sparql_eval::AdmittedVec<crate::execute::ReadStratum<'d>>,
+        statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, crate::fusion_stream::ProducerStatus>,
+    ) -> Result<Self::Output<'d>, ExecutionError>;
 }
 
 impl sealed::Sealed for CompiledRetrieval {}
 impl CompiledRead for CompiledRetrieval {
     type Output<'d> = crate::execute::ExecutionResult<'d>;
+    fn constraints(&self) -> &[crate::RequestTerm] {
+        &self.constraints
+    }
     fn units(&self) -> &[StratumUnit] {
         &self.units
     }
@@ -1626,27 +1664,56 @@ impl CompiledRead for CompiledRetrieval {
     }
     fn finish<'d>(
         &self,
-        streams: Vec<crate::execute::ReadStratum<'d>>,
-        statuses: purrdf_core::FastMap<Iri, crate::fusion_stream::ProducerStatus>,
-    ) -> Self::Output<'d> {
-        crate::execute::ExecutionResult {
-            streams: streams
-                .into_iter()
-                .map(|stream| crate::execute::StratumStream {
-                    stratum: stream.stratum,
-                    plan_id: stream.plan_id,
-                    fused_bound: self.fused_bound,
-                    contract: stream.contract,
-                    attestation: stream.attestation,
-                    stream: stream.stream,
-                })
-                .collect(),
+        streams: purrdf_sparql_eval::AdmittedVec<crate::execute::ReadStratum<'d>>,
+        statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, crate::fusion_stream::ProducerStatus>,
+    ) -> Result<Self::Output<'d>, ExecutionError> {
+        let workspace = statuses.workspace().clone();
+        Ok(crate::execute::ExecutionResult {
+            streams: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                streams
+                    .into_iter()
+                    .map(|stream| crate::execute::StratumStream {
+                        stratum: stream.stratum,
+                        plan_id: stream.plan_id,
+                        fused_bound: self.fused_bound,
+                        contract: stream.contract,
+                        attestation: stream.attestation,
+                        stream: stream.stream,
+                    }),
+                &workspace,
+            )
+            .map_err(ExecutionError::NativeFailure)?,
             statuses,
-        }
+        })
     }
 }
 
 impl CompiledRetrieval {
+    /// Publish the admitted waist's exact resolution under an execution authority.
+    ///
+    /// # Errors
+    /// Returns the original key, nested array, arena or control refusal.
+    pub fn resolution_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<
+        purrdf_sparql_eval::SharedWorkspace<
+            purrdf_sparql_eval::AdmittedOrderedMap<Iri, PlannedResolution>,
+        >,
+        purrdf_sparql_eval::EvalError,
+    > {
+        let values = purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+            self.resolution.iter().map(|(stratum, resolution)| {
+                Ok((
+                    stratum.clone_admitted(workspace)?,
+                    resolution.clone_admitted(workspace)?,
+                ))
+            }),
+            workspace,
+        )?;
+        purrdf_sparql_eval::SharedWorkspace::new_admitted(values, workspace)
+    }
+
     /// Assemble a bundle out of `units` and the identities that pin them.
     ///
     /// This is the seam a caller starts at to drive [`execute`](crate::execute) over a
@@ -1671,6 +1738,7 @@ impl CompiledRetrieval {
     ) -> Self {
         let attribution = units.iter().map(UnitAttribution::of).collect();
         Self {
+            constraints: Vec::new(),
             units,
             plan_id,
             registry_id,
@@ -1782,10 +1850,35 @@ pub struct PlannedResolution {
     /// Empty only for a stratum this plan gave a depth and no producer, which
     /// emits no unit, contributes no stream and therefore has no declaration to
     /// meet anyone else's.
-    pub sharing_weights: Vec<Fixed>,
+    pub sharing_weights:
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Fixed>>,
 }
 
 impl PlannedResolution {
+    /// Copy caller weights once through their original admitted array home.
+    ///
+    /// # Errors
+    /// Returns the first nested array or shared-control refusal.
+    pub fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        if self.sharing_weights.workspace().is_bounded() {
+            return Ok(self.clone());
+        }
+        Ok(Self {
+            separation: self.separation,
+            requested_depth: self.requested_depth,
+            sharing_weights: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                    self.sharing_weights.iter().copied(),
+                    workspace,
+                )?,
+                workspace,
+            )?,
+        })
+    }
+
     /// Whether every rank this plan reads is still separated from its
     /// neighbours by score alone.
     ///
@@ -1883,7 +1976,15 @@ pub fn compile(
                         PlannedResolution {
                             separation,
                             requested_depth: depth.get(),
-                            sharing_weights,
+                            sharing_weights: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                                purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                                    sharing_weights,
+                                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                                )
+                                .expect("resident planning weights"),
+                                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                            )
+                            .expect("resident planning publication"),
                         },
                     )
                 })
@@ -1891,14 +1992,16 @@ pub fn compile(
             .collect()
     });
 
-    Ok(CompiledRetrieval::new(
+    let mut compiled = CompiledRetrieval::new(
         units,
         plan.id(),
         admitted.instance_id,
         admitted.fingerprint,
         fused_bound(plan),
         resolution,
-    ))
+    );
+    compiled.constraints.clone_from(&plan.constraints);
+    Ok(compiled)
 }
 
 /// Emit units from the single admitted placement/depth view. Candidate work

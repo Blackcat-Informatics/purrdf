@@ -726,8 +726,7 @@ fn delete_insert(
                 e.to_string(),
             )
         })?
-        .into_complete()
-        .map_err(|truncation| UpdateAbort::Tripped(truncation.tripped()))?;
+        .into_complete(|truncation| UpdateAbort::Tripped(truncation.tripped()))?;
     let schema = seq.schema.clone();
 
     // Each DELETE/INSERT template quad's column ordinals, resolved ONCE against

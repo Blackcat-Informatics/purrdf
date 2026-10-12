@@ -78,6 +78,9 @@ mod registry;
 use purrdf_retrieval::block_on;
 use purrdf_retrieval::fixture::iri;
 use registry::{entities, kernel_iri};
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 /// The reciprocal-rank smoothing constant this host fuses under.
 const K: u32 = 60;
 /// The row bound this host asks for. Fused enumeration is top-k by
@@ -86,7 +89,546 @@ const K: u32 = 60;
 /// decided by it.
 const TOP_K: TopK = TopK::new(16);
 
-#[test]
+#[derive(Debug)]
+struct OriginalTimeConstraint {
+    concern: TermValue,
+    cause: TermValue,
+}
+
+impl OriginalTimeConstraint {
+    fn description(&self) -> purrdf_core::evidence::ReasonDescription<'_> {
+        purrdf_core::evidence::ReasonDescription {
+            cause: &self.cause,
+            concern: &self.concern,
+            constraint: None,
+            vault: None,
+            watermark: None,
+        }
+    }
+}
+
+impl purrdf_sparql_eval::CandidateConstraint for OriginalTimeConstraint {
+    fn identity(&self) -> purrdf_hash::hex::Digest32 {
+        purrdf_hash::hex::Digest32::new([7; 32])
+    }
+
+    fn decide(
+        &self,
+        candidate: &TermValue,
+        evidence: &purrdf_sparql_eval::QueryEvidence,
+        _: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_core::query_scope::ConstraintDecision, EvalError> {
+        use purrdf_core::query_scope::ConstraintDecision;
+        if candidate == &TermValue::iri(ex("a")) {
+            return Ok(ConstraintDecision::Rejected);
+        }
+        if candidate == &TermValue::iri(ex("b")) {
+            return evidence
+                .declare_reason(self.description())
+                .map(ConstraintDecision::Undecided);
+        }
+        Ok(ConstraintDecision::Satisfied)
+    }
+}
+
+struct OriginalClosedScope;
+
+/// The original resident corpus behind a view that promises bounded residency
+/// but cannot retain an owned native query account.
+struct UnpricedOriginalView(Arc<RdfDataset>);
+impl purrdf_core::DatasetView for UnpricedOriginalView {
+    type Id = purrdf_core::TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a>
+        = purrdf_core::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
+    type ProbePlan = ();
+    fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+        self.0.quads()
+    }
+    fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        purrdf_core::DatasetView::resolve(&self.0, id)
+    }
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        purrdf_core::DatasetView::term_id_by_value(&self.0, value)
+    }
+    fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+        purrdf_core::DatasetView::capabilities(&self.0)
+    }
+    fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+    fn quads_for_pattern_with_plan(
+        &self,
+        (): &(),
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: purrdf_core::GraphMatch,
+    ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+        self.0.quads_for_pattern(s, p, o, g)
+    }
+    fn term_count(&self) -> u64 {
+        purrdf_core::DatasetView::term_count(&self.0)
+    }
+    fn storage_live_budget(&self) -> Option<u64> {
+        Some(1)
+    }
+}
+
+fn scoped_native_owner_refusal_precedes_original_producer_open() {
+    let inner = TextSearchRelation::new(Arc::new(text_index()));
+    let declaration = inner
+        .ranked_declaration(
+            kernel_iri(TEXT_STRATUM),
+            Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        )
+        .unwrap();
+    let opened = Arc::new(AtomicU64::new(0));
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        TEXT_PF,
+        Arc::new(CountingTextRelation {
+            inner,
+            opened: opened.clone(),
+            refuse_suffix: None,
+            attachment: None,
+        }),
+        declaration,
+    );
+    let request = lexical_request("alpha");
+    let profile = profile();
+    let environment = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let compiled = compile(
+        &plan(&request, &registry, &NoStatistics).unwrap(),
+        &environment,
+    )
+    .unwrap();
+    let data = UnpricedOriginalView(dataset());
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&[]);
+    for schedule in [ReadSchedule::OnDemand, ReadSchedule::Materialised] {
+        let error = block_on(purrdf_retrieval::execute_scoped_within(
+            &compiled,
+            &registry,
+            &data,
+            schedule,
+            &bindings,
+            &OriginalClosedScope,
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                purrdf_retrieval::ExecutionError::NativeFailure(EvalError::WorkspaceUnpriced(
+                    "a view without owned reporting admission"
+                ))
+            ),
+            "{error:?}"
+        );
+    }
+    assert_eq!(opened.load(Ordering::Relaxed), 0);
+}
+
+#[derive(Debug)]
+struct OriginalAdmissionRefusal(AtomicU64);
+impl purrdf_sparql_eval::CandidateConstraint for OriginalAdmissionRefusal {
+    fn identity(&self) -> purrdf_hash::hex::Digest32 {
+        purrdf_hash::hex::Digest32::new([9; 32])
+    }
+    fn decide(
+        &self,
+        _: &TermValue,
+        _: &purrdf_sparql_eval::QueryEvidence,
+        _: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_core::query_scope::ConstraintDecision, EvalError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Err(EvalError::AllocationFailed {
+            construct: "original scoped candidate admission",
+        })
+    }
+}
+
+fn scoped_native_admission_refusal_invalidates_before_any_ranked_row() {
+    let registry = registry();
+    let data = dataset();
+    let request = request().with_constraints(vec![RequestTerm::Temporal {
+        predicate: iri("https://example.org/when"),
+        lower: Some("2026-10-10T00:00:00Z".to_owned()),
+        upper: None,
+    }]);
+    let refusal = OriginalAdmissionRefusal(AtomicU64::new(0));
+    let bindings = [purrdf_retrieval::ConstraintBinding {
+        request: &request.constraints[0],
+        evaluator: &refusal,
+    }];
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&bindings);
+    let profile = profile();
+    let environment = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request, &registry, &NoStatistics).unwrap();
+    let compiled = compile(&planned, &environment).unwrap();
+    // CandidateScope is borrowed only while the original producer opens;
+    // native candidate generation can fail before a ranked cursor exists.
+    // Neither schedule may turn that typed refusal into a zero-row stratum.
+    for schedule in [ReadSchedule::OnDemand, ReadSchedule::Materialised] {
+        let failure = block_on(purrdf_retrieval::execute_scoped_within(
+            &compiled,
+            &registry,
+            &data,
+            schedule,
+            &bindings,
+            &OriginalClosedScope,
+        ))
+        .expect_err("native admission refusal publishes no ranked execution");
+        assert!(
+            matches!(
+                failure,
+                purrdf_retrieval::ExecutionError::NativeFailure(EvalError::AllocationFailed {
+                    construct: "original scoped candidate admission"
+                })
+            ),
+            "original typed native cause survives: {failure:?}"
+        );
+    }
+    assert!(
+        refusal.0.load(Ordering::Relaxed) > 0,
+        "the actual shipped producer reached its native constraint"
+    );
+}
+
+struct OriginalOpenScope<'a> {
+    declaration: &'a OriginalTimeConstraint,
+    reason: purrdf_core::evidence::ReasonId,
+}
+
+impl purrdf_sparql_eval::EvidenceSource<purrdf_core::TermId> for OriginalOpenScope<'_> {
+    fn claim(
+        &self,
+        _: &purrdf_core::QuadIds,
+    ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
+        Ok(None)
+    }
+
+    fn scope(
+        &self,
+        _: purrdf_core::GraphMatch,
+    ) -> Result<purrdf_sparql_eval::EvidenceScope, EvalError> {
+        Ok(purrdf_sparql_eval::EvidenceScope {
+            completeness: purrdf_core::evidence::SearchCompleteness::Undetermined,
+            closure_declared: false,
+            missing_reason: Some(self.reason),
+        })
+    }
+
+    fn reason(
+        &self,
+        id: purrdf_core::evidence::ReasonId,
+    ) -> Result<Option<purrdf_core::evidence::ReasonDescription<'_>>, EvalError> {
+        Ok((id == self.reason).then(|| self.declaration.description()))
+    }
+}
+
+impl purrdf_sparql_eval::EvidenceSource<purrdf_core::TermId> for OriginalClosedScope {
+    fn claim(
+        &self,
+        _: &purrdf_core::QuadIds,
+    ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
+        Ok(None)
+    }
+
+    fn scope(
+        &self,
+        _: purrdf_core::GraphMatch,
+    ) -> Result<purrdf_sparql_eval::EvidenceScope, EvalError> {
+        Ok(purrdf_sparql_eval::EvidenceScope {
+            completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+            closure_declared: true,
+            missing_reason: None,
+        })
+    }
+
+    fn reason(
+        &self,
+        _: purrdf_core::evidence::ReasonId,
+    ) -> Result<Option<purrdf_core::evidence::ReasonDescription<'_>>, EvalError> {
+        Ok(None)
+    }
+}
+
+fn scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion() {
+    let registry = registry();
+    let data = dataset();
+    let request = request().with_constraints(vec![RequestTerm::Temporal {
+        predicate: iri("https://example.org/when"),
+        lower: Some("2026-10-10T00:00:00Z".to_owned()),
+        upper: Some("2026-10-11T00:00:00Z".to_owned()),
+    }]);
+    let constraint = OriginalTimeConstraint {
+        cause: TermValue::iri("https://example.org/missing-time"),
+        concern: TermValue::Triple {
+            s: purrdf_core::TermBox::new(TermValue::iri("https://example.org/request")),
+            p: purrdf_core::TermBox::new(TermValue::iri("https://example.org/when")),
+            o: purrdf_core::TermBox::new(TermValue::simple_literal("2026-10-10")),
+        },
+    };
+    let bindings = [purrdf_retrieval::ConstraintBinding {
+        request: &request.constraints[0],
+        evaluator: &constraint,
+    }];
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&bindings);
+    let profile = profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request, &registry, &NoStatistics).unwrap();
+    let compiled = compile(&planned, &env).unwrap();
+    // Exercise the original cursor's admitted door itself, including its actual
+    // per-row FILTER context. The receipt must survive the producer's destruction.
+    let engine = purrdf_sparql_eval::NativeSparqlEngine::new();
+    let workspace = purrdf_sparql_eval::NativeSparqlEngine::workspace_for_view(&data).unwrap();
+    let extensions = purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone()).unwrap();
+    let mut cursor_unknowns = Vec::new();
+    for unit in &compiled.units {
+        let scope = bindings.bind(&compiled, &workspace).unwrap();
+        let options = purrdf_sparql_eval::QueryOptions::new()
+            .with_env(&extensions)
+            .with_candidate_scope(&scope);
+        let query = format!(
+            "SELECT ?candidate WHERE {{ {{ {} }} FILTER(BOUND(?candidate)) }}",
+            unit.sparql()
+        );
+        let prepared = engine
+            .prepare_query_with_options(&query, None, options)
+            .unwrap();
+        let mut cursor = engine
+            .open_call_cursor_admitted(&prepared, options, &workspace)
+            .unwrap();
+        assert!(cursor.physical_row_bound() >= 1);
+        let mut unknowns = 0;
+        while let Some(row) = cursor.next_admitted_row(&data).unwrap() {
+            if row.evidence.is_undecided() {
+                assert_eq!(row.cells[0].as_deref(), Some(&TermValue::iri(ex("b"))));
+                unknowns += 1;
+                cursor_unknowns.push(row);
+            }
+        }
+        assert_eq!(unknowns, 1);
+    }
+    for schedule in [ReadSchedule::Materialised, ReadSchedule::OnDemand] {
+        let scoped = block_on(purrdf_retrieval::execute_scoped_within(
+            &compiled,
+            &registry,
+            &data,
+            schedule,
+            &bindings,
+            &OriginalClosedScope,
+        ))
+        .unwrap();
+        assert_eq!(scoped.scopes.len(), 2);
+        if schedule == ReadSchedule::OnDemand {
+            for receipt in &scoped.scopes {
+                assert!(!receipt.rows.complete().unwrap());
+                receipt
+                    .rows
+                    .with_rows(|rows| assert!(rows.is_empty()))
+                    .unwrap();
+            }
+        }
+        for mut read in scoped.result.streams {
+            for (candidate, expected) in [
+                ("a", purrdf_retrieval::ExclusionVerdict::Excluded),
+                ("b", purrdf_retrieval::ExclusionVerdict::Possible),
+                ("absent", purrdf_retrieval::ExclusionVerdict::Excluded),
+            ] {
+                assert_eq!(
+                    block_on(
+                        read.stream
+                            .exclusion(&Term::new(format!("<{}>", ex(candidate))))
+                    )
+                    .unwrap(),
+                    expected,
+                );
+            }
+            if schedule == ReadSchedule::OnDemand {
+                assert_eq!(read.stream.rows_materialised(), 0);
+            }
+            while let Some((_, candidate, _)) = block_on(read.stream.next()).unwrap() {
+                assert_ne!(candidate, Term::new(format!("<{}>", ex("a"))));
+                assert_ne!(candidate, Term::new(format!("<{}>", ex("b"))));
+            }
+            block_on(read.stream.settle()).unwrap();
+        }
+        for receipt in &scoped.scopes {
+            assert!(receipt.rows.complete().unwrap());
+            receipt
+                .search
+                .with_record(|record| {
+                    assert_eq!(
+                        record.completeness(),
+                        purrdf_core::evidence::SearchCompleteness::Complete
+                    );
+                    assert!(
+                        receipt.rows.complete().unwrap(),
+                        "search inspection does not lock the row inspector"
+                    );
+                })
+                .unwrap();
+            receipt
+                .exclusions
+                .with_rows(|rows| {
+                    assert_eq!(rows.len(), 3);
+                    let unknown = rows.iter().find(|row| row.evidence.is_undecided()).unwrap();
+                    assert_eq!(unknown.cells[0].as_deref(), Some(&TermValue::iri(ex("b"))));
+                    unknown
+                        .evidence
+                        .with_record(|record| assert_eq!(record.reasons().len(), 1))
+                        .unwrap();
+                })
+                .unwrap();
+            assert_eq!(receipt.constraints.len(), 1);
+            assert_eq!(receipt.constraints[0].undecided, 1);
+            let candidate = receipt
+                .variables
+                .iter()
+                .position(|name| name.as_str() == "candidate")
+                .unwrap();
+            receipt
+                .rows
+                .with_rows(|rows| {
+                    let unknown = rows
+                        .iter()
+                        .filter(|row| row.evidence.is_undecided())
+                        .collect::<Vec<_>>();
+                    assert_eq!(unknown.len(), 1);
+                    assert_eq!(
+                        unknown[0].cells[candidate].as_deref(),
+                        Some(&TermValue::iri(ex("b")))
+                    );
+                    assert!(rows.iter().all(
+                        |row| row.cells[candidate].as_deref() != Some(&TermValue::iri(ex("a")))
+                    ));
+                })
+                .unwrap();
+        }
+    }
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    let source = OriginalOpenScope {
+        declaration: &constraint,
+        reason: constraint.description().identity(&mut memory).unwrap(),
+    };
+    for schedule in [ReadSchedule::Materialised, ReadSchedule::OnDemand] {
+        let scoped = block_on(purrdf_retrieval::execute_scoped_within(
+            &compiled, &registry, &data, schedule, &bindings, &source,
+        ))
+        .unwrap();
+        for mut read in scoped.result.streams {
+            assert_eq!(
+                block_on(
+                    read.stream
+                        .exclusion(&Term::new(format!("<{}>", ex("absent"))))
+                )
+                .unwrap(),
+                purrdf_retrieval::ExclusionVerdict::Possible,
+            );
+        }
+        for receipt in &scoped.scopes {
+            receipt
+                .exclusions
+                .with_rows(|rows| {
+                    assert_eq!(rows.len(), 1);
+                    let row = &rows[0];
+                    assert!(row.evidence.is_undecided());
+                    let reason = row
+                        .evidence
+                        .with_record(|record| record.reasons()[0])
+                        .unwrap();
+                    row.evidence
+                        .with_reason(reason, |description| {
+                            assert_eq!(description.cause, &constraint.cause);
+                            assert_eq!(description.concern, &constraint.concern);
+                        })
+                        .unwrap();
+                })
+                .unwrap();
+        }
+    }
+    let answer = block_on(purrdf_retrieval::search_scoped(
+        &request,
+        &registry,
+        &NoStatistics,
+        &data,
+        &env,
+        &profile,
+        &bindings,
+        &OriginalClosedScope,
+    ))
+    .unwrap();
+    assert_eq!(answer.scopes.len(), 2);
+    assert_eq!(answer.result.plan_id, planned.id());
+    let retained = answer.scopes;
+    drop(constraint);
+    for row in cursor_unknowns {
+        assert_eq!(row.cells[0].as_deref(), Some(&TermValue::iri(ex("b"))));
+        row.evidence
+            .with_record(|record| assert_eq!(record.reasons().len(), 1))
+            .unwrap();
+    }
+    for receipt in &retained {
+        assert!(receipt.rows.complete().unwrap());
+        receipt
+            .rows
+            .with_rows(|rows| {
+                let unknown = rows.iter().find(|row| row.evidence.is_undecided()).unwrap();
+                let reason = unknown
+                    .evidence
+                    .with_record(|record| {
+                        assert_eq!(
+                            record.completeness(),
+                            purrdf_core::evidence::SearchCompleteness::Undetermined
+                        );
+                        assert_eq!(record.reasons().len(), 1);
+                        record.reasons()[0]
+                    })
+                    .unwrap();
+                unknown
+                    .evidence
+                    .with_reason(reason, |description| {
+                        assert_eq!(
+                            description.cause,
+                            &TermValue::iri("https://example.org/missing-time")
+                        );
+                        assert_eq!(
+                            description.concern,
+                            &TermValue::Triple {
+                                s: purrdf_core::TermBox::new(TermValue::iri(
+                                    "https://example.org/request"
+                                )),
+                                p: purrdf_core::TermBox::new(TermValue::iri(
+                                    "https://example.org/when"
+                                )),
+                                o: purrdf_core::TermBox::new(TermValue::simple_literal(
+                                    "2026-10-10"
+                                )),
+                            }
+                        );
+                    })
+                    .unwrap();
+            })
+            .unwrap();
+    }
+}
+
 fn independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion() {
     let registry = registry();
     let depths = CandidateDepths::new([(iri(TEXT_STRATUM), 2), (iri(KNN_STRATUM), 3)]).unwrap();
@@ -146,7 +688,16 @@ fn independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion() {
         let actual: BTreeMap<_, _> = candidates
             .candidates
             .iter()
-            .map(|(subject, entry)| (subject.clone(), entry.ranks.clone()))
+            .map(|(subject, entry)| {
+                (
+                    subject.clone(),
+                    entry
+                        .ranks
+                        .iter()
+                        .map(|(stratum, ranks)| (stratum.clone(), ranks.as_slice().to_vec()))
+                        .collect::<BTreeMap<_, _>>(),
+                )
+            })
             .collect();
         assert_eq!(actual, expected);
         assert_eq!(actual.len(), 3);
@@ -171,6 +722,91 @@ fn independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion() {
             assert_eq!(previous, &candidates.canonical_bytes());
         }
         previous = Some(candidates.canonical_bytes());
+    }
+}
+
+fn field_membership_precedes_each_real_stratum_depth_in_both_schedules() {
+    const FROM: &str = "https://example.org/from";
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+    let from = builder.intern_iri(FROM);
+    let a = builder.intern_iri(&ex("a"));
+    let b = builder.intern_iri(&ex("b"));
+    let high = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
+    let low = builder.intern_literal(RdfLiteral::simple("alpha"));
+    let padding = builder.intern_literal(RdfLiteral::simple(
+        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    ));
+    builder.push_quad(a, note, high, None);
+    builder.push_quad(b, note, padding, None);
+    builder.push_quad(b, from, low, None);
+    let data = builder.freeze().unwrap();
+    let index = Arc::new(
+        TextIndex::from_dataset(
+            &*data,
+            &TextIndexConfig::new(
+                vec![TermValue::iri(NOTE), TermValue::iri(FROM)],
+                GraphSelector::Any,
+                purrdf_text::Analyzer::empty_lexicon(),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let strata = [ex("stratum/first"), ex("stratum/second")];
+    let mut registry = PropertyFunctionRegistry::new();
+    for (position, stratum) in strata.iter().enumerate() {
+        let relation = TextSearchRelation::new(Arc::clone(&index));
+        let declaration = relation
+            .ranked_declaration(
+                kernel_iri(stratum),
+                Some(FROM.to_owned()),
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            )
+            .unwrap();
+        registry.register_ranked(
+            ex(&format!("pf/field-{position}")),
+            Arc::new(relation),
+            declaration,
+        );
+    }
+    let depths = CandidateDepths::new(strata.iter().map(|stratum| (iri(stratum), 1))).unwrap();
+    // A missing second token must not change the producer's ANY-token law.
+    let terms = [RequestTerm::Lexical {
+        text: "alpha missing".to_owned(),
+        language: None,
+        predicate: Some(iri(FROM)),
+    }];
+    let planned = plan_candidates(&terms, &depths, &registry, &NoStatistics).unwrap();
+    let compiled = compile_candidates(
+        &planned,
+        &AdmissionEnvironment {
+            registry: &registry,
+            statistics: &NoStatistics,
+            fusion_profile: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(compiled.units().len(), 2);
+    let mut previous = None;
+    for schedule in [ReadSchedule::Materialised, ReadSchedule::OnDemand] {
+        let executed = block_on(execute_within(&compiled, &registry, &data, schedule)).unwrap();
+        let candidates = block_on(union(executed, &depths)).unwrap();
+        assert!(candidates.completed_prefix);
+        assert_eq!(candidates.candidates.len(), 1);
+        let admitted = &candidates.candidates[&Term::new(format!("<{}>", ex("b")))];
+        for stratum in &strata {
+            assert_eq!(admitted.ranks[&iri(stratum)].as_slice(), [1]);
+            assert!(candidates.producers[&iri(stratum)].completed_prefix);
+        }
+        let bytes = candidates
+            .canonical_bytes()
+            .expect("canonical export is admitted");
+        if let Some(previous) = &previous {
+            assert_eq!(previous, &bytes);
+        }
+        previous = Some(bytes);
     }
 }
 
@@ -385,9 +1021,15 @@ fn registry() -> PropertyFunctionRegistry {
 /// from two relations over one space differ in the relation's arithmetic and in
 /// nothing else.
 fn registry_with<A: Arithmetic>(knn: EmbeddingKnnRelation<A>) -> PropertyFunctionRegistry {
+    registry_with_text(knn, TextSearchRelation::new(Arc::new(text_index())))
+}
+
+fn registry_with_text<A: Arithmetic>(
+    knn: EmbeddingKnnRelation<A>,
+    text: TextSearchRelation,
+) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
 
-    let text = TextSearchRelation::new(Arc::new(text_index()));
     let text_declaration = text
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
@@ -521,7 +1163,6 @@ fn strata_of(result: &SearchResult, candidate: &str) -> Vec<String> {
 // 1. The demonstration
 // ---------------------------------------------------------------------------
 
-#[test]
 fn two_real_producers_fuse_into_one_ranking_over_real_data() {
     let registry = registry();
     let statistics = NoStatistics;
@@ -651,7 +1292,6 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
 // 2. The request is in the text, and the text is what runs
 // ---------------------------------------------------------------------------
 
-#[test]
 fn each_real_producer_is_compiled_with_the_facet_it_declared() {
     let registry = registry();
     let statistics = NoStatistics;
@@ -673,10 +1313,11 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{TEXT_PF}> \
-             ( \"alpha beta\" ?c2 ?c3 ?c4 ?c5 ) }} LIMIT 5 }}\n\
-             }}\nLIMIT 5"
+             ( <<( <{NOTE}> <{value}> \"alpha beta\" )>> ?c2 ?c3 ?c4 ?c5 ) }} LIMIT 5 }}\n\
+             }}\nLIMIT 5",
+            value = purrdf_core::vocab::rdf::VALUE,
         ),
-        "the needle is a rendered constant at the relation's own needle position, \
+        "the needle and its field are one RDF1.2 constant at the relation's own needle position, \
          every other position is free, and the relation takes no depth argument so the \
          branch carries the stratum's LIMIT — five over a depth of four, because the \
          probe row is emitted at every depth including one that sits on the declaration"
@@ -738,7 +1379,6 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
 /// own bound — is
 /// `a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_a_wrong_one`
 /// in `tests/compile_request.rs`.
-#[test]
 fn the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it() {
     let registry = registry();
     let statistics = NoStatistics;
@@ -866,9 +1506,14 @@ async fn manual_composition(
                 Some(&stream.attestation),
                 "an unweighted stratum settles to what it announced"
             );
-            statuses
-                .entry(stream.stratum.clone())
-                .or_insert_with(|| purrdf_retrieval::ProducerStatus::from(receipt));
+            if !statuses.contains_key(&stream.stratum) {
+                statuses
+                    .insert(
+                        stream.stratum.clone(),
+                        purrdf_retrieval::ProducerStatus::from(receipt),
+                    )
+                    .expect("receipt storage is admitted");
+            }
             unweighted_strata.push(stream.stratum);
             continue;
         }
@@ -898,21 +1543,39 @@ async fn manual_composition(
     let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
-    let trailer = fused.trailer.completed_with(statuses);
+    let trailer = fused
+        .trailer
+        .completed_with(statuses)
+        .expect("status publication is admitted");
     let evidence_id = trailer.evidence_id;
     SearchResult {
         rows: fused.rows,
         trailer,
-        unserved_terms: planned.unserved_evidence(),
+        unserved_terms: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            planned
+                .unserved_evidence_admitted(&purrdf_sparql_eval::WorkspaceCapability::resident())
+                .expect("caller loss derivation"),
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+        .expect("caller loss publication"),
         plan_id: planned.id(),
         evidence_id,
-        planned_resolution: compiled.resolution,
+        planned_resolution: compiled
+            .resolution_admitted(&purrdf_sparql_eval::WorkspaceCapability::resident())
+            .expect("caller resolution publication"),
         profile_id: profile.id(),
-        unweighted_strata,
+        unweighted_strata: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                unweighted_strata,
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller fixture storage"),
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+        .expect("caller fixture owner"),
     }
 }
 
-#[test]
 fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
     let registry = registry();
     let statistics = NoStatistics;
@@ -1028,7 +1691,6 @@ fn attested_generation(result: &SearchResult, stratum: &str) -> String {
 /// before pulling a row, and the `EvidenceId` is its content identity. A break
 /// anywhere along it shows up as an `Undeclared` in the trailer or as a
 /// generation that does not equal the index's own fingerprint.
-#[test]
 fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
     let result = answer_of_a_fresh_build();
 
@@ -1089,7 +1751,6 @@ fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
 /// and `profile_id` pins the law, and neither of them moves when an index is
 /// rebuilt. `evidence_id` is the only one that can, so it is worth nothing
 /// unless two answers produced against the same index state agree on it.
-#[test]
 fn two_runs_over_the_same_index_state_carry_one_evidence_id() {
     let first = answer_of_a_fresh_build();
     let second = answer_of_a_fresh_build();
@@ -1303,7 +1964,6 @@ fn lexical_request(needle: &str) -> RetrievalRequest {
 /// hand-built stream that *does* declare `Unique` and repeat, and pins the
 /// refusal. Between them: a producer that breaks the promise is refused, and the
 /// shipped producer does not break it.
-#[test]
 fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat() {
     let data = dataset_of(&hub_corpus());
     let index = TextIndex::from_dataset(&*data, &text_config()).expect("the fixture index builds");
@@ -1373,7 +2033,6 @@ fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat
 /// index is refused; the single-partition index next to it still declares, and
 /// the declaration it hands out still carries [`DuplicatePolicy::Unique`]. A
 /// tightening that refused both would pass a test asserting only the first.
-#[test]
 fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
     let stratum = kernel_iri(TEXT_STRATUM);
 
@@ -1468,7 +2127,6 @@ fn twinned_vectors() -> Vec<(&'static str, Vec<f64>)> {
 /// `ProtocolError::DuplicateItem` and refusal also yields a duplicate-free
 /// answer, so the call must succeed *and* the candidates must be distinct, with
 /// the emitted row count pinned so the distinctness is not a truncated prefix's.
-#[test]
 fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
     let rows = twinned_vectors();
     let row_count = u64::try_from(rows.len()).expect("the fixture is small");
@@ -1585,12 +2243,54 @@ fn empty_text_index() -> (Arc<RdfDataset>, TextIndex) {
 /// evaluator opens a relation and applies the bound afterwards, so the counter
 /// rises either way — measured, not assumed. That bound is asserted separately,
 /// against the compiled text, in [`sole_producer_answer`].
+#[derive(Clone)]
+enum NativeAttachment {
+    Row(purrdf_sparql_eval::RowEvidence),
+    Search(
+        purrdf_sparql_eval::RowEvidence,
+        Arc<std::sync::atomic::AtomicBool>,
+    ),
+    SearchFailure(Arc<std::sync::atomic::AtomicBool>),
+}
+
 struct CountingTextRelation {
     inner: TextSearchRelation,
     opened: Arc<AtomicU64>,
+    refuse_suffix: Option<Arc<AtomicU64>>,
+    attachment: Option<NativeAttachment>,
 }
 
 impl PropertyFunction for CountingTextRelation {
+    fn supports_candidate_scope(&self) -> bool {
+        self.inner.supports_candidate_scope()
+    }
+
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.opened.fetch_add(1, Ordering::Relaxed);
+        let cursor = self.inner.open_admitted(args, ceiling, workspace.clone())?;
+        if self.refuse_suffix.is_none() && self.attachment.is_none() {
+            return Ok(cursor);
+        }
+        let admission = workspace.charge(
+            u64::try_from(size_of::<PrefixRefusalCursor>())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let cursor = purrdf_core::small::try_boxed(PrefixRefusalCursor {
+            cursor,
+            calls: self.refuse_suffix.clone(),
+            attachment: self.attachment.clone(),
+            _admission: admission,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "prefix refusal cursor",
+        })?;
+        Ok(cursor)
+    }
     fn volatility(&self) -> Volatility {
         self.inner.volatility()
     }
@@ -1612,8 +2312,68 @@ impl PropertyFunction for CountingTextRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.opened.fetch_add(1, Ordering::Relaxed);
-        self.inner.open(args, ceiling)
+        self.open_admitted(
+            args,
+            ceiling,
+            purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+    }
+}
+
+struct PrefixRefusalCursor {
+    cursor: Box<dyn PfCursor>,
+    calls: Option<Arc<AtomicU64>>,
+    attachment: Option<NativeAttachment>,
+    _admission: purrdf_sparql_eval::WorkspaceAllocation,
+}
+
+impl PfCursor for PrefixRefusalCursor {
+    fn carries_row_evidence(&self) -> bool {
+        self.attachment.is_some() || self.cursor.carries_row_evidence()
+    }
+    fn search_evidence(&self) -> Result<Option<&purrdf_sparql_eval::RowEvidence>, EvalError> {
+        match &self.attachment {
+            Some(NativeAttachment::Search(evidence, enabled))
+                if enabled.load(Ordering::Relaxed) =>
+            {
+                Ok(Some(evidence))
+            }
+            Some(NativeAttachment::SearchFailure(enabled)) if enabled.load(Ordering::Relaxed) => {
+                Err(EvalError::AllocationFailed {
+                    construct: "original unscoped terminal search",
+                })
+            }
+            _ => self.cursor.search_evidence(),
+        }
+    }
+    fn next(&mut self) -> Result<Option<purrdf_sparql_eval::PfRow>, EvalError> {
+        self.cursor.next()
+    }
+    fn next_admitted(&mut self) -> Result<Option<purrdf_sparql_eval::AdmittedPfRow>, EvalError> {
+        if self
+            .calls
+            .as_ref()
+            .is_some_and(|calls| calls.fetch_add(1, Ordering::Relaxed) >= 2)
+        {
+            return Err(EvalError::AllocationFailed {
+                construct: "original scoped suffix",
+            });
+        }
+        self.cursor.next_admitted().map(|row| {
+            row.map(|row| match &self.attachment {
+                Some(NativeAttachment::Row(evidence)) => row.with_evidence(evidence.clone()),
+                _ => row,
+            })
+        })
+    }
+    fn take_work(&mut self) -> u64 {
+        self.cursor.take_work()
+    }
+    fn generation(&self) -> purrdf_sparql_eval::IndexGeneration {
+        self.cursor.generation()
+    }
+    fn service_level(&self) -> purrdf_sparql_eval::ServiceLevel {
+        self.cursor.service_level()
     }
 }
 
@@ -1638,6 +2398,8 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
         Arc::new(CountingTextRelation {
             inner,
             opened: Arc::clone(&opened),
+            refuse_suffix: None,
+            attachment: None,
         }),
         declaration,
     );
@@ -1694,7 +2456,6 @@ fn statuses(result: &SearchResult) -> Vec<(String, purrdf_retrieval::ProducerSta
         .collect()
 }
 
-#[test]
 fn the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness() {
     let (data, index) = empty_text_index();
     let (registry, opened) = counting_text_registry(index);
@@ -1760,7 +2521,6 @@ fn the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness() {
     );
 }
 
-#[test]
 fn the_sole_text_producer_over_one_document_still_returns_that_document() {
     // The neighbour that must still work, and the arm that proves the producer
     // accepts the term the empty-corpus arm asserts it accepts. Nothing changes
@@ -1883,7 +2643,6 @@ fn answer_from(registry: &PropertyFunctionRegistry) -> SearchResult {
 /// them both stop yielding, both leave contiguous ranks, both report exhaustion.
 /// The answer read as complete while a document the whole space would have
 /// ranked was silently absent.
-#[test]
 fn a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness() {
     let evidence: Arc<str> = Arc::from(SAMPLE_EVIDENCE);
     let declared = answer_from(&registry_over_a_partial_vector_space(RankFidelity {
@@ -1967,7 +2726,6 @@ fn a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness() {
 /// certified score unreachable. This is the case that proves it did not: the
 /// whole corpus, both producers exhaustive, and a trailer that still certifies
 /// its scores as values.
-#[test]
 fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
     let whole = answer_from(&registry());
     assert_eq!(
@@ -2000,7 +2758,6 @@ fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
 /// is the arithmetic the relation was built under. The evidence the treatment's
 /// trailer carries is therefore the relation's, not the host's, and it arrives
 /// byte for byte.
-#[test]
 fn fusion_trailer_names_reassociated_kernel() {
     let fast = EmbeddingKnnRelation::new_reassociated(Arc::new(embedding_space()))
         .expect("the default float environment is the IEEE one");
@@ -2053,3 +2810,525 @@ fn fusion_trailer_names_reassociated_kernel() {
     );
     assert_eq!(exact.trailer.exactness, ScoreExactness::Exact);
 }
+
+fn scoped_fused_acceptance_retains_original_two_stratum_scores_and_order() {
+    let text = TextSearchRelation::new(Arc::new(text_index()));
+    let text_work = text.observations();
+    let knn = EmbeddingKnnRelation::new(Arc::new(embedding_space()));
+    let knn_work = knn.observations();
+    let registry = registry_with_text(knn, text);
+    let data = dataset();
+    let profile = profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let original = block_on(search(
+        &request(),
+        &registry,
+        &NoStatistics,
+        &data,
+        &env,
+        &profile,
+    ))
+    .unwrap();
+    let original_unknown = original
+        .rows
+        .iter()
+        .find(|row| row.entity == Term::new(format!("<{}>", ex("b"))))
+        .unwrap();
+    assert_eq!(original_unknown.contributions.len(), 2);
+    for bound in [TOP_K, TopK::new(1)] {
+        let request = RetrievalRequest::bounded(request().terms, bound).with_constraints(vec![
+            RequestTerm::Temporal {
+                predicate: iri("https://example.org/when"),
+                lower: Some("2026-10-10T00:00:00Z".to_owned()),
+                upper: None,
+            },
+        ]);
+        let constraint = OriginalTimeConstraint {
+            cause: TermValue::iri("https://example.org/missing-time"),
+            concern: TermValue::Triple {
+                s: purrdf_core::TermBox::new(TermValue::iri(ex("request"))),
+                p: purrdf_core::TermBox::new(TermValue::iri("https://example.org/when")),
+                o: purrdf_core::TermBox::new(TermValue::simple_literal("2026-10-10")),
+            },
+        };
+        let declared = [purrdf_retrieval::ConstraintBinding {
+            request: &request.constraints[0],
+            evaluator: &constraint,
+        }];
+        let bindings = purrdf_retrieval::ConstraintBindings::new(&declared);
+        let planned = plan(&request, &registry, &NoStatistics).unwrap();
+        let compiled = compile(&planned, &env).unwrap();
+        let oracle = block_on(purrdf_retrieval::execute_scoped_within(
+            &compiled,
+            &registry,
+            &data,
+            ReadSchedule::Materialised,
+            &bindings,
+            &OriginalClosedScope,
+        ))
+        .unwrap();
+        let adapters = oracle
+            .result
+            .streams
+            .into_iter()
+            .map(|read| {
+                let adapter =
+                    RankedStreamAdapter::new(read.stream, read.contract, &profile, &read.stratum)
+                        .unwrap()
+                        .with_plan_id(read.plan_id)
+                        .with_fused_bound(read.fused_bound)
+                        .with_attestation(read.attestation);
+                (read.stratum, adapter)
+            })
+            .collect();
+        let established = block_on(fuse::<_, Term>(adapters, &profile, bound)).unwrap();
+        let answer = block_on(purrdf_retrieval::search_scoped(
+            &request,
+            &registry,
+            &NoStatistics,
+            &data,
+            &env,
+            &profile,
+            &bindings,
+            &OriginalClosedScope,
+        ))
+        .unwrap();
+        assert_eq!(answer.result.rows.len(), established.rows.len());
+        for (actual, expected) in answer.result.rows.iter().zip(established.rows.iter()) {
+            assert_eq!(actual.entity, expected.entity);
+            assert_eq!(actual.score, expected.score);
+            assert_eq!(actual.contributions, expected.contributions);
+        }
+        let fused = answer.fused.as_ref().unwrap();
+        let undecided = fused
+            .rows
+            .iter()
+            .find(|row| row.evidence.is_undecided())
+            .unwrap();
+        assert_eq!(undecided.row.entity, original_unknown.entity);
+        assert_eq!(undecided.row.score, original_unknown.score);
+        assert_eq!(undecided.row.contributions, original_unknown.contributions);
+        let reason = undecided
+            .evidence
+            .with_record(|record| {
+                assert_eq!(
+                    record.completeness(),
+                    purrdf_core::evidence::SearchCompleteness::Undetermined
+                );
+                assert_eq!(record.reasons().len(), 1);
+                record.reasons()[0]
+            })
+            .unwrap();
+        undecided
+            .evidence
+            .with_reason(reason, |description| {
+                assert_eq!(description.cause, &constraint.cause);
+                assert_eq!(description.concern, &constraint.concern);
+            })
+            .unwrap();
+        for receipt in &answer.scopes {
+            assert!(
+                receipt.variables.iter().any(|name| name.as_ref() == "c3"),
+                "original text rank / kNN distance survives compilation"
+            );
+            receipt
+                .rows
+                .with_rows(|rows| {
+                    let row = rows.iter().find(|row| row.evidence.is_undecided()).unwrap();
+                    let expected = original_unknown
+                        .contributions
+                        .iter()
+                        .find(|(stratum, _, _)| stratum.as_str() == receipt.stratum.as_ref())
+                        .unwrap();
+                    assert_eq!(row.evidence.original_rank().unwrap().get(), expected.1);
+                })
+                .unwrap();
+        }
+        let work = || {
+            (
+                text_work.rankings(),
+                text_work.documents_scored(),
+                text_work.membership_lookups(),
+                knn_work.scans(),
+                knn_work.scanned_candidates(),
+                knn_work.membership_lookups(),
+            )
+        };
+        let before = work();
+        assert!(
+            original_unknown.score > established.rows[0].score,
+            "original uncertain score precedes the established partition in this fixture"
+        );
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        fused
+            .with_accepted_rows(&[], |rows| {
+                let mut count = 0;
+                for row in rows {
+                    let row = row.unwrap();
+                    assert!(!row.is_accepted());
+                    assert!(!row.row.evidence.is_undecided());
+                    count += 1;
+                }
+                assert_eq!(count, answer.result.rows.len());
+            })
+            .unwrap();
+        fused
+            .with_accepted_rows(&[reason], |rows| {
+                let mut count = 0;
+                let mut accepted = 0;
+                let mut expected = std::iter::once(original_unknown).chain(established.rows.iter());
+                let mut previous_score = None;
+                for row in rows {
+                    let row = row.unwrap();
+                    let expected = expected
+                        .next()
+                        .expect("original certified composition order");
+                    assert_eq!(row.row.row.entity, expected.entity);
+                    assert_eq!(row.row.row.score, expected.score);
+                    assert_eq!(row.row.row.contributions, expected.contributions);
+                    if let Some(previous) = previous_score {
+                        assert!(previous >= row.row.row.score);
+                    }
+                    previous_score = Some(row.row.row.score);
+                    assert!(std::ptr::eq(
+                        row.row,
+                        &raw const fused.rows[row.position as usize]
+                    ));
+                    if row.is_accepted() {
+                        accepted += 1;
+                        assert!(std::ptr::eq(row.row, undecided));
+                        assert_eq!(row.accepted_reasons().next(), Some(reason));
+                        assert_eq!(row.evidence.reasons(), &[reason]);
+                        assert_ne!(row.identity(row.row.identity()), row.row.identity());
+                        assert_eq!(row.row.row.contributions, original_unknown.contributions);
+                    } else {
+                        assert_eq!(row.identity(row.row.identity()), row.row.identity());
+                    }
+                    count += 1;
+                }
+                assert_eq!(accepted, 1);
+                assert_eq!(count, answer.result.rows.len() + 1);
+                assert!(expected.next().is_none());
+            })
+            .unwrap();
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(
+            work(),
+            before,
+            "acceptance does not read, score, constrain or fuse again"
+        );
+        assert!(fused.with_accepted_rows(&[reason, reason], |_| ()).is_err());
+    }
+}
+
+fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
+    let data = dataset_of(&[
+        ("a", "alpha", None),
+        ("b", "alpha", None),
+        ("c", "alpha", None),
+        ("d", "alpha", None),
+    ]);
+    // Exercise the real unscoped ranked adapter before its raw rank/cell
+    // publication, including an owned record whose semantics became default.
+    let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+    let owner = purrdf_sparql_eval::QueryEvidence::new(&workspace).unwrap();
+    let incomplete = purrdf_core::evidence::EvidenceRecord::from_parts(
+        &purrdf_core::evidence::InformationMap::default(),
+        purrdf_core::evidence::SearchCompleteness::Undetermined,
+        &purrdf_core::evidence::Frame::actual(),
+        &[],
+        &[],
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .unwrap();
+    let owned = owner
+        .with_completeness(
+            &owner.retain(&incomplete).unwrap(),
+            purrdf_core::evidence::SearchCompleteness::Complete,
+            None,
+        )
+        .unwrap();
+    #[derive(Clone, Copy)]
+    enum Transport {
+        Row,
+        OpeningSearch,
+        EmptySearch,
+        LateSearch,
+        LateFault,
+    }
+    let empty = dataset_of(&[]);
+    for (mode, attachment) in [
+        (Transport::Row, owned.clone()),
+        (
+            Transport::Row,
+            purrdf_sparql_eval::RowEvidence::default()
+                .with_original_rank(core::num::NonZeroU64::new(1).unwrap()),
+        ),
+        (Transport::OpeningSearch, owned.clone()),
+        (Transport::EmptySearch, owned.clone()),
+        (
+            Transport::EmptySearch,
+            owner
+                .retain(&incomplete)
+                .unwrap()
+                .with_unclosed_search(true),
+        ),
+        (Transport::LateSearch, owned.clone()),
+        (Transport::LateFault, owned),
+    ] {
+        assert!(!attachment.is_virtual());
+        let actual_data = if matches!(mode, Transport::EmptySearch) {
+            &empty
+        } else {
+            &data
+        };
+        let enabled = Arc::new(std::sync::atomic::AtomicBool::new(matches!(
+            mode,
+            Transport::OpeningSearch | Transport::EmptySearch
+        )));
+        let attachment = match mode {
+            Transport::Row => NativeAttachment::Row(attachment),
+            Transport::LateFault => NativeAttachment::SearchFailure(enabled.clone()),
+            _ => NativeAttachment::Search(attachment, enabled.clone()),
+        };
+        let inner = TextSearchRelation::new(Arc::new(
+            TextIndex::from_dataset(&**actual_data, &text_config()).unwrap(),
+        ));
+        let declaration = inner
+            .ranked_declaration(
+                kernel_iri(TEXT_STRATUM),
+                Some(NOTE.to_owned()),
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            )
+            .unwrap();
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            TEXT_PF,
+            Arc::new(CountingTextRelation {
+                inner,
+                opened: Arc::new(AtomicU64::new(0)),
+                refuse_suffix: None,
+                attachment: Some(attachment),
+            }),
+            declaration,
+        );
+        let request = lexical_request("alpha");
+        let profile = profile();
+        let compiled = compile(
+            &plan(&request, &registry, &NoStatistics).unwrap(),
+            &AdmissionEnvironment {
+                registry: &registry,
+                statistics: &NoStatistics,
+                fusion_profile: Some(&profile),
+            },
+        )
+        .unwrap();
+        let execution = block_on(execute_within(
+            &compiled,
+            &registry,
+            actual_data,
+            ReadSchedule::OnDemand,
+        ))
+        .unwrap();
+        let mut read = execution.streams.into_iter().next().unwrap();
+        if matches!(mode, Transport::LateSearch | Transport::LateFault) {
+            assert!(block_on(read.stream.next()).unwrap().is_some());
+            enabled.store(true, Ordering::Relaxed);
+            let error = block_on(read.stream.settle()).unwrap_err();
+            if matches!(mode, Transport::LateFault) {
+                assert!(matches!(
+                    error,
+                    ProtocolError::NativeFailure(EvalError::AllocationFailed {
+                        construct: "original unscoped terminal search"
+                    })
+                ));
+            } else {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("cannot discard original search evidence")
+                );
+            }
+        } else {
+            let error = block_on(read.stream.next()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(if matches!(mode, Transport::Row) {
+                        "cannot discard original row evidence"
+                    } else {
+                        "cannot discard original search evidence"
+                    })
+            );
+        }
+        if matches!(mode, Transport::Row) {
+            let bindings = purrdf_retrieval::ConstraintBindings::new(&[]);
+            let scoped = block_on(purrdf_retrieval::execute_scoped_within(
+                &compiled,
+                &registry,
+                actual_data,
+                ReadSchedule::OnDemand,
+                &bindings,
+                &OriginalClosedScope,
+            ))
+            .unwrap();
+            for mut read in scoped.result.streams {
+                while block_on(read.stream.next()).unwrap().is_some() {}
+                block_on(read.stream.settle()).unwrap();
+            }
+            for receipt in scoped.scopes {
+                receipt
+                    .rows
+                    .with_rows(|rows| {
+                        assert!(!rows.is_empty());
+                        for row in rows {
+                            assert!(row.evidence.is_default());
+                            assert!(!row.evidence.is_virtual());
+                        }
+                    })
+                    .unwrap();
+            }
+        }
+    }
+    let inner = TextSearchRelation::new(Arc::new(
+        TextIndex::from_dataset(&*data, &text_config()).unwrap(),
+    ));
+    let declaration = inner
+        .ranked_declaration(
+            kernel_iri(TEXT_STRATUM),
+            Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        )
+        .unwrap();
+    let calls = Arc::new(AtomicU64::new(0));
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        TEXT_PF,
+        Arc::new(CountingTextRelation {
+            inner,
+            opened: Arc::new(AtomicU64::new(0)),
+            refuse_suffix: Some(calls.clone()),
+            attachment: None,
+        }),
+        declaration,
+    );
+    let request = lexical_request("alpha").with_constraints(vec![RequestTerm::Temporal {
+        predicate: iri("https://example.org/when"),
+        lower: Some("2026-10-10T00:00:00Z".to_owned()),
+        upper: None,
+    }]);
+    let constraint = OriginalTimeConstraint {
+        cause: TermValue::iri("https://example.org/missing-time"),
+        concern: TermValue::Triple {
+            s: purrdf_core::TermBox::new(TermValue::iri(ex("request"))),
+            p: purrdf_core::TermBox::new(TermValue::iri("https://example.org/when")),
+            o: purrdf_core::TermBox::new(TermValue::simple_literal("missing")),
+        },
+    };
+    let declarations = [purrdf_retrieval::ConstraintBinding {
+        request: &request.constraints[0],
+        evaluator: &constraint,
+    }];
+    let bindings = purrdf_retrieval::ConstraintBindings::new(&declarations);
+    let profile = profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &NoStatistics,
+        fusion_profile: Some(&profile),
+    };
+    let compiled = compile(&plan(&request, &registry, &NoStatistics).unwrap(), &env).unwrap();
+    // Original resident prepared parameters use the bounded per-thread name
+    // interner. Initialize the one lookup name with a compile-only empty plan;
+    // no dataset read, query evaluation or producer call occurs here. The
+    // retained TLS cache is separate from this query's row/control owners.
+    let prepare = purrdf_sparql_eval::NativeSparqlEngine::new();
+    drop(
+        prepare
+            .prepare_execution(
+                "SELECT ?candidate WHERE {}",
+                None,
+                &["candidate"],
+                purrdf_sparql_eval::QueryOptions::default(),
+            )
+            .unwrap(),
+    );
+    drop(prepare);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let execution = block_on(purrdf_retrieval::execute_scoped_within(
+        &compiled,
+        &registry,
+        &data,
+        ReadSchedule::OnDemand,
+        &bindings,
+        &OriginalClosedScope,
+    ))
+    .unwrap();
+    assert_eq!(execution.result.streams.len(), 1);
+    let purrdf_retrieval::ScopedExecution {
+        result,
+        scopes,
+        fused,
+    } = execution;
+    let purrdf_retrieval::ExecutionResult { streams, statuses } = result;
+    let mut streams = streams.into_iter();
+    let mut read = streams.next().unwrap();
+    let first = block_on(read.stream.next()).unwrap().unwrap();
+    assert_eq!(first.0, 1);
+    assert_eq!(first.1, Term::new(format!("<{}>", ex("c"))));
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    let refused = |error| {
+        assert!(matches!(
+            error,
+            ProtocolError::NativeFailure(EvalError::AllocationFailed {
+                construct: "original scoped suffix"
+            })
+        ));
+    };
+    refused(block_on(read.stream.settle()).unwrap_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+    refused(block_on(read.stream.settle()).unwrap_err());
+    refused(block_on(read.stream.next()).unwrap_err());
+    refused(block_on(read.stream.receipt()).unwrap_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+    drop(first);
+    drop(read);
+    drop(streams);
+    drop(scopes);
+    drop(fused);
+    drop(statuses);
+    assert_eq!(
+        window.close().retained_bytes,
+        0,
+        "failed suffix retains no original native row/control owner"
+    );
+}
+
+purrdf_testkit::harness_main!(
+    scoped_native_owner_refusal_precedes_original_producer_open,
+    native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows,
+    scoped_fused_acceptance_retains_original_two_stratum_scores_and_order,
+    scoped_native_admission_refusal_invalidates_before_any_ranked_row,
+    scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion,
+    independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion,
+    field_membership_precedes_each_real_stratum_depth_in_both_schedules,
+    two_real_producers_fuse_into_one_ranking_over_real_data,
+    each_real_producer_is_compiled_with_the_facet_it_declared,
+    the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it,
+    search_equals_the_hand_composed_pipeline_over_the_real_producers,
+    both_real_producers_attest_the_generation_of_the_index_that_answered,
+    two_runs_over_the_same_index_state_carry_one_evidence_id,
+    the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat,
+    the_text_producer_declares_unique_only_where_one_subject_can_appear_once,
+    the_knn_producer_names_each_target_once_when_two_rows_share_one_vector,
+    the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness,
+    the_sole_text_producer_over_one_document_still_returns_that_document,
+    a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness,
+    a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores,
+    fusion_trailer_names_reassociated_kernel,
+);

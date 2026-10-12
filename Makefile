@@ -791,11 +791,69 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+				scoped_text_bound_candidates_retain_unknown_membership \
+				scoped_text_depth_preserves_original_unknown_rows_and_scores \
+				scoped_text_preserves_original_constraint_failure \
 				the_sentence_boundaries_are_reproduced_on_this_target \
 				declared_large_corpora_are_exact \
 				five_thousand_term_index \
 				promoted_field_arithmetic_is_exact \
 				thirty_two_index_fields_are_exact \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test physical_shapes -- --exact \
+				dictionary_property expanded_dictionary_and_union dictionary_cache_and_size \
+				dictionary_projection_and_aliases longest_first_reference window_property \
+				typed_series_property registered_host_and_decline prepared_and_query_forms \
+				window_barrier_property dictionary_analyzer_identity bucket_custom_and_parallel_order \
+				host_refusal_and_governor_boundary dictionary_long_phrase_and_determinism \
+				bounded_shapes_keep_original_owners original_evidence_and_empty_barriers \
+				scoped_streams_and_update_where cache_refusal_keeps_previous_owner \
+				false_expression_gaps_keep_original_traversal \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-retrieval --test real_producers -- --exact \
+				scoped_fused_acceptance_retains_original_two_stratum_scores_and_order \
+				native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows \
+				scoped_native_owner_refusal_precedes_original_producer_open \
+				scoped_native_admission_refusal_invalidates_before_any_ranked_row \
+				scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion \
+				independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion \
+				field_membership_precedes_each_real_stratum_depth_in_both_schedules \
+				two_real_producers_fuse_into_one_ranking_over_real_data \
+				each_real_producer_is_compiled_with_the_facet_it_declared \
+				the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it \
+				search_equals_the_hand_composed_pipeline_over_the_real_producers \
+				both_real_producers_attest_the_generation_of_the_index_that_answered \
+				two_runs_over_the_same_index_state_carry_one_evidence_id \
+				the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat \
+				the_text_producer_declares_unique_only_where_one_subject_can_appear_once \
+				the_knn_producer_names_each_target_once_when_two_rows_share_one_vector \
+				the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness \
+				the_sole_text_producer_over_one_document_still_returns_that_document \
+				a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness \
+				a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores \
+				fusion_trailer_names_reassociated_kernel \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test evidence_ingress -- --exact \
+				verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities \
+				actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims \
+				service_rows_keep_signed_and_undecided_declarations_through_original_operators \
+				empty_service_keeps_search_reason_without_inventing_an_answer_row \
+				sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence \
+				distinct_coalesces_both_polarities_without_changing_binding_identity \
+				source_refusal_never_publishes_partial_or_undetermined_rows \
+				unmatched_optional_preserves_information_and_declared_missing_scope \
+				group_bounds_follow_whole_scope_and_declared_sum_domain \
+				nested_projection_retains_only_visible_aggregate_aliases \
+				registered_lossy_search_keeps_original_candidates_and_caller_reason \
+				declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness \
+				all_query_forms_publish_original_unknown_status_at_requested_count_tiers \
+				minus_absence_requires_closure_but_disjoint_domains_are_decidable \
+				minus_negates_all_original_witnesses_under_declared_closure \
+				exists_transports_original_witnesses_through_vm_memos_and_deferred_sites \
+				actual_unknown_answer_exposes_queryable_original_rdf_ledger \
+				acceptance_merges_original_order_without_replaying_cells_or_losing_scores \
+				native_paths_keep_derivation_polarity_and_complete_found_witnesses \
+				native_property_rows_retain_original_declarations_through_normal_ingestion \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-mime --test lossless -- --exact \
 				production_rdf_round_trip_is_deterministic_for_original_and_broken_messages \

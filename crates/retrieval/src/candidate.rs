@@ -9,7 +9,7 @@ use crate::compile::{
     CompiledRead, StratumUnit, UnitAttribution, emit_units, tagged_units_as_assembled,
 };
 use crate::error::PlanError;
-use crate::execute::{CandidateExecutionResult, ReadStratum};
+use crate::execute::{CandidateExecutionResult, ExecutionError, ReadStratum};
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::Iri;
@@ -101,7 +101,9 @@ purrdf_lex::variant_from!(CandidatePlanError { Plan(PlanError) });
 /// slot, and reports that read in rows_materialised. Unknown strata and
 /// missing selected strata are refused when the request is planned.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CandidateDepths(pub(crate) FastMap<Iri, u32>);
+pub struct CandidateDepths(
+    pub(crate) purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedOrderedMap<Iri, u32>>,
+);
 
 impl CandidateDepths {
     /// Validate explicit work depths without clamping or deriving any value.
@@ -124,7 +126,47 @@ impl CandidateDepths {
                 });
             }
         }
-        Ok(Self(values))
+        Ok(Self::resident(values))
+    }
+
+    fn resident(values: FastMap<Iri, u32>) -> Self {
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let values = purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+            values.into_iter().map(Ok),
+            &workspace,
+        )
+        .expect("resident depth arena");
+        Self(
+            purrdf_sparql_eval::SharedWorkspace::new_admitted(values, &workspace)
+                .expect("resident depth control"),
+        )
+    }
+
+    /// Retain native depth keys, ordered arena and immutable control.
+    ///
+    /// # Errors
+    /// Returns the original key, arena or control refusal.
+    pub fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        if self.0.workspace().is_bounded() {
+            return Ok(self.clone());
+        }
+        let values = purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+            self.0
+                .iter()
+                .map(|(stratum, depth)| Ok((stratum.clone_admitted(workspace)?, *depth))),
+            workspace,
+        )?;
+        Ok(Self(purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            values, workspace,
+        )?))
+    }
+
+    /// Borrow canonical ascending depths without allocating sort scratch.
+    pub fn iter(&self) -> impl Iterator<Item = (&Iri, u32)> {
+        self.0.iter().map(|(stratum, depth)| (stratum, *depth))
     }
 
     /// The caller's work depth for this stratum.
@@ -148,13 +190,7 @@ impl CandidateDepths {
     /// Canonical ascending strata, independent of the fixed hash table's layout.
     #[must_use]
     pub fn sorted(&self) -> Vec<(&Iri, u32)> {
-        let mut values: Vec<_> = self
-            .0
-            .iter()
-            .map(|(stratum, depth)| (stratum, *depth))
-            .collect();
-        values.sort_unstable_by(|left, right| left.0.cmp(right.0));
-        values
+        self.iter().collect()
     }
 }
 
@@ -176,7 +212,7 @@ impl CandidatePlan {
     /// Caller-supplied depths, in the actual plan.
     #[must_use]
     pub fn depths(&self) -> CandidateDepths {
-        CandidateDepths(self.parts.stratum_depths.clone())
+        CandidateDepths::resident(self.parts.stratum_depths.clone())
     }
 
     /// The original request terms in caller order.
@@ -291,7 +327,10 @@ impl CandidatePlan {
                 producer_bindings,
                 producer_decisions,
                 unserved_terms,
-                stratum_depths: depths.0,
+                stratum_depths: depths
+                    .iter()
+                    .map(|(stratum, depth)| (stratum.clone(), depth))
+                    .collect(),
                 stratum_derivations: BTreeMap::new(),
                 declared_rows,
                 statistics_snapshot,
@@ -406,8 +445,8 @@ pub struct CompiledCandidates {
     pub(crate) depths: CandidateDepths,
     pub(crate) attribution: Vec<UnitAttribution>,
     pub(crate) unserved_terms: Vec<UnservedTerm>,
-    pub(crate) producer_bindings: Vec<ProducerBinding>,
-    pub(crate) producer_decisions: Vec<ProducerDecision>,
+    pub(crate) producer_bindings: purrdf_sparql_eval::SharedWorkspace<Vec<ProducerBinding>>,
+    pub(crate) producer_decisions: purrdf_sparql_eval::SharedWorkspace<Vec<ProducerDecision>>,
 }
 
 impl CompiledCandidates {
@@ -441,8 +480,8 @@ pub fn compile_candidates(
         registry_fingerprint: admitted.fingerprint,
         depths: plan.depths(),
         unserved_terms: plan.unserved_evidence(),
-        producer_bindings: plan.parts.producer_bindings.clone(),
-        producer_decisions: plan.parts.producer_decisions.clone(),
+        producer_bindings: std::sync::Arc::new(plan.parts.producer_bindings.clone()).into(),
+        producer_decisions: std::sync::Arc::new(plan.parts.producer_decisions.clone()).into(),
     })
 }
 
@@ -458,11 +497,11 @@ impl CompiledRead for CompiledCandidates {
     fn plan_id(&self) -> PlanId {
         self.plan_id
     }
-    fn tagged_as_assembled(&self) -> Result<(), crate::ExecutionError> {
+    fn tagged_as_assembled(&self) -> Result<(), ExecutionError> {
         tagged_units_as_assembled(self.plan_id, &self.units, &self.attribution)?;
         for unit in &self.units {
             if self.depths.get(&unit.stratum) != Some(unit.depth()) {
-                return Err(crate::ExecutionError::UnitsNotAsAssembled {
+                return Err(ExecutionError::UnitsNotAsAssembled {
                     plan: self.plan_id,
                     reason: format!(
                         "candidate stratum {} was requested at {:?} ranks but its unit reads {}",
@@ -477,22 +516,43 @@ impl CompiledRead for CompiledCandidates {
     }
     fn finish<'d>(
         &self,
-        streams: Vec<ReadStratum<'d>>,
-        statuses: FastMap<Iri, ProducerStatus>,
-    ) -> Self::Output<'d> {
-        CandidateExecutionResult {
+        streams: purrdf_sparql_eval::AdmittedVec<ReadStratum<'d>>,
+        statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
+    ) -> Result<Self::Output<'d>, ExecutionError> {
+        let workspace = streams.workspace().clone();
+        Ok(CandidateExecutionResult {
             streams,
             statuses,
             plan_id: self.plan_id,
-            depths: self.depths.clone(),
-            contracts: self
-                .units
-                .iter()
-                .map(|unit| (unit.stratum.clone(), unit.contract.clone()))
-                .collect(),
-            unserved_terms: self.unserved_terms.clone(),
+            depths: self
+                .depths
+                .clone_admitted(&workspace)
+                .map_err(ExecutionError::NativeFailure)?,
+            contracts: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    self.units.iter().map(|unit| {
+                        Ok((
+                            unit.stratum.clone_admitted(&workspace)?,
+                            unit.contract.clone_admitted(&workspace)?,
+                        ))
+                    }),
+                    &workspace,
+                )
+                .map_err(ExecutionError::NativeFailure)?,
+                &workspace,
+            )
+            .map_err(ExecutionError::NativeFailure)?,
+            unserved_terms: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                    self.unserved_terms.iter().copied(),
+                    &workspace,
+                )
+                .map_err(ExecutionError::NativeFailure)?,
+                &workspace,
+            )
+            .map_err(ExecutionError::NativeFailure)?,
             producer_bindings: self.producer_bindings.clone(),
             producer_decisions: self.producer_decisions.clone(),
-        }
+        })
     }
 }

@@ -2134,7 +2134,7 @@ fn renders_value() -> Vec<AcceptedTerm> {
     vec![AcceptedTerm {
         pattern: TermPattern::of_kind(TermKind::Any),
         placements: vec![TermPlacement {
-            facet: RequestFacet::Value,
+            facet: RequestFacet::ScopedLexicalValue,
             position: 1,
             datatype: None,
         }],
@@ -2259,7 +2259,7 @@ fn literal_only_registry(mandatory: bool) -> PropertyFunctionRegistry {
             vec![AcceptedTerm {
                 pattern: TermPattern::of_kind(TermKind::Literal),
                 placements: vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     datatype: None,
                 }],

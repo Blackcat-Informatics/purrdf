@@ -40,7 +40,7 @@ use purrdf_sparql_algebra::{
 use purrdf_core::{RdfLiteral, TermFactory};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
+use crate::eval::EvalCtx;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
@@ -344,7 +344,14 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
     })();
     let graph = frozen.map_err(|error| frame.storage_error(error, "constructed graph freeze"))?;
     let graph = frame.finish_dataset(&mut Some(graph))?;
-    commit_answer_triples(graph, certificate, &rows, ctx)
+    let result = commit_answer_triples(graph, certificate, &rows, ctx)?;
+    if ctx.evidence_input.is_some()
+        || rows.rows.may_have_evidence_attachment()
+        || !rows.rows.search_evidence().is_virtual()
+    {
+        ctx.evidence_answer = Some(rows);
+    }
+    Ok(result)
 }
 
 /// Validated graph plus the WHERE rows and their completeness certificate.
@@ -362,7 +369,7 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<StagedConstruct<D::Id>, EvalError> {
-    let (mut seq, mut certificate) = match eval_evaluated(pattern, ctx)? {
+    let (mut seq, mut certificate) = match crate::eval::eval_answer_pattern(pattern, ctx)? {
         Evaluated::Complete(seq) => (seq, None),
         Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
     };
@@ -703,6 +710,9 @@ fn build_construct_graph_with_memory<D: DatasetView + Sync>(
     let mut blanks = crate::template::TemplateBlanks::default();
 
     'rows: for row in &seq.rows {
+        if row.evidence().is_undecided() {
+            continue;
+        }
         blanks.clear();
 
         if !has_reifier_decls {
@@ -868,6 +878,9 @@ fn build_construct_graph_with_memory<D: DatasetView + Sync>(
         let constructed_graph_id = uniform_slot.ground_graph();
         let mut seeds = crate::AdmittedVec::new(&ctx.growth);
         for row in &seq.rows {
+            if row.evidence().is_undecided() {
+                continue;
+            }
             for term in row.iter().flatten() {
                 seeds.push(ctx.scratch.try_owned_value_of(
                     ctx.dataset,

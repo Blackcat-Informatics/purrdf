@@ -480,11 +480,20 @@ pub enum AdmissionError {
         /// What is inconsistent.
         reason: String,
     },
+    /// A selected producer has no original pre-depth hard-constraint path.
+    UnsupportedCandidateScope {
+        /// The producer that cannot honor the request's explicit scope.
+        producer: String,
+    },
 }
 
 impl fmt::Display for AdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedCandidateScope { producer } => write!(
+                f,
+                "producer {producer} cannot apply hard constraints before ranking depth"
+            ),
             Self::MissingMandatoryProducer { producer } => write!(
                 f,
                 "the registry's mandatory producer {producer} is absent from the plan"
@@ -589,6 +598,7 @@ impl AdmissionError {
             Self::InvalidPlanVersion { .. } => "invalid_plan_version",
             Self::UnsatisfiablePlacement { .. } => "unsatisfiable_placement",
             Self::MalformedPlan { .. } => "malformed_plan",
+            Self::UnsupportedCandidateScope { .. } => "unsupported_candidate_scope",
         }
     }
 }
@@ -1123,6 +1133,7 @@ struct ReadPlan<'a> {
     version: u16,
     expected_version: u16,
     request_terms: &'a [crate::request::RequestTerm],
+    constraints: &'a [crate::request::RequestTerm],
     producer_bindings: &'a [ProducerBinding],
     unserved_terms: &'a [crate::plan::UnservedTerm],
     stratum_depths: &'a purrdf_core::FastMap<Iri, u32>,
@@ -1142,6 +1153,7 @@ pub(crate) fn admit_plan<'a>(
             version: plan.version,
             expected_version: PLAN_VERSION,
             request_terms: &plan.request_terms,
+            constraints: &plan.constraints,
             producer_bindings: &plan.producer_bindings,
             unserved_terms: &plan.unserved_terms,
             stratum_depths: &plan.stratum_depths,
@@ -1170,6 +1182,7 @@ pub(crate) fn admit_candidates<'a>(
             version: crate::candidate::CandidatePlan::VERSION,
             expected_version: crate::candidate::CandidatePlan::VERSION,
             request_terms: &parts.request_terms,
+            constraints: &[],
             producer_bindings: &parts.producer_bindings,
             unserved_terms: &parts.unserved_terms,
             stratum_depths: &parts.stratum_depths,
@@ -1203,6 +1216,13 @@ fn admit_read<'a>(
     plan: ReadPlan<'a>,
     env: &AdmissionEnvironment<'_>,
 ) -> Result<AdmittedRegistry<'a>, AdmissionError> {
+    for constraint in plan.constraints {
+        crate::planner::validate_term(constraint).map_err(|error| {
+            AdmissionError::MalformedPlan {
+                reason: error.to_string(),
+            }
+        })?;
+    }
     // 1. The plan's layout version must be one this build writes. A plan read
     //    from JSON bypasses `from_canonical_bytes`'s own gate, so it is
     //    re-checked here rather than assumed.
@@ -1375,6 +1395,26 @@ fn admit_read<'a>(
     let mut stratum_bindings: BTreeMap<Iri, &ProducerBinding> = BTreeMap::new();
     let mut stratum_invocations: BTreeMap<Iri, Invocation> = BTreeMap::new();
     for binding in plan.producer_bindings {
+        if !plan.constraints.is_empty() {
+            let relation = env.registry.resolve(&binding.producer).ok_or_else(|| {
+                AdmissionError::MalformedPlan {
+                    reason: format!("scope names an unavailable producer {}", binding.producer),
+                }
+            })?;
+            let supported = purrdf_sparql_eval::property_fn::declaration_contained(
+                &binding.producer,
+                "candidate scope support",
+                || relation.supports_candidate_scope(),
+            )
+            .map_err(|error| AdmissionError::MalformedPlan {
+                reason: error.to_string(),
+            })?;
+            if !supported {
+                return Err(AdmissionError::UnsupportedCandidateScope {
+                    producer: binding.producer.clone(),
+                });
+            }
+        }
         let Some(descriptor) = descriptors.get(&binding.producer) else {
             return Err(AdmissionError::MalformedPlan {
                 reason: format!(

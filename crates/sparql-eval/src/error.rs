@@ -634,6 +634,22 @@ purrdf_lex::constructors! {
 }
 
 impl EvalError {
+    /// A native storage/source refusal invalidates every producer sharing the
+    /// execution. An invocation's data or function failure remains that
+    /// invocation's refusal at a composition boundary.
+    pub const fn is_native_storage_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::AllocationFailed { .. }
+                | Self::WorkspaceStopped
+                | Self::WorkspaceUnpriced(_)
+                | Self::WorkspaceBoundOverflow
+                | Self::SourceRead(_)
+                | Self::UnstableNativeDiagnostic
+                | Self::ExchangeIdExhausted
+        )
+    }
+
     /// A caller-returned `Function` contains no typed request classification.
     /// Retain it as an execution failure while preserving every more specific
     /// typed cause (including XPath, source and governor-adjacent refusals).

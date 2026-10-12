@@ -150,7 +150,7 @@ impl BlankLabels {
     }
     fn clear(&mut self) {
         if let Some(owner) = &mut self.owner
-            && let Some(table) = owner.unique_mut()
+            && let Some(table) = owner.get_mut()
         {
             table.clear();
             return;
@@ -180,7 +180,7 @@ impl BlankLabels {
         let unique = self
             .owner
             .as_mut()
-            .and_then(crate::workspace::SharedWorkspace::unique_mut)
+            .and_then(crate::workspace::SharedWorkspace::get_mut)
             .is_some();
         if !unique {
             let mut replacement = crate::AdmittedMap::default();
@@ -197,7 +197,7 @@ impl BlankLabels {
         self.owner
             .as_mut()
             .expect("a mutation has a native owner")
-            .unique_mut()
+            .get_mut()
             .expect("the replacement is uniquely owned")
             .insert_admitted(label, (), workspace)?;
         Ok(true)
@@ -1061,7 +1061,12 @@ impl ScratchInterner {
         }
     }
 
-    pub(crate) fn try_owned_value_of<D: DatasetView>(
+    /// Resolve one original cell through native physical admission, retaining
+    /// its payload after the scratch interner and dataset borrow are released.
+    ///
+    /// # Errors
+    /// Preserves the original source read or native allocation refusal.
+    pub fn try_owned_value_of<D: DatasetView>(
         &self,
         dataset: &D,
         term: SolutionTerm<D::Id>,

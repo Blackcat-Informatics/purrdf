@@ -131,16 +131,16 @@ fn memo_verification_enabled() -> bool {
 pub struct PreparedExecution {
     /// The admitted plan. Held by `Arc`, so it stays valid for this execution's
     /// lifetime even if the engine's cache evicts it.
-    pub(crate) prepared: Arc<PreparedQuery>,
+    pub(crate) prepared: crate::SharedWorkspace<PreparedQuery>,
     /// The declared parameters, interned once, in declaration order.
-    pub(crate) parameters: Box<[Variable]>,
+    pub(crate) parameters: crate::WorkspaceArray<Variable>,
     /// The current value of each parameter, positionally. `None` until bound;
     /// running with any parameter still `None` is refused rather than defaulted.
     ///
     /// A [`ParameterValue`] rather than a bare [`TermValue`] because a slot may have
     /// been filled through either door — see that type for what each one holds and
     /// why the id door stores a resolved term rather than the id it was given.
-    pub(crate) values: Vec<Option<ParameterValue>>,
+    pub(crate) values: crate::WorkspaceArray<Option<ParameterValue>>,
     /// This run's bindings as the rewrite consumes them, in a buffer this execution
     /// keeps. The list has the same length on every run and only its cells change,
     /// so refilling it costs nothing where a fresh `Vec` cost one allocation per run.
@@ -358,6 +358,38 @@ impl PreparedExecution {
     /// the admission whose result this value then carries.
     pub(crate) fn new(prepared: Arc<PreparedQuery>, parameters: Box<[Variable]>) -> Self {
         let values = vec![None; parameters.len()];
+        Self::with_storage(
+            prepared.into(),
+            crate::WorkspaceArray::Caller(parameters.into_vec()),
+            crate::WorkspaceArray::Caller(values),
+        )
+    }
+
+    pub(crate) fn new_admitted(
+        prepared: crate::SharedWorkspace<PreparedQuery>,
+        parameters: &[&str],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        let names = crate::AdmittedVec::try_from_iter_admitted(
+            parameters
+                .iter()
+                .map(|name| workspace.authored_text(*name).map(Variable::from_admitted)),
+            workspace,
+        )?;
+        let values =
+            crate::AdmittedVec::from_iter_admitted((0..parameters.len()).map(|_| None), workspace)?;
+        Ok(Self::with_storage(
+            prepared,
+            crate::WorkspaceArray::Native(names),
+            crate::WorkspaceArray::Native(values),
+        ))
+    }
+
+    fn with_storage(
+        prepared: crate::SharedWorkspace<PreparedQuery>,
+        parameters: crate::WorkspaceArray<Variable>,
+        values: crate::WorkspaceArray<Option<ParameterValue>>,
+    ) -> Self {
         Self {
             prepared,
             parameters,
@@ -571,6 +603,30 @@ impl PreparedExecution {
         self.write(slot, ParameterValue::Value(value))
     }
 
+    /// Bind a native-produced value without copying or detaching its admission.
+    ///
+    /// # Errors
+    /// Returns a typed refusal if the slot is not a declared parameter.
+    pub fn bind_admitted(
+        &mut self,
+        slot: usize,
+        value: crate::SharedWorkspace<crate::WorkspaceTerm>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        let Some(cell) = self.values.get_mut(slot) else {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Data,
+                format_args!(
+                    "no parameter in slot {slot}: this execution declares {}",
+                    ParameterList(&self.parameters)
+                ),
+                workspace,
+            ));
+        };
+        *cell = Some(ParameterValue::AdmittedValue(value));
+        Ok(())
+    }
+
     /// Bind the parameter in `slot` to the term `dataset` interns at `id` — the **id
     /// door**.
     ///
@@ -636,6 +692,35 @@ impl PreparedExecution {
         }
         let ground = crate::substitute::ground_term_from_id(dataset, id)?;
         self.write(slot, ParameterValue::Ground(ground))
+    }
+
+    /// Ground an infallible view's id under the enclosing native lookup account.
+    /// The binding retains its original lexical payload and shared-control grant.
+    ///
+    /// # Errors
+    /// Returns the original lexical or physical refusal without a resident copy.
+    pub fn bind_id_admitted<D: DatasetView<ReadError = std::convert::Infallible>>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        if slot >= self.values.len() {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Data,
+                format_args!(
+                    "no parameter in slot {slot}: this execution declares {}",
+                    ParameterList(&self.parameters)
+                ),
+                workspace,
+            ));
+        }
+        let value =
+            ParameterValue::from_id_admitted(dataset, id, workspace, |never| match never {})
+                .map_err(crate::substitute::GroundFailure::into_eval_error)?;
+        self.values[slot] = Some(value);
+        Ok(())
     }
 
     /// Bind a persistent dataset id through the storage provider's owned account.

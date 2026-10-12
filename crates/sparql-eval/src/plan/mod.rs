@@ -247,9 +247,16 @@ pub(crate) struct PlanShape {
     volatile_sites: Vec<bool>,
     /// Pure UNION regions, derived once from the numbered kinds and parent edges.
     positive_regions: AdmittedVec<bool>,
+    /// The numbered walk includes nested subqueries and expression EXISTS bodies.
+    has_property_functions: bool,
 }
 
 impl PlanShape {
+    /// Whether the actual prepared algebra can invoke a native relation.
+    pub(crate) const fn has_property_functions(&self) -> bool {
+        self.has_property_functions
+    }
+
     /// The number of nodes.
     pub(crate) fn len(&self) -> usize {
         self.rows.len()
@@ -490,6 +497,7 @@ impl<'q> Tree<'q> {
         // Id end positions and attached-expression ranges use this exact domain.
         u32::try_from(node_count).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
         u32::try_from(expr_count).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+        let mut has_property_functions = false;
         let mut rows = AdmittedVec::<NodeRow>::with_capacity(node_count, workspace)?;
         let mut exprs = AdmittedVec::<ExprSlot>::with_capacity(expr_count, workspace)?;
         let mut paths = AdmittedVec::new(workspace);
@@ -515,6 +523,7 @@ impl<'q> Tree<'q> {
                     }
                     None => (None, ChildEdge::MONOTONE, None),
                 };
+                has_property_functions |= matches!(node, GraphPattern::PropertyFunction(_));
                 if matches!(node, GraphPattern::Path { .. }) {
                     paths.push(id)?;
                 }
@@ -638,6 +647,7 @@ impl<'q> Tree<'q> {
             recycled: Vec::new(),
             volatile_sites: Vec::new(),
             positive_regions,
+            has_property_functions,
         })
     }
 
@@ -870,6 +880,13 @@ mod tests {
         let mut spine: Vec<(&GraphPattern, usize)> = Vec::new();
         walk_spine(root, &mut |node, _context, depth| spine.push((node, depth)));
         assert_eq!(shape.len(), spine.len(), "{context}: node count");
+        assert_eq!(
+            shape.has_property_functions(),
+            spine
+                .iter()
+                .any(|(node, _)| matches!(node, GraphPattern::PropertyFunction(_))),
+            "{context}: native relation reachability"
+        );
         let mut expected_exprs = 0_u32;
         let mut expected_paths = 0_u32;
         // Every `EXISTS` body with the node whose expression reaches it, gathered over

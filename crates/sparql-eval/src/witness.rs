@@ -324,12 +324,12 @@ fn mutable_witness_array<'a, T: Clone>(
 ) -> Result<&'a mut crate::workspace::AdmittedVec<T>, crate::EvalError> {
     let unique = storage
         .as_mut()
-        .is_some_and(|values| values.unique_mut().is_some());
+        .is_some_and(|values| values.get_mut().is_some());
     if !unique {
         let count = storage.as_ref().map_or(0, |values| values.len());
         let mut replacement = crate::workspace::AdmittedVec::with_capacity(count, workspace)?;
         if let Some(original) = storage.as_ref() {
-            for value in original.iter() {
+            for value in original {
                 replacement.push(value.clone())?;
             }
         }
@@ -341,7 +341,7 @@ fn mutable_witness_array<'a, T: Clone>(
     Ok(storage
         .as_mut()
         .expect("the original array was installed")
-        .unique_mut()
+        .get_mut()
         .expect("the original array is unique"))
 }
 
@@ -412,7 +412,7 @@ impl<T: Ord + Send + Sync + 'static> WitnessSet<T> {
         workspace: &crate::workspace::WorkspaceCapability,
     ) -> Result<(), crate::EvalError> {
         if let Some(values) = &other.values {
-            for value in values.iter() {
+            for value in values {
                 self.insert_owned(value.clone(), workspace)?;
             }
         }
@@ -559,7 +559,7 @@ impl RelationWitness {
         workspace: &crate::workspace::WorkspaceCapability,
     ) -> Result<(), crate::EvalError> {
         if let Some(source) = &other.entries {
-            for (name, attestations) in source.iter() {
+            for (name, attestations) in source {
                 let index = self.entries.as_ref().map_or(Err(0), |entries| {
                     entries.binary_search_by(|(candidate, _)| candidate.as_str().cmp(name.as_str()))
                 });

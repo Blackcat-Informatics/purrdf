@@ -166,6 +166,18 @@ impl From<QuadRow> for QuadIds {
     }
 }
 
+impl From<QuadIds> for QuadRow {
+    #[inline]
+    fn from(row: QuadIds) -> Self {
+        Self {
+            s: row.s,
+            p: row.p,
+            o: row.o,
+            g: row.g,
+        }
+    }
+}
+
 impl<Id> QuadIds<Id> {
     /// The same quad with every id, graph slot included, through `map`: how a view
     /// re-keys the rows of the dataset it wraps into its own id space.
@@ -1253,6 +1265,52 @@ impl RdfDataset {
             }
         }
         QuadProbePlan { perm: best, prefix }
+    }
+
+    /// The order of physical candidates in the selected permutation index.
+    /// Uses the same comparator as the store's permutation indexes.
+    #[must_use]
+    pub fn compare_probe_rows(plan: &QuadProbePlan, left: QuadIds, right: QuadIds) -> Ordering {
+        compare_quads(plan.perm.axes(), &left.into(), &right.into())
+    }
+
+    /// Compare candidates in one prefix's actual native read order, including
+    /// the value-dependent sequential fallback. Distinct prefixes are ordered
+    /// by the index prefix, keeping the comparison transitive across buckets.
+    #[must_use]
+    pub fn compare_pattern_probe_rows(
+        &self,
+        plan: &QuadProbePlan,
+        left: QuadIds,
+        right: QuadIds,
+    ) -> Ordering {
+        let left_row = QuadRow::from(left);
+        let right_row = QuadRow::from(right);
+        let axes = plan.perm.axes();
+        let prefix = &axes.axes[..plan.prefix];
+        for &axis in prefix {
+            let order = axis_key(axis, &left_row).cmp(&axis_key(axis, &right_row));
+            if order != Ordering::Equal {
+                return order;
+            }
+        }
+        let graph = if prefix.contains(&Axis::G) {
+            left.g.map_or(GraphMatch::Default, GraphMatch::Named)
+        } else {
+            GraphMatch::Any
+        };
+        let (access, _, _) = self.candidate_access(
+            plan,
+            prefix.contains(&Axis::S).then_some(left.s),
+            prefix.contains(&Axis::P).then_some(left.p),
+            prefix.contains(&Axis::O).then_some(left.o),
+            graph,
+        );
+        let perm = match access {
+            QuadCandidateAccess::Sequential => QuadPermutation::Spog,
+            QuadCandidateAccess::Permuted(perm) => perm,
+        };
+        Self::compare_probe_rows(&QuadProbePlan { perm, prefix: 0 }, left, right)
     }
 
     /// The contiguous `[lo, hi)` candidate run for this row's `(s, p, o, g)` values under
@@ -4314,6 +4372,12 @@ mod tests {
                             }
                             let chunked: Vec<QuadIds> =
                                 ds.quads_for_pattern_with_plan(&plan, s, p, o, g).collect();
+                            let mut ordered = chunked.clone();
+                            ordered.reverse();
+                            ordered.sort_unstable_by(|left, right| {
+                                ds.compare_pattern_probe_rows(&plan, *left, *right)
+                            });
+                            assert_eq!(ordered, chunked, "actual probe order, including fallback");
                             let per_row = ds.quads_for_pattern_with_plan_per_row(&plan, s, p, o, g);
                             assert_eq!(
                                 chunked, per_row,

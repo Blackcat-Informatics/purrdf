@@ -63,6 +63,18 @@ pub fn frame_le(out: &mut Vec<u8>, bytes: &[u8]) {
     frame_le_with(bytes, &mut |part| out.extend_from_slice(part));
 }
 
+/// Append a framed field through a fallible, originally admitted destination.
+///
+/// # Errors
+/// Returns the first destination refusal, without appending the remaining part.
+pub fn try_frame_le_with<E>(
+    bytes: &[u8],
+    mut append: impl FnMut(&[u8]) -> Result<(), E>,
+) -> Result<(), E> {
+    append(&prefix(bytes.len()))?;
+    append(bytes)
+}
+
 /// The checked exact destination layout of one published labelled frame.
 /// Returns `None` if the combined frame cannot fit in addressable storage.
 #[must_use]
@@ -170,6 +182,16 @@ pub fn frame_le_display_into<D: Digest + ?Sized>(
     } else {
         Err(core::fmt::Error)
     }
+}
+
+/// Start a framed field whose payload is emitted directly into the same digest.
+///
+/// The caller must subsequently emit exactly `len` payload bytes. This is the
+/// same length prefix as `frame_le_into`, for an existing deterministic emitter
+/// whose byte count is known without materializing its complete output.
+#[inline]
+pub fn frame_length_into<D: Digest + ?Sized>(digest: &mut D, len: usize) {
+    digest.update(&prefix(len));
 }
 
 #[cfg(test)]

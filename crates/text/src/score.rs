@@ -384,6 +384,144 @@ pub fn select(
     )
 }
 
+/// A query-time membership restriction on one analyzed token.
+///
+/// The predicate is a caller-declared field, resolved against this index's
+/// selected predicates when the query runs. It supplies no ranking weight.
+#[derive(Clone, Copy, Debug)]
+pub struct ScopedTerm<'a> {
+    /// An analyzed token of the actual query needle.
+    pub term: &'a str,
+    /// The predicate through which that token must occur.
+    pub predicate: &'a TermValue,
+}
+
+/// Select ranked rows after applying every declared token-field membership.
+///
+/// Scope is evaluated in the candidate walk before either a partition's heap
+/// depth or the overall emission ceiling. Frequencies, corpus statistics and
+/// weights still compute the original score; scope only decides membership.
+/// This handles decidable lexical membership. Missing-data hard constraints use
+/// the separate evidence/undecided partition, never a false membership value.
+///
+/// # Errors
+/// Refuses undeclared field predicates, scopes outside the analyzed needle,
+/// or the original scorer's typed numeric/data failure.
+pub fn select_scoped(
+    index: &TextIndex,
+    needle: &[String],
+    filter: &PartitionFilter,
+    scopes: &[ScopedTerm<'_>],
+    ceiling: Option<u64>,
+    partition_rank: Option<u32>,
+) -> Result<Vec<Scored>, TextError> {
+    select_scoped_counted(
+        index,
+        needle,
+        filter,
+        scopes,
+        ceiling,
+        partition_rank,
+        &mut ScoringWork::default(),
+    )
+}
+
+pub(crate) fn select_scoped_counted(
+    index: &TextIndex,
+    needle: &[String],
+    filter: &PartitionFilter,
+    scopes: &[ScopedTerm<'_>],
+    ceiling: Option<u64>,
+    partition_rank: Option<u32>,
+    work: &mut ScoringWork,
+) -> Result<Vec<Scored>, TextError> {
+    let terms = distinct_terms(needle);
+    for scope in scopes {
+        if terms.binary_search(&scope.term).is_err() {
+            return Err(TextError::config(
+                "field scope token is outside the analyzed query needle",
+            ));
+        }
+        if index
+            .config()
+            .predicates()
+            .binary_search(scope.predicate)
+            .is_err()
+        {
+            return Err(TextError::config(
+                "field scope predicate is not selected by this text index",
+            ));
+        }
+    }
+    select_counted_with_membership(
+        index,
+        needle,
+        filter,
+        ceiling,
+        partition_rank,
+        work,
+        &mut |document| matches_scopes(index, document, scopes),
+    )
+}
+
+pub(crate) fn matches_scopes(
+    index: &TextIndex,
+    document: u32,
+    scopes: &[ScopedTerm<'_>],
+) -> Result<bool, TextError> {
+    for scope in scopes {
+        if index.term_frequency_in_predicate(document, scope.term, scope.predicate)? == 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// A whole lexical needle retains its original any-token candidate semantics.
+/// Field scope changes which postings establish membership, not conjunction of
+/// the tokens or any scoring weight. Explicit `ScopedTerm` requirements above
+/// instead denote separately required token/field constraints.
+pub(crate) fn matches_predicate<'a>(
+    index: &TextIndex,
+    document: u32,
+    terms: impl IntoIterator<Item = &'a str>,
+    predicate: Option<&TermValue>,
+) -> Result<bool, TextError> {
+    let Some(predicate) = predicate else {
+        return Ok(true);
+    };
+    for term in terms {
+        if index.term_frequency_in_predicate(document, term, predicate)? != 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn select_counted_with_membership(
+    index: &TextIndex,
+    needle: &[String],
+    filter: &PartitionFilter,
+    ceiling: Option<u64>,
+    partition_rank: Option<u32>,
+    work: &mut ScoringWork,
+    membership: &mut impl FnMut(u32) -> Result<bool, TextError>,
+) -> Result<Vec<Scored>, TextError> {
+    let rows = select_counted_membership_owned(
+        index,
+        needle.iter().map(String::as_str),
+        CandidateSelection {
+            partitions: |key: &PartitionKey| filter.matches(key),
+            candidates: membership,
+        },
+        ceiling,
+        partition_rank,
+        work,
+        &WorkspaceCapability::default(),
+    )?;
+    Ok(rows.into_iter().collect())
+}
+
 /// [`select`], adding the work it did to `work`.
 pub(crate) fn select_counted(
     index: &TextIndex,
@@ -416,6 +554,38 @@ pub(crate) fn select_counted_owned<'a>(
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
 ) -> Result<AdmittedVec<Scored>, TextError> {
+    select_counted_membership_owned(
+        index,
+        needle,
+        CandidateSelection {
+            partitions: matches,
+            candidates: |_| Ok::<_, TextError>(true),
+        },
+        ceiling,
+        partition_rank,
+        work,
+        workspace,
+    )
+}
+
+/// The partition restriction and pre-depth candidate decision, evaluated in place.
+pub(crate) struct CandidateSelection<P, M> {
+    pub partitions: P,
+    pub candidates: M,
+}
+
+pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>>(
+    index: &TextIndex,
+    needle: impl ExactSizeIterator<Item = &'a str>,
+    mut selection: CandidateSelection<
+        impl Fn(&PartitionKey) -> bool,
+        impl FnMut(u32) -> Result<bool, E>,
+    >,
+    ceiling: Option<u64>,
+    partition_rank: Option<u32>,
+    work: &mut ScoringWork,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Scored>, E> {
     let terms = distinct_terms_owned(needle, workspace)?;
     let limit = partition_rank.map_or(ceiling, |wanted| Some(u64::from(wanted)));
     let emitted = ceiling.map_or(usize::MAX, |k| usize::try_from(k).unwrap_or(usize::MAX));
@@ -427,10 +597,18 @@ pub(crate) fn select_counted_owned<'a>(
         if rows.len() >= emitted {
             break;
         }
-        if !matches(key) {
+        if !(selection.partitions)(key) {
             continue;
         }
-        let partition_rows = rank_terms_owned(index, key, &terms, limit, work, workspace)?;
+        let partition_rows = rank_terms_owned(
+            index,
+            key,
+            &terms,
+            limit,
+            work,
+            workspace,
+            &mut selection.candidates,
+        )?;
         // Rank the entire required working population first. Move only the prefix
         // this output can emit; no oversized append/truncate allocation remains.
         for row in partition_rows {
@@ -586,23 +764,25 @@ fn rank_terms(
         limit,
         work,
         &WorkspaceCapability::default(),
+        &mut |_| Ok::<_, TextError>(true),
     )?
     .into_iter()
     .collect())
 }
 
-fn rank_terms_owned(
+fn rank_terms_owned<E: From<TextError>>(
     index: &TextIndex,
     partition: &PartitionKey,
     terms: &[&str],
     limit: Option<u64>,
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
-) -> Result<AdmittedVec<Scored>, TextError> {
+    membership: &mut impl FnMut(u32) -> Result<bool, E>,
+) -> Result<AdmittedVec<Scored>, E> {
     let Some(partition) = admitted(index.partition_key_owned(partition, workspace))? else {
         return Ok(AdmittedVec::new(workspace));
     };
-    let candidates = candidates_owned(index, partition, terms, work, workspace)?;
+    let candidates = candidates_owned(index, partition, terms, work, workspace, membership)?;
     let keep = limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let ordered = order_owned(candidates, keep, workspace)?;
     let mut rows = admitted(AdmittedVec::with_capacity(ordered.len(), workspace))?;
@@ -645,13 +825,14 @@ struct CandidateOccurrence<'a> {
 /// A document holding none of them is not a candidate. Candidate membership is
 /// independent of field weights: a matching document can legitimately score
 /// zero, and still participates in the canonical tie order.
-fn candidates_owned(
+fn candidates_owned<E: From<TextError>>(
     index: &TextIndex,
     partition: &PartitionKey,
     terms: &[&str],
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
-) -> Result<AdmittedVec<Candidate>, TextError> {
+    membership: &mut impl FnMut(u32) -> Result<bool, E>,
+) -> Result<AdmittedVec<Candidate>, E> {
     if index.partition_stats(partition).is_none() {
         return Ok(AdmittedVec::new(workspace));
     }
@@ -702,9 +883,11 @@ fn candidates_owned(
         let held = occurrences[at..at + run]
             .iter()
             .map(|entry| (entry.ordinal, entry.counts));
-        admitted(out.push(score_document(
-            index, &query, document, held, work, workspace,
-        )?))?;
+        if membership(document)? {
+            admitted(out.push(score_document(
+                index, &query, document, held, work, workspace,
+            )?))?;
+        }
         at += run;
     }
     Ok(out)

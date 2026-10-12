@@ -1818,10 +1818,21 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///
 /// # v15
 ///
+/// The schedule stays unchanged. Evidence-bearing `EXISTS`/`NOT EXISTS` evaluates
+/// the original body and retains every alternative witness instead of entering
+/// the ordinary definition path's synthetic first-witness `Slice`. Its node-entry
+/// and output charges therefore describe the body actually executed; an empty
+/// property-function body charges one fewer node entry. Evidence preservation
+/// also retains algebra nodes whose normalization could discard declarations.
+/// An unused relation registry does not select this execution path. Consumers
+/// must remeasure fuel ceilings and stop cut points for evidence-bearing queries.
+///
+/// # v16
+///
 /// Appends native-function-work. Native kernels price their own documented
 /// internal chunks, share physical admission, and stop between chunks. Existing
 /// seventeen point labels and prices retain their order and values.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 15;
+pub const GOVERNOR_PROFILE_VERSION: u32 = 16;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2861,7 +2872,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 15);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 16);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(
@@ -2873,6 +2884,16 @@ mod tests {
             schedule_digest(GOVERNOR_PROFILE_ID, 13, historical),
             pinned,
             "binary-limb charging cannot reuse the v13 receipt identity"
+        );
+        assert_ne!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 14, historical),
+            pinned,
+            "binary-limb charging cannot reuse the v14 receipt identity"
+        );
+        assert_eq!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 15, historical),
+            "34f3ed243e70e82eb473de8a264af5a712ccab053c48bc4be286f1c7293071a1",
+            "the evidence-preserving EXISTS profile keeps its published v15 identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

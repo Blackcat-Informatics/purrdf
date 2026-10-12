@@ -40,7 +40,10 @@
 //! than a misspelling of it — see [`verify_binding`].
 
 use crate::query_workspace::{QueryString, admitted, query_error};
-use crate::score::{distinct_terms_owned, score_located_owned, select_counted_owned};
+use crate::score::{
+    CandidateSelection, distinct_terms_owned, matches_predicate, score_located_owned,
+    select_counted_membership_owned,
+};
 use purrdf_sparql_eval::{
     AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability,
     WorkspaceCursor, WorkspaceTerm,
@@ -49,11 +52,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::query_scope::LexicalQuery;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis, IndexGeneration,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic, RankFidelity,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, CandidateDomains, CandidateScope, DuplicatePolicy, EvalError, ExclusionBasis,
+    IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic,
+    RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 use crate::error::TextError;
@@ -444,7 +449,7 @@ fn distinct_graphs(keys: &[PartitionKey]) -> u64 {
 /// Nothing here reads a clock, a counter or an RNG. The value is a pure
 /// function of the index's content, so two processes that built the same index
 /// from the same rows attest the same generation and a reader may compare them.
-fn index_generation(index: &TextIndex) -> Arc<str> {
+pub(crate) fn index_generation(index: &TextIndex) -> Arc<str> {
     Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))
 }
 
@@ -794,6 +799,20 @@ impl From<Scored> for Hit {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ScopedSearch<'a> {
+    scope: &'a dyn CandidateScope,
+    predicate: Option<&'a TermValue>,
+    subject: Option<&'a TermValue>,
+    ceiling: Option<u64>,
+    rank: Option<u32>,
+}
+
+struct ScopedHits {
+    rows: AdmittedVec<Hit>,
+    declarations: AdmittedVec<(u32, Option<purrdf_sparql_eval::RowEvidence>)>,
+}
+
 impl TextSearchRelation {
     /// A ranked-retrieval relation over `index`.
     ///
@@ -872,9 +891,10 @@ impl TextSearchRelation {
     ///
     /// * **Candidate at [`Self::DOC`]** — the document subject is the term a
     ///   consumer fuses and joins on; every other position is about the row.
-    /// * **One accepted alternative: a literal request term**, with its value
-    ///   rendered into [`Self::NEEDLE`]. That is the only position this relation
-    ///   requires bound, and a needle is the only thing it can be asked for.
+    /// * **One accepted alternative: a literal request term**, with an explicit
+    ///   predicate retained through [`LexicalQuery`]. Field membership is resolved
+    ///   before candidate depth without changing statistics or weights. Unscoped
+    ///   requests retain their ordinary literal. The six-cell arity is unchanged.
     /// * **No datatype on that placement.** This relation reads `xsd:string`,
     ///   `rdf:langString` and `rdf:dirLangString`, and an absent datatype is
     ///   what lets a *language-tagged* request term render as `"needle"@tag`
@@ -1011,7 +1031,7 @@ impl TextSearchRelation {
                     predicate,
                 },
                 placements: vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: Self::NEEDLE,
                     datatype: None,
                 }],
@@ -1124,6 +1144,7 @@ impl TextSearchRelation {
         terms: &[&str],
         language: &Constraint<&str>,
         workspace: &WorkspaceCapability,
+        predicate: Option<&TermValue>,
     ) -> Result<AdmittedVec<Holding<'_>>, TextError> {
         let documents = admitted(self.index.documents_with_subject_owned(subject, workspace))?;
         let mut held = admitted(AdmittedVec::with_capacity(documents.len(), workspace))?;
@@ -1143,7 +1164,9 @@ impl TextSearchRelation {
                     admitted(located.push((ordinal, counts)))?;
                 }
             }
-            if !located.is_empty() {
+            if !located.is_empty()
+                && matches_predicate(&self.index, document, terms.iter().copied(), predicate)?
+            {
                 let partition = self.index.partition_ordinal_of(document).ok_or_else(|| {
                     query_error(
                         workspace,
@@ -1206,13 +1229,24 @@ impl TextSearchRelation {
         ceiling: Option<u64>,
         partition_rank: Option<u32>,
         workspace: &WorkspaceCapability,
+        predicate: Option<&TermValue>,
     ) -> Result<AdmittedVec<Scored>, TextError> {
         self.observations.rankings.fetch_add(1, Ordering::Relaxed);
         let mut work = ScoringWork::default();
-        let result = select_counted_owned(
+        let result = select_counted_membership_owned(
             &self.index,
             needle.iter().map(QueryString::as_str),
-            matches,
+            CandidateSelection {
+                partitions: matches,
+                candidates: |document| {
+                    matches_predicate(
+                        &self.index,
+                        document,
+                        needle.iter().map(QueryString::as_str),
+                        predicate,
+                    )
+                },
+            },
             ceiling,
             partition_rank,
             &mut work,
@@ -1220,6 +1254,135 @@ impl TextSearchRelation {
         );
         self.observations.record(work);
         result
+    }
+
+    fn ranked_scoped_owned(
+        &self,
+        needle: &[QueryString],
+        matches: impl Fn(&PartitionKey) -> bool,
+        selection: ScopedSearch<'_>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<ScopedHits, EvalError> {
+        self.observations.rankings.fetch_add(1, Ordering::Relaxed);
+        let mut work = ScoringWork::default();
+        let mut declarations = AdmittedVec::new(workspace);
+        // The same posting traversal and scorer applies every decision before
+        // selection. Unknown rows are scored once alongside established rows;
+        // a limited established prefix cannot hide the rest of that partition.
+        let result = select_counted_membership_owned(
+            &self.index,
+            needle.iter().map(QueryString::as_str),
+            CandidateSelection {
+                partitions: matches,
+                candidates: |document| {
+                    if !matches_predicate(
+                        &self.index,
+                        document,
+                        needle.iter().map(QueryString::as_str),
+                        selection.predicate,
+                    )? {
+                        return Ok(false);
+                    }
+                    let source = self.index.document(document).ok_or_else(|| {
+                        NativeDiagnostic::error(
+                            NativeDiagnosticKind::Internal,
+                            "text candidate is absent from its original index",
+                            workspace,
+                        )
+                    })?;
+                    let evidence = selection
+                        .scope
+                        .decide(source.subject(), workspace)?
+                        .into_evidence(workspace)?;
+                    declarations.push((document, evidence))?;
+                    // Rank the original field-selected candidates once. A
+                    // proven rejection is removed below, before established
+                    // depth, without renumbering the undecided partition.
+                    Ok::<_, EvalError>(true)
+                },
+            },
+            None,
+            None,
+            &mut work,
+            workspace,
+        );
+        self.observations.record(work);
+        let scored = result?;
+        declarations
+            .as_mut_slice()
+            .sort_unstable_by_key(|entry| entry.0);
+        let mut rows = AdmittedVec::new(workspace);
+        let mut partition = None;
+        let mut established_rank = 0u32;
+        let mut selected = 0u64;
+        for mut row in scored {
+            let key = self
+                .index
+                .partition_ordinal_of(row.document)
+                .ok_or_else(|| {
+                    NativeDiagnostic::error(
+                        NativeDiagnosticKind::Internal,
+                        "scoped text row lost its original partition",
+                        workspace,
+                    )
+                })?;
+            if partition != Some(key) {
+                partition = Some(key);
+                established_rank = 0;
+            }
+            let declaration = declarations
+                .binary_search_by_key(&row.document, |entry| entry.0)
+                .map_err(|_| {
+                    NativeDiagnostic::error(
+                        NativeDiagnosticKind::Internal,
+                        "scoped text row lost its original declaration",
+                        workspace,
+                    )
+                })?;
+            let Some(evidence) = &declarations[declaration].1 else {
+                continue;
+            };
+            let unknown = evidence.is_undecided();
+            if unknown {
+                declarations[declaration].1 = Some(
+                    evidence.clone().with_original_rank(
+                        core::num::NonZeroU64::new(u64::from(row.partition_rank))
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ),
+                );
+            }
+            if !unknown {
+                established_rank = established_rank
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                row.partition_rank = established_rank;
+            }
+            // Established ranks are exact positions after proven membership.
+            // Unknown ranks retain the original possible-candidate order; they
+            // belong to the separate incomplete evidence partition, not to the
+            // complete contiguous ranked stream.
+            if selection.subject.is_some_and(|subject| {
+                self.index
+                    .document(row.document)
+                    .is_none_or(|document| document.subject() != subject)
+            }) {
+                continue;
+            }
+            if !unknown {
+                if selection.ceiling.is_some_and(|ceiling| selected >= ceiling)
+                    || selection
+                        .rank
+                        .is_some_and(|rank| row.partition_rank != rank)
+                {
+                    continue;
+                }
+                selected = selected
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            }
+            rows.push(Hit::from(row))?;
+        }
+        Ok(ScopedHits { rows, declarations })
     }
 
     fn open_owned(
@@ -1233,7 +1396,34 @@ impl TextSearchRelation {
             format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
                 for a needle and cannot enumerate needles for a document, which is why both of \
                 its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"), &workspace))?;
-        let text = needle_text_owned(needle, SEARCH_NEEDLE, &workspace)?;
+        let query = match needle {
+            TermValue::Triple { .. } => LexicalQuery::decode(needle).map_err(|error| {
+                NativeDiagnostic::error(
+                    NativeDiagnosticKind::Function,
+                    format_args!("{error}"),
+                    &workspace,
+                )
+            })?,
+            _ => LexicalQuery {
+                needle,
+                predicate: None,
+            },
+        };
+        if let Some(predicate) = query.predicate
+            && self
+                .index
+                .config()
+                .predicates()
+                .binary_search(predicate)
+                .is_err()
+        {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Function,
+                format_args!("field scope predicate is not selected by this text index"),
+                &workspace,
+            ));
+        }
+        let text = needle_text_owned(query.needle, SEARCH_NEEDLE, &workspace)?;
         let rank = args
             .get(SEARCH_RANK)
             .map(|value| rank_bound_owned(value, &workspace))
@@ -1254,55 +1444,143 @@ impl TextSearchRelation {
             _ => None,
         };
         let mut rows = AdmittedVec::new(&workspace);
-        match args.get(SEARCH_DOC) {
-            _ if rank == RankBound::BeyondTheIndex => {}
-            None => {
-                let scored = self.ranked_owned(
-                    &analyzed,
-                    |key| language_matches(&language, key),
-                    select_ceiling,
-                    rank_at,
-                    &workspace,
-                )?;
-                rows = AdmittedVec::with_capacity(scored.len(), &workspace)?;
-                for row in scored {
-                    rows.push(Hit::from(row))?;
-                }
-            }
-            Some(subject) => {
-                let terms =
-                    distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
-                let holdings = self.holdings_owned(subject, &terms, &language, &workspace)?;
-                if args.is_unobserved(SEARCH_RANK) {
-                    if !holdings.is_empty() {
-                        rows = self.scored_in_place_owned(&terms, &holdings, &workspace)?;
+        let mut declarations = AdmittedVec::new(&workspace);
+        if let Some(scope) = args.candidate_scope() {
+            if rank != RankBound::BeyondTheIndex {
+                if let Some(subject) = args.get(SEARCH_DOC)
+                    && args.is_unobserved(SEARCH_RANK)
+                {
+                    let terms =
+                        distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
+                    let holdings = self.holdings_owned(
+                        subject,
+                        &terms,
+                        &language,
+                        &workspace,
+                        query.predicate,
+                    )?;
+                    let mut selected = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+                    for holding in holdings {
+                        let document = self.index.document(holding.document).ok_or_else(|| {
+                            NativeDiagnostic::error(
+                                NativeDiagnosticKind::Internal,
+                                "bound text holding lost its original document",
+                                &workspace,
+                            )
+                        })?;
+                        if let Some(evidence) = scope
+                            .decide(document.subject(), &workspace)?
+                            .into_evidence(&workspace)?
+                        {
+                            declarations.push((holding.document, Some(evidence)))?;
+                            selected.push(holding)?;
+                        }
                     }
-                } else if !holdings.is_empty() {
-                    let mut documents = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
-                    let mut keys = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
-                    for holding in &holdings {
-                        documents.push(holding.document)?;
-                        keys.push(holding.partition)?;
+                    rows = self.scored_in_place_owned(&terms, &selected, &workspace)?;
+                    declarations
+                        .as_mut_slice()
+                        .sort_unstable_by_key(|entry| entry.0);
+                } else {
+                    let mut partitions = AdmittedVec::new(&workspace);
+                    if let Some(subject) = args.get(SEARCH_DOC) {
+                        let terms = distinct_terms_owned(
+                            analyzed.iter().map(QueryString::as_str),
+                            &workspace,
+                        )?;
+                        for holding in self.holdings_owned(
+                            subject,
+                            &terms,
+                            &language,
+                            &workspace,
+                            query.predicate,
+                        )? {
+                            partitions.push(holding.partition)?;
+                        }
                     }
-                    drop(holdings);
-                    let scored = self.ranked_owned(
+                    let scoped = self.ranked_scoped_owned(
                         &analyzed,
                         |key| {
                             language_matches(&language, key)
-                                && self
-                                    .index
-                                    .local_partition_ordinal(key)
-                                    .is_some_and(|ordinal| keys.contains(&ordinal))
+                                && (args.get(SEARCH_DOC).is_none()
+                                    || self
+                                        .index
+                                        .local_partition_ordinal(key)
+                                        .is_some_and(|ordinal| partitions.contains(&ordinal)))
                         },
+                        ScopedSearch {
+                            scope,
+                            predicate: query.predicate,
+                            subject: args.get(SEARCH_DOC),
+                            ceiling: select_ceiling,
+                            rank: rank_at,
+                        },
+                        &workspace,
+                    )?;
+                    rows = scoped.rows;
+                    declarations = scoped.declarations;
+                }
+            }
+        } else {
+            match args.get(SEARCH_DOC) {
+                _ if rank == RankBound::BeyondTheIndex => {}
+                None => {
+                    let scored = self.ranked_owned(
+                        &analyzed,
+                        |key| language_matches(&language, key),
                         select_ceiling,
                         rank_at,
                         &workspace,
+                        query.predicate,
                     )?;
-                    rows =
-                        AdmittedVec::with_capacity(documents.len().min(scored.len()), &workspace)?;
+                    rows = AdmittedVec::with_capacity(scored.len(), &workspace)?;
                     for row in scored {
-                        if documents.contains(&row.document) {
-                            rows.push(Hit::from(row))?;
+                        rows.push(Hit::from(row))?;
+                    }
+                }
+                Some(subject) => {
+                    let terms =
+                        distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
+                    let holdings = self.holdings_owned(
+                        subject,
+                        &terms,
+                        &language,
+                        &workspace,
+                        query.predicate,
+                    )?;
+                    if args.is_unobserved(SEARCH_RANK) {
+                        if !holdings.is_empty() {
+                            rows = self.scored_in_place_owned(&terms, &holdings, &workspace)?;
+                        }
+                    } else if !holdings.is_empty() {
+                        let mut documents = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+                        let mut keys = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+                        for holding in &holdings {
+                            documents.push(holding.document)?;
+                            keys.push(holding.partition)?;
+                        }
+                        drop(holdings);
+                        let scored = self.ranked_owned(
+                            &analyzed,
+                            |key| {
+                                language_matches(&language, key)
+                                    && self
+                                        .index
+                                        .local_partition_ordinal(key)
+                                        .is_some_and(|ordinal| keys.contains(&ordinal))
+                            },
+                            select_ceiling,
+                            rank_at,
+                            &workspace,
+                            query.predicate,
+                        )?;
+                        rows = AdmittedVec::with_capacity(
+                            documents.len().min(scored.len()),
+                            &workspace,
+                        )?;
+                        for row in scored {
+                            if documents.contains(&row.document) {
+                                rows.push(Hit::from(row))?;
+                            }
                         }
                     }
                 }
@@ -1314,6 +1592,8 @@ impl TextSearchRelation {
             index: Arc::clone(&self.index),
             generation: Arc::clone(&self.generation),
             rows,
+            declarations,
+            scoped: args.candidate_scope().is_some(),
             at: 0,
             bound,
             remaining: ceiling,
@@ -1324,6 +1604,10 @@ impl TextSearchRelation {
 }
 
 impl PropertyFunction for TextSearchRelation {
+    fn supports_candidate_scope(&self) -> bool {
+        true
+    }
+
     fn volatility(&self) -> Volatility {
         // A frozen index is deterministic for a query's lifetime, so this
         // relation may run across fork-join workers. See the type's docs.
@@ -1500,6 +1784,8 @@ struct SearchCursor {
     index: Arc<TextIndex>,
     generation: Arc<str>,
     rows: AdmittedVec<Hit>,
+    declarations: AdmittedVec<(u32, Option<purrdf_sparql_eval::RowEvidence>)>,
+    scoped: bool,
     at: usize,
     bound: AdmittedVec<Option<WorkspaceTerm>>,
     remaining: Option<u64>,
@@ -1531,18 +1817,44 @@ impl SearchCursor {
                 .literal(document.language().unwrap_or(""), XSD_STRING)?,
             self.workspace.literal(hit.matched, XSD_INTEGER)?,
         ];
-        AdmittedPfRow::from_terms(terms.into_iter(), &self.workspace)
+        let row = AdmittedPfRow::from_terms(terms.into_iter(), &self.workspace)?;
+        if !self.scoped {
+            return Ok(row);
+        }
+        let declaration = self
+            .declarations
+            .binary_search_by_key(&hit.document, |entry| entry.0)
+            .map_err(|_| {
+                NativeDiagnostic::error(
+                    NativeDiagnosticKind::Internal,
+                    "text cursor lost its original scoped declaration",
+                    &self.workspace,
+                )
+            })?;
+        let evidence = self.declarations[declaration].1.as_ref().ok_or_else(|| {
+            NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                "text cursor published a rejected scoped candidate",
+                &self.workspace,
+            )
+        })?;
+        Ok(row.with_evidence(evidence.clone()))
     }
 
     fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
-        if self.remaining == Some(0) {
+        if !self.scoped && self.remaining == Some(0) {
             return Ok(None);
         }
         while let Some(hit) = self.rows.get(self.at) {
             self.at += 1;
             let row = self.build(hit)?;
             if agrees_owned(&self.bound, row.cells(), &self.workspace)? {
-                if let Some(remaining) = self.remaining.as_mut() {
+                if !row.evidence().is_undecided()
+                    && let Some(remaining) = self.remaining.as_mut()
+                {
+                    if *remaining == 0 {
+                        continue;
+                    }
                     *remaining -= 1;
                 }
                 return Ok(Some(row));
@@ -1553,11 +1865,7 @@ impl SearchCursor {
 }
 
 fn resident_row(row: Option<AdmittedPfRow>) -> Result<Option<PfRow>, EvalError> {
-    row.map(|row| {
-        row.try_into_resident()
-            .map_err(|_| EvalError::WorkspaceStopped)
-    })
-    .transpose()
+    row.map(AdmittedPfRow::try_into_resident).transpose()
 }
 
 macro_rules! resident_cursor_next {
@@ -1569,6 +1877,9 @@ macro_rules! resident_cursor_next {
 }
 
 impl PfCursor for SearchCursor {
+    fn carries_row_evidence(&self) -> bool {
+        self.scoped
+    }
     resident_cursor_next!();
     fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
         self.next_owned()
@@ -1750,6 +2061,8 @@ pub struct TermOccurrenceRelation {
     bounds: OccurrenceBounds,
     /// The generation every cursor attests, rendered once at construction.
     generation: Arc<str>,
+    /// Explicit one-entry analyzer/dictionary reuse, shared by caller clones.
+    dictionary: Arc<crate::dictionary::DictionaryCache>,
 }
 
 impl TermOccurrenceRelation {
@@ -1769,6 +2082,7 @@ impl TermOccurrenceRelation {
             modes: [BindingPattern::from_code(OCCURRENCE_MODE)],
             bounds,
             generation,
+            dictionary: Arc::new(crate::dictionary::DictionaryCache::default()),
         }
     }
 
@@ -1854,6 +2168,27 @@ impl TermOccurrenceRelation {
 }
 
 impl PropertyFunction for TermOccurrenceRelation {
+    fn occurrence_shape(&self) -> Option<purrdf_sparql_eval::property_fn::OccurrenceShape> {
+        Some(purrdf_sparql_eval::property_fn::OccurrenceShape {
+            analyzer: self.index.analyzer_fingerprint(),
+        })
+    }
+
+    fn prepare_occurrence_dictionary(
+        &self,
+        inputs: &[purrdf_sparql_eval::property_fn::OccurrenceDictionaryInput],
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<Box<dyn purrdf_sparql_eval::property_fn::OccurrenceDictionary>>, EvalError>
+    {
+        crate::occurrence_dictionary::prepare(
+            &self.index,
+            &self.dictionary,
+            &self.generation,
+            inputs,
+            workspace,
+        )
+    }
+
     fn volatility(&self) -> Volatility {
         Volatility::Stable
     }
@@ -2391,12 +2726,11 @@ mod tests {
         assert_eq!(
             accepted.placements,
             vec![TermPlacement {
-                facet: RequestFacet::Value,
+                facet: RequestFacet::ScopedLexicalValue,
                 position: TextSearchRelation::NEEDLE,
                 datatype: None,
             }],
-            "the needle renders into the one position this relation requires bound, \
-             with no datatype so a language-tagged needle keeps its tag"
+            "the scoped needle retains its original literal facets in the same required input position"
         );
 
         // The positions are the relation's own, not a second spelling of them.

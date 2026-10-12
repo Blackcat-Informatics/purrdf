@@ -898,6 +898,34 @@ pub trait DatasetView {
         g: GraphMatch<Self::Id>,
     ) -> Self::ProbePlan;
 
+    /// Certify the order required by exact scan-reusing physical operators.
+    ///
+    /// For every probe plan and fixed bound prefix, physical quads are ordered
+    /// by [`Self::compare_probe_order`], including value-dependent native access
+    /// selection; residual restrictions are a subsequence of that order.
+    /// Different prefixes have a consistent total order. Reifier and annotation streams each
+    /// retain their original table order when restricted, and follow physical
+    /// quads. The certificate covers every stream and graph admitted by this
+    /// view, including an empty stream. It is not a cardinality estimate.
+    ///
+    /// A view without this guarantee keeps the ordinary literal evaluator.
+    fn certifies_probe_order(&self) -> bool {
+        false
+    }
+
+    /// Compare physical candidates in the original plan's traversal order.
+    /// `Some` for every pair is mandatory when the certificate above is true.
+    /// Equal candidates must be identical quads; virtual-stream ordinals are
+    /// retained separately by the consumer.
+    fn compare_probe_order(
+        &self,
+        _plan: &Self::ProbePlan,
+        _left: QuadIds<Self::Id>,
+        _right: QuadIds<Self::Id>,
+    ) -> Option<core::cmp::Ordering> {
+        None
+    }
+
     /// Quads matching `(s, p, o, g)` under a caller-precomputed
     /// [`ProbePlan`](Self::ProbePlan). Behaviourally identical to
     /// [`Self::quads_for_pattern`] — the plan only skips the per-row permutation
@@ -1667,6 +1695,21 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
+    fn certifies_probe_order(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn compare_probe_order(
+        &self,
+        plan: &QuadProbePlan,
+        left: QuadIds,
+        right: QuadIds,
+    ) -> Option<core::cmp::Ordering> {
+        Some(self.compare_pattern_probe_rows(plan, left, right))
+    }
+
+    #[inline]
     fn quads_for_pattern_with_plan(
         &self,
         plan: &QuadProbePlan,
@@ -1849,6 +1892,21 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         g: GraphMatch<Self::Id>,
     ) -> Self::ProbePlan {
         (**self).probe_plan(s_bound, p_bound, o_bound, g)
+    }
+
+    #[inline]
+    fn certifies_probe_order(&self) -> bool {
+        (**self).certifies_probe_order()
+    }
+
+    #[inline]
+    fn compare_probe_order(
+        &self,
+        plan: &Self::ProbePlan,
+        left: QuadIds<Self::Id>,
+        right: QuadIds<Self::Id>,
+    ) -> Option<core::cmp::Ordering> {
+        (**self).compare_probe_order(plan, left, right)
     }
 
     #[inline]

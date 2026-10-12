@@ -236,8 +236,6 @@
 //! the same [`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)
 //! rather than reported as the stratum's ending.
 
-use std::collections::BTreeMap;
-
 use purrdf_core::DatasetView;
 use purrdf_sparql_eval::{PfAttestation, PropertyFunctionRegistry};
 use purrdf_text::Fixed;
@@ -246,7 +244,7 @@ use crate::admission::{AdmissionEnvironment, AdmissionError};
 use crate::compile::{CompiledRetrieval, PlannedResolution, ReadSchedule, compile};
 use crate::error::{FusionError, PlanError};
 use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute_within};
-use crate::fuse::{TopK, fuse};
+use crate::fuse::TopK;
 use crate::fusion_profile::{DecayRule, FusionProfile};
 use crate::fusion_stream::{FusedRow, FusionTrailer, ProducerStatus};
 use crate::id::{EvidenceId, FusionProfileId, PlanId};
@@ -278,7 +276,7 @@ pub struct SearchResult {
     /// A top-k answer is not a claim that nothing else ranked: reaching the
     /// bound and exhausting the frontier return the same shape. Completeness
     /// belongs to the producers and is in [`Self::trailer`].
-    pub rows: Vec<FusedRow>,
+    pub rows: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<FusedRow>>,
     /// The terminal report: every applicable producer's own status, keyed by
     /// stratum, and the profile identity.
     ///
@@ -301,7 +299,8 @@ pub struct SearchResult {
     /// whose only acceptor declared nowhere to put it shows up as
     /// [`UnservedReason::AcceptedWithoutPlacement`](crate::UnservedReason);
     /// neither is left as a term that silently contributed no rows.
-    pub unserved_terms: Vec<UnservedTerm>,
+    pub unserved_terms:
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<UnservedTerm>>,
     /// The canonical identity of the plan the answer descends from.
     ///
     /// Read back off [`Self::trailer`], where it arrived on the streams
@@ -354,7 +353,9 @@ pub struct SearchResult {
     /// so it is empty for no other reason. A stratum with no weight makes no
     /// contribution to fuse, so there is no resolution it could have; that
     /// stratum is named in [`Self::unweighted_strata`] instead.
-    pub planned_resolution: BTreeMap<Iri, PlannedResolution>,
+    pub planned_resolution: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, PlannedResolution>,
+    >,
     /// The identity of the fusion profile the answer was fused under.
     pub profile_id: FusionProfileId,
     /// Every stratum that ran but that the profile declares no weight for, in
@@ -371,7 +372,8 @@ pub struct SearchResult {
     /// weights none of the executed strata is refused outright, so a non-empty
     /// list always accompanies at least one fused stratum. See this module's
     /// header.
-    pub unweighted_strata: Vec<Iri>,
+    pub unweighted_strata:
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Iri>>,
 }
 
 /// A failure of any stage of the search composition, tagged with the stage that
@@ -529,6 +531,77 @@ where
     S: Statistics,
     D: DatasetView<ReadError = std::convert::Infallible> + Sync,
 {
+    search_bound(request, registry, statistics, dataset, env, profile, None)
+        .await
+        .map(|(result, _, _)| result)
+}
+
+/// Run the original search composition with caller-bound hard constraints.
+/// The fused answer contains established candidates; the inseparable native
+/// receipts retain undecided candidates and complete constraint accounting.
+///
+/// # Errors
+/// Preserves the original planning, admission, execution and fusion failures.
+// The two original scope inputs accompany the existing six composition inputs;
+// no independently configured second search pipeline is introduced.
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
+pub async fn search_scoped<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    bindings: &crate::ConstraintBindings<'_>,
+    source: &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+) -> Result<crate::ScopedExecution<SearchResult>, SearchError>
+where
+    S: Statistics,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+{
+    let (result, scopes, fused) = search_bound(
+        request,
+        registry,
+        statistics,
+        dataset,
+        env,
+        profile,
+        Some((bindings, source)),
+    )
+    .await?;
+    Ok(crate::ScopedExecution {
+        result,
+        scopes: scopes.expect("scoped execution retains its original unit receipts"),
+        fused,
+    })
+}
+
+// The optional borrowed input selects the original native execution door; all
+// planning, admission, fusion and answer publication below remain one body.
+#[allow(clippy::future_not_send)]
+async fn search_bound<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    scope: Option<(
+        &crate::ConstraintBindings<'_>,
+        &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+    )>,
+) -> Result<
+    (
+        SearchResult,
+        Option<purrdf_sparql_eval::AdmittedVec<crate::ScopedStratum>>,
+        Option<crate::ScopedFusedAnswer>,
+    ),
+    SearchError,
+>
+where
+    S: Statistics,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+{
     // 1. Plan. A pure function of the request, the registry and the statistics.
     let plan = plan(request, registry, statistics).map_err(SearchError::PlanError)?;
 
@@ -547,23 +620,37 @@ where
 
     // 3. Read and fuse. Each stratum is read on demand, so the read goes exactly
     //    as deep as the fusion's own stop; see this module's header.
-    let answer = read_and_fuse(&compiled, registry, dataset, profile).await?;
+    let answer = read_and_fuse(&compiled, registry, dataset, profile, scope).await?;
+    let workspace = answer.rows.workspace();
+    let unserved_terms = purrdf_sparql_eval::SharedWorkspace::new_admitted(
+        plan.unserved_evidence_admitted(workspace)
+            .map_err(FusionError::from)?,
+        workspace,
+    )
+    .map_err(FusionError::from)?;
+    let planned_resolution = compiled
+        .resolution_admitted(workspace)
+        .map_err(FusionError::from)?;
 
-    Ok(SearchResult {
-        rows: answer.rows,
-        trailer: answer.trailer,
-        unserved_terms: plan.unserved_evidence(),
-        plan_id: answer.plan_id,
-        evidence_id: answer.evidence_id,
-        // 7. Carry the waist's own resolution evidence onto the answer. It is
-        //    moved, not recomputed: recomputing it here from the profile and
-        //    the plan would be a second derivation of what the admission waist
-        //    already decided, and the value of the evidence is that it is the
-        //    one the compiled bundle actually holds.
-        planned_resolution: compiled.resolution,
-        profile_id: profile.id(),
-        unweighted_strata: answer.unweighted_strata,
-    })
+    Ok((
+        SearchResult {
+            rows: answer.rows,
+            trailer: answer.trailer,
+            unserved_terms,
+            plan_id: answer.plan_id,
+            evidence_id: answer.evidence_id,
+            // 7. Carry the waist's own resolution evidence onto the answer. It is
+            //    copied through native owners, not recomputed: recomputing it here from the profile and
+            //    the plan would be a second derivation of what the admission waist
+            //    already decided, and the value of the evidence is that it is the
+            //    one the compiled bundle actually holds.
+            planned_resolution,
+            profile_id: profile.id(),
+            unweighted_strata: answer.unweighted_strata,
+        },
+        answer.scopes,
+        answer.scoped_fused,
+    ))
 }
 
 /// One read of `compiled`, on demand, fused under `profile`.
@@ -578,15 +665,37 @@ async fn read_and_fuse<D>(
     registry: &PropertyFunctionRegistry,
     dataset: &D,
     profile: &FusionProfile,
+    scope: Option<(
+        &crate::ConstraintBindings<'_>,
+        &dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+    )>,
 ) -> Result<Attempt, SearchError>
 where
     D: DatasetView<ReadError = std::convert::Infallible> + Sync,
 {
     // 3. Execute. Each stratum runs independently against the caller's dataset; a
     //    failed stratum is a status, not a stream.
-    let execution = execute_within(compiled, registry, dataset, ReadSchedule::OnDemand)
-        .await
-        .map_err(SearchError::ExecutionError)?;
+    let (execution, scopes) = match scope {
+        Some((bindings, source)) => {
+            let scoped = crate::execute_scoped_within(
+                compiled,
+                registry,
+                dataset,
+                ReadSchedule::Materialised,
+                bindings,
+                source,
+            )
+            .await
+            .map_err(SearchError::ExecutionError)?;
+            (scoped.result, Some(scoped.scopes))
+        }
+        None => (
+            execute_within(compiled, registry, dataset, ReadSchedule::OnDemand)
+                .await
+                .map_err(SearchError::ExecutionError)?,
+            None,
+        ),
+    };
 
     // 4. Bridge each surviving stream to the fusion protocol. The weight is read
     //    from the profile so the contribution attached here is exactly the one
@@ -597,10 +706,13 @@ where
         streams: executed,
         mut statuses,
     } = execution;
-    let mut streams: Vec<(Iri, RankedStreamAdapter<'_>)> = Vec::with_capacity(executed.len());
-    let mut unweighted_strata: Vec<Iri> = Vec::new();
+    let workspace = statuses.workspace().clone();
+    let mut streams: purrdf_sparql_eval::AdmittedVec<(Iri, RankedStreamAdapter<'_>)> =
+        purrdf_sparql_eval::AdmittedVec::with_capacity(executed.len(), &workspace)
+            .map_err(FusionError::from)?;
+    let mut unweighted_strata = purrdf_sparql_eval::AdmittedVec::new(&workspace);
     for stratum_stream in executed {
-        let stratum = stratum_stream.stratum.clone();
+        let stratum = stratum_stream.stratum;
         let plan_id = stratum_stream.plan_id;
         let fused_bound = stratum_stream.fused_bound;
         let attestation = stratum_stream.attestation.clone();
@@ -617,9 +729,17 @@ where
                 let status = read_to_its_end(stratum_stream.stream, &stratum, &attestation)
                     .await
                     .map_err(|error| SearchError::FusionError(error.into()))?;
-                statuses.insert(stratum.clone(), status);
+                let workspace = statuses.workspace().clone();
+                statuses
+                    .insert(
+                        stratum
+                            .clone_admitted(&workspace)
+                            .map_err(FusionError::from)?,
+                        status,
+                    )
+                    .map_err(FusionError::from)?;
             }
-            unweighted_strata.push(stratum);
+            unweighted_strata.push(stratum).map_err(FusionError::from)?;
             continue;
         }
         let Some(adapter) = RankedStreamAdapter::new(
@@ -628,7 +748,7 @@ where
             profile,
             &stratum,
         ) else {
-            unweighted_strata.push(stratum);
+            unweighted_strata.push(stratum).map_err(FusionError::from)?;
             continue;
         };
         // The stream carries the plan it was compiled from into the fusion, so
@@ -637,13 +757,15 @@ where
         // carries what the index behind those rows attested for the same
         // reason. Fusion reads the attestation before it pulls a row, which is
         // why it is attached here rather than collected after.
-        streams.push((
-            stratum,
-            adapter
-                .with_plan_id(plan_id)
-                .with_fused_bound(fused_bound)
-                .with_attestation(attestation),
-        ));
+        streams
+            .push((
+                stratum,
+                adapter
+                    .with_plan_id(plan_id)
+                    .with_fused_bound(fused_bound)
+                    .with_attestation(attestation),
+            ))
+            .map_err(FusionError::from)?;
     }
     // `execute` yields its streams in the compiler's stratum order, but the
     // report is sorted rather than inherited: it is part of the answer, and an
@@ -668,9 +790,14 @@ where
     //    bundle's bound, so `fuse` re-checks this call against it rather than
     //    taking it on trust.
     let fused_strata = streams.len();
-    let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
-        .await
-        .map_err(SearchError::FusionError)?;
+    let fused = crate::fuse::fuse_admitted_scoped::<RankedStreamAdapter<'_>, Term>(
+        streams,
+        profile,
+        compiled.fused_bound,
+        scopes.as_deref(),
+    )
+    .await
+    .map_err(SearchError::FusionError)?;
 
     // 5b. Read the plan identity back off the answer rather than off the plan.
     //     Every stream handed to `fuse` was tagged with the compiled plan, and
@@ -699,7 +826,7 @@ where
     //    the profile does not weight both ran without ever becoming a stream.
     //    They are applicable producers that could not contribute, and §6 says
     //    the answer carries them beside the ones that did.
-    let trailer = fused.trailer.completed_with(statuses);
+    let trailer = fused.trailer.completed_with(statuses)?;
     // 6b. Read the evidence identity back off the answer, exactly as the plan
     //     identity was read back off it above. Completing the report cannot move
     //     it: a stratum that never became a stream opened no index, so it has no
@@ -707,11 +834,17 @@ where
     let evidence_id = trailer.evidence_id;
 
     Ok(Attempt {
+        scopes,
+        scoped_fused: fused.scoped,
         rows: fused.rows,
         trailer,
         plan_id,
         evidence_id,
-        unweighted_strata,
+        unweighted_strata: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            unweighted_strata,
+            &workspace,
+        )
+        .map_err(FusionError::from)?,
     })
 }
 
@@ -749,6 +882,10 @@ async fn read_to_its_end(
     stratum: &Iri,
     announced: &PfAttestation,
 ) -> Result<ProducerStatus, ProtocolError> {
+    let workspace = stream
+        .workspace()
+        .cloned()
+        .expect("executor streams retain native authority");
     loop {
         match stream.next().await {
             Ok(Some(_)) => {}
@@ -760,9 +897,8 @@ async fn read_to_its_end(
             // it.
             Err(error) if stream.run_invalidated() => return Err(error),
             Err(error) => {
-                return Ok(ProducerStatus::ExecutionFailed {
-                    reason: error.to_string(),
-                });
+                return ProducerStatus::failed_admitted(&error, &workspace)
+                    .map_err(ProtocolError::NativeFailure);
             }
         }
     }
@@ -786,10 +922,10 @@ async fn read_to_its_end(
             }
             receipt
         }
+        Err(error @ ProtocolError::NativeFailure(_)) => return Err(error),
         Err(error) => {
-            return Ok(ProducerStatus::ExecutionFailed {
-                reason: error.to_string(),
-            });
+            return ProducerStatus::failed_admitted(&error, &workspace)
+                .map_err(ProtocolError::NativeFailure);
         }
     };
     Ok(ProducerStatus::from(receipt))
@@ -802,8 +938,10 @@ async fn read_to_its_end(
 /// the unserved terms, the planned resolution, the profile identity — are not
 /// here, because they are the compiled plan's and the waist's rather than the read's.
 struct Attempt {
+    scopes: Option<purrdf_sparql_eval::AdmittedVec<crate::ScopedStratum>>,
+    scoped_fused: Option<crate::ScopedFusedAnswer>,
     /// The fused rows, in the profile's declared final order.
-    rows: Vec<FusedRow>,
+    rows: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<FusedRow>>,
     /// The terminal report, already completed with the executor's statuses.
     trailer: FusionTrailer,
     /// The plan identity that travelled with these rows.
@@ -811,7 +949,7 @@ struct Attempt {
     /// The digest of exactly the attestations in [`Self::trailer`].
     evidence_id: EvidenceId,
     /// The strata that ran but that the profile declares no weight for.
-    unweighted_strata: Vec<Iri>,
+    unweighted_strata: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Iri>>,
 }
 
 /// The bridge from [`execute`](crate::execute)'s `(rank, candidate, block)`
@@ -975,6 +1113,10 @@ impl<'d> RankedStreamAdapter<'d> {
 
 impl RankedStream for RankedStreamAdapter<'_> {
     type Item = Term;
+
+    fn workspace(&self) -> Option<purrdf_sparql_eval::WorkspaceCapability> {
+        self.inner.workspace().cloned()
+    }
 
     #[expect(
         clippy::future_not_send,

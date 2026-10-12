@@ -287,10 +287,10 @@ impl TermValue {
     ///
     /// # Errors
     /// Returns the first visitor or storage refusal.
-    pub fn visit_terms_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, B>(
-        &self,
+    pub fn visit_terms_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized, B>(
+        &'a self,
         mut visit: impl FnMut(
-            &Self,
+            &'a Self,
             &mut purrdf_lex::allocation::Memory<'_, S>,
         ) -> Result<ControlFlow<B>, purrdf_lex::allocation::StorageError>,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
@@ -435,38 +435,75 @@ impl TermValue {
         mut leaf: impl FnMut(&mut W, &Self) -> Result<(), E>,
         mut text: impl FnMut(&mut W, &str) -> Result<(), E>,
     ) -> Result<(), E> {
-        // For each triple term being written, how many of its components have begun.
-        let mut begun: Vec<u8> = Vec::new();
-        let written = self.visit_terms_pre_post(|event| {
-            if !matches!(event, TermVisit::Close(_))
-                && let Some(count) = begun.last_mut()
-            {
-                if *count > 0
-                    && let Err(error) = text(out, separator)
-                {
-                    return ControlFlow::Break(error);
-                }
-                *count += 1;
+        match self.try_write_nested_with_memory(
+            out,
+            [open, separator, close],
+            |out, term, _| leaf(out, term),
+            |out, piece, _| text(out, piece),
+            &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        ) {
+            Ok(()) => Ok(()),
+            Err(OwnedTermFoldError::Visitor(error)) => Err(error),
+            Err(OwnedTermFoldError::Storage(error)) => {
+                panic!("resident nested term spelling: {error}")
             }
-            let piece = match event {
-                TermVisit::Open(_) => {
-                    begun.push(0);
-                    text(out, open)
+        }
+    }
+
+    /// Write the same nested term through its original native working admission.
+    /// Leaf and text callbacks retain their own destination and payload owners.
+    ///
+    /// # Errors
+    /// Preserves the first callback refusal or before-growth storage failure.
+    pub fn try_write_nested_with_memory<
+        W: ?Sized,
+        E,
+        S: purrdf_lex::allocation::Admission + ?Sized,
+    >(
+        &self,
+        out: &mut W,
+        delimiters: [&str; 3],
+        mut leaf: impl FnMut(&mut W, &Self, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+        mut text: impl FnMut(&mut W, &str, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), OwnedTermFoldError<E>> {
+        let [open, separator, close] = delimiters;
+        enum Piece<'t, 's> {
+            Term(&'t TermValue),
+            Text(&'s str),
+        }
+        let mut pending: WorkList<Piece<'_, '_>, 16> = WorkList::new();
+        let written = (|| {
+            pending.try_push_admitted(Piece::Term(self), memory)?;
+            while let Some(piece) = pending.pop() {
+                match piece {
+                    Piece::Text(piece) => {
+                        text(out, piece, memory).map_err(OwnedTermFoldError::Visitor)?;
+                    }
+                    Piece::Term(Self::Triple { s, p, o }) => {
+                        text(out, open, memory).map_err(OwnedTermFoldError::Visitor)?;
+                        for piece in [
+                            Piece::Text(close),
+                            Piece::Term(o),
+                            Piece::Text(separator),
+                            Piece::Term(p),
+                            Piece::Text(separator),
+                            Piece::Term(s),
+                        ] {
+                            pending.try_push_admitted(piece, memory)?;
+                        }
+                    }
+                    Piece::Term(term) => {
+                        leaf(out, term, memory).map_err(OwnedTermFoldError::Visitor)?;
+                    }
                 }
-                TermVisit::Leaf(term) => leaf(out, term),
-                TermVisit::Close(_) => {
-                    begun.pop();
-                    text(out, close)
-                }
-            };
-            match piece {
-                Ok(()) => ControlFlow::Continue(()),
-                Err(error) => ControlFlow::Break(error),
             }
-        });
+            Ok(())
+        })();
+        let released = pending.release_admitted(memory);
         match written {
-            ControlFlow::Continue(()) => Ok(()),
-            ControlFlow::Break(error) => Err(error),
+            Err(original) => Err(original),
+            Ok(()) => released.map_err(OwnedTermFoldError::Storage),
         }
     }
 }

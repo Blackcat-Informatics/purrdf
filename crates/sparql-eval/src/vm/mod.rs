@@ -43,6 +43,7 @@
 //! evaluator; resolving a suspension is the one place that re-entry happens.
 
 mod compile;
+mod evidence;
 #[cfg(test)]
 mod tests;
 
@@ -282,6 +283,8 @@ pub(crate) struct Linked<'e, I: Copy> {
     /// Each `EXISTS`'s pattern, in the expression's pre-order.
     exists: Vec<&'e GraphPattern>,
     stack: ValStack<I>,
+    /// Born only for an explicit evidence query; ordinary stacks are unchanged.
+    evidence: Option<crate::workspace::SharedWorkspace<std::sync::Mutex<evidence::Records>>>,
     /// A function call's argument values, refilled by every call instruction, so a row
     /// that calls a function reuses one buffer instead of allocating its own.
     args: Arguments,
@@ -290,7 +293,7 @@ pub(crate) struct Linked<'e, I: Copy> {
     _exists_allocation: Option<crate::WorkspaceAllocation>,
 }
 
-impl<'e, I: Copy + PartialEq> Linked<'e, I> {
+impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
     /// Link `program`, compiled from `expr`, to a call over `schema`.
     #[cfg(test)]
     pub(crate) fn link<D: DatasetView<Id = I> + Sync>(
@@ -453,6 +456,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             regexes,
             exists,
             stack,
+            evidence: None,
             args,
             program,
             _allocation: Some(allocation),
@@ -470,6 +474,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             regexes: self.regexes.clone(),
             exists: self.exists.clone(),
             stack: Vec::new(),
+            evidence: None,
             args: Arguments::new(&crate::WorkspaceCapability::resident()),
             _allocation: None,
             _exists_allocation: None,
@@ -490,6 +495,29 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         }
     }
 
+    /// Decide a native filter and retain its original witness/gap records.
+    /// A kept ordinary row has no replacement attachment; rejection is separate
+    /// from that physical absence so no virtual payload crosses the row loop.
+    pub(crate) fn filter<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        expression: &Expression,
+        row: &crate::solution::RetainedRow<I>,
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(bool, Option<crate::evidence_exec::RowEvidence>), EvalError> {
+        let value = self.ebv(row, schema, ctx)?;
+        // The completed VM owns every computed witness. With no such owner,
+        // no source declaration and no row attachment, filtering needs only
+        // its original boolean decision, including rejected rows.
+        if self.evidence.is_none() && ctx.evidence_input.is_none() && !row.has_evidence_attachment()
+        {
+            return Ok((value == Some(true), None));
+        }
+        let evidence =
+            helpers::filter_evidence(value, self.result_evidence()?, expression, row, schema, ctx)?;
+        Ok((evidence.is_some(), evidence))
+    }
+
     /// The expression's value over `row`: `Ok(Some)` a term, `Ok(None)` an error or
     /// unbound, `Err` a hard failure. `schema` is the schema the program was linked to.
     pub(crate) fn term<D: DatasetView<Id = I> + Sync>(
@@ -499,16 +527,57 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Option<SolutionTerm<I>>, EvalError> {
         self.stack.clear();
+        if ctx.may_have_evidence()
+            && self.evidence.is_none()
+            && (self.program.has_exists()
+                || self.program.calls.iter().any(|function| {
+                    matches!(function, Function::Custom(iri) if ctx.user_functions.resolve(iri.as_str()).is_some())
+                }))
+        {
+            self.evidence = Some(crate::workspace::SharedWorkspace::new_admitted(
+                std::sync::Mutex::new(evidence::Records::admitted(&ctx.growth)),
+                &ctx.growth,
+            )?);
+        }
+        if let Some(owner) = &self.evidence {
+            owner.lock().map_err(|_| evidence_poisoned())?.clear();
+        }
         let mut pc = 0;
         loop {
-            match self.advance(&mut pc, row, ctx)? {
+            let step = if self.evidence.is_some() {
+                self.advance::<true, D>(&mut pc, row, ctx)?
+            } else {
+                self.advance::<false, D>(&mut pc, row, ctx)?
+            };
+            match step {
                 VmStep::Value(value) => return Ok(value),
                 VmStep::Suspend(suspend) => {
-                    let value = resolve(suspend, &self.program, row, schema, ctx)?;
+                    let (value, record) = resolve(suspend, &self.program, row, schema, ctx)?;
                     self.stack.push(Val::Term(value));
+                    if let Some(owner) = &self.evidence {
+                        owner.lock().map_err(|_| evidence_poisoned())?.resume(
+                            self.stack.len() - 1,
+                            record,
+                            pc,
+                            &ctx.growth,
+                        )?;
+                    }
                 }
             }
         }
+    }
+
+    /// Borrowed-value execution's original evidence, never an expression replay.
+    pub(crate) fn result_evidence(
+        &self,
+    ) -> Result<Option<crate::evidence_exec::RowEvidence>, EvalError> {
+        self.evidence.as_ref().map_or(Ok(None), |owner| {
+            Ok(owner
+                .lock()
+                .map_err(|_| evidence_poisoned())?
+                .result
+                .clone())
+        })
     }
 
     /// Run instructions up to a recursive suspension or the completed value.
@@ -516,7 +585,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
     /// keeping this frame live would charge every opcode's native owners to each
     /// nested EXISTS or SPARQL function, even when that opcode never runs there.
     #[inline(never)]
-    fn advance<'d, D: DatasetView<Id = I> + Sync>(
+    fn advance<'d, const TRACKING: bool, D: DatasetView<Id = I> + Sync>(
         &mut self,
         pc: &mut usize,
         row: &[Option<SolutionTerm<I>>],
@@ -529,12 +598,31 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             regexes,
             exists,
             stack,
+            evidence,
             args,
             ..
         } = self;
+        let mut records = if TRACKING {
+            evidence
+                .as_ref()
+                .map(|owner| owner.lock().map_err(|_| evidence_poisoned()))
+                .transpose()?
+        } else {
+            None
+        };
         let ops = &program.ops;
         while let Some(op) = ops.get(*pc) {
             *pc += 1;
+            let before = stack.len();
+            let record = if TRACKING {
+                records
+                    .as_mut()
+                    .map(|records| records.begin(*op, before, ctx))
+                    .transpose()?
+                    .flatten()
+            } else {
+                None
+            };
             match *op {
                 Op::Const(k) => {
                     let k = k as usize;
@@ -581,12 +669,22 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         value.map(|b| helpers::intern_boolean(ctx, b)).transpose()?,
                     ));
                 }
-                Op::Not => {
-                    let value = pop_ebv(stack)?;
+                Op::Not | Op::NotExists => {
+                    let ordinary = pop_ebv(stack)?.map(|value| !value);
+                    let value = if matches!(op, Op::NotExists)
+                        && let Some(record) = &record
+                        && !record.is_undecided()
+                    {
+                        Some(record.with_record(|record| {
+                            record.information().fallback()
+                                != purrdf_core::evidence::Information::Opposed
+                                || !record.information().entries().is_empty()
+                        })?)
+                    } else {
+                        ordinary
+                    };
                     stack.push(Val::Term(
-                        value
-                            .map(|b| helpers::intern_boolean(ctx, !b))
-                            .transpose()?,
+                        value.map(|b| helpers::intern_boolean(ctx, b)).transpose()?,
                     ));
                 }
                 Op::Equal => {
@@ -711,6 +809,9 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                              for it",
                         )
                     })?;
+                    if let Some(records) = &mut records {
+                        records.suspend(record);
+                    }
                     return Ok(VmStep::Suspend(Suspend::Exists(pattern)));
                 }
                 Op::Call { call, argc, regex } => {
@@ -727,7 +828,12 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     args.clear();
                     match result? {
                         VmStep::Value(value) => stack.push(Val::Term(value)),
-                        suspension @ VmStep::Suspend(_) => return Ok(suspension),
+                        suspension @ VmStep::Suspend(_) => {
+                            if let Some(records) = &mut records {
+                                records.suspend(record);
+                            }
+                            return Ok(suspension);
+                        }
                     }
                 }
                 Op::Triple { intern } => {
@@ -863,7 +969,15 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(value));
                 }
             }
+            if let Some(records) = &mut records {
+                records.finish(*op, before, stack.len(), *pc, record, &ctx.growth)?;
+            }
         }
+        if let Some(records) = &mut records {
+            let position = stack.len().checked_sub(1).ok_or_else(underflow)?;
+            records.complete(position);
+        }
+        drop(records);
         let value = pop_term(stack)?;
         if !stack.is_empty() {
             return Err(EvalError::internal(
@@ -926,17 +1040,27 @@ fn call_custom<'e, 'd, D: DatasetView + Sync>(
 }
 
 /// Resolve a suspension by running the pattern evaluation it waits on, now.
+type Resolved<I> = (
+    Option<SolutionTerm<I>>,
+    Option<crate::evidence_exec::RowEvidence>,
+);
+
 fn resolve<D: DatasetView + Sync>(
     suspend: Suspend<'_, '_>,
     program: &ExprProgram,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+) -> Result<Resolved<D::Id>, EvalError> {
     match suspend {
         Suspend::Exists(pattern) => {
-            let found = helpers::exists(pattern, row, schema, ctx)?;
-            Ok(Some(helpers::intern_boolean(ctx, found)?))
+            if ctx.may_have_evidence() {
+                let (found, record) = helpers::exists_evidence(pattern, row, schema, ctx)?;
+                Ok((Some(helpers::intern_boolean(ctx, found)?), Some(record)))
+            } else {
+                let found = helpers::exists(pattern, row, schema, ctx)?;
+                Ok((Some(helpers::intern_boolean(ctx, found)?), None))
+            }
         }
         Suspend::SparqlUdf {
             func,
@@ -949,13 +1073,28 @@ fn resolve<D: DatasetView + Sync>(
                     "a suspended function call names a built-in function",
                 ));
             };
-            let result = crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-            Ok(result
-                .map(|value| helpers::intern(ctx, value))
-                .transpose()?
-                .flatten())
+            let mut evidence = None;
+            let result = crate::user_fn::eval_user_function_evidence(
+                func,
+                body,
+                iri.as_str(),
+                &vals,
+                ctx,
+                &mut evidence,
+            )?;
+            Ok((
+                result
+                    .map(|value| helpers::intern(ctx, value))
+                    .transpose()?
+                    .flatten(),
+                evidence,
+            ))
         }
     }
+}
+
+fn evidence_poisoned() -> EvalError {
+    EvalError::internal("poisoned original VM evidence records")
 }
 
 /// Pop `argc` terms and materialize their values into `vals`, in argument order,

@@ -196,9 +196,11 @@ async fn manual_composition(
                 Some(&stream.attestation),
                 "an unweighted stratum settles to what it announced"
             );
-            statuses
-                .entry(stream.stratum.clone())
-                .or_insert_with(|| ProducerStatus::from(receipt));
+            if !statuses.contains_key(&stream.stratum) {
+                statuses
+                    .insert(stream.stratum.clone(), ProducerStatus::from(receipt))
+                    .expect("receipt storage is admitted");
+            }
             unweighted_strata.push(stream.stratum);
             continue;
         }
@@ -225,17 +227,36 @@ async fn manual_composition(
     let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
-    let trailer = fused.trailer.completed_with(statuses);
+    let trailer = fused
+        .trailer
+        .completed_with(statuses)
+        .expect("status publication is admitted");
     let evidence_id = trailer.evidence_id;
     SearchResult {
         rows: fused.rows,
         trailer,
-        unserved_terms: planned.unserved_evidence(),
+        unserved_terms: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            planned
+                .unserved_evidence_admitted(&purrdf_sparql_eval::WorkspaceCapability::resident())
+                .expect("caller loss derivation"),
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+        .expect("caller loss publication"),
         plan_id: planned.id(),
         evidence_id,
-        planned_resolution: compiled.resolution,
+        planned_resolution: compiled
+            .resolution_admitted(&purrdf_sparql_eval::WorkspaceCapability::resident())
+            .expect("caller resolution publication"),
         profile_id: profile.id(),
-        unweighted_strata,
+        unweighted_strata: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                unweighted_strata,
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            )
+            .expect("caller fixture storage"),
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+        .expect("caller fixture owner"),
     }
 }
 
@@ -591,7 +612,8 @@ fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
     // recorded, not a number `search` derived a second time.
     let compiled = compiled_under(&registry, &stats, &shallow);
     assert_eq!(
-        result.planned_resolution, compiled.resolution,
+        result.planned_resolution.iter().collect::<Vec<_>>(),
+        compiled.resolution.iter().collect::<Vec<_>>(),
         "the answer carries the compiled plan's own resolution map"
     );
     let planned = result
@@ -637,8 +659,8 @@ fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
         "only the weighted stratum has a resolution to report"
     );
     assert_eq!(
-        result.unweighted_strata,
-        vec![iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
+        &**result.unweighted_strata,
+        &[iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
         "the strata this profile does not weight are named, not silently resolved"
     );
 }
@@ -665,7 +687,10 @@ fn a_fully_separated_plan_reports_itself_as_separated_rather_than_as_an_absence(
     .expect("a profile whose arithmetic covers every recorded depth answers");
 
     let compiled = compiled_under(&registry, &stats, &profile);
-    assert_eq!(result.planned_resolution, compiled.resolution);
+    assert_eq!(
+        result.planned_resolution.iter().collect::<Vec<_>>(),
+        compiled.resolution.iter().collect::<Vec<_>>()
+    );
     assert_eq!(
         result.planned_resolution.keys().collect::<Vec<_>>(),
         vec![
@@ -726,8 +751,8 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
     .expect("the weighted stratum still answers");
 
     assert_eq!(
-        result.unweighted_strata,
-        vec![iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
+        &**result.unweighted_strata,
+        &[iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
         "the strata the profile does not weight are reported, in stratum order"
     );
     assert_eq!(
@@ -1117,7 +1142,7 @@ fn a_term_that_reached_no_producer_is_visible_in_the_plan_and_in_the_answer() {
     .expect("the served term still answers");
 
     assert_eq!(
-        result.unserved_terms,
+        result.unserved_terms.as_slice(),
         vec![UnservedTerm {
             request_term: 1,
             reason: UnservedReason::NoProducerAccepts,
@@ -1207,7 +1232,7 @@ fn a_request_carrying_a_term_only_a_placement_free_producer_accepts_reports_it()
     ))
     .expect("the two served terms still answer");
     assert_eq!(
-        result.unserved_terms,
+        result.unserved_terms.as_slice(),
         vec![UnservedTerm {
             request_term: 1,
             reason: UnservedReason::AcceptedWithoutPlacement,
@@ -1252,7 +1277,7 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
     let bounded = run(TopK::new(3));
     assert_eq!(bounded.rows.len(), 3, "at most k rows");
     assert_eq!(
-        bounded.rows,
+        bounded.rows.as_slice(),
         whole.rows[..3].to_vec(),
         "and they are the top of the same declared order"
     );
@@ -1384,7 +1409,7 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
     .expect("a producer that could not run is a status, not a whole-request refusal");
 
     assert_eq!(
-        result.rows,
+        result.rows.as_slice(),
         Vec::new(),
         "the only producer could not run, so nothing ranked"
     );
@@ -1742,7 +1767,12 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         )
     };
     assert_eq!(
-        result.trailer.domains,
+        result
+            .trailer
+            .domains
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             declared("pf/any", "stratum/universal"),
             declared("pf/literal", "stratum/text"),
@@ -1770,7 +1800,13 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         result
             .rows
             .iter()
-            .map(|row| (row.entity.clone(), row.score, row.contributions.clone()))
+            .map(|row| {
+                (
+                    row.entity.clone(),
+                    row.score,
+                    row.contributions.as_slice().to_vec(),
+                )
+            })
             .collect()
     };
     assert_eq!(
@@ -1779,7 +1815,12 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         "the declared search and the undeclared one answer identically"
     );
     assert_eq!(
-        plain.trailer.domains,
+        plain
+            .trailer
+            .domains
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (
                 iri(&ex("stratum/universal")),
@@ -2277,7 +2318,13 @@ fn fused_answers(result: &SearchResult) -> Vec<FusedAnswer> {
     result
         .rows
         .iter()
-        .map(|row| (row.entity.clone(), row.score, row.contributions.clone()))
+        .map(|row| {
+            (
+                row.entity.clone(),
+                row.score,
+                row.contributions.as_slice().to_vec(),
+            )
+        })
         .collect()
 }
 

@@ -297,16 +297,13 @@
 //! answer.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::fmt;
-use std::rc::Rc;
-use std::sync::Arc;
 
-use purrdf_core::{DatasetView, FastHasher, FastMap, SparqlResult, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_eval::{
-    CallCursor, CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, InternedOutcome,
-    NativeSparqlEngine, PfAttestation, PreparedExecution, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RegistryId, RelationWitness, ServiceLevel,
+    CallCursor, CandidateDomains, DomainTag, ExtensionEnv, InternedOutcome, NativeSparqlEngine,
+    PfAttestation, PreparedExecution, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    RegistryId, RelationWitness, ServiceLevel,
 };
 
 use crate::admission::BoundMode;
@@ -320,7 +317,8 @@ use crate::iri::{Iri, Term};
 use crate::ranked_stream::{
     ExclusionVerdict, ProducerReceipt, ProtocolError, RowBlock, StreamContract,
 };
-use crate::render::{RenderError, candidate_lexical, decode_term};
+#[cfg(test)]
+use crate::render::{RenderError, candidate_lexical};
 
 /// One stratum's ranked rows, tagged with the pinned plan they descend from and
 /// the contract its producer declared them under.
@@ -392,9 +390,9 @@ pub struct StratumStream<'d> {
 #[derive(Debug)]
 pub struct ExecutionResult<'d> {
     /// One stream per stratum that ran, ordered as compiled.
-    pub streams: Vec<StratumStream<'d>>,
+    pub streams: purrdf_sparql_eval::AdmittedVec<StratumStream<'d>>,
     /// Every stratum's own terminal status.
-    pub statuses: FastMap<Iri, ProducerStatus>,
+    pub statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
 }
 
 /// One actual native ranked read with an independent prefix depth.
@@ -415,27 +413,35 @@ pub struct ReadStratum<'d> {
     pub attestation: PfAttestation,
     /// The native read, preserving rank, settlement and producer cost.
     pub stream: RankedStreamImpl<'d>,
+    /// Settlement retained in the original read arena if result admission fails.
+    /// A successful value retains the actual final attestation, to compare with
+    /// the announcement above; a refusal retains the original error unchanged.
+    pub admission_failure_settlement: Option<Result<Option<PfAttestation>, ProtocolError>>,
 }
 
 /// Unscored candidate streams and the failures of producers that did not open.
 #[derive(Debug)]
 pub struct CandidateExecutionResult<'d> {
     /// The actual native unit reads, ascending by stratum.
-    pub streams: Vec<ReadStratum<'d>>,
+    pub streams: purrdf_sparql_eval::AdmittedVec<ReadStratum<'d>>,
     /// Original terminal statuses known at execute time, including failures.
-    pub statuses: FastMap<Iri, ProducerStatus>,
+    pub statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
     /// The explicit candidate-plan identity.
     pub plan_id: PlanId,
     /// The caller work depths compiled into the actual units.
     pub depths: crate::candidate::CandidateDepths,
     /// The admitted contract of every selected stratum, including failed reads.
-    pub contracts: FastMap<Iri, StreamContract>,
+    pub contracts: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, StreamContract>,
+    >,
     /// Request terms and placements no selected producer could serve.
-    pub unserved_terms: Vec<crate::plan::UnservedTerm>,
-    /// The actual term-to-producer binding records.
-    pub producer_bindings: Vec<crate::plan::ProducerBinding>,
-    /// All producer selection/rejection decisions.
-    pub producer_decisions: Vec<crate::plan::ProducerDecision>,
+    pub unserved_terms: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedVec<crate::plan::UnservedTerm>,
+    >,
+    /// Immutable caller-plan binding records retained from compilation; no execution copy.
+    pub producer_bindings: purrdf_sparql_eval::SharedWorkspace<Vec<crate::plan::ProducerBinding>>,
+    /// Immutable caller-plan decisions retained from compilation; no execution copy.
+    pub producer_decisions: purrdf_sparql_eval::SharedWorkspace<Vec<crate::plan::ProducerDecision>>,
 }
 
 /// A whole-execution failure, as distinct from a per-stratum one.
@@ -497,6 +503,11 @@ pub struct CandidateExecutionResult<'d> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError {
+    /// The original native refusal, preserving its cause and payload admission.
+    NativeFailure(purrdf_sparql_eval::EvalError),
+    /// Hard constraints require their original admitted candidate evaluator.
+    /// A normal unscoped entry point cannot silently drop the compiled scope.
+    MissingCandidateScope,
     /// The backing read session failed; no stratum may publish partial source data.
     SourceRead {
         /// The operational refusal, retained for the caller.
@@ -642,6 +653,10 @@ pub enum ExecutionError {
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NativeFailure(error) => error.fmt(f),
+            Self::MissingCandidateScope => {
+                f.write_str("scoped retrieval requires its original admitted candidate evaluator")
+            }
             Self::SourceRead { reason } => write!(f, "retrieval source read failed: {reason}"),
             Self::RegistryMismatch { expected, got } => write!(
                 f,
@@ -672,7 +687,14 @@ impl fmt::Display for ExecutionError {
     }
 }
 
-impl std::error::Error for ExecutionError {}
+impl std::error::Error for ExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NativeFailure(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// A concrete ranked stream of `(rank, candidate, block)` rows.
 ///
@@ -698,6 +720,7 @@ impl std::error::Error for ExecutionError {}
 /// to tell a stratum that ended from a stratum it stopped reading.
 #[derive(Debug)]
 pub struct RankedStreamImpl<'d> {
+    workspace: Option<purrdf_sparql_eval::WorkspaceCapability>,
     /// Where the rows come from: a read already materialised, or one produced as
     /// this stream is pulled.
     source: RowSource<'d>,
@@ -722,7 +745,7 @@ pub struct RankedStreamImpl<'d> {
     /// parameter on this type unavoidable, and it is stated rather than worked
     /// around because a lookup that could not reach the dataset would have to
     /// answer from something else.
-    exclusion: Option<Box<dyn ExclusionLookup + 'd>>,
+    exclusion: Option<purrdf_sparql_eval::WorkspaceBox<dyn ExclusionLookup + 'd>>,
     /// How many rows the read that produced this stream really returned.
     ///
     /// Not `rows.len()` in general, and that is the point. The rows this stream
@@ -748,6 +771,7 @@ pub struct RankedStreamImpl<'d> {
     /// for a materialised read, while a breach is refused for every stratum, weighted
     /// or not, exactly as [`ExecutionError::RowBoundBreached`] is.
     run_invalidated: bool,
+    native_failure: Option<purrdf_sparql_eval::EvalError>,
 }
 
 /// Where a [`RankedStreamImpl`]'s rows come from.
@@ -755,7 +779,7 @@ enum RowSource<'d> {
     /// A read that finished before this stream existed: its rows, already cut to the
     /// depth, and the ending it had.
     Materialised {
-        rows: VecDeque<(u64, Term, RowBlock)>,
+        rows: RankedRowsStorage,
         ending: StreamEnding,
         /// What the read's witness attested when it finished, for a read this
         /// executor took; `None` for rows a caller handed [`RankedStreamImpl::new`],
@@ -765,9 +789,30 @@ enum RowSource<'d> {
     /// One invocation held open and read a row per pull, and — once it has ended —
     /// how it ended.
     OnDemand {
-        read: Box<dyn OnDemandRead + 'd>,
+        read: purrdf_sparql_eval::WorkspaceBox<dyn OnDemandRead + 'd>,
         ended: Option<OnDemandEnd>,
     },
+}
+
+enum RankedRowsStorage {
+    Caller(std::vec::IntoIter<(u64, Term, RowBlock)>),
+    Native(purrdf_sparql_eval::AdmittedVecIntoIter<(u64, Term, RowBlock)>),
+}
+
+impl Iterator for RankedRowsStorage {
+    type Item = (u64, Term, RowBlock);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Caller(rows) => rows.next(),
+            Self::Native(rows) => rows.next(),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Caller(rows) => rows.size_hint(),
+            Self::Native(rows) => rows.size_hint(),
+        }
+    }
 }
 
 impl fmt::Debug for RowSource<'_> {
@@ -779,7 +824,7 @@ impl fmt::Debug for RowSource<'_> {
                 attested,
             } => f
                 .debug_struct("Materialised")
-                .field("rows_left", &rows.len())
+                .field("rows_left", &rows.size_hint().0)
                 .field("ending", ending)
                 .field("attested", attested)
                 .finish(),
@@ -798,7 +843,7 @@ impl fmt::Debug for RowSource<'_> {
 #[derive(Clone, Debug)]
 enum OnDemandEnd {
     Ended(StreamEnding),
-    Failed(String),
+    Failed(purrdf_lex::allocation::OwnedText),
 }
 
 /// One stratum's invocation, held open and read as its stream is pulled.
@@ -815,7 +860,7 @@ trait OnDemandRead: fmt::Debug {
     fn materialised(&self) -> u64;
     /// The attestation the invocation stands behind now, read off its witness under
     /// the sole-witness rule, or the rule it broke.
-    fn settle(&self) -> Result<PfAttestation, String>;
+    fn settle(&mut self) -> Result<PfAttestation, ReadFault>;
 }
 
 /// One step of an on-demand read.
@@ -827,12 +872,29 @@ enum ReadStep {
 }
 
 /// Why an on-demand read could not go on.
-struct ReadFault {
+enum ReadFault {
+    /// Original native cause; never rendered into unadmitted replacement text.
+    Native(purrdf_sparql_eval::EvalError),
+    /// An original invocation refusal, isolated from native storage authority.
+    Invocation(purrdf_sparql_eval::EvalError),
     /// The refusal, rendered as a materialised read would render it.
-    reason: String,
-    /// Whether the failure invalidates the whole run whenever it is observed — the
-    /// producer beating its declared row bound — rather than only this stratum.
-    whole_run: bool,
+    Producer {
+        reason: String,
+        /// Whether the failure invalidates the whole run whenever it is observed:
+        /// a native source/storage refusal, a failed scoped declaration/publication,
+        /// or a producer beating its declared row bound is not an isolated stratum.
+        whole_run: bool,
+    },
+}
+
+impl ReadFault {
+    fn invocation(error: purrdf_sparql_eval::EvalError, scoped: bool) -> Self {
+        if scoped || error.is_native_storage_failure() {
+            Self::Native(error)
+        } else {
+            Self::Invocation(error)
+        }
+    }
 }
 
 /// One stratum's prepared *do you hold this one* question, asked per candidate.
@@ -879,24 +941,33 @@ enum CandidateBinding<I> {
     /// The dataset holds the term, at this id.
     Id(I),
     /// The dataset does not hold the term; it is bound by value.
-    Value(TermValue),
+    Value(purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::WorkspaceTerm>),
 }
 
 /// Every candidate the ranking reads of one [`execute_within`] call named, keyed by
 /// the [`Term`] the fusion stage will ask about. Shared by that call's lookups.
-type CandidateIndex<I> = FastMap<Term, CandidateBinding<I>>;
+type CandidateIndex<I> = purrdf_sparql_eval::AdmittedOrderedMap<Term, CandidateBinding<I>>;
 
 /// One stratum's prepared lookups, held until every ranking read of the call is
 /// open and they can be attached to its stream.
-struct PendingLookup {
+struct PendingLookup<'d, I: purrdf_core::ViewTermId> {
     /// The stream's position in the call's streams.
     position: usize,
     /// The stratum the lookups answer for.
     stratum: Iri,
     /// The lookups, one list per alternative — see [`DatasetExclusion::lookups`].
-    lookups: Vec<Vec<PreparedLookup>>,
+    lookups: purrdf_sparql_eval::AdmittedVec<purrdf_sparql_eval::AdmittedVec<PreparedLookup>>,
     /// What the stratum's ranked read pinned, which every lookup is held to.
     pinned: PfAttestation,
+    /// Original caller scope and source retained for subsequent point reads.
+    scoped: Option<ScopedLookup<'d, I>>,
+}
+
+struct ScopedLookup<'d, I: purrdf_core::ViewTermId> {
+    scope: purrdf_sparql_eval::NativeCandidateScope<'d>,
+    source: &'d dyn purrdf_sparql_eval::EvidenceSource<I>,
+    workspace: purrdf_sparql_eval::WorkspaceCapability,
+    rows: crate::ScopedRows,
 }
 
 /// One exclusion lookup, prepared once with the candidate as its one parameter.
@@ -942,6 +1013,7 @@ struct PreparedLookup {
 /// verdict from any lookup answered by another index generation is refused, whichever
 /// alternative and lookup it was.
 struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync> {
+    scoped: Option<ScopedLookup<'d, D::Id>>,
     /// The stratum this lookup answers for, so its refusals name a producer
     /// rather than a query.
     stratum: Iri,
@@ -949,20 +1021,20 @@ struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible>
     /// [`execute_within`] call compiled. Shared rather than owned per stratum
     /// because the stream outlives that call, and an engine is not a fact about
     /// any one stratum.
-    engine: Rc<NativeSparqlEngine>,
+    engine: purrdf_sparql_eval::SharedWorkspace<NativeSparqlEngine>,
     /// The extension environment the execution was prepared against, shared with
     /// the run that produced the rows. An execution prepared against one registry
     /// and run under another is refused by the evaluator, so the same value must
     /// reach both calls — see [`execute_within`]'s own single-environment note.
-    env: Arc<ExtensionEnv>,
+    env: purrdf_sparql_eval::SharedWorkspace<ExtensionEnv>,
     /// The lookups themselves, one list per alternative and one lookup per
     /// qualifying call of it, in the order
     /// [`StratumUnit::exclusion_sparql`](crate::StratumUnit) derived them, each
     /// prepared once with the candidate as its one parameter.
-    lookups: Vec<Vec<PreparedLookup>>,
+    lookups: purrdf_sparql_eval::AdmittedVec<purrdf_sparql_eval::AdmittedVec<PreparedLookup>>,
     /// How each candidate this execution read is bound, shared by its lookups and
     /// written by the reads that name candidates — on demand, as each row is pulled.
-    candidates: Rc<RefCell<CandidateIndex<D::Id>>>,
+    candidates: purrdf_sparql_eval::SharedWorkspace<RefCell<CandidateIndex<D::Id>>>,
     /// The caller's dataset, read exactly as the ranking read it.
     dataset: &'d D,
     /// What the ranked read of this stratum pinned: the attestation its stream
@@ -1017,6 +1089,18 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
         candidate: &Term,
         binding: Option<&CandidateBinding<D::Id>>,
     ) -> Result<ExclusionVerdict, ProtocolError> {
+        let lookup_workspace = self.candidates.borrow().workspace().clone();
+        let external = if binding.is_none() {
+            let value = crate::render::decode_term_admitted(candidate.as_str(), &lookup_workspace)
+                .map_err(ProtocolError::NativeFailure)?;
+            Some(CandidateBinding::Value(
+                purrdf_sparql_eval::SharedWorkspace::new_admitted(value, &lookup_workspace)
+                    .map_err(ProtocolError::NativeFailure)?,
+            ))
+        } else {
+            None
+        };
+        let binding = binding.or(external.as_ref());
         let stratum = &self.stratum;
         let failed = |reason: String| ProtocolError::ExclusionLookupFailed {
             stratum: stratum.as_str().to_owned(),
@@ -1028,54 +1112,108 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
             driven,
         } = &mut self.lookups[alternative][index];
         let (slot, driven) = (*slot, *driven);
-        let bound = match binding {
-            Some(CandidateBinding::Id(id)) => execution.bind_id(slot, self.dataset, *id),
-            Some(CandidateBinding::Value(value)) => execution.bind(slot, value.clone()),
+        match binding {
+            Some(CandidateBinding::Id(id)) => {
+                execution
+                    .bind_id_admitted(slot, self.dataset, *id, &lookup_workspace)
+                    .map_err(ProtocolError::NativeFailure)?;
+            }
+            Some(CandidateBinding::Value(value)) => {
+                execution
+                    .bind_admitted(slot, value.clone(), &lookup_workspace)
+                    .map_err(ProtocolError::NativeFailure)?;
+            }
             // A candidate no ranking read of this execution named: one from a
             // stream assembled elsewhere and fused beside these. Its canonical
             // lexical is the only form it arrives in, so it is read back through the
             // crate's own decoder. A term this layer wrote and cannot read back is a
             // defect in one of the two halves, and it is reported as the failed
             // lookup it is rather than answered as `Possible`.
-            None => {
-                let value = decode_term(candidate.as_str()).map_err(|reason| {
-                    failed(format!("candidate {candidate} did not decode: {reason}"))
-                })?;
-                execution.bind(slot, value)
-            }
-        };
-        bound.map_err(|diagnostic| failed(diagnostic.to_string()))?;
-        let options = QueryOptions::new().with_env(&self.env);
-        // Ungoverned, and the governed ranking read's reasoning is why that is no
-        // loss: that lane declines every caller-settable ceiling and is taken for
-        // its receipt. A lookup's receipt is two facts — its row count, which the
-        // visitor reads here, and the witness of the index generation that
-        // answered, which the witnessed door hands back beside it.
-        //
-        // A driven lookup projects the candidate and the inputs it was invoked with,
-        // one invocation per distinct binding of them, so the most rows any one
-        // invocation answered is the most times one row repeats.
+            None => unreachable!("external canonical candidate has its retained native binding"),
+        }
+        let mut options = QueryOptions::new().with_env(&self.env);
+        if let Some(scoped) = &self.scoped {
+            options = options.with_candidate_scope(&scoped.scope);
+        }
+        // Both doors run the same prepared lookup and visitor. Scoped lookup
+        // evidence is retained while its original context and source are alive.
+        let visit =
+            |outcome: InternedOutcome<'_, '_, D>| -> Result<_, purrdf_sparql_eval::EvalError> {
+                let InternedOutcome::Solutions(solutions) = outcome else {
+                    return Ok(None);
+                };
+                let rows = solutions.len();
+                let pulled = if driven {
+                    let mut answered = purrdf_sparql_eval::AdmittedMap::default();
+                    for row in solutions.rows() {
+                        if let Some(count) = answered.get_mut(row.as_slice()) {
+                            *count += 1;
+                        } else {
+                            answered.insert_admitted(row.as_slice(), 1_u64, &lookup_workspace)?;
+                        }
+                    }
+                    answered.values().copied().max().unwrap_or(0)
+                } else {
+                    u64::try_from(rows).unwrap_or(u64::MAX)
+                };
+                let evidence = self
+                    .scoped
+                    .as_ref()
+                    .map(|_| solutions.existential_evidence())
+                    .transpose()?;
+                Ok(Some((rows, pulled, evidence)))
+            };
         let (rows, witness) = self
             .engine
-            .execute_witnessed(execution, self.dataset, options, |outcome| match outcome {
-                InternedOutcome::Solutions(solutions) => Some(if driven {
-                    let mut answered: FastMap<&[_], u64> = FastMap::default();
-                    for row in solutions.rows() {
-                        *answered.entry(row.as_slice()).or_default() += 1;
-                    }
-                    (
-                        solutions.len(),
-                        answered.values().copied().max().unwrap_or(0),
-                    )
-                } else {
-                    let rows = solutions.len();
-                    (rows, u64::try_from(rows).unwrap_or(u64::MAX))
-                }),
-                InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
-            })
-            .map_err(|diagnostic| failed(diagnostic.to_string()))?;
-        let (rows, pulled) =
-            rows.ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
+            .execute_witnessed_admitted(
+                execution,
+                self.dataset,
+                options,
+                self.scoped.as_ref().map(|scoped| scoped.source),
+                &lookup_workspace,
+                visit,
+            )
+            .map_err(|error| match error {
+                purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
+                    ProtocolError::NativeFailure(error)
+                }
+                error => failed(error.to_string()),
+            })?;
+        let (rows, pulled, evidence) = rows
+            .map_err(ProtocolError::NativeFailure)?
+            .ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
+        let closed = if let (Some(scoped), Some(evidence)) = (&self.scoped, evidence) {
+            let closed = !evidence.is_undecided()
+                && evidence
+                    .with_record(|record| {
+                        record.completeness() == purrdf_core::evidence::SearchCompleteness::Complete
+                    })
+                    .map_err(ProtocolError::NativeFailure)?;
+            let value = match binding {
+                Some(CandidateBinding::Id(id)) => purrdf_sparql_eval::ScratchInterner::default()
+                    .try_owned_value_of(
+                        self.dataset,
+                        purrdf_sparql_eval::SolutionTerm::Existing(*id),
+                        &scoped.workspace,
+                        |never| match never {},
+                    ),
+                Some(CandidateBinding::Value(value)) => scoped.workspace.clone_term(value),
+                None => unreachable!("external canonical candidate retains its native value"),
+            }
+            .map_err(ProtocolError::NativeFailure)?;
+            let mut cells = purrdf_sparql_eval::AdmittedVec::with_capacity(1, &scoped.workspace)
+                .map_err(ProtocolError::NativeFailure)?;
+            cells
+                .push(Some(value))
+                .map_err(ProtocolError::NativeFailure)?;
+            scoped
+                .rows
+                .push(crate::ScopedRow { cells, evidence })
+                .map_err(ProtocolError::NativeFailure)?;
+            closed
+        } else {
+            true
+        };
         // Held to the read before its verdict is read at all. A verdict is only a
         // statement about the rows the ranked read would have gone on to name if it
         // came from the index generation that read pinned; one from anywhere else
@@ -1093,7 +1231,11 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
         // witness there stays the refusal below; so does an empty witness beside a
         // row, which no invocation produced.
         if driven && rows == 0 && witness.is_empty() {
-            return Ok(ExclusionVerdict::Excluded);
+            return Ok(if closed {
+                ExclusionVerdict::Excluded
+            } else {
+                ExclusionVerdict::Possible
+            });
         }
         let moved = |reason: String| ProtocolError::ExclusionAttestationMoved {
             stratum: stratum.as_str().to_owned(),
@@ -1137,7 +1279,7 @@ impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusi
             };
             return Err(failed(breach.to_string()));
         }
-        Ok(if rows == 0 {
+        Ok(if rows == 0 && closed {
             ExclusionVerdict::Excluded
         } else {
             ExclusionVerdict::Possible
@@ -1233,8 +1375,9 @@ impl<'d> RankedStreamImpl<'d> {
         // an enormous read as a tiny one.
         let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
         Self {
+            workspace: None,
             source: RowSource::Materialised {
-                rows: rows.into(),
+                rows: RankedRowsStorage::Caller(rows.into_iter()),
                 ending,
                 attested: None,
             },
@@ -1243,6 +1386,29 @@ impl<'d> RankedStreamImpl<'d> {
             exclusion: None,
             materialised,
             run_invalidated: false,
+            native_failure: None,
+        }
+    }
+
+    fn from_admitted(
+        rows: purrdf_sparql_eval::AdmittedVec<(u64, Term, RowBlock)>,
+        ending: StreamEnding,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Self {
+        let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+        Self {
+            workspace: Some(workspace.clone()),
+            source: RowSource::Materialised {
+                rows: RankedRowsStorage::Native(rows.into_iter()),
+                ending,
+                attested: None,
+            },
+            pulled: 0,
+            exhausted: false,
+            exclusion: None,
+            materialised,
+            run_invalidated: false,
+            native_failure: None,
         }
     }
 
@@ -1251,15 +1417,25 @@ impl<'d> RankedStreamImpl<'d> {
     /// Not public: an on-demand read is one this executor opened, against a dataset
     /// and a registry it was handed, and its ending is decided by observations only
     /// the executor's read makes.
-    const fn on_demand(read: Box<dyn OnDemandRead + 'd>) -> Self {
+    fn on_demand(
+        read: purrdf_sparql_eval::WorkspaceBox<dyn OnDemandRead + 'd>,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Self {
         Self {
+            workspace: Some(workspace.clone()),
             source: RowSource::OnDemand { read, ended: None },
             pulled: 0,
             exhausted: false,
             exclusion: None,
             materialised: 0,
             run_invalidated: false,
+            native_failure: None,
         }
+    }
+
+    /// Borrow the original native authority without detaching row ownership.
+    pub fn workspace(&self) -> Option<&purrdf_sparql_eval::WorkspaceCapability> {
+        self.workspace.as_ref()
     }
 
     /// Record how many rows the read that produced these rows really returned.
@@ -1340,17 +1516,28 @@ impl<'d> RankedStreamImpl<'d> {
                   task that fuses it, so the future is not `Send` by construction"
     )]
     pub async fn settle(&mut self) -> Result<Option<PfAttestation>, ProtocolError> {
-        match &self.source {
+        self.check_native_failure()?;
+        match &mut self.source {
             RowSource::Materialised { attested, .. } => Ok(attested.clone()),
-            RowSource::OnDemand { read, .. } => {
-                read.settle()
-                    .map(Some)
-                    .map_err(|reason| ProtocolError::AttestationMoved {
-                        stratum: read.stratum().to_owned(),
-                        reason,
-                    })
-            }
+            RowSource::OnDemand { read, .. } => match read.settle() {
+                Ok(attestation) => Ok(Some(attestation)),
+                Err(ReadFault::Native(error) | ReadFault::Invocation(error)) => {
+                    self.run_invalidated = true;
+                    self.native_failure = Some(error.clone());
+                    Err(ProtocolError::NativeFailure(error))
+                }
+                Err(ReadFault::Producer { reason, .. }) => Err(ProtocolError::AttestationMoved {
+                    stratum: read.stratum().to_owned(),
+                    reason,
+                }),
+            },
         }
+    }
+
+    fn check_native_failure(&self) -> Result<(), ProtocolError> {
+        self.native_failure.as_ref().map_or(Ok(()), |error| {
+            Err(ProtocolError::NativeFailure(error.clone()))
+        })
     }
 
     /// Whether the fault [`Self::next`] refused with invalidates the whole run
@@ -1372,7 +1559,10 @@ impl<'d> RankedStreamImpl<'d> {
     /// [`execute_within`] attaches its lookups after every stratum has been read,
     /// because a lookup binds candidates any stratum of the call may have named,
     /// and those are only all known once the last ranking read is in.
-    pub(crate) fn attach_exclusion(&mut self, lookup: Box<dyn ExclusionLookup + 'd>) {
+    pub(crate) fn attach_exclusion(
+        &mut self,
+        lookup: purrdf_sparql_eval::WorkspaceBox<dyn ExclusionLookup + 'd>,
+    ) {
         self.exclusion = Some(lookup);
     }
 
@@ -1398,10 +1588,16 @@ impl<'d> RankedStreamImpl<'d> {
                   task that fuses it, so the future is not `Send` by construction"
     )]
     pub async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
-        match self.exclusion.as_mut() {
+        self.check_native_failure()?;
+        let result = match self.exclusion.as_mut() {
             Some(lookup) => lookup.look_up(candidate),
             None => Err(ProtocolError::ExclusionUnavailable),
+        };
+        if let Err(ProtocolError::NativeFailure(error)) = &result {
+            self.run_invalidated = true;
+            self.native_failure = Some(error.clone());
         }
+        result
     }
 
     /// The next row, or `None` when the stream is exhausted.
@@ -1421,8 +1617,9 @@ impl<'d> RankedStreamImpl<'d> {
                   task that fuses it, so the future is not `Send` by construction"
     )]
     pub async fn next(&mut self) -> Result<Option<(u64, Term, RowBlock)>, ProtocolError> {
+        self.check_native_failure()?;
         let row = match &mut self.source {
-            RowSource::Materialised { rows, .. } => rows.pop_front(),
+            RowSource::Materialised { rows, .. } => rows.next(),
             RowSource::OnDemand { read, ended } => {
                 if ended.is_some() {
                     None
@@ -1437,17 +1634,48 @@ impl<'d> RankedStreamImpl<'d> {
                         // reported exactly as a materialised read's is: through the
                         // receipt, as `ExecutionFailed`, with every other stratum
                         // still answering.
-                        Err(ReadFault {
+                        Err(ReadFault::Producer {
                             reason,
                             whole_run: false,
                         }) if self.pulled == 0 => {
-                            *ended = Some(OnDemandEnd::Failed(reason));
+                            let workspace =
+                                self.workspace.as_ref().expect("on-demand native authority");
+                            *ended = Some(OnDemandEnd::Failed(
+                                workspace
+                                    .authored_text(&reason)
+                                    .map_err(ProtocolError::NativeFailure)?
+                                    .into(),
+                            ));
                             None
                         }
                         // After rows were handed out — or at any point, for a
                         // breach of the declared row bound — it fails the request by
                         // name, because those rows may already be in the answer.
-                        Err(ReadFault { reason, whole_run }) => {
+                        Err(ReadFault::Invocation(error)) if self.pulled == 0 => {
+                            let workspace =
+                                self.workspace.as_ref().expect("on-demand native authority");
+                            *ended = Some(OnDemandEnd::Failed(
+                                workspace
+                                    .authored_text(&error)
+                                    .map_err(ProtocolError::NativeFailure)?
+                                    .into(),
+                            ));
+                            None
+                        }
+                        Err(ReadFault::Invocation(error)) => {
+                            self.run_invalidated = false;
+                            return Err(ProtocolError::ReadFailed {
+                                stratum: read.stratum().to_owned(),
+                                rows_before: self.pulled,
+                                reason: error.to_string(),
+                            });
+                        }
+                        Err(ReadFault::Native(error)) => {
+                            self.run_invalidated = true;
+                            self.native_failure = Some(error.clone());
+                            return Err(ProtocolError::NativeFailure(error));
+                        }
+                        Err(ReadFault::Producer { reason, whole_run }) => {
                             self.run_invalidated = whole_run;
                             return Err(ProtocolError::ReadFailed {
                                 stratum: read.stratum().to_owned(),
@@ -1494,6 +1722,7 @@ impl<'d> RankedStreamImpl<'d> {
                   task that fuses it, so the future is not `Send` by construction"
     )]
     pub async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
+        self.check_native_failure()?;
         if !self.exhausted {
             return Err(ProtocolError::NeverEndingSource);
         }
@@ -1621,6 +1850,80 @@ pub async fn execute_within<
     dataset: &'d D,
     schedule: ReadSchedule,
 ) -> Result<C::Output<'d>, ExecutionError> {
+    execute_bound(compiled, registry, dataset, schedule, None)
+}
+
+/// Execute the complete compiled hard-constraint set through its original
+/// candidate evaluators and evidence source. Unknown rows stay outside ranked
+/// fusion and remain available in the returned original unit receipts.
+///
+/// # Errors
+/// Preserves binding/source failures and the ordinary executor's whole-run gates.
+#[allow(clippy::unused_async, clippy::future_not_send)]
+pub async fn execute_scoped_within<
+    'd,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    C: CompiledRead,
+>(
+    compiled: &C,
+    registry: &PropertyFunctionRegistry,
+    dataset: &'d D,
+    schedule: ReadSchedule,
+    bindings: &'d crate::ConstraintBindings<'d>,
+    source: &'d dyn purrdf_sparql_eval::EvidenceSource<D::Id>,
+) -> Result<crate::ScopedExecution<C::Output<'d>>, ExecutionError> {
+    let workspace =
+        NativeSparqlEngine::workspace_for_view_admitted(dataset).map_err(|error| match error {
+            purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
+                ExecutionError::NativeFailure(error)
+            }
+            error => ExecutionError::SourceRead {
+                reason: error.to_string(),
+            },
+        })?;
+    let mut scopes =
+        purrdf_sparql_eval::AdmittedVec::with_capacity(compiled.units().len(), &workspace)
+            .map_err(ExecutionError::NativeFailure)?;
+    let result = execute_bound(
+        compiled,
+        registry,
+        dataset,
+        schedule,
+        Some(ScopedExecutionInput {
+            bindings,
+            source,
+            receipts: &mut scopes,
+            workspace: &workspace,
+        }),
+    )?;
+    Ok(crate::ScopedExecution {
+        result,
+        scopes,
+        fused: None,
+    })
+}
+
+struct ScopedExecutionInput<'a, 'b, I: purrdf_core::ViewTermId> {
+    bindings: &'b crate::ConstraintBindings<'b>,
+    source: &'b dyn purrdf_sparql_eval::EvidenceSource<I>,
+    receipts: &'a mut purrdf_sparql_eval::AdmittedVec<crate::ScopedStratum>,
+    workspace: &'a purrdf_sparql_eval::WorkspaceCapability,
+}
+
+fn execute_bound<
+    'd,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    C: CompiledRead,
+>(
+    compiled: &C,
+    registry: &PropertyFunctionRegistry,
+    dataset: &'d D,
+    schedule: ReadSchedule,
+    mut scoped: Option<ScopedExecutionInput<'_, 'd, D::Id>>,
+) -> Result<C::Output<'d>, ExecutionError> {
+    if !compiled.constraints().is_empty() && scoped.is_none() {
+        return Err(ExecutionError::MissingCandidateScope);
+    }
     if compiled.registry_id() != registry.instance_id() {
         return Err(ExecutionError::RegistryMismatch {
             expected: compiled.registry_id(),
@@ -1636,19 +1939,46 @@ pub async fn execute_within<
 
     // One engine for the whole call, shared with the exclusion lookups it
     // compiles: they run after this call returns, on executions prepared here.
-    let engine = Rc::new(NativeSparqlEngine::new());
-    let mut streams = Vec::with_capacity(compiled.units().len());
+    let execution_workspace =
+        match scoped.as_ref() {
+            Some(input) => input.workspace.clone(),
+            None => NativeSparqlEngine::workspace_for_view_admitted(dataset).map_err(|error| {
+                match error {
+                    purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
+                        ExecutionError::NativeFailure(error)
+                    }
+                    error => ExecutionError::SourceRead {
+                        reason: error.to_string(),
+                    },
+                }
+            })?,
+        };
+    let engine = purrdf_sparql_eval::SharedWorkspace::new_admitted(
+        NativeSparqlEngine::new(),
+        &execution_workspace,
+    )
+    .map_err(ExecutionError::NativeFailure)?;
+    let mut streams = purrdf_sparql_eval::AdmittedVec::with_capacity(
+        compiled.units().len(),
+        &execution_workspace,
+    )
+    .map_err(ExecutionError::NativeFailure)?;
     // The lookups this call compiled, attached once every ranking read is open —
     // see `CandidateIndex` — beside the index of each candidate those reads named.
     // The index is filled only when some stratum compiled a lookup, because it is
     // read by lookups and by nothing else; a read produced on demand fills it as
     // each row is pulled, which is before any lookup can ask about that row's
     // candidate, because the fusion asks only about candidates it has pulled.
-    let mut lookups: Vec<PendingLookup> = Vec::new();
-    let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(FastMap::default()));
+    let mut lookups: purrdf_sparql_eval::AdmittedVec<PendingLookup<'d, D::Id>> =
+        purrdf_sparql_eval::AdmittedVec::new(&execution_workspace);
+    let candidates: purrdf_sparql_eval::SharedWorkspace<RefCell<CandidateIndex<D::Id>>> =
+        purrdf_sparql_eval::SharedWorkspace::new_admitted(
+            RefCell::new(CandidateIndex::new(&execution_workspace)),
+            &execution_workspace,
+        )
+        .map_err(ExecutionError::NativeFailure)?;
     let index_candidates = compiled.units().iter().any(StratumUnit::declares_exclusion);
-    let mut statuses =
-        FastMap::with_capacity_and_hasher(compiled.units().len(), FastHasher::default());
+    let mut statuses = purrdf_sparql_eval::AdmittedOrderedMap::new(&execution_workspace);
     // The registry is named identically at prepare and at evaluation: the
     // evaluator refuses a plan prepared against a different registry than the
     // one it is run under, because a plan prepared without one has already
@@ -1665,14 +1995,39 @@ pub async fn execute_within<
     // run under a different registry than it was prepared against. One value,
     // one refcount per capable stratum, and no way for the two calls to name
     // different registries.
-    let env = Arc::new(ExtensionEnv::over_relations(registry.clone()).map_err(|e| {
-        ExecutionError::EnvironmentNotDerivable {
-            reason: e.to_string(),
-        }
-    })?);
+    let env = purrdf_sparql_eval::SharedWorkspace::new_admitted(
+        ExtensionEnv::over_relations(registry.clone()).map_err(|e| {
+            ExecutionError::EnvironmentNotDerivable {
+                reason: e.to_string(),
+            }
+        })?,
+        &execution_workspace,
+    )
+    .map_err(ExecutionError::NativeFailure)?;
     let options = || QueryOptions::new().with_env(env.as_ref());
 
     for unit in compiled.units() {
+        let scope_workspace = execution_workspace.clone();
+        let mut candidate_scope = scoped
+            .as_ref()
+            .map(|input| {
+                input
+                    .bindings
+                    .bind(compiled, &scope_workspace)
+                    .map_err(ExecutionError::NativeFailure)
+            })
+            .transpose()?;
+        let exclusion_rows = scoped
+            .as_ref()
+            .map(|_| {
+                crate::ScopedRows::new(
+                    purrdf_sparql_eval::AdmittedVec::new(&scope_workspace),
+                    false,
+                    &scope_workspace,
+                )
+                .map_err(ExecutionError::NativeFailure)
+            })
+            .transpose()?;
         // There is no empty-text arm here, and there is nothing left for one to catch.
         // An empty supplied text is not a query, so `StratumUnit::new` refuses it
         // outright (`UnitError::NotAQuery`), and a rendered text is assembled from a
@@ -1685,24 +2040,32 @@ pub async fn execute_within<
         // taken from the unit once, here, so the text, the reach and the rank the
         // ending reports cannot be three readings of two different numbers.
         let depth = unit.probed_depth();
-        let sparql = unit.sparql();
-        let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
-            Ok(prepared) => prepared,
-            Err(diagnostic) if diagnostic.code == "native-sparql-source-read" => {
-                return Err(ExecutionError::SourceRead {
-                    reason: diagnostic.message,
-                });
-            }
-            Err(diagnostic) => {
-                statuses.insert(
-                    unit.stratum.clone(),
-                    ProducerStatus::ExecutionFailed {
-                        reason: diagnostic.to_string(),
-                    },
-                );
-                continue;
-            }
+        let sparql = if scoped.is_some() {
+            unit.sparql_scoped()
+        } else {
+            unit.sparql()
         };
+        let prepared =
+            match engine.prepare_query_admitted(&sparql, None, options(), &scope_workspace) {
+                Ok(prepared) => prepared,
+                Err(purrdf_sparql_eval::EvaluationFailure::Evaluation(error))
+                    if scoped.is_some() || error.is_native_storage_failure() =>
+                {
+                    return Err(ExecutionError::NativeFailure(error));
+                }
+                Err(diagnostic) => {
+                    statuses
+                        .insert(
+                            unit.stratum
+                                .clone_admitted(&scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                            ProducerStatus::failed_admitted(&diagnostic, &scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                        )
+                        .map_err(ExecutionError::NativeFailure)?;
+                    continue;
+                }
+            };
         // Prepared before the ranking read runs, and once for the whole stratum —
         // but after the ranking text is prepared, because that prepared plan is what
         // a caller's own text has its lookups derived from (see
@@ -1730,30 +2093,27 @@ pub async fn execute_within<
             None => None,
             Some(Err(reason)) => {
                 statuses.insert(
-                    unit.stratum.clone(),
-                    ProducerStatus::ExecutionFailed {
-                        reason: format!(
+                    unit.stratum.clone_admitted(&scope_workspace).map_err(ExecutionError::NativeFailure)?,
+                    ProducerStatus::failed_admitted(&format_args!(
                             "stratum {}: the exclusion lookup its contract declared could not be \
                              derived from its query: {reason}",
                             unit.stratum
-                        ),
-                    },
-                );
+                        ), &scope_workspace).map_err(ExecutionError::NativeFailure)?,
+                ).map_err(ExecutionError::NativeFailure)?;
                 continue;
             }
             Some(Ok(alternatives)) => {
-                let prepared_lookups: Result<Vec<Vec<PreparedLookup>>, _> = alternatives
-                    .iter()
-                    .map(|alternative| {
-                        alternative
-                            .iter()
-                            .map(|lookup| {
+                let prepared_lookups = purrdf_sparql_eval::AdmittedVec::try_from_iter_admitted(
+                    alternatives.iter().map(|alternative| {
+                        purrdf_sparql_eval::AdmittedVec::try_from_iter_admitted(
+                            alternative.iter().map(|lookup| {
                                 engine
-                                    .prepare_execution(
+                                    .prepare_execution_admitted(
                                         &lookup.text,
                                         None,
                                         &[lookup.parameter.as_str()],
                                         options(),
+                                        &scope_workspace,
                                     )
                                     .map(|execution| {
                                         let slot = execution.slot(&lookup.parameter).expect(
@@ -1765,23 +2125,36 @@ pub async fn execute_within<
                                             driven: lookup.driven,
                                         }
                                     })
-                            })
-                            .collect()
-                    })
-                    .collect();
+                            }),
+                            &scope_workspace,
+                        )
+                    }),
+                    &scope_workspace,
+                );
                 match prepared_lookups {
                     Ok(lookups) => Some(lookups),
+                    Err(purrdf_sparql_eval::EvaluationFailure::Evaluation(error))
+                        if scoped.is_some() || error.is_native_storage_failure() =>
+                    {
+                        return Err(ExecutionError::NativeFailure(error));
+                    }
                     Err(diagnostic) => {
-                        statuses.insert(
-                            unit.stratum.clone(),
-                            ProducerStatus::ExecutionFailed {
-                                reason: format!(
-                                    "stratum {}: the exclusion lookup its producer declared \
+                        statuses
+                            .insert(
+                                unit.stratum
+                                    .clone_admitted(&scope_workspace)
+                                    .map_err(ExecutionError::NativeFailure)?,
+                                ProducerStatus::failed_admitted(
+                                    &format_args!(
+                                        "stratum {}: the exclusion lookup its producer declared \
                                      could not be prepared: {diagnostic}",
-                                    unit.stratum
-                                ),
-                            },
-                        );
+                                        unit.stratum
+                                    ),
+                                    &scope_workspace,
+                                )
+                                .map_err(ExecutionError::NativeFailure)?,
+                            )
+                            .map_err(ExecutionError::NativeFailure)?;
                         continue;
                     }
                 }
@@ -1795,190 +2168,505 @@ pub async fn execute_within<
         // caller's own text that is one call under row-for-row operators is exactly
         // one invocation, and one that is anything else is read materialised below.
         if schedule == ReadSchedule::OnDemand && prepared.is_call_read() {
-            let opened = engine
-                .open_call_cursor(&prepared, options())
-                .map_err(|diagnostic| diagnostic.to_string())
+            let opened =
+                if let (Some(input), Some(scope)) = (scoped.as_ref(), candidate_scope.as_ref()) {
+                    engine.open_call_cursor_evidence(
+                        &prepared,
+                        options().with_candidate_scope(scope),
+                        &scope_workspace,
+                        input.source,
+                    )
+                } else {
+                    engine.open_call_cursor_admitted(&prepared, options(), &scope_workspace)
+                }
                 .and_then(|cursor| {
                     CandidateColumns::locate(cursor.variables(), &unit.contract.domains)
                         .map(|columns| (cursor, columns))
-                        .map_err(|reason| format!("stratum {}: {reason}", unit.stratum))
+                        .map_err(|reason| {
+                            purrdf_sparql_eval::RetainedDiagnostic::render(
+                                "native-sparql-query-eval",
+                                &format_args!("stratum {}: {reason}", unit.stratum),
+                                &scope_workspace,
+                            )
+                            .map_or_else(
+                                purrdf_sparql_eval::EvaluationFailure::Evaluation,
+                                purrdf_sparql_eval::EvaluationFailure::RetainedDiagnostic,
+                            )
+                        })
                 });
             match opened {
                 Ok((cursor, columns)) => {
                     let attestation = cursor.opened().clone();
+                    let retained = if let (Some(input), Some(scope)) =
+                        (scoped.as_mut(), candidate_scope.as_ref())
+                    {
+                        let receipt = crate::ScopedStratum::opened(
+                            unit.stratum.as_str(),
+                            &cursor,
+                            scope,
+                            exclusion_rows
+                                .as_ref()
+                                .expect("scoped exclusion owner")
+                                .clone(),
+                            &scope_workspace,
+                        )
+                        .map_err(ExecutionError::NativeFailure)?;
+                        let rows = receipt.rows.clone();
+                        input
+                            .receipts
+                            .push(receipt)
+                            .map_err(ExecutionError::NativeFailure)?;
+                        Some(rows)
+                    } else {
+                        None
+                    };
+                    let declared_rows = if retained.is_some() {
+                        Some(cursor.physical_row_bound())
+                    } else {
+                        unit.declared_rows()
+                    };
                     let read = CallRead {
-                        stratum: unit.stratum.clone(),
+                        workspace: scope_workspace.clone(),
+                        stratum: unit
+                            .stratum
+                            .clone_admitted(&scope_workspace)
+                            .map_err(ExecutionError::NativeFailure)?,
                         cursor,
                         columns,
                         depth: depth.get(),
-                        declared_rows: unit.declared_rows(),
+                        declared_rows,
                         declared_mode: unit.declared_mode(),
                         reach: unit.reach(),
                         materialised: 0,
-                        candidates: index_candidates.then(|| Rc::clone(&candidates)),
+                        established: 0,
+                        retained,
+                        candidates: index_candidates.then(|| candidates.clone()),
                         dataset,
                     };
                     if let Some(prepared_lookups) = exclusion {
-                        lookups.push(PendingLookup {
-                            position: streams.len(),
-                            stratum: unit.stratum.clone(),
-                            lookups: prepared_lookups,
-                            pinned: attestation.clone(),
-                        });
+                        lookups
+                            .push(PendingLookup {
+                                position: streams.len(),
+                                stratum: unit
+                                    .stratum
+                                    .clone_admitted(&scope_workspace)
+                                    .map_err(ExecutionError::NativeFailure)?,
+                                lookups: prepared_lookups,
+                                pinned: attestation.clone(),
+                                scoped: candidate_scope.take().map(|scope| ScopedLookup {
+                                    scope,
+                                    source: scoped.as_ref().expect("scoped source").source,
+                                    workspace: scope_workspace.clone(),
+                                    rows: exclusion_rows
+                                        .as_ref()
+                                        .expect("scoped exclusion owner")
+                                        .clone(),
+                                }),
+                            })
+                            .map_err(ExecutionError::NativeFailure)?;
                     }
-                    streams.push(ReadStratum {
-                        stratum: unit.stratum.clone(),
-                        plan_id: compiled.plan_id(),
-                        requested_depth: depth.get(),
-                        contract: unit.contract.clone(),
-                        attestation,
-                        stream: RankedStreamImpl::on_demand(Box::new(read)),
-                    });
+                    streams
+                        .push(ReadStratum {
+                            admission_failure_settlement: None,
+                            stratum: unit
+                                .stratum
+                                .clone_admitted(&scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                            plan_id: compiled.plan_id(),
+                            requested_depth: depth.get(),
+                            contract: unit.contract.clone(),
+                            attestation,
+                            stream: RankedStreamImpl::on_demand(
+                                purrdf_sparql_eval::WorkspaceBox::new_admitted(
+                                    read,
+                                    &scope_workspace,
+                                )
+                                .map_err(ExecutionError::NativeFailure)?
+                                .coerce(|read| -> Box<dyn OnDemandRead + '_> { read }),
+                                &scope_workspace,
+                            ),
+                        })
+                        .map_err(ExecutionError::NativeFailure)?;
+                }
+                Err(purrdf_sparql_eval::EvaluationFailure::Evaluation(error))
+                    if scoped.is_some() || error.is_native_storage_failure() =>
+                {
+                    return Err(ExecutionError::NativeFailure(error));
                 }
                 Err(reason) => {
-                    statuses.insert(
-                        unit.stratum.clone(),
-                        ProducerStatus::ExecutionFailed { reason },
-                    );
+                    if scoped.is_some() {
+                        return Err(ExecutionError::SourceRead {
+                            reason: reason.to_string(),
+                        });
+                    }
+                    statuses
+                        .insert(
+                            unit.stratum
+                                .clone_admitted(&scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                            ProducerStatus::failed_admitted(&reason, &scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                        )
+                        .map_err(ExecutionError::NativeFailure)?;
                 }
             }
+            continue;
+        }
+        if let (Some(input), Some(scope)) = (scoped.as_mut(), candidate_scope.as_ref()) {
+            let query_options = options().with_candidate_scope(scope);
+            let mut execution = engine
+                .prepare_execution_admitted(&sparql, None, &[], query_options, &scope_workspace)
+                .map_err(|error| match error {
+                    purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
+                        ExecutionError::NativeFailure(error)
+                    }
+                    diagnostic => ExecutionError::SourceRead {
+                        reason: diagnostic.to_string(),
+                    },
+                })?;
+            let (receipt, witness) = engine
+                .execute_witnessed_admitted(
+                    &mut execution,
+                    dataset,
+                    query_options,
+                    Some(input.source),
+                    &scope_workspace,
+                    |outcome| {
+                        let InternedOutcome::Solutions(solutions) = outcome else {
+                            return Err(purrdf_sparql_eval::NativeDiagnostic::error(
+                                purrdf_sparql_eval::NativeDiagnosticKind::Internal,
+                                "compiled scoped unit did not return solutions",
+                                &scope_workspace,
+                            ));
+                        };
+                        let MaterializedCells { variables, rows } =
+                            materialize_cells_admitted(&solutions, &scope_workspace)?;
+                        let constraints = crate::scope::retain_counts(scope, &scope_workspace)?;
+                        let rows = crate::ScopedRows::new(rows, true, &scope_workspace)?;
+                        rows.retain_search(solutions.search_evidence())?;
+                        Ok(crate::ScopedStratum {
+                            stratum: scope_workspace.authored_text(unit.stratum.as_str())?,
+                            variables,
+                            search: rows.search(),
+                            rows,
+                            exclusions: exclusion_rows
+                                .as_ref()
+                                .expect("scoped exclusion owner")
+                                .clone(),
+                            constraints,
+                        })
+                    },
+                )
+                .map_err(|error| match error {
+                    purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
+                        ExecutionError::NativeFailure(error)
+                    }
+                    diagnostic => ExecutionError::SourceRead {
+                        reason: diagnostic.to_string(),
+                    },
+                })?;
+            let receipt = receipt.map_err(ExecutionError::NativeFailure)?;
+            let attestation = read_attestation(
+                &witness,
+                receipt
+                    .rows
+                    .with_rows(<[crate::ScopedRow]>::is_empty)
+                    .map_err(ExecutionError::NativeFailure)?,
+            )
+            .map_err(|reason| ExecutionError::InconsistentWitness {
+                stratum: Box::new(unit.stratum.clone()),
+                reason,
+            })?;
+            let ranked = receipt
+                .rows
+                .with_rows(|rows| {
+                    let known_rows = rows
+                        .iter()
+                        .filter(|row| !row.evidence.is_undecided())
+                        .map(|row| &row.cells[..]);
+                    let ranked = rank_candidate_rows(
+                        &receipt.variables,
+                        known_rows.clone(),
+                        &unit.contract.domains,
+                        &scope_workspace,
+                    )
+                    .map_err(ExecutionError::NativeFailure)?;
+                    if index_candidates {
+                        index_candidate_rows(
+                            &mut candidates.borrow_mut(),
+                            &receipt.variables,
+                            known_rows,
+                            &ranked,
+                            dataset,
+                        )?;
+                    }
+                    Ok::<_, ExecutionError>(ranked)
+                })
+                .map_err(ExecutionError::NativeFailure)??;
+            let (ranked, ending, status) = bound_to_depth(
+                ranked,
+                depth.get(),
+                unit.declared_rows(),
+                unit.declared_mode(),
+                unit.reach(),
+                &unit.stratum,
+            )?;
+            let materialised = u64::try_from(
+                receipt
+                    .rows
+                    .with_rows(<[crate::ScopedRow]>::len)
+                    .map_err(ExecutionError::NativeFailure)?,
+            )
+            .map_err(|_| ExecutionError::SourceRead {
+                reason: "scoped materialized row count overflow".to_owned(),
+            })?;
+            let stream = RankedStreamImpl::from_admitted(ranked, ending, &scope_workspace)
+                .with_materialised_rows(materialised)
+                .with_attested(attestation.clone());
+            if let Some(prepared_lookups) = exclusion {
+                lookups
+                    .push(PendingLookup {
+                        position: streams.len(),
+                        stratum: unit
+                            .stratum
+                            .clone_admitted(&scope_workspace)
+                            .map_err(ExecutionError::NativeFailure)?,
+                        lookups: prepared_lookups,
+                        pinned: attestation.clone(),
+                        scoped: candidate_scope.take().map(|scope| ScopedLookup {
+                            scope,
+                            source: input.source,
+                            workspace: scope_workspace.clone(),
+                            rows: exclusion_rows
+                                .as_ref()
+                                .expect("scoped exclusion owner")
+                                .clone(),
+                        }),
+                    })
+                    .map_err(ExecutionError::NativeFailure)?;
+            }
+            streams
+                .push(ReadStratum {
+                    admission_failure_settlement: None,
+                    stratum: unit
+                        .stratum
+                        .clone_admitted(&scope_workspace)
+                        .map_err(ExecutionError::NativeFailure)?,
+                    plan_id: compiled.plan_id(),
+                    requested_depth: depth.get(),
+                    contract: unit.contract.clone(),
+                    attestation,
+                    stream,
+                })
+                .map_err(ExecutionError::NativeFailure)?;
+            statuses
+                .insert(
+                    unit.stratum
+                        .clone_admitted(&scope_workspace)
+                        .map_err(ExecutionError::NativeFailure)?,
+                    status,
+                )
+                .map_err(ExecutionError::NativeFailure)?;
+            input
+                .receipts
+                .push(receipt)
+                .map_err(ExecutionError::NativeFailure)?;
             continue;
         }
         // Governors are per call, never per engine: the value is built here,
         // used once, and dropped with the call. `UNBOUNDED` declines every
         // caller-settable ceiling, so this is the governed lane for its receipt
         // and for nothing else — see this module's header.
-        let outcome = engine.query_prepared_governed_view(
-            dataset,
-            &prepared,
+        let mut execution = match engine.prepare_execution_admitted(
+            &sparql,
+            None,
             &[],
             options(),
+            &scope_workspace,
+        ) {
+            Ok(execution) => execution,
+            Err(purrdf_sparql_eval::EvaluationFailure::Evaluation(error))
+                if scoped.is_some() || error.is_native_storage_failure() =>
+            {
+                return Err(ExecutionError::NativeFailure(error));
+            }
+            Err(diagnostic) => {
+                statuses
+                    .insert(
+                        unit.stratum
+                            .clone_admitted(&scope_workspace)
+                            .map_err(ExecutionError::NativeFailure)?,
+                        ProducerStatus::failed_admitted(&diagnostic, &scope_workspace)
+                            .map_err(ExecutionError::NativeFailure)?,
+                    )
+                    .map_err(ExecutionError::NativeFailure)?;
+                continue;
+            }
+        };
+        let outcome = engine.execute_governed_admitted(
+            &mut execution,
+            dataset,
+            options(),
             &QueryGovernors::UNBOUNDED,
+            &scope_workspace,
+            |outcome| match outcome {
+                InternedOutcome::Solutions(solutions) => {
+                    materialize_cells_admitted(&solutions, &scope_workspace).map(Some)
+                }
+                _ => Ok(None),
+            },
         );
         match outcome {
-            Ok(GovernedOutcome::Complete {
-                result:
-                    SparqlResult::Solutions {
-                        variables, rows, ..
-                    },
-                relations,
-                ..
-            }) => {
-                // Read before ranking. The witness describes the run that just
-                // happened, so an inconsistency in it invalidates that run
-                // whether or not this stratum's rows could also be ranked; the
-                // alternative would let a per-stratum ranking failure mask the
-                // whole-run condition that caused it.
-                let attestation =
-                    read_attestation(&relations.witness, rows.is_empty()).map_err(|reason| {
-                        ExecutionError::InconsistentWitness {
-                            stratum: Box::new(unit.stratum.clone()),
-                            reason,
-                        }
-                    })?;
-                match rank_candidates(&variables, &rows, &unit.contract.domains) {
-                    Ok(ranked) => {
+            Ok(receipt) => {
+                let materialized = receipt.consume(
+                    |value, _, relations| {
+                        let Some(cells) = value.map_err(ExecutionError::NativeFailure)? else {
+                            return Ok(None);
+                        };
+                        let attestation =
+                            read_attestation(&relations.witness, cells.rows.is_empty()).map_err(
+                                |reason| ExecutionError::InconsistentWitness {
+                                    stratum: Box::new(unit.stratum.clone()),
+                                    reason,
+                                },
+                            )?;
+                        let materialised = u64::try_from(cells.rows.len()).map_err(|_| {
+                            ExecutionError::NativeFailure(
+                                purrdf_sparql_eval::EvalError::WorkspaceBoundOverflow,
+                            )
+                        })?;
+                        let ranked = rank_candidate_rows(
+                            &cells.variables,
+                            cells.rows.iter().map(|row| row.cells.as_slice()),
+                            &unit.contract.domains,
+                            &scope_workspace,
+                        )
+                        .map_err(ExecutionError::NativeFailure)?;
                         if index_candidates {
-                            index_candidates_into(
+                            index_candidate_rows(
                                 &mut candidates.borrow_mut(),
-                                &variables,
-                                &rows,
+                                &cells.variables,
+                                cells.rows.iter().map(|row| row.cells.as_slice()),
                                 &ranked,
                                 dataset,
                             )?;
                         }
-                        // `?`, not a per-stratum status: a producer that beat
-                        // its own declaration broke the number every other
-                        // stratum's admission and ordering rested on, and the
-                        // only ending left for this one is a completeness claim
-                        // the extra row has already falsified.
-                        let (ranked, ending, status) = bound_to_depth(
-                            ranked,
-                            depth.get(),
-                            unit.declared_rows(),
-                            unit.declared_mode(),
-                            unit.reach(),
-                            &unit.stratum,
-                        )?;
-                        // The read's own cost, taken from the evaluator's
-                        // answer rather than from the rows that survived the
-                        // depth: `bound_to_depth` has just taken the probe row
-                        // off, and a figure read after it would report every
-                        // bounded read as one row cheaper than it was.
-                        let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
-                        let stream = RankedStreamImpl::new(ranked, ending)
-                            .with_materialised_rows(materialised)
-                            .with_attested(attestation.clone());
-                        if let Some(prepared_lookups) = exclusion {
-                            lookups.push(PendingLookup {
+                        Ok(Some((ranked, materialised, attestation)))
+                    },
+                    |exhausted| {
+                        Err(ExecutionError::InconsistentWitness {
+                            stratum: Box::new(unit.stratum.clone()),
+                            reason: format!(
+                                "the run declined every ceiling, yet {} stopped it",
+                                exhausted.tripped
+                            ),
+                        })
+                    },
+                );
+                let materialized = match materialized {
+                    Ok(materialized) => materialized,
+                    Err(ExecutionError::NativeFailure(error))
+                        if scoped.is_none() && !error.is_native_storage_failure() =>
+                    {
+                        statuses
+                            .insert(
+                                unit.stratum
+                                    .clone_admitted(&scope_workspace)
+                                    .map_err(ExecutionError::NativeFailure)?,
+                                ProducerStatus::failed_admitted(
+                                    &format_args!("stratum {}: {error}", unit.stratum),
+                                    &scope_workspace,
+                                )
+                                .map_err(ExecutionError::NativeFailure)?,
+                            )
+                            .map_err(ExecutionError::NativeFailure)?;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some((ranked, materialised, attestation)) = materialized {
+                    let (ranked, ending, status) = bound_to_depth(
+                        ranked,
+                        depth.get(),
+                        unit.declared_rows(),
+                        unit.declared_mode(),
+                        unit.reach(),
+                        &unit.stratum,
+                    )?;
+                    // The read's own cost, taken from the evaluator's
+                    // answer rather than from the rows that survived the
+                    // depth: `bound_to_depth` has just taken the probe row
+                    // off, and a figure read after it would report every
+                    // bounded read as one row cheaper than it was.
+                    let stream = RankedStreamImpl::from_admitted(ranked, ending, &scope_workspace)
+                        .with_materialised_rows(materialised)
+                        .with_attested(attestation.clone());
+                    if let Some(prepared_lookups) = exclusion {
+                        lookups
+                            .push(PendingLookup {
                                 position: streams.len(),
-                                stratum: unit.stratum.clone(),
+                                stratum: unit
+                                    .stratum
+                                    .clone_admitted(&scope_workspace)
+                                    .map_err(ExecutionError::NativeFailure)?,
                                 lookups: prepared_lookups,
                                 pinned: attestation.clone(),
-                            });
-                        }
-                        streams.push(ReadStratum {
-                            stratum: unit.stratum.clone(),
+                                scoped: None,
+                            })
+                            .map_err(ExecutionError::NativeFailure)?;
+                    }
+                    streams
+                        .push(ReadStratum {
+                            admission_failure_settlement: None,
+                            stratum: unit
+                                .stratum
+                                .clone_admitted(&scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
                             plan_id: compiled.plan_id(),
                             requested_depth: depth.get(),
                             contract: unit.contract.clone(),
                             attestation,
                             stream,
-                        });
-                        statuses.insert(unit.stratum.clone(), status);
-                    }
-                    Err(reason) => {
-                        statuses.insert(
-                            unit.stratum.clone(),
-                            ProducerStatus::ExecutionFailed {
-                                reason: format!("stratum {}: {reason}", unit.stratum),
-                            },
-                        );
-                    }
+                        })
+                        .map_err(ExecutionError::NativeFailure)?;
+                    statuses
+                        .insert(
+                            unit.stratum
+                                .clone_admitted(&scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                            status,
+                        )
+                        .map_err(ExecutionError::NativeFailure)?;
+                } else {
+                    statuses
+                        .insert(
+                            unit.stratum
+                                .clone_admitted(&scope_workspace)
+                                .map_err(ExecutionError::NativeFailure)?,
+                            ProducerStatus::failed_admitted(
+                                "compiled unit did not return solutions",
+                                &scope_workspace,
+                            )
+                            .map_err(ExecutionError::NativeFailure)?,
+                        )
+                        .map_err(ExecutionError::NativeFailure)?;
                 }
             }
-            Ok(GovernedOutcome::Complete { .. }) => {
-                statuses.insert(
-                    unit.stratum.clone(),
-                    ProducerStatus::ExecutionFailed {
-                        reason: "compiled unit did not return solutions".to_owned(),
-                    },
-                );
-            }
-            Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
-                // A required arm over an outcome no unit on this lane can reach
-                // — the enum is exhaustive by design, so this case is handled
-                // here or nowhere. `UNBOUNDED` declines every caller-settable
-                // ceiling and carries no stop signal, and these options inject
-                // no user-function registry, so the one ceiling that remains has
-                // no charge site a unit can enter; see `ExecutionError` for the
-                // full argument and the tests that pin both halves.
-                //
-                // What it must not do is take the partial rows: a trip means
-                // something other than this call's governors stopped the run,
-                // and reporting its rows as a stratum's answer would certify a
-                // truncated read as an exhausted one. So it is the whole-run
-                // refusal it would be, naming the governor that did it.
-                return Err(ExecutionError::InconsistentWitness {
-                    stratum: Box::new(unit.stratum.clone()),
-                    reason: format!(
-                        "the run declined every ceiling, yet {} stopped it",
-                        exhausted.tripped
-                    ),
-                });
-            }
-            Err(diagnostic) if diagnostic.code == "native-sparql-source-read" => {
-                return Err(ExecutionError::SourceRead {
-                    reason: diagnostic.message,
-                });
+            Err(purrdf_sparql_eval::EvaluationFailure::Evaluation(error))
+                if scoped.is_some() || error.is_native_storage_failure() =>
+            {
+                return Err(ExecutionError::NativeFailure(error));
             }
             Err(diagnostic) => {
-                statuses.insert(
-                    unit.stratum.clone(),
-                    ProducerStatus::ExecutionFailed {
-                        reason: diagnostic.to_string(),
-                    },
-                );
+                statuses
+                    .insert(
+                        unit.stratum
+                            .clone_admitted(&scope_workspace)
+                            .map_err(ExecutionError::NativeFailure)?,
+                        ProducerStatus::failed_admitted(&diagnostic, &scope_workspace)
+                            .map_err(ExecutionError::NativeFailure)?,
+                    )
+                    .map_err(ExecutionError::NativeFailure)?;
             }
         }
     }
@@ -1988,44 +2676,77 @@ pub async fn execute_within<
         stratum,
         lookups,
         pinned,
+        scoped,
     } in lookups
     {
-        streams[position]
-            .stream
-            .attach_exclusion(Box::new(DatasetExclusion {
-                stratum,
-                engine: Rc::clone(&engine),
-                env: Arc::clone(&env),
-                lookups,
-                candidates: Rc::clone(&candidates),
-                dataset,
-                pinned,
-            }));
+        streams[position].stream.attach_exclusion(
+            purrdf_sparql_eval::WorkspaceBox::new_admitted(
+                DatasetExclusion {
+                    stratum,
+                    engine: engine.clone(),
+                    env: env.clone(),
+                    lookups,
+                    candidates: candidates.clone(),
+                    dataset,
+                    pinned,
+                    scoped,
+                },
+                &execution_workspace,
+            )
+            .map_err(ExecutionError::NativeFailure)?
+            .coerce(|lookup| -> Box<dyn ExclusionLookup + '_> { lookup }),
+        );
     }
 
-    Ok(compiled.finish(streams, statuses))
+    compiled.finish(streams, statuses)
 }
 
-/// Record how each of `ranked`'s candidates is bound into an exclusion lookup —
-/// see [`CandidateBinding`].
-///
-/// `ranked` is [`rank_candidates`]' answer over `rows`, one entry per row in row
-/// order, so the two are zipped rather than the lexical being rendered a second
-/// time. A candidate several strata named is recorded once: the dataset's id for a
-/// term does not depend on which read found it.
-fn index_candidates_into<D: DatasetView>(
+/// Native projected cells and original per-row evidence for materialized reads.
+struct MaterializedCells {
+    variables: purrdf_sparql_eval::AdmittedVec<purrdf_lex::allocation::SharedText>,
+    rows: purrdf_sparql_eval::AdmittedVec<crate::ScopedRow>,
+}
+
+fn materialize_cells_admitted<D: DatasetView + Sync>(
+    solutions: &purrdf_sparql_eval::InternedSolutions<'_, '_, D>,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<MaterializedCells, purrdf_sparql_eval::EvalError> {
+    let mut variables =
+        purrdf_sparql_eval::AdmittedVec::with_capacity(solutions.variables().len(), workspace)?;
+    for variable in solutions.variables() {
+        variables.push(workspace.authored_text(variable.as_str())?)?;
+    }
+    let mut rows = purrdf_sparql_eval::AdmittedVec::with_capacity(solutions.len(), workspace)?;
+    for row in solutions.rows() {
+        let mut cells = purrdf_sparql_eval::AdmittedVec::with_capacity(variables.len(), workspace)?;
+        for column in 0..variables.len() {
+            cells.push(solutions.try_cell_owned(row, column, workspace)?)?;
+        }
+        rows.push(crate::ScopedRow {
+            cells,
+            evidence: row.evidence().clone(),
+        })?;
+    }
+    Ok(MaterializedCells { variables, rows })
+}
+
+/// Zip original ranking with its cells without rendering lexical identity again.
+fn index_candidate_rows<'a, D: DatasetView, C: std::borrow::Borrow<TermValue> + 'a>(
     index: &mut CandidateIndex<D::Id>,
-    variables: &[String],
-    rows: &[Vec<Option<TermValue>>],
+    variables: &[impl AsRef<str>],
+    rows: impl IntoIterator<Item = &'a [Option<C>]>,
     ranked: &[(u64, Term, RowBlock)],
     dataset: &D,
 ) -> Result<(), ExecutionError> {
-    let Some(column) = variables.iter().position(|name| name == CANDIDATE_NAME) else {
+    let Some(column) = variables
+        .iter()
+        .position(|name| name.as_ref() == CANDIDATE_NAME)
+    else {
         return Ok(());
     };
     for ((_, term, _), row) in ranked.iter().zip(rows) {
         if let Some(value) = row.get(column).and_then(Option::as_ref) {
-            index_candidate(index, term, value, dataset)?;
+            index_candidate(index, term, value.borrow(), dataset)?;
         }
     }
     Ok(())
@@ -2044,16 +2765,27 @@ fn index_candidate<D: DatasetView>(
     if index.contains_key(term) {
         return Ok(());
     }
-    let binding = dataset
+    let identity = dataset
         .term_id_by_value(value)
         .map_err(|error| ExecutionError::SourceRead {
             reason: error.to_string(),
-        })?
-        .map_or_else(
-            || CandidateBinding::Value(value.clone()),
-            CandidateBinding::Id,
-        );
-    index.insert(term.clone(), binding);
+        })?;
+    let binding = match identity {
+        Some(id) => CandidateBinding::Id(id),
+        None => {
+            let workspace = index.workspace();
+            let value = workspace
+                .clone_term(value)
+                .map_err(ExecutionError::NativeFailure)?;
+            CandidateBinding::Value(
+                purrdf_sparql_eval::SharedWorkspace::new_admitted(value, workspace)
+                    .map_err(ExecutionError::NativeFailure)?,
+            )
+        }
+    };
+    index
+        .insert(term.clone(), binding)
+        .map_err(ExecutionError::NativeFailure)?;
     Ok(())
 }
 
@@ -2064,7 +2796,21 @@ fn index_candidate<D: DatasetView>(
 /// the ending is a claim about the rows beside it, and a caller holding one
 /// without the others could report an exhaustion that the dropped probe row had
 /// already falsified.
-type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
+type BoundedRead<R> = (R, StreamEnding, ProducerStatus);
+
+trait RankedRows: std::ops::Deref<Target = [(u64, Term, RowBlock)]> {
+    fn truncate_rows(&mut self, length: usize);
+}
+impl RankedRows for Vec<(u64, Term, RowBlock)> {
+    fn truncate_rows(&mut self, length: usize) {
+        self.truncate(length);
+    }
+}
+impl RankedRows for purrdf_sparql_eval::AdmittedVec<(u64, Term, RowBlock)> {
+    fn truncate_rows(&mut self, length: usize) {
+        self.truncate(length);
+    }
+}
 
 /// Cut `ranked` down to the stratum's `depth`, and say which ending that was.
 ///
@@ -2126,14 +2872,14 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 /// 32-bit bound cannot express. Without that refusal this comparison would be
 /// unsatisfiable at exactly that depth, and every such read — cut or not — would
 /// leave here as `Exhausted`.
-fn bound_to_depth(
-    mut ranked: Vec<(u64, Term, RowBlock)>,
+fn bound_to_depth<R: RankedRows>(
+    mut ranked: R,
     depth: u32,
     declared_rows: Option<u64>,
     declared_mode: BoundMode,
     reach: ReadReach,
     stratum: &Iri,
-) -> Result<BoundedRead, ExecutionError> {
+) -> Result<BoundedRead<R>, ExecutionError> {
     let ceiling = usize::try_from(depth).unwrap_or(usize::MAX);
     let pulled = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
     // Consulted against the declaration alone, before the depth is looked at,
@@ -2168,7 +2914,7 @@ fn bound_to_depth(
         });
     }
     if ranked.len() > ceiling {
-        ranked.truncate(ceiling);
+        ranked.truncate_rows(ceiling);
         let rank = u64::from(depth);
         return Ok((
             ranked,
@@ -2314,16 +3060,46 @@ fn sole_attestation(witness: &RelationWitness) -> Result<PfAttestation, String> 
 /// list that still looked complete. An unbound cell and an unrenderable value are
 /// therefore both refusals of the whole unit, returned as the reason the caller
 /// records as this stratum's [`ProducerStatus::ExecutionFailed`].
+#[cfg(test)]
 fn rank_candidates(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     domains: &CandidateDomains,
 ) -> Result<Vec<(u64, Term, RowBlock)>, String> {
-    let columns = CandidateColumns::locate(variables, domains)?;
-    let mut ranked = Vec::with_capacity(rows.len());
-    for (index, row) in rows.iter().enumerate() {
-        let rank = u64::try_from(index + 1).unwrap_or(u64::MAX);
-        ranked.push(columns.rank(row, rank)?);
+    rank_candidate_rows(
+        variables,
+        rows.iter().map(Vec::as_slice),
+        domains,
+        &purrdf_sparql_eval::WorkspaceCapability::resident(),
+    )
+    .map(|rows| {
+        rows.try_into_resident()
+            .expect("resident oracle retains no native account")
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn rank_candidate_rows<'a, C: std::borrow::Borrow<TermValue> + 'a>(
+    variables: &[impl AsRef<str> + fmt::Debug],
+    rows: impl IntoIterator<Item = &'a [Option<C>]>,
+    domains: &CandidateDomains,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<purrdf_sparql_eval::AdmittedVec<(u64, Term, RowBlock)>, purrdf_sparql_eval::EvalError> {
+    let columns = CandidateColumns::locate(variables, domains).map_err(|error| {
+        purrdf_sparql_eval::NativeDiagnostic::error(
+            purrdf_sparql_eval::NativeDiagnosticKind::Data,
+            error,
+            workspace,
+        )
+    })?;
+    let rows = rows.into_iter();
+    let mut ranked = purrdf_sparql_eval::AdmittedVec::with_capacity(rows.size_hint().0, workspace)?;
+    for (index, row) in rows.enumerate() {
+        let rank = index
+            .checked_add(1)
+            .and_then(|index| u64::try_from(index).ok())
+            .ok_or(purrdf_sparql_eval::EvalError::WorkspaceBoundOverflow)?;
+        ranked.push(columns.rank_admitted(row, rank, workspace)?)?;
     }
     Ok(ranked)
 }
@@ -2332,7 +3108,7 @@ fn rank_candidates(
 /// and applied to every row of it — materialised or produced on demand alike, so the
 /// two schedules rank a row by one reading of it.
 #[derive(Debug)]
-struct CandidateColumns {
+pub(crate) struct CandidateColumns {
     /// The `?candidate` column.
     candidate: usize,
     /// The `?block` column, present exactly when the producer declared a position to
@@ -2349,41 +3125,77 @@ impl CandidateColumns {
     ///
     /// Found by name rather than by position, because reading a position would make
     /// the candidate and the block depend on projection order.
-    fn locate(variables: &[String], domains: &CandidateDomains) -> Result<Self, String> {
+    pub(crate) fn locate(
+        variables: &[impl AsRef<str> + fmt::Debug],
+        domains: &CandidateDomains,
+    ) -> Result<Self, String> {
         let candidate = variables
             .iter()
-            .position(|name| name == CANDIDATE_NAME)
+            .position(|name| name.as_ref() == CANDIDATE_NAME)
             .ok_or_else(|| {
                 format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
             })?;
         Ok(Self {
             candidate,
-            block: variables.iter().position(|name| name == BLOCK_NAME),
+            block: variables
+                .iter()
+                .position(|name| name.as_ref() == BLOCK_NAME),
             entailed: entailed_block(domains),
         })
     }
 
-    /// The ranked `(rank, candidate, block)` reading of one solution row at `rank`.
-    fn rank(&self, row: &[Option<TermValue>], rank: u64) -> Result<(u64, Term, RowBlock), String> {
+    /// One ranked row retains the native producer's original lexical authority.
+    pub(crate) fn rank_admitted<C: std::borrow::Borrow<TermValue>>(
+        &self,
+        row: &[Option<C>],
+        rank: u64,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<(u64, Term, RowBlock), purrdf_sparql_eval::EvalError> {
         let value = row
             .get(self.candidate)
             .and_then(Option::as_ref)
             .ok_or_else(|| {
-                format!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}")
+                purrdf_sparql_eval::NativeDiagnostic::error(
+                    purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                    format_args!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}"),
+                    workspace,
+                )
             })?;
+        let value = value.borrow();
         let block = match self.block {
             None => self.entailed.clone(),
-            Some(column) => row_block(row.get(column).and_then(Option::as_ref), rank)?,
+            Some(column) => row_block_admitted(
+                row.get(column)
+                    .and_then(Option::as_ref)
+                    .map(std::borrow::Borrow::borrow),
+                rank,
+                workspace,
+            )?,
         };
-        let candidate = term_candidate(value).map_err(|error| {
-            format!("the projected ?{CANDIDATE_NAME} column in row {rank} names no term: {error}")
-        })?;
+        let candidate = crate::render::candidate_lexical_admitted(value, workspace)
+            .map(Term::from_admitted)
+            .map_err(|error| {
+                if error.is_native_storage_failure() {
+                    error
+                } else {
+                    purrdf_sparql_eval::NativeDiagnostic::error(
+                        purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                        format_args!("row {rank} names no term: {error}"),
+                        workspace,
+                    )
+                }
+            })?;
         Ok((rank, candidate, block))
     }
 
     /// The candidate cell of `row`, when it is bound.
-    fn candidate_of<'r>(&self, row: &'r [Option<TermValue>]) -> Option<&'r TermValue> {
-        row.get(self.candidate).and_then(Option::as_ref)
+    fn candidate_of<'r, C: std::borrow::Borrow<TermValue>>(
+        &self,
+        row: &'r [Option<C>],
+    ) -> Option<&'r TermValue> {
+        row.get(self.candidate)
+            .and_then(Option::as_ref)
+            .map(std::borrow::Borrow::borrow)
     }
 }
 
@@ -2397,6 +3209,8 @@ impl CandidateColumns {
 /// `DepthReached`; a producer that runs out ends it `Exhausted`, or
 /// `RowBoundReached` where it filled a depth it could not be asked past.
 struct CallRead<'d, D: DatasetView + Sync> {
+    /// Native ownership authority shared by the producer and ranked identities.
+    workspace: purrdf_sparql_eval::WorkspaceCapability,
     /// The stratum this read is for.
     stratum: Iri,
     /// The open invocation.
@@ -2413,9 +3227,13 @@ struct CallRead<'d, D: DatasetView + Sync> {
     reach: ReadReach,
     /// The rows the invocation has returned, the probe row included once read.
     materialised: u64,
+    /// Established ranks advance independently of unknown scope rows.
+    established: u64,
+    /// The original live receipt, sharing the actual admitted row owner.
+    retained: Option<crate::ScopedRows>,
     /// The index an exclusion lookup binds candidates through, when any stratum of
     /// this execution compiled one.
-    candidates: Option<Rc<RefCell<CandidateIndex<D::Id>>>>,
+    candidates: Option<purrdf_sparql_eval::SharedWorkspace<RefCell<CandidateIndex<D::Id>>>>,
     /// The caller's dataset, which a candidate is resolved against for that index.
     dataset: &'d D,
 }
@@ -2437,87 +3255,177 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
     }
 
     fn pull(&mut self) -> Result<ReadStep, ReadFault> {
-        let isolated = |reason: String| ReadFault {
+        let invalidated = |reason: String| ReadFault::Producer {
             reason,
-            whole_run: false,
+            whole_run: true,
         };
-        let Some(row) = self
-            .cursor
-            .next_row(self.dataset)
-            .map_err(|error| ReadFault {
-                whole_run: matches!(error, purrdf_sparql_eval::EvalError::SourceRead(_)),
-                reason: error.to_string(),
-            })?
-        else {
-            // Ran out. A caller's own text is the stopper nobody observed past, and
-            // the ending names it, exactly as `bound_to_depth` does: a `LIMIT` inside
-            // that text may have cut the read before this layer's bound was reached.
-            // Filling a depth the read could not be taken past is the producer's own
-            // bound stopping it, which nobody could observe past either; anything
-            // else is a verified exhaustion.
-            let ending = match self.reach {
-                ReadReach::Unknown => StreamEnding::SuppliedQueryEnded {
-                    rank: self.materialised,
-                },
-                ReadReach::AtDepth if self.materialised == u64::from(self.depth) => {
-                    StreamEnding::RowBoundReached {
-                        rank: u64::from(self.depth),
+        loop {
+            let row = self
+                .cursor
+                .next_admitted_row(self.dataset)
+                .map_err(|error| ReadFault::invocation(error, self.retained.is_some()))?;
+            if let Some(retained) = &self.retained {
+                retained
+                    .retain_search(self.cursor.search_evidence())
+                    .map_err(ReadFault::Native)?;
+            } else if !self.cursor.search_evidence().is_virtual() {
+                return Err(invalidated(
+                    "an unscoped ranked read cannot discard original search evidence".to_owned(),
+                ));
+            }
+            let Some(row) = row else {
+                // Ran out. A caller's own text is the stopper nobody observed past, and
+                // the ending names it, exactly as `bound_to_depth` does: a `LIMIT` inside
+                // that text may have cut the read before this layer's bound was reached.
+                // Filling a depth the read could not be taken past is the producer's own
+                // bound stopping it, which nobody could observe past either; anything
+                // else is a verified exhaustion.
+                let ending = match self.reach {
+                    ReadReach::Unknown => StreamEnding::SuppliedQueryEnded {
+                        rank: self.established,
+                    },
+                    ReadReach::AtDepth if self.established == u64::from(self.depth) => {
+                        StreamEnding::RowBoundReached {
+                            rank: u64::from(self.depth),
+                        }
                     }
-                }
-                ReadReach::AtBound(bound) if self.materialised == bound => {
-                    StreamEnding::RowBoundReached { rank: bound }
-                }
-                ReadReach::AtDepth | ReadReach::AtBound(_) | ReadReach::PastDepth => {
-                    StreamEnding::Exhausted
-                }
+                    ReadReach::AtBound(bound) if self.established == bound => {
+                        StreamEnding::RowBoundReached { rank: bound }
+                    }
+                    ReadReach::AtDepth | ReadReach::AtBound(_) | ReadReach::PastDepth => {
+                        StreamEnding::Exhausted
+                    }
+                };
+                return Ok(ReadStep::Ended(ending));
             };
-            return Ok(ReadStep::Ended(ending));
-        };
-        self.materialised += 1;
-        if let Some(declared) = self.declared_rows
-            && self.materialised > declared
-        {
-            return Err(ReadFault {
-                reason: ExecutionError::RowBoundBreached {
-                    stratum: Box::new(self.stratum.clone()),
-                    declared,
-                    pulled: self.materialised,
-                    mode: self.declared_mode,
-                }
-                .to_string(),
-                whole_run: true,
-            });
-        }
-        if self.materialised > u64::from(self.depth) {
-            // The probe row: never emitted, and its arrival is the ending.
-            return Ok(ReadStep::Ended(StreamEnding::DepthReached {
-                rank: u64::from(self.depth),
-            }));
-        }
-        let ranked = self
-            .columns
-            .rank(&row, self.materialised)
-            .map_err(|reason| isolated(format!("stratum {}: {reason}", self.stratum)))?;
-        if let Some(index) = &self.candidates
-            && let Some(value) = self.columns.candidate_of(&row)
-        {
-            index_candidate(&mut index.borrow_mut(), &ranked.1, value, self.dataset).map_err(
-                |error| ReadFault {
-                    reason: error.to_string(),
+            self.materialised = self
+                .materialised
+                .checked_add(1)
+                .ok_or_else(|| invalidated("physical row count overflow".to_owned()))?;
+            if let Some(declared) = self.declared_rows
+                && self.materialised > declared
+            {
+                return Err(ReadFault::Producer {
+                    reason: ExecutionError::RowBoundBreached {
+                        stratum: Box::new(self.stratum.clone()),
+                        declared,
+                        pulled: self.materialised,
+                        mode: self.declared_mode,
+                    }
+                    .to_string(),
                     whole_run: true,
-                },
-            )?;
+                });
+            }
+            let unknown = row.evidence.is_undecided();
+            if self.retained.is_none() && !row.evidence.is_virtual() {
+                return Err(invalidated(
+                    "an unscoped ranked read cannot discard original row evidence".to_owned(),
+                ));
+            }
+            let ranked = if unknown {
+                None
+            } else {
+                self.established = self
+                    .established
+                    .checked_add(1)
+                    .ok_or_else(|| invalidated("established rank overflow".to_owned()))?;
+                Some(
+                    self.columns
+                        .rank_admitted(&row.cells, self.established, &self.workspace)
+                        .map_err(|error| ReadFault::invocation(error, self.retained.is_some()))?,
+                )
+            };
+            if let Some(index) = &self.candidates
+                && let Some(ranked) = &ranked
+                && let Some(value) = self.columns.candidate_of(&row.cells)
+            {
+                index_candidate(&mut index.borrow_mut(), &ranked.1, value, self.dataset).map_err(
+                    |error| match error {
+                        ExecutionError::NativeFailure(error) => ReadFault::Native(error),
+                        error => ReadFault::Producer {
+                            reason: error.to_string(),
+                            whole_run: true,
+                        },
+                    },
+                )?;
+            }
+            if let Some(retained) = &self.retained {
+                retained
+                    .push(crate::ScopedRow {
+                        cells: row.cells,
+                        evidence: row.evidence,
+                    })
+                    .map_err(ReadFault::Native)?;
+            }
+            let Some(ranked) = ranked else {
+                continue;
+            };
+            if self.established > u64::from(self.depth) {
+                return Ok(ReadStep::Ended(StreamEnding::DepthReached {
+                    rank: u64::from(self.depth),
+                }));
+            }
+            return Ok(ReadStep::Row(ranked));
         }
-        Ok(ReadStep::Row(ranked))
     }
 
     fn materialised(&self) -> u64 {
         self.materialised
     }
 
-    fn settle(&self) -> Result<PfAttestation, String> {
-        let witness = self.cursor.settle().map_err(|error| error.to_string())?;
-        sole_attestation(&witness)
+    fn settle(&mut self) -> Result<PfAttestation, ReadFault> {
+        if let Some(retained) = &self.retained {
+            while let Some(row) = self
+                .cursor
+                .next_admitted_row(self.dataset)
+                .map_err(ReadFault::Native)?
+            {
+                self.materialised = self.materialised.checked_add(1).ok_or(ReadFault::Native(
+                    purrdf_sparql_eval::EvalError::WorkspaceBoundOverflow,
+                ))?;
+                if self
+                    .declared_rows
+                    .is_some_and(|bound| self.materialised > bound)
+                {
+                    return Err(ReadFault::Producer {
+                        reason: "scoped producer exceeded its original physical row declaration"
+                            .to_owned(),
+                        whole_run: true,
+                    });
+                }
+                retained
+                    .push(crate::ScopedRow {
+                        cells: row.cells,
+                        evidence: row.evidence,
+                    })
+                    .map_err(ReadFault::Native)?;
+            }
+        }
+        let witness = self
+            .cursor
+            .settle()
+            .map_err(|error| ReadFault::invocation(error, self.retained.is_some()))?;
+        let search = self
+            .cursor
+            .settled_search_evidence()
+            .map_err(ReadFault::Native)?;
+        if let Some(retained) = &self.retained {
+            retained.retain_search(&search).map_err(ReadFault::Native)?;
+        } else if !search.is_virtual() {
+            return Err(ReadFault::Producer {
+                reason: "an unscoped ranked read cannot discard original search evidence"
+                    .to_owned(),
+                whole_run: true,
+            });
+        }
+        let attested = sole_attestation(&witness).map_err(|reason| ReadFault::Producer {
+            reason,
+            whole_run: true,
+        })?;
+        if let Some(retained) = &self.retained {
+            retained.finish().map_err(ReadFault::Native)?;
+        }
+        Ok(attested)
     }
 }
 
@@ -2563,32 +3471,46 @@ fn entailed_block(domains: &CandidateDomains) -> RowBlock {
 /// producer that cannot name a block for one of its rows has not declared a
 /// narrower domain — it has declared one it cannot back, and that is refused where
 /// it is observed.
-fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
+fn row_block_admitted(
+    value: Option<&TermValue>,
+    rank: u64,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<RowBlock, purrdf_sparql_eval::EvalError> {
     let value = value.ok_or_else(|| {
-        format!(
-            "the projected ?{BLOCK_NAME} column is unbound in row {rank}, so that row names \
+        purrdf_sparql_eval::NativeDiagnostic::error(
+            purrdf_sparql_eval::NativeDiagnosticKind::Data,
+            format_args!(
+                "the projected ?{BLOCK_NAME} column is unbound in row {rank}, so that row names \
                  no block of the candidate universe; a producer that declares a block column owes \
                  a block on every row"
+            ),
+            workspace,
         )
     })?;
     match value {
         // Parsed, never trusted: the tag reaches a consumer that compares it
         // against a host's declared blocks, and a cell that is not an IRI cannot
-        // be one of those. `DomainTag::parse` is the same validation the registry
+        // be one of those. The admitted IRI home uses the same validation the registry
         // applied to the declaration, so the two sides are compared after one
         // rule rather than two.
-        TermValue::Iri(text) => DomainTag::parse(text)
+        TermValue::Iri(text) => DomainTag::parse_admitted(text, workspace)
             .map(RowBlock::Declared)
             .map_err(|error| {
-                format!(
-                    "the projected ?{BLOCK_NAME} column in row {rank} is <{text}>, which is not a \
-                 valid IRI and so names no block: {error}"
-                )
+                if matches!(&error, purrdf_sparql_eval::EvalError::NativeDiagnostic(diagnostic)
+                    if diagnostic.kind() == purrdf_sparql_eval::NativeDiagnosticKind::Data)
+                {
+                    purrdf_sparql_eval::NativeDiagnostic::error(purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                        format_args!("the projected ?{BLOCK_NAME} column in row {rank} is <{text}>, which is not a valid IRI and so names no block: {error}"), workspace)
+                } else {
+                    // Physical refusals keep their original typed cause; rendering
+                    // a grammar explanation after admission failed would hide it.
+                    error
+                }
             }),
-        other => Err(format!(
+        other => Err(purrdf_sparql_eval::NativeDiagnostic::error(purrdf_sparql_eval::NativeDiagnosticKind::Data, format_args!(
             "the projected ?{BLOCK_NAME} column in row {rank} is {other:?}, and a block of the \
              candidate universe is named by an IRI"
-        )),
+        ), workspace)),
     }
 }
 
@@ -2612,6 +3534,7 @@ fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
 /// or a tag that is not a `LANGTAG` — is refused: it is not well-formed RDF, and
 /// dropping the tag or direction to write it would name the plain literal of the
 /// same lexical form instead, a different term.
+#[cfg(test)]
 fn term_candidate(value: &TermValue) -> Result<Term, RenderError> {
     candidate_lexical(value).map(Term::new)
 }
@@ -2688,7 +3611,8 @@ mod tests {
         provider
             .refuse
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let mut candidates = super::CandidateIndex::default();
+        let mut candidates =
+            super::CandidateIndex::new(&purrdf_sparql_eval::WorkspaceCapability::resident());
         let error = super::index_candidate(&mut candidates, &term, &value, &source).unwrap_err();
         assert!(matches!(error, ExecutionError::SourceRead { .. }));
         assert_eq!(candidates.len(), 0);
