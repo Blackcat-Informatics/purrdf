@@ -728,8 +728,8 @@ impl XsdError {
     ///   integer type;
     /// * [`ErrorCode::Foca0001`] / [`ErrorCode::Foca0003`] / [`ErrorCode::Foca0006`]
     ///   — a value narrowed to a machine-word representation that cannot hold it
-    ///   ([`exact::Decimal::to_bounded`], [`exact::Integer::to_i128`], and the bounded
-    ///   decimal parser [`crate::numeric::parse_decimal`]); [`parse`] itself never raises them, since
+    ///   ([`exact::Decimal::to_bounded`] and [`exact::Integer::to_i128`]);
+    ///   [`parse`] itself never raises them, since
     ///   `xsd:integer` and `xsd:decimal` are unbounded;
     /// * [`ErrorCode::Xpty0004`] — an operand of the wrong type.
     ///

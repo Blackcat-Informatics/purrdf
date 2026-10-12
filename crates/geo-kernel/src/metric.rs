@@ -107,8 +107,8 @@ impl XsdDoubleMetres {
     /// # Errors
     ///
     /// Refuses an incompatible floating environment or a nonfinite promoted result.
-    pub fn from_decimal(value: numeric::Decimal) -> Result<Self, GeoError> {
-        Self::from_xsd(&XsdValue::Decimal(value))
+    pub fn from_decimal(value: purrdf_xsd::exact::Decimal) -> Result<Self, GeoError> {
+        Self::from_xsd(&XsdValue::from_exact_decimal(value))
     }
 
     /// Promote an XSD integer through the shared numeric home.

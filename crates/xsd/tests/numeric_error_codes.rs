@@ -120,8 +120,8 @@ fn tower_refusals_name_their_code() {
     assert_eq!(fine.to_bounded().unwrap_err().code(), ErrorCode::Foca0001);
     let coarse: exact::Decimal = "0.000000000000000001".parse().expect("a decimal");
     assert!(coarse.to_bounded().is_ok());
-    // The public integer reader keeps the exact value; explicit narrowing owns
-    // the integer range code. Decimal's bounded reader is migrated separately.
+    // Both public readers keep exact values; explicit narrowing owns the
+    // machine-word range codes.
     assert_eq!(
         purrdf_xsd::numeric::parse_integer(&past)
             .expect("an exact integer")
@@ -130,9 +130,21 @@ fn tower_refusals_name_their_code() {
     );
     assert_eq!(
         purrdf_xsd::numeric::parse_decimal("0.1000000000000000001")
-            .unwrap_err()
+            .expect("exact decimal")
+            .canonical_lexical(),
+        "0.1000000000000000001"
+    );
+    assert_eq!(
+        purrdf_xsd::numeric::parse_decimal(&past)
+            .expect("large exact decimal")
+            .canonical_lexical(),
+        past
+    );
+    assert_eq!(
+        purrdf_xsd::numeric::parse_decimal("1e3")
+            .expect_err("an exponent is not a decimal lexical")
             .code(),
-        Some(ErrorCode::Foca0006)
+        Some(ErrorCode::Forg0001)
     );
     assert!(purrdf_xsd::numeric::parse_decimal("0.100000000000000001").is_ok());
 }

@@ -13,10 +13,10 @@
 //! a threshold.
 //!
 //! - `xsd_exact_small/*/{exact,bounded}` — the same 1024 operations over values
-//!   inside `i128`, through the tower (`Integer`, `Decimal`) and through the
-//!   bounded `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`,
-//!   `parse_decimal`, `Decimal::to_f64`). The tower's inline representation is
-//!   what keeps the left column close to the right one.
+//!   inside `i128`, through the tower (`Integer`, `Decimal`) and the current
+//!   hybrid `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`).
+//!   Division on this hybrid path already uses the exact tower; historical 3.x
+//!   bounded instruction counts require a separate baseline checkout.
 //! - `xsd_exact_growth/*/<digits>` — one operation on operands of 40 to 40 000
 //!   decimal digits: binary addition stays linear; decimal parsing and rendering
 //!   include base conversion, products grow as Karatsuba's `n^1.585`, and
@@ -121,8 +121,8 @@ fn bench_small(c: &mut Bench) {
         .iter()
         .map(|(a, b)| {
             (
-                XsdValue::Decimal(parse_decimal(a).expect("valid")),
-                XsdValue::Decimal(parse_decimal(b).expect("valid")),
+                XsdValue::from_exact_decimal(parse_decimal(a).expect("valid")),
+                XsdValue::from_exact_decimal(parse_decimal(b).expect("valid")),
             )
         })
         .collect();
@@ -217,7 +217,7 @@ fn bench_small(c: &mut Bench) {
             black_box(len)
         });
     });
-    group.bench_function("decimal_parse_canonical/bounded", |b| {
+    group.bench_function("decimal_parse_canonical/public", |b| {
         b.iter(|| {
             let mut len = 0;
             for (text, _) in &decimals {
@@ -324,7 +324,7 @@ fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
         let (whole, fraction) = digits.split_at(12 - scale.min(12));
         let fraction = format!("{fraction:0>scale$}");
         let text = format!("{}.{fraction}", if whole.is_empty() { "0" } else { whole });
-        XsdValue::Decimal(parse_decimal(&text).expect("a bounded decimal"))
+        XsdValue::from_exact_decimal(parse_decimal(&text).expect("an exact decimal"))
     };
     (0..SMALL_OPS)
         .map(|_| (one(&mut state), one(&mut state)))

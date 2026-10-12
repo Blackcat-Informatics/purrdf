@@ -39,7 +39,7 @@ use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
 #[cfg(test)]
-use crate::numeric::parse_decimal;
+use crate::numeric::read_decimal as parse_decimal;
 use crate::numeric::{Decimal, align_decimals, decimal_div_raw, decimal_mul_raw};
 use crate::value::{XsdError, XsdValue};
 
@@ -170,18 +170,18 @@ impl Duration {
     ///
     /// ```
     /// use purrdf_xsd::XsdDatatype;
-    /// use purrdf_xsd::numeric::parse_decimal;
+    /// use purrdf_xsd::numeric::Decimal;
     /// use purrdf_xsd::temporal::Duration;
     ///
     /// // 12 months, zero seconds: sign-coherent (seconds is zero, so only the
     /// // months sign matters), constructs fine.
-    /// let d = Duration::new(12, parse_decimal("0").unwrap(), XsdDatatype::Duration).unwrap();
+    /// let d = Duration::new(12, Decimal::from_integer(0), XsdDatatype::Duration).unwrap();
     /// assert_eq!(d.canonical_lexical(), "P1Y");
     ///
     /// // 1 month against -1 second: strictly opposite signs lie outside the
     /// // value space's lexical mapping, so construction is refused outright
     /// // rather than rendering a wrong string.
-    /// let neg_one_sec = parse_decimal("-1").unwrap();
+    /// let neg_one_sec = Decimal::from_integer(-1);
     /// assert!(Duration::new(1, neg_one_sec, XsdDatatype::Duration).is_err());
     /// ```
     pub fn new(months: i64, seconds: Decimal, datatype: XsdDatatype) -> Result<Self, XsdError> {

@@ -494,13 +494,18 @@ pub(crate) fn read_integer_typed(
 }
 
 /// `xsd:decimal`: optional sign, digits with an optional single `.` (at least one
-/// digit overall; `.5`, `1.`, `1.5`, `12` all valid).
-pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
-    read_decimal(s).map_err(|error| error.owned(XsdDatatype::Decimal, s))
+/// digit overall; `.5`, `1.`, `1.5`, `12` all valid), at any coefficient size or
+/// fractional scale representable by the exact tower.
+///
+/// # Errors
+/// Returns a lexical or scale error without narrowing to the old decimal type.
+pub fn parse_decimal(s: &str) -> Result<crate::exact::Decimal, XsdError> {
+    s.parse().map_err(XsdError::Exact)
 }
 
 /// A borrowed classification of the bounded numeric readers. Exact fallback
 /// and physical sizing inspect it without first allocating an owned diagnostic.
+#[derive(Debug)]
 pub(crate) enum NumericReadError {
     Invalid(&'static str),
     OutOfRange(&'static str),
@@ -2828,8 +2833,12 @@ mod tests {
         }
     }
 
+    fn parse_bounded_decimal(s: &str) -> Result<Decimal, XsdError> {
+        read_decimal(s).map_err(|error| error.owned(XsdDatatype::Decimal, s))
+    }
+
     fn dec(s: &str) -> Decimal {
-        parse_decimal(s).unwrap()
+        parse_bounded_decimal(s).unwrap()
     }
 
     fn int_val(n: i128) -> XsdValue {
@@ -3477,7 +3486,7 @@ mod tests {
     // ── Arithmetic tests ─────────────────────────────────────────────────────
 
     fn dec_val(s: &str) -> XsdValue {
-        XsdValue::Decimal(parse_decimal(s).unwrap())
+        XsdValue::Decimal(parse_bounded_decimal(s).unwrap())
     }
 
     fn float_val(f: f32) -> XsdValue {
@@ -3665,7 +3674,7 @@ mod tests {
         // IEEE double: 0.1 + 0.2 ≠ 0.3; exact decimal: 0.1 + 0.2 == 0.3.
         let result = numeric_add(&dec_val("0.1"), &dec_val("0.2")).unwrap();
         let d = as_decimal(&result);
-        let expected = parse_decimal("0.3").unwrap();
+        let expected = parse_bounded_decimal("0.3").unwrap();
         assert_eq!(
             d.cmp_exact(&expected),
             Ordering::Equal,
@@ -3788,7 +3797,7 @@ mod tests {
             "expected Decimal, got {result:?}"
         );
         let d = as_decimal(&result);
-        let expected = parse_decimal("4.5").unwrap();
+        let expected = parse_bounded_decimal("4.5").unwrap();
         assert_eq!(
             d.cmp_exact(&expected),
             Ordering::Equal,
@@ -4329,7 +4338,7 @@ mod tests {
     #[test]
     fn decimal_mantissa_spans_the_whole_i128_range() {
         let min = i128::MIN.to_string();
-        let parsed = parse_decimal(&min).expect("i128::MIN is a decimal");
+        let parsed = parse_bounded_decimal(&min).expect("i128::MIN is a decimal");
         assert_eq!(parsed.mantissa(), i128::MIN);
         assert_eq!(parsed.canonical_lexical(), min);
         assert_eq!(
@@ -4337,10 +4346,11 @@ mod tests {
             min,
             "the canonical lexical of the cast reads back"
         );
-        let scaled = parse_decimal("-170141183460469231731.687303715884105728").expect("scaled");
+        let scaled =
+            parse_bounded_decimal("-170141183460469231731.687303715884105728").expect("scaled");
         assert_eq!((scaled.mantissa(), scaled.scale()), (i128::MIN, 18));
         assert_eq!(
-            parse_decimal(&i128::MAX.to_string())
+            parse_bounded_decimal(&i128::MAX.to_string())
                 .expect("max")
                 .mantissa(),
             i128::MAX
@@ -4352,7 +4362,10 @@ mod tests {
             "-170141183460469231731.687303715884105729",
         ] {
             assert!(
-                matches!(parse_decimal(beyond), Err(XsdError::OutOfRange { .. })),
+                matches!(
+                    parse_bounded_decimal(beyond),
+                    Err(XsdError::OutOfRange { .. })
+                ),
                 "{beyond}"
             );
         }
