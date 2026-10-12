@@ -1401,6 +1401,22 @@ export class ServiceCatalog {
 export interface PurrdfError extends Error {
   readonly code: string;
   /**
+   * Original `purrdf-diagnostic-v1` record for native storage refusal. Its optional
+   * `capacity` record carries `space`, `attempted` and `limit`; both counts are exact
+   * decimal strings. Present on synchronous and asynchronous storage failures alike.
+   */
+  readonly diagnostic?: {
+    readonly schema: "purrdf-diagnostic-v1";
+    readonly severity: string;
+    readonly code: string;
+    readonly message: string;
+    readonly capacity?: {
+      readonly space: string;
+      readonly attempted: string;
+      readonly limit: string;
+    };
+  };
+  /**
    * The failure's typed condition, when it carries one. A SPARQL parse failure
    * (`code` `native-sparql-query-parse` or `native-sparql-update-parse`) carries its
    * `sparql-parse-*` identity and typed parameters, so its kind and byte offset are read

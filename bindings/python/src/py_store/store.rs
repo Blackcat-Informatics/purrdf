@@ -14,28 +14,24 @@
 //! `_store_capsule` hands `purrdf_shapes` / `purrdf_validate` a stable
 //! `Arc<RdfDataset>` snapshot under the `c"purrdf-validation-dataset"` capsule name.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use purrdf_core::ir::MutableDataset;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
-use super::io::{
-    PyRdfFormat, dataset_from_quads_verbatim, declare_loaded_graphs, parse_quads_and_prefixes,
-    read_input,
-};
+use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
+use super::load::insert_loaded_document;
 use super::presentation;
 use super::quad_store::PyQuadStore;
 use super::query::{
     EngineConfig, build_engine, build_relations, collect_relations, engine_parser_options,
 };
-use super::term::{PyQuad, extract_graph_name, rdf_quad_to_values, rdf_quad_to_values_scoped};
+use super::term::{PyQuad, extract_graph_name, rdf_quad_to_values};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::{iri_read_value_error, iri_value_error};
 use crate::{
-    BlankScope, DatasetMut, RdfQuad, RdfTerm, SerializeGraph, SerializeOptions, StatementLayer,
+    DatasetMut, RdfQuad, RdfTerm, SerializeGraph, SerializeOptions, StatementLayer,
     serialize_dataset_with,
 };
 
@@ -50,7 +46,7 @@ use crate::{
 pub struct PyStore {
     /// Monotonic per-load counter that isolates blank-node label scopes across
     /// separate [`load`](PyStore::load) calls (see [`load`](PyStore::load) for why).
-    next_load_scope: AtomicU64,
+    next_load_scope: u64,
 }
 
 #[pymethods]
@@ -59,11 +55,8 @@ impl PyStore {
     #[pyo3(signature = (*, remember_empty_graphs=false))]
     fn new(remember_empty_graphs: bool) -> PyResult<PyClassInitializer<Self>> {
         Ok(
-            PyClassInitializer::from(PyQuadStore::empty(remember_empty_graphs)?).add_subclass(
-                Self {
-                    next_load_scope: AtomicU64::new(1),
-                },
-            ),
+            PyClassInitializer::from(PyQuadStore::empty(remember_empty_graphs)?)
+                .add_subclass(Self { next_load_scope: 1 }),
         )
     }
 
@@ -94,23 +87,22 @@ impl PyStore {
         // isolation by tagging every parsed blank node's label with a per-load-call-unique `BlankScope` before insertion.
         // `parse` / `parse_quads` keep labels verbatim — that path round-trips a single
         // document, where verbatim labels are correct and canonicalization needs them.
-        let scope = BlankScope(slf.next_load_scope() as u32);
+        let mut next_scope = slf.next_load_scope;
+        let next_scope_ref = &mut next_scope;
         let inner = &mut slf.as_super().inner;
         // Parse + insert run detached (GIL released); the closure only touches
         // plain Rust data.
-        py.detach(move || {
+        let result = py.detach(move || {
             let base_ref = base.as_deref();
             let (quads, prefixes, declared) =
                 parse_quads_and_prefixes(&data, format.to_native(), base_ref)
-                    .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?;
-            for quad in quads {
-                inner
-                    .insert(rdf_quad_to_values_scoped(&quad, scope))
-                    .map_err(|e| iri_read_value_error(&e))?;
-            }
-            declare_loaded_graphs(inner, declared, scope)?;
+                    .map_err(|e| presentation::value_error(format!("load error: {e}"), &e))?;
+            insert_loaded_document(inner, &quads, declared, next_scope_ref)
+                .map_err(super::load_value_error)?;
             Ok(prefixes)
-        })
+        });
+        slf.next_load_scope = next_scope;
+        result
     }
 
     /// Alias of [`load`] — bulk loading is not a different semantics, so the
@@ -443,7 +435,7 @@ impl PyStore {
                 ),
             };
             let dataset = dataset_from_quads_verbatim(&quads, &declared)
-                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
+                .map_err(|e| presentation::value_error(format!("dump error: {e}"), &e))?;
             // ONE serialization call, not a configured/unconfigured pair: the JSON-LD
             // options are an axis of the same options value the base and the graph
             // selection travel on, so a base cannot reach one arm and miss the other.
@@ -458,7 +450,7 @@ impl PyStore {
                 },
             )
             .map(|outcome| outcome.bytes)
-            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+            .map_err(|e| presentation::value_error(format!("dump error: {e}"), &e))
         })?;
         match output {
             Some(output) => {
@@ -467,13 +459,6 @@ impl PyStore {
             }
             None => Ok(Some(PyBytes::new(py, &buf).unbind())),
         }
-    }
-}
-
-impl PyStore {
-    /// The next per-load blank scope ordinal (monotonic, wrapping past 1).
-    fn next_load_scope(&self) -> u64 {
-        self.next_load_scope.fetch_add(1, Ordering::Relaxed)
     }
 }
 

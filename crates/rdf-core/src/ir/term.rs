@@ -624,9 +624,31 @@ impl TermValue {
         literal: &RdfLiteral,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Self::from_literal_in_scope_with_memory(literal, BlankScope::DEFAULT, memory)
+    }
+
+    fn from_literal_in_scope_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        literal: &RdfLiteral,
+        scope: BlankScope,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
         memory.scope(|memory| {
+            let lexical = if scope == BlankScope::DEFAULT {
+                std::borrow::Cow::Borrowed(literal.lexical_form.as_str())
+            } else {
+                crate::cdt_blank::bind_cdt_blank_labels_unchecked_with_memory(
+                    &literal.lexical_form,
+                    literal.datatype_iri(),
+                    crate::cdt_blank::BlankBinding::Ambient(scope),
+                    memory,
+                )?
+            };
+            let lexical_form = match lexical {
+                std::borrow::Cow::Borrowed(lexical) => memory.string(lexical)?,
+                std::borrow::Cow::Owned(lexical) => lexical,
+            };
             Ok(Self::Literal {
-                lexical_form: memory.string(&literal.lexical_form)?,
+                lexical_form,
                 datatype: memory.string(literal.datatype_iri())?,
                 language: literal
                     .language
@@ -660,6 +682,8 @@ impl TermValue {
     ///   isolation a caller asks for when it loads one document's blanks apart from
     ///   every other's (C0.2).
     ///
+    /// A non-default scope also binds blank labels inside composite literals through
+    /// the owned-model CDT bridge; it does not revalidate their document grammar.
     /// A triple term is converted bottom-up over [`RdfTerm::try_fold`]'s work list.
     #[must_use]
     pub fn from_rdf_term_in_scope(term: &RdfTerm, scope: BlankScope) -> Self {
@@ -678,8 +702,9 @@ impl TermValue {
                         label: label.clone(),
                         scope,
                     },
-                    RdfTerm::Literal(literal) => Self::from_literal_with_memory(
+                    RdfTerm::Literal(literal) => Self::from_literal_in_scope_with_memory(
                         literal,
+                        scope,
                         &mut purrdf_lex::allocation::Memory::new(
                             &mut purrdf_lex::allocation::Resident,
                         ),
@@ -1894,6 +1919,33 @@ mod conversion_tests {
                 scoped("c", 0)
             )
         );
+    }
+
+    #[test]
+    fn owned_scoped_conversion_binds_composite_blanks_inside_triples() {
+        let term = RdfTerm::triple(RdfTriple::new(
+            RdfTerm::blank_node("same"),
+            format!("{EX}p"),
+            RdfTerm::literal(RdfLiteral::typed(
+                "[_:same, <<( _:other <http://example.org/p> _:same )>>]",
+                purrdf_cdt::CDT_LIST,
+            )),
+        ));
+        for scope in [BlankScope::DEFAULT, BlankScope(u32::MAX)] {
+            let value = TermValue::from_rdf_term_in_scope(&term, scope);
+            let mut identities = Vec::new();
+            let _ = value.visit_blank_identities(|label, actual| {
+                identities.push((label.to_owned(), actual));
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            assert_eq!(identities.len(), 4);
+            assert!(identities.iter().all(|(_, actual)| *actual == scope));
+            assert_eq!(identities[0].0, identities[1].0);
+            assert_eq!(
+                TermValue::from_rdf_term(&value.to_rdf_term().unwrap()),
+                value
+            );
+        }
     }
 
     /// The owned literal's implied datatype is expanded and its tag lowercased, which is

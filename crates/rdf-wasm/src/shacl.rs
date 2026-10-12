@@ -149,10 +149,12 @@ impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
 }
 
 /// Reject with the shapes-graph error's JS form: a [`ShaclImportError`] for the import
-/// refusal, a plain `Error` carrying [`shapes_error_message`] for anything else.
+/// refusal, the original diagnostic for storage refusal, and a plain `Error` carrying
+/// [`shapes_error_message`] for anything else.
 fn shapes_rejection(error: ShapesError) -> JsValue {
     match error {
         ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
+        ShapesError::Storage(error) => crate::operation::diagnostic_to_js(error.into()),
         other => JsError::new(&shapes_error_message(&other)).into(),
     }
 }
@@ -1951,6 +1953,7 @@ impl ShaclFailure for ShapesError {
 
     fn into_outcome(self) -> JobOutcome {
         match self {
+            Self::Storage(error) => JobOutcome::Failed(JobError::diagnostic(error.into())),
             Self::Imports(error) => {
                 JobOutcome::Refused(ShaclRefusal::Import(ShaclImportError::from(&error)))
             }
@@ -2006,6 +2009,80 @@ impl ShaclFailure for ShaclProductRefusal {
 pub(crate) mod tests {
     use super::*;
     use purrdf_lex::json;
+
+    #[test]
+    fn shapes_storage_outcome_retains_exact_diagnostic() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+
+        for cause in [
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                u128::MAX,
+                u128::from(u64::MAX) + 1,
+            )),
+            StorageError::AllocationFailed,
+            StorageError::AdmissionFailed,
+        ] {
+            let diagnostic = purrdf_core::RdfDiagnostic::from(cause);
+            for outcome in [
+                ShapesError::Storage(cause).into_outcome(),
+                XPathValidationError::Shapes(ShapesError::Storage(cause)).into_outcome(),
+            ] {
+                let JobOutcome::Failed(error) = outcome else {
+                    panic!("storage refusal must remain a failed operation");
+                };
+                assert_eq!(error.code(), diagnostic.code);
+                assert_eq!(error.rendered(), diagnostic.to_string());
+                assert_eq!(
+                    error.diagnostic_json(),
+                    Some(diagnostic.to_json().to_string())
+                );
+                assert!(error.presentation_json().is_none());
+            }
+        }
+        assert!(
+            JobError::message(SHACL_CODE, "invalid shapes")
+                .diagnostic_json()
+                .is_none()
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn storage_rejections_keep_the_javascript_capacity_record() {
+        use crate::host::reflect_get;
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+
+        let cause = StorageError::Capacity(CapacityError::new(
+            CapacitySpace::GlobalTerms,
+            u128::MAX,
+            u128::from(u64::MAX) + 1,
+        ));
+        let diagnostic = purrdf_core::RdfDiagnostic::from(cause);
+        for error in [
+            shapes_rejection(ShapesError::Storage(cause)),
+            XPathValidationError::Shapes(ShapesError::Storage(cause)).into_rejection(),
+            crate::dataset::diag_to_err(&diagnostic),
+        ] {
+            assert_eq!(
+                reflect_get(&error, "code").unwrap().as_string().as_deref(),
+                Some(diagnostic.code.as_str())
+            );
+            let record = reflect_get(&error, "diagnostic").unwrap();
+            let capacity = reflect_get(&record, "capacity").unwrap();
+            for (key, expected) in [
+                ("space", "rdf-global-terms".to_owned()),
+                ("attempted", u128::MAX.to_string()),
+                ("limit", (u128::from(u64::MAX) + 1).to_string()),
+            ] {
+                assert_eq!(
+                    reflect_get(&capacity, key).unwrap().as_string(),
+                    Some(expected)
+                );
+            }
+            assert!(reflect_get(&error, "presentation").unwrap().is_undefined());
+        }
+    }
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\

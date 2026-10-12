@@ -211,7 +211,7 @@ fn secret_array(secret: Option<&Bound<'_, PyBytes>>) -> PyResult<Option<[u8; 32]
 /// released); the error is a lazily-materialized `ValueError`.
 fn parse_rdf(data: &[u8], format: PyRdfFormat, base: Option<&str>) -> PyResult<Vec<RdfQuad>> {
     parse_quads(data, rdf_format(format), base)
-        .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
+        .map_err(|e| crate::py_store::presentation::value_error(format!("parse error: {e}"), &e))
 }
 
 /// Parse RDF bytes into a frozen native [`RdfDataset`] for `SnapshotBuilder`
@@ -231,7 +231,7 @@ fn parse_rdf_dataset(
     base: Option<&str>,
 ) -> PyResult<std::sync::Arc<RdfDataset>> {
     crate::parse_dataset(data, rdf_format(format).media_type(), base)
-        .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
+        .map_err(|e| crate::py_store::presentation::value_error(format!("parse error: {e}"), &e))
 }
 
 // ── Module-level functions ────────────────────────────────────────────────────

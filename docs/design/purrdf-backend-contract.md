@@ -62,6 +62,16 @@ inline without heap allocation or a wide-alignment requirement on enclosing
 operational errors. Numeric Debug, Display and Hash semantics are preserved.
 Physical admission and allocation refusals remain separate storage errors.
 
+At diagnostic host boundaries, the original storage cause is retained in the
+`purrdf-diagnostic-v1` record. A capacity record names its `space` and carries
+`attempted` and `limit` as decimal strings, preserving counts wider than a
+JavaScript number. Python exposes the native record as `ValueError.diagnostic_json`
+alongside `code`; the WASM package exposes its parsed form as `Error.diagnostic`
+on both synchronous and asynchronous failures. Existing diagnostic presentation
+fields retain their separate message-identity meaning. C Shapes entry points
+return the additive `StorageError` status and preserve the native diagnostic
+record through the existing error-JSON accessor.
+
 #### The `Option<TermId>` niche (load-bearing P3a invariant)
 
 `TermId` wraps a `NonZeroU32` holding `dense_index + 1`, so the all-zero bit

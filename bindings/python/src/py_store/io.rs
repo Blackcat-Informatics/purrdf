@@ -11,6 +11,8 @@
 
 use std::sync::Arc;
 
+use purrdf_core::RdfDiagnostic;
+
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
@@ -203,13 +205,11 @@ pub(super) fn dump_quads_with_loss(
     quads: &[RdfQuad],
     declared_graphs: &[RdfTerm],
     format: NativeRdfFormat,
-) -> Result<PySerializeLoss, String> {
+) -> Result<PySerializeLoss, RdfDiagnostic> {
     let dataset = dataset_from_quads_verbatim(quads, declared_graphs)?;
-    let outcome = serialize_dataset_to_format(&dataset, format, None).map_err(|e| e.to_string())?;
+    let outcome = serialize_dataset_to_format(&dataset, format, None)?;
     let empty_named_graphs_dropped =
-        empty_named_graphs_dropped(&*dataset, format, SerializeGraph::Dataset)
-            .map_err(|e| e.to_string())?
-            .len();
+        empty_named_graphs_dropped(&*dataset, format, SerializeGraph::Dataset)?.len();
     Ok(PySerializeLoss {
         bytes: outcome.bytes,
         statement_rows_dropped: outcome.statement_rows_dropped,
@@ -246,7 +246,7 @@ pub(crate) fn parse(
     // built after reacquiring.
     let quads = py
         .detach(move || parse_quads(&data, format.to_native(), base.as_deref()))
-        .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))?;
+        .map_err(|e| super::presentation::value_error(format!("parse error: {e}"), &e))?;
     quads
         .into_iter()
         .map(|inner| Py::new(py, PyQuad { inner }))
@@ -352,8 +352,8 @@ pub(crate) fn parse_quads(
     data: &[u8],
     format: NativeRdfFormat,
     base: Option<&str>,
-) -> Result<Vec<RdfQuad>, String> {
-    let dataset = parse_dataset(data, format.media_type(), base).map_err(|e| e.to_string())?;
+) -> Result<Vec<RdfQuad>, RdfDiagnostic> {
+    let dataset = parse_dataset(data, format.media_type(), base)?;
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }
 
@@ -371,42 +371,20 @@ pub(crate) fn parse_quads_and_prefixes(
     data: &[u8],
     format: NativeRdfFormat,
     base: Option<&str>,
-) -> Result<LoadedDocument, String> {
-    let outcome = parse_dataset_with(data, format.media_type(), base, &ParseOptions::default())
-        .map_err(|e| e.to_string())?;
+) -> Result<LoadedDocument, RdfDiagnostic> {
+    let outcome = parse_dataset_with(data, format.media_type(), base, &ParseOptions::default())?;
     // The graphs a format that names a graph only on a row would drop are exactly the
     // ones the document declared with no row; N-Quads is that format.
     let declared_empty = empty_named_graphs_dropped(
         &*outcome.dataset,
         NativeRdfFormat::NQuads,
         SerializeGraph::Dataset,
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     Ok((
         flat_rdf_quads_from_dataset(&outcome.dataset),
         outcome.document_prefixes,
         declared_empty,
     ))
-}
-
-/// Declare on `inner` each graph a loaded document declared without rows, under the
-/// load's blank scope exactly as its quads were inserted, so `_:g { }` in one document
-/// and `_:g` in another stay distinct graphs. Shared by `Store.load` and
-/// `MutableDataset.load`.
-pub(super) fn declare_loaded_graphs(
-    inner: &mut purrdf_core::ir::MutableDataset,
-    declared: Vec<TermValue>,
-    scope: purrdf_core::BlankScope,
-) -> PyResult<()> {
-    for graph in declared {
-        let term = graph
-            .to_rdf_term()
-            .expect("a declared graph name has an owned form");
-        inner
-            .declare_named_graph(TermValue::from_rdf_term_in_scope(&term, scope))
-            .map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))?;
-    }
-    Ok(())
 }
 
 /// Serialize triples through the native codec under an optional document `base`.
@@ -429,7 +407,7 @@ pub(crate) fn serialize_triples(
     triples: &[RdfTriple],
     format: NativeRdfFormat,
     base: Option<&str>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, RdfDiagnostic> {
     // Build the IR verbatim — every triple is a default-graph quad, RDF 1.2
     // triple-term objects preserved as triple-term objects (no statement-layer fold)
     // — then serialize through the native codec.
@@ -437,10 +415,8 @@ pub(crate) fn serialize_triples(
         .iter()
         .map(|t| RdfQuad::new(t.subject.clone(), t.predicate.clone(), t.object.clone()))
         .collect();
-    let dataset = flat_dataset_from_quads(&quads).map_err(|error| error.to_string())?;
-    serialize_dataset_to_format(&dataset, format, base)
-        .map(|outcome| outcome.bytes)
-        .map_err(|e| e.to_string())
+    let dataset = flat_dataset_from_quads(&quads)?;
+    serialize_dataset_to_format(&dataset, format, base).map(|outcome| outcome.bytes)
 }
 
 /// Serialize a graph-carrying CONSTRUCT result's quads through the native codec,
@@ -461,8 +437,8 @@ pub(crate) fn serialize_quads(
     quads: &[RdfQuad],
     format: NativeRdfFormat,
     base: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    let dataset = flat_dataset_from_quads(quads).map_err(|error| error.to_string())?;
+) -> Result<Vec<u8>, RdfDiagnostic> {
+    let dataset = flat_dataset_from_quads(quads)?;
     serialize_dataset_with(
         &dataset,
         format,
@@ -477,7 +453,6 @@ pub(crate) fn serialize_quads(
         },
     )
     .map(|outcome| outcome.bytes)
-    .map_err(|e| e.to_string())
 }
 
 /// Freeze a flat native quad list into the IR verbatim — RDF 1.2 triple-term objects
@@ -488,8 +463,8 @@ pub(crate) fn serialize_quads(
 pub(super) fn dataset_from_quads_verbatim(
     quads: &[RdfQuad],
     declared_graphs: &[RdfTerm],
-) -> Result<Arc<RdfDataset>, String> {
-    flat_dataset_from_quads_declaring(quads, declared_graphs).map_err(|error| error.to_string())
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    flat_dataset_from_quads_declaring(quads, declared_graphs)
 }
 
 pub(crate) fn read_input(
