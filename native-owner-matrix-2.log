@@ -1,0 +1,40 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+error[E0277]: `Box<dyn property_fn::PfCursor>` doesn't implement `Debug`
+    --> crates/sparql-eval/src/geo/relation.rs:1730:50
+     |
+1730 |         let refused = relation.open(&args, None).unwrap_err();
+     |                                                  ^^^^^^^^^^ the trait `Debug` is not implemented for `Box<dyn property_fn::PfCursor>`
+     |
+help: the trait `Debug` is conditionally implemented for `Box<T, A>`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/boxed.rs:2323:1
+     |
+2323 | impl<T: fmt::Debug + ?Sized, A: Allocator> fmt::Debug for Box<T, A> {
+     | ^^^^^^^^----------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         unsatisfied requirement introduced here: `_: Debug`
+note: required by a bound in `Result::<T, E>::unwrap_err`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:1325:12
+     |
+1323 |     pub fn unwrap_err(self) -> E
+     |            ---------- required by a bound in this associated function
+1324 |     where
+1325 |         T: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap_err`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

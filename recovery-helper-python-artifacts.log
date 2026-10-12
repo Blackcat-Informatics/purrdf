@@ -1,0 +1,546 @@
+bash scripts/check-python-release-artifacts.sh
+OK: version 3.0.1 coherent across crates.io/PyPI/npm; release lane publishes all 33 publishable crates.
+license bundles verified: 1 profiles
+license bundles verified: 1 profiles
+Python license backend self-test: dynamic source metadata, PEP660 delegation, target selection and wheel RECORD integrity passed
+Python release candidate: /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP
+Building source distribution...
+Running `maturin pep517 write-sdist --sdist-directory /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf`
+⚠️  Warning: `build-backend` in pyproject.toml is not set to `maturin`, packaging tools such as pip will not use maturin to build this project.
+🍹 Building a mixed python/rust project
+🔗 Found pyo3 bindings with abi3-py3.13 support
+📡 Using build options bindings from pyproject.toml
+📦 Including files matching "purrdf_build_backend.py"
+📦 Including files matching "rust-toolchain.toml"
+📦 Including files matching "licenses/*"
+📦 Including files matching "licenses/**/*"
+📦 Built source distribution to /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/purrdf-3.0.1.tar.gz
+purrdf-3.0.1.tar.gz
+Successfully built target/python-release-candidate/attempt.qv4UdP/purrdf/purrdf-3.0.1.tar.gz
+Building wheel from source distribution...
+Running `maturin pep517 build-wheel -i /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/uv-cache/builds-v0/.tmpAm0QIz/bin/python --compatibility manylinux_2_34 --out /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.purrdf-wheel-41_skan8/built`
+⚠️  Warning: `build-backend` in pyproject.toml is not set to `maturin`, packaging tools such as pip will not use maturin to build this project.
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.13 at /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/uv-cache/builds-v0/.tmpAm0QIz/bin/python
+🔗 Found pyo3 bindings with abi3-py3.13 support
+📡 Using build options bindings from pyproject.toml
+warning: unused workspace dependency `clap`
+  --> Cargo.toml:92:1
+   |
+92 | clap = { version = "4", features = ["derive"] }
+   | ^^^^
+   |
+   = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `clap`
+warning: unused workspace dependency `purrdf-conformance-kit`
+  --> Cargo.toml:40:1
+   |
+40 | purrdf-conformance-kit = { path = "crates/conformance-kit" }
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: consider removing the workspace dependency `purrdf-conformance-kit`
+warning: unused workspace dependency `purrdf-rs`
+  --> Cargo.toml:29:1
+   |
+29 | purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "3.0.1" }
+   | ^^^^^^^^^
+   |
+help: consider removing the workspace dependency `purrdf-rs`
+warning: unused workspace dependency `wasm-encoder`
+   --> Cargo.toml:140:1
+    |
+140 | wasm-encoder = { version = "0.259", default-features = false }
+    | ^^^^^^^^^^^^
+    |
+help: consider removing the workspace dependency `wasm-encoder`
+warning: workspace (manifest) generated 4 warnings
+warning: explicit `package.readme` can be inferred
+  --> crates/purrdf/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/markdown/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-markdown` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/deflate/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-deflate` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/rdf-core/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-core` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/sparql-eval/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-sparql-eval` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/alloc-probe/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-alloc-probe` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/gts/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-gts` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/entail/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-entail` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/sparql-algebra/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-sparql-algebra` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/testkit/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-testkit` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/rdf-events/Cargo.toml:19:1
+   |
+19 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-events` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/text/Cargo.toml:18:1
+   |
+18 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-text` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/cdt/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-cdt` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/columnar/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-columnar` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/json/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-json` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/shapes/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-shapes` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/validate/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-validate` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/jsonschema/Cargo.toml:28:1
+   |
+28 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-jsonschema` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/geo-kernel/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-geo-kernel` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/ed25519/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-ed25519` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/rdf/Cargo.toml:21:1
+   |
+21 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-rdf` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/retrieval/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-retrieval` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/iri/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-iri` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/lex/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-lex` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/shex/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-shex` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/hnsw/Cargo.toml:14:1
+   |
+14 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-hnsw` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/stack/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-stack` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/datalog/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-datalog` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/xsd/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-xsd` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/geo/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-geo` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/hash/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-hash` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/slice/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-slice` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> bindings/python/Cargo.toml:14:1
+   |
+14 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-python` (manifest) generated 1 warning
+warning: explicit `package.readme` can be inferred
+  --> crates/sparql-results/Cargo.toml:16:1
+   |
+16 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-sparql-results` (manifest) generated 1 warning
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/hash)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/rdf-core)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/stack)
+   Compiling target-lexicon v0.13.5
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling heck v0.5.0
+   Compiling once_cell v1.21.4
+   Compiling pyo3-build-config v0.29.0
+   Compiling syn v2.0.118
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/ed25519)
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling pyo3-macros v0.29.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/datalog)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/markdown)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/mime)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/entail)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/json)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/shex)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/crates/purrdf)
+   Compiling purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.tmpt7tItP/purrdf-3.0.1/bindings/python)
+    Finished `release` profile [optimized] target(s) in 4m 38s
+📦 Built wheel for abi3 Python ≥ 3.13 to /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.purrdf-wheel-41_skan8/built/purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl
+/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/.purrdf-wheel-41_skan8/built/purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl
+Successfully built target/python-release-candidate/attempt.qv4UdP/purrdf/purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl
+Building source distribution...
+Building wheel from source distribution...
+Successfully built target/python-release-candidate/attempt.qv4UdP/purrdf-rdflib/purrdf_rdflib-3.0.1.tar.gz
+Successfully built target/python-release-candidate/attempt.qv4UdP/purrdf-rdflib/purrdf_rdflib-3.0.1-py3-none-any.whl
+qualified distribution license metadata: purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl
+qualified distribution license metadata: purrdf-3.0.1.tar.gz
+{
+  "artifacts": [
+    {
+      "artifact": "purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl",
+      "notice_files": 193,
+      "profile": "python",
+      "runtime_notice_files": 14,
+      "sha256": "b8ba543ab49cd9d6a097053e62ee32406d0ced652bf43e5415e12e9cd5798a05",
+      "status": "passed"
+    },
+    {
+      "artifact": "purrdf-3.0.1.tar.gz",
+      "notice_files": 193,
+      "profile": "python",
+      "runtime_notice_files": 0,
+      "sha256": "ac70b96dd1f11977d1a1841786a8be2bebcd5a7e6acac264db8b00e0390922be",
+      "status": "passed"
+    }
+  ],
+  "schema": 1
+}
+{
+  "artifacts": [
+    {
+      "artifact": "purrdf_rdflib-3.0.1-py3-none-any.whl",
+      "notice_files": 6,
+      "profile": "python-rdflib",
+      "runtime_notice_files": 0,
+      "sha256": "bf855d10ff2a06dc6c98e2d435aff98b1b24e1e20f682350254bcd8cb2bb83b8",
+      "status": "passed"
+    },
+    {
+      "artifact": "purrdf_rdflib-3.0.1.tar.gz",
+      "notice_files": 6,
+      "profile": "python-rdflib",
+      "runtime_notice_files": 0,
+      "sha256": "61ecc33783c34dd64bb07731d5665e81af7bb4c4a47b709f4e9f7e146132458b",
+      "status": "passed"
+    }
+  ],
+  "schema": 1
+}
+Using CPython 3.13.5 interpreter at: /home/paudley/stage/root/bin/python3.13
+Creating virtual environment at: target/python-release-candidate/attempt.qv4UdP/publisher-tooling.EJwahe
+Activate with: source target/python-release-candidate/attempt.qv4UdP/publisher-tooling.EJwahe/bin/activate
+Using Python 3.13.5 environment at: target/python-release-candidate/attempt.qv4UdP/publisher-tooling.EJwahe
+Resolved 46 packages in 274ms
+Installed 46 packages in 31ms
+ + annotated-types==0.8.0
+ + certifi==2026.7.22
+ + cffi==2.1.1
+ + charset-normalizer==3.5.2
+ + cryptography==50.0.2
+ + dnspython==2.8.0
+ + docutils==0.23
+ + email-validator==2.3.0
+ + id==1.6.1
+ + idna==3.20
+ + jaraco-classes==3.4.0
+ + jaraco-context==6.1.2
+ + jaraco-functools==4.6.0
+ + jeepney==0.9.0
+ + keyring==25.7.0
+ + markdown-it-py==4.2.0
+ + mdurl==0.1.2
+ + more-itertools==11.1.0
+ + nh3==0.3.7
+ + packaging==26.3
+ + platformdirs==4.12.2
+ + pyasn1==0.6.4
+ + pycparser==3.0
+ + pydantic==2.13.5
+ + pydantic-core==2.46.5
+ + pygments==2.21.0
+ + pyjwt==2.15.1
+ + pyopenssl==26.4.0
+ + pypi-attestations==0.0.30
+ + readme-renderer==46.0
+ + requests==2.34.2
+ + requests-toolbelt==1.0.0
+ + rfc3161-client==1.0.9
+ + rfc3986==2.0.0
+ + rfc8785==0.1.4
+ + rich==15.0.0
+ + secretstorage==3.5.0
+ + securesystemslib==1.5.1
+ + sigstore==4.5.0
+ + sigstore-models==0.0.6
+ + sigstore-rekor-types==0.0.18
+ + tuf==7.0.1
+ + twine==7.0.0
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.4
+ + urllib3==2.8.0
+test_absent_identity_refuses_before_signing_or_upload (python_publisher_tests.PublisherTests.test_absent_identity_refuses_before_signing_or_upload) ... ok
+test_changed_bytes_wrong_predicate_and_corrupt_attestation_no_upload (python_publisher_tests.PublisherTests.test_changed_bytes_wrong_predicate_and_corrupt_attestation_no_upload) ... ok
+test_check_diagnostic_rejects_arbitrary_exception_class_names (python_publisher_tests.PublisherTests.test_check_diagnostic_rejects_arbitrary_exception_class_names) ... ok
+test_cli_failure_sanitizes_external_exception (python_publisher_tests.PublisherTests.test_cli_failure_sanitizes_external_exception) ... ok
+test_complete_locked_toolchain (python_publisher_tests.PublisherTests.test_complete_locked_toolchain) ... ok
+test_invalid_lock_and_old_transport_refused (python_publisher_tests.PublisherTests.test_invalid_lock_and_old_transport_refused) ... ok
+test_malformed_expired_wrong_audience_issuer_subject_identity (python_publisher_tests.PublisherTests.test_malformed_expired_wrong_audience_issuer_subject_identity) ... ok
+test_metadata25_wheel_sdist_and_subjects (python_publisher_tests.PublisherTests.test_metadata25_wheel_sdist_and_subjects) ... ok
+test_missing_pypi_identity_cannot_use_stored_credentials (python_publisher_tests.PublisherTests.test_missing_pypi_identity_cannot_use_stored_credentials) ... ok
+test_preloaded_keyring_cannot_replace_missing_pypi_identity (python_publisher_tests.PublisherTests.test_preloaded_keyring_cannot_replace_missing_pypi_identity) ... ok
+test_project_version_metadata_and_closed_roster_refusals (python_publisher_tests.PublisherTests.test_project_version_metadata_and_closed_roster_refusals) ... ok
+test_real_invalid_metadata_check_reports_only_approved_class (python_publisher_tests.PublisherTests.test_real_invalid_metadata_check_reports_only_approved_class) ... ok
+test_real_twine_cli_two_audiences_exact_uploads_both_projects (python_publisher_tests.PublisherTests.test_real_twine_cli_two_audiences_exact_uploads_both_projects) ... ok
+test_real_twine_duplicate_skip (python_publisher_tests.PublisherTests.test_real_twine_duplicate_skip) ... ok
+test_real_twine_http_failure_and_existing_response (python_publisher_tests.PublisherTests.test_real_twine_http_failure_and_existing_response) ... ok
+test_real_verifier_rejects_an_invalid_attestation_before_upload (python_publisher_tests.PublisherTests.test_real_verifier_rejects_an_invalid_attestation_before_upload) ... ok
+test_symlink_and_preexisting_attestation_refusals (python_publisher_tests.PublisherTests.test_symlink_and_preexisting_attestation_refusals) ... ok
+test_wrong_workflow_and_explicit_credentials_refused (python_publisher_tests.PublisherTests.test_wrong_workflow_and_explicit_credentials_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.616s
+
+OK
+{"artifacts": [{"filename": "purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl", "sha256": "b8ba543ab49cd9d6a097053e62ee32406d0ced652bf43e5415e12e9cd5798a05"}, {"filename": "purrdf-3.0.1.tar.gz", "sha256": "ac70b96dd1f11977d1a1841786a8be2bebcd5a7e6acac264db8b00e0390922be"}], "live_publish_executed": false, "mode": "check", "project": "purrdf", "schema": 1, "toolchain": {"packages": {"annotated-types": "0.8.0", "certifi": "2026.7.22", "cffi": "2.1.1", "charset-normalizer": "3.5.2", "cryptography": "50.0.2", "dnspython": "2.8.0", "docutils": "0.23", "email-validator": "2.3.0", "id": "1.6.1", "idna": "3.20", "jaraco-classes": "3.4.0", "jaraco-context": "6.1.2", "jaraco-functools": "4.6.0", "jeepney": "0.9.0", "keyring": "25.7.0", "markdown-it-py": "4.2.0", "mdurl": "0.1.2", "more-itertools": "11.1.0", "nh3": "0.3.7", "packaging": "26.3", "platformdirs": "4.12.2", "pyasn1": "0.6.4", "pycparser": "3.0", "pydantic": "2.13.5", "pydantic-core": "2.46.5", "pygments": "2.21.0", "pyjwt": "2.15.1", "pyopenssl": "26.4.0", "pypi-attestations": "0.0.30", "readme-renderer": "46.0", "requests": "2.34.2", "requests-toolbelt": "1.0.0", "rfc3161-client": "1.0.9", "rfc3986": "2.0.0", "rfc8785": "0.1.4", "rich": "15.0.0", "secretstorage": "3.5.0", "securesystemslib": "1.5.1", "sigstore": "4.5.0", "sigstore-models": "0.0.6", "sigstore-rekor-types": "0.0.18", "tuf": "7.0.1", "twine": "7.0.0", "typing-extensions": "4.16.0", "typing-inspection": "0.4.4", "urllib3": "2.8.0"}, "requirements_sha256": "5060ed7cd8e4dffb5439a6337fffd7e7878abc58be238b0a6e440011b3e74b66"}, "version": "3.0.1"}
+{"artifacts": [{"filename": "purrdf_rdflib-3.0.1-py3-none-any.whl", "sha256": "bf855d10ff2a06dc6c98e2d435aff98b1b24e1e20f682350254bcd8cb2bb83b8"}, {"filename": "purrdf_rdflib-3.0.1.tar.gz", "sha256": "61ecc33783c34dd64bb07731d5665e81af7bb4c4a47b709f4e9f7e146132458b"}], "live_publish_executed": false, "mode": "check", "project": "purrdf-rdflib", "schema": 1, "toolchain": {"packages": {"annotated-types": "0.8.0", "certifi": "2026.7.22", "cffi": "2.1.1", "charset-normalizer": "3.5.2", "cryptography": "50.0.2", "dnspython": "2.8.0", "docutils": "0.23", "email-validator": "2.3.0", "id": "1.6.1", "idna": "3.20", "jaraco-classes": "3.4.0", "jaraco-context": "6.1.2", "jaraco-functools": "4.6.0", "jeepney": "0.9.0", "keyring": "25.7.0", "markdown-it-py": "4.2.0", "mdurl": "0.1.2", "more-itertools": "11.1.0", "nh3": "0.3.7", "packaging": "26.3", "platformdirs": "4.12.2", "pyasn1": "0.6.4", "pycparser": "3.0", "pydantic": "2.13.5", "pydantic-core": "2.46.5", "pygments": "2.21.0", "pyjwt": "2.15.1", "pyopenssl": "26.4.0", "pypi-attestations": "0.0.30", "readme-renderer": "46.0", "requests": "2.34.2", "requests-toolbelt": "1.0.0", "rfc3161-client": "1.0.9", "rfc3986": "2.0.0", "rfc8785": "0.1.4", "rich": "15.0.0", "secretstorage": "3.5.0", "securesystemslib": "1.5.1", "sigstore": "4.5.0", "sigstore-models": "0.0.6", "sigstore-rekor-types": "0.0.18", "tuf": "7.0.1", "twine": "7.0.0", "typing-extensions": "4.16.0", "typing-inspection": "0.4.4", "urllib3": "2.8.0"}, "requirements_sha256": "5060ed7cd8e4dffb5439a6337fffd7e7878abc58be238b0a6e440011b3e74b66"}, "version": "3.0.1"}
+Using CPython 3.13.5 interpreter at: /home/paudley/stage/root/bin/python
+Creating virtual environment at: target/python-release-candidate/attempt.qv4UdP/install
+Activate with: source target/python-release-candidate/attempt.qv4UdP/install/bin/activate
+Using Python 3.13.5 environment at: target/python-release-candidate/attempt.qv4UdP/install
+Resolved 2 packages in 2ms
+Prepared 2 packages in 138ms
+Installed 2 packages in 4ms
+ + purrdf==3.0.1 (from file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf/purrdf-3.0.1-cp313-abi3-manylinux_2_34_x86_64.whl)
+ + purrdf-rdflib==3.0.1 (from file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.qv4UdP/purrdf-rdflib/purrdf_rdflib-3.0.1-py3-none-any.whl)
+installed purrdf and purrdf-rdflib 3.0.1: metadata, shadow imports and graph operations passed
+terminal_status=0

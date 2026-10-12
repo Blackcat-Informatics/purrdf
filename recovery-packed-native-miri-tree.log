@@ -1,0 +1,15 @@
+WARNING: Ignoring `RUSTC_WRAPPER` environment variable, Miri does not support wrapping.
+    Finished `test` profile [optimized] target(s) in 0.16s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/x86_64-unknown-linux-gnu/debug/build/purrdf-lex/83d93c4daa291330/out/purrdf_lex-83d93c4daa291330)
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+running 3 tests
+test allocation::shared::buffers::tests::independent_ranges_mutate_concurrently_while_a_clone_keeps_the_array_alive ... ok
+test allocation::shared::buffers::tests::overflowing_layout_and_refused_birth_leave_the_original_account_empty ... ok
+test allocation::shared::buffers::tests::packed_destinations_preserve_disjoint_ranges_and_immutable_clones ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 299 filtered out; finished in 5.75s
+
+warning: 1 warning emitted
+

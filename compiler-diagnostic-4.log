@@ -1,0 +1,3181 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/helper-census)
+warning: unnecessary qualification
+   --> crates/rdf-core/src/ir/term_walk.rs:994:39
+    |
+994 |     compare_pairs_with(a, b, shallow, purrdf_lex::walk::WorkList::try_push)
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+    = note: the `unused_qualifications` lint ignores `-D warnings`
+help: remove the unnecessary path segments
+    |
+994 -     compare_pairs_with(a, b, shallow, purrdf_lex::walk::WorkList::try_push)
+994 +     compare_pairs_with(a, b, shallow, WorkList::try_push)
+    |
+
+warning: `purrdf-core` (lib) generated 1 warning (run `cargo clippy --fix --lib -p purrdf-core -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+  --> crates/geo-kernel/src/binding.rs:17:5
+   |
+17 | use purrdf_iri::vocab::ogc;
+   |     ^^^^^^^^^^^^^^^^^^^---
+   |                        |
+   |                        no `ogc` in `vocab`
+
+error[E0432]: unresolved import `purrdf_xsd::wide::mul_div_round_even`
+ --> crates/geo-kernel/src/cells/fixed.rs:7:5
+  |
+7 | use purrdf_xsd::wide::mul_div_round_even;
+  |     ^^^^^^^^^^^^^^^^^^------------------
+  |                       |
+  |                       no `mul_div_round_even` in `wide`
+
+error[E0432]: unresolved import `purrdf_xsd::ieee::f64_negate`
+   --> crates/geo-kernel/src/geodesic/seed.rs:124:5
+    |
+124 | use purrdf_xsd::ieee::f64_negate as negate;
+    |     ^^^^^^^^^^^^^^^^^^----------^^^^^^^^^^
+    |                       |
+    |                       no `f64_negate` in `ieee`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/carrier/term.rs:187:45
+    |
+187 |             Self::Wkt => purrdf_iri::vocab::ogc::geo::WKT_LITERAL,
+    |                                             ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/carrier/term.rs:188:49
+    |
+188 |             Self::GeoJson => purrdf_iri::vocab::ogc::geo::GEO_JSON_LITERAL,
+    |                                                 ^^^ could not find `ogc` in `vocab`
+
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/vocab.rs:315:85
+    |
+315 |         core_ns: purrdf_lex::allocation::SharedText::from_static(purrdf_iri::vocab::ogc::geo::NS),
+    |                                                                                     ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/vocab.rs:317:32
+    |
+317 |             purrdf_iri::vocab::ogc::geof::NS,
+    |                                ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/vocab.rs:319:68
+    |
+319 |         default_wkt_crs: Crs::declared_standard(purrdf_iri::vocab::ogc::CRS84),
+    |                                                                    ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/vocab.rs:320:64
+    |
+320 |         geojson_crs: Crs::declared_standard(purrdf_iri::vocab::ogc::CRS84),
+    |                                                                ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/vocab.rs:323:32
+    |
+323 |             purrdf_iri::vocab::ogc::uom::METRE,
+    |                                ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/vocab.rs:326:32
+    |
+326 |             purrdf_iri::vocab::ogc::sf::NS,
+    |                                ^^^ could not find `ogc` in `vocab`
+
+error[E0425]: cannot find function `carrier` in module `materialize`
+   --> crates/geo-kernel/src/buffer.rs:406:32
+    |
+406 |             || Ok(materialize::carrier(point, reference.axes())),
+    |                                ^^^^^^^ not found in `materialize`
+
+error[E0425]: cannot find function `promote_to_double` in module `numeric`
+   --> crates/geo-kernel/src/metric.rs:104:33
+    |
+104 |         let promoted = numeric::promote_to_double(value)
+    |                                 ^^^^^^^^^^^^^^^^^ not found in `numeric`
+
+warning: unused import: `RationalDivide`
+  --> crates/geo-kernel/src/atlas/arcs/arrangement.rs:18:43
+   |
+18 |     Linear, RationalAdd, RationalCompare, RationalDivide, RationalMultiply,
+   |                                           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+   = note: the `unused_imports` lint ignores `-D warnings`
+
+warning: unused import: `crate::carrier::reserve_metadata`
+   --> crates/geo-kernel/src/atlas/arcs/arrangement.rs:764:16
+    |
+764 | pub(super) use crate::carrier::reserve_metadata;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/atlas/arcs/polynomial.rs:350:23
+    |
+350 |             meter.run(ExactOperation::Linear, &[&lower], |values| {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+    = note: the `unused_qualifications` lint ignores `-D warnings`
+help: remove the unnecessary path segments
+    |
+350 -             meter.run(ExactOperation::Linear, &[&lower], |values| {
+350 +             meter.run(Linear, &[&lower], |values| {
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/atlas/arcs/polynomial.rs:357:29
+    |
+357 |             break meter.run(ExactOperation::Linear, &[&lower], |values| {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+357 -             break meter.run(ExactOperation::Linear, &[&lower], |values| {
+357 +             break meter.run(Linear, &[&lower], |values| {
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/atlas/boundary.rs:490:13
+    |
+490 | ) -> Result<crate::context::RetainedBuilder<Coord>, GeoError> {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+490 - ) -> Result<crate::context::RetainedBuilder<Coord>, GeoError> {
+490 + ) -> Result<RetainedBuilder<Coord>, GeoError> {
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/atlas/boundary.rs:491:24
+    |
+491 |     let mut original = crate::context::RetainedBuilder::default();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+491 -     let mut original = crate::context::RetainedBuilder::default();
+491 +     let mut original = RetainedBuilder::default();
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/atlas/boundary.rs:497:26
+    |
+497 |     let mut cut_points = crate::context::RetainedBuilder::default();
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+497 -     let mut cut_points = crate::context::RetainedBuilder::default();
+497 +     let mut cut_points = RetainedBuilder::default();
+    |
+
+warning: unused import: `Rat`
+  --> crates/geo-kernel/src/atlas/union.rs:14:95
+   |
+14 |     Coord, CoordDim, GeoError, Geometry, GeometryBody, LonLat, MetricContext, PreparedRegion, Rat,
+   |                                                                                               ^^^
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/binding/prepared_image.rs:479:25
+    |
+479 |         let mut edges = crate::context::RetainedBuilder::default();
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+479 -         let mut edges = crate::context::RetainedBuilder::default();
+479 +         let mut edges = RetainedBuilder::default();
+    |
+
+warning: unused import: `std::sync::Arc`
+  --> crates/geo-kernel/src/buffer/materialize.rs:37:5
+   |
+37 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/carrier/admission.rs:431:24
+    |
+431 |         let rendered = super::with_storage(self.storage, |memory| {
+    |                        ^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+431 -         let rendered = super::with_storage(self.storage, |memory| {
+431 +         let rendered = with_storage(self.storage, |memory| {
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/carrier/admission.rs:472:9
+    |
+472 |         super::with_storage(self.storage, |memory| {
+    |         ^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+472 -         super::with_storage(self.storage, |memory| {
+472 +         with_storage(self.storage, |memory| {
+    |
+
+warning: unused imports: `owned_coordinates_storage` and `reserve_metadata_for_push`
+  --> crates/geo-kernel/src/carrier.rs:20:29
+   |
+20 |     GeometryStorageVisitor, owned_coordinates_storage, reserve_metadata, reserve_metadata_for_push,
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context.rs:1298:24
+     |
+1298 |         let retained = crate::context::retained::persistent_numeric_bytes(reference, &progress)?;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1298 -         let retained = crate::context::retained::persistent_numeric_bytes(reference, &progress)?;
+1298 +         let retained = persistent_numeric_bytes(reference, &progress)?;
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context.rs:1312:13
+     |
+1312 |             crate::context::retained::produce_persistent_numeric_from(reference, &mut progress)?
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1312 -             crate::context::retained::produce_persistent_numeric_from(reference, &mut progress)?
+1312 +             produce_persistent_numeric_from(reference, &mut progress)?
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context.rs:1366:21
+     |
+1366 |         let bytes = crate::context::retained::persistent_numeric_bytes(&self.reference, &progress)?;
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1366 -         let bytes = crate::context::retained::persistent_numeric_bytes(&self.reference, &progress)?;
+1366 +         let bytes = persistent_numeric_bytes(&self.reference, &progress)?;
+     |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:145:17
+    |
+145 |                 crate::numerical::ExactAdmission::new(context, progress).expression_result(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+145 -                 crate::numerical::ExactAdmission::new(context, progress).expression_result(
+145 +                 ExactAdmission::new(context, progress).expression_result(
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:146:21
+    |
+146 |                     purrdf_xsd::integer::ExactOperation::Linear,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+146 -                     purrdf_xsd::integer::ExactOperation::Linear,
+146 +                     ExactOperation::Linear,
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:154:17
+    |
+154 |                 crate::numerical::ExactAdmission::new(context, progress).expression_result(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+154 -                 crate::numerical::ExactAdmission::new(context, progress).expression_result(
+154 +                 ExactAdmission::new(context, progress).expression_result(
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:155:21
+    |
+155 |                     purrdf_xsd::integer::ExactOperation::Linear,
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+155 -                     purrdf_xsd::integer::ExactOperation::Linear,
+155 +                     ExactOperation::Linear,
+    |
+
+warning: unused import: `LonLat`
+  --> crates/geo-kernel/src/ellipsoidal/native.rs:13:23
+   |
+13 | use crate::{GeoError, LonLat, MetricContext, PreparedEdge, Rat, SourceLinearEdge};
+   |                       ^^^^^^
+
+warning: unused import: `direct::canonical_endpoint`
+  --> crates/geo-kernel/src/geodesic.rs:27:16
+   |
+27 | pub(crate) use direct::canonical_endpoint;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/geodesic.rs:963:17
+    |
+963 |     ) -> Result<crate::context::Retained<T>, SolveError> {
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+963 -     ) -> Result<crate::context::Retained<T>, SolveError> {
+963 +     ) -> Result<Retained<T>, SolveError> {
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/geodesic.rs:964:9
+    |
+964 |         crate::context::Retained::produce(self.progress_mut(), make, publish)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+964 -         crate::context::Retained::produce(self.progress_mut(), make, publish)
+964 +         Retained::produce(self.progress_mut(), make, publish)
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/geom.rs:697:22
+    |
+697 |         let result = tree::visit_leaves_with_memory(self, memory, |geometry| {
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+697 -         let result = tree::visit_leaves_with_memory(self, memory, |geometry| {
+697 +         let result = visit_leaves_with_memory(self, memory, |geometry| {
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/index/projection.rs:540:50
+    |
+540 |     fn allocation(&mut self) -> Option<(&mut dyn purrdf_lex::allocation::Admission, usize)> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+540 -     fn allocation(&mut self) -> Option<(&mut dyn purrdf_lex::allocation::Admission, usize)> {
+540 +     fn allocation(&mut self) -> Option<(&mut dyn Admission, usize)> {
+    |
+
+warning: unused import: `on_segment`
+  --> crates/geo-kernel/src/measure.rs:95:63
+   |
+95 | use crate::topology::{SegmentIntersection, intersect, locate, on_segment, plane};
+   |                                                               ^^^^^^^^^^
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/metric.rs:223:9
+    |
+223 |         crate::metric::resident_certificate(|admission| self.certificate_bytes_admitted(admission))
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+223 -         crate::metric::resident_certificate(|admission| self.certificate_bytes_admitted(admission))
+223 +         resident_certificate(|admission| self.certificate_bytes_admitted(admission))
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/operation.rs:430:28
+    |
+430 |         observer: &mut dyn crate::MetricWorkObserver,
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+430 -         observer: &mut dyn crate::MetricWorkObserver,
+430 +         observer: &mut dyn MetricWorkObserver,
+    |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/operation.rs:441:35
+    |
+441 |         observer: Option<&mut dyn crate::MetricWorkObserver>,
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+441 -         observer: Option<&mut dyn crate::MetricWorkObserver>,
+441 +         observer: Option<&mut dyn MetricWorkObserver>,
+    |
+
+warning: unnested or-patterns
+   --> crates/geo-kernel/src/topology/relate.rs:448:21
+    |
+448 | /                     (Set::Interior, Set::Interior)
+449 | |                     | (Set::Interior, Set::Exterior)
+450 | |                     | (Set::Exterior, Set::Interior) => matrix.raise(in_a, in_b, Dim::Two),
+    | |____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+    = note: `-D clippy::unnested-or-patterns` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnested_or_patterns)]`
+    = note: the `clippy::unnested_or_patterns` lint ignores `-D warnings`
+help: nest the patterns
+    |
+448 ~                     (Set::Interior | Set::Exterior, Set::Interior) |
+449 ~ (Set::Interior, Set::Exterior) => matrix.raise(in_a, in_b, Dim::Two),
+    |
+
+warning: unused import: `cmp_xy`
+  --> crates/geo-kernel/src/topology/mod.rs:78:5
+   |
+78 |     cmp_xy, compare_inner, determinant2_admitted, intersect_admitted, midpoint_admitted,
+   |     ^^^^^^
+
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/conformance-kit)
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+    --> crates/geo-kernel/src/numerical.rs:1496:44
+     |
+1496 |     ExactAdmission::new(context, progress).expression_result(
+     |                                            ^^^^^^^^^^^^^^^^^ expected closure that takes 1 argument
+...
+1500 |         || Ok(a.same_location(b)),
+     |         -- takes 0 arguments
+     |
+help: consider changing the closure to take and ignore the expected argument
+     |
+1500 |         |_| Ok(a.same_location(b)),
+     |          +
+
+error[E0593]: closure is expected to take 0 arguments, but it takes 1 argument
+    --> crates/geo-kernel/src/numerical.rs:2052:44
+     |
+2052 |     ExactAdmission::new(context, progress).rational(
+     |                                            ^^^^^^^^ expected closure that takes 0 arguments
+...
+2056 |         |values| Ok(values.original(value)?),
+     |         -------- takes 1 argument
+
+error[E0282]: type annotations needed for `context::retained::RetainedBuilder<_>`
+    --> crates/geo-kernel/src/atlas/arcs/arrangement.rs:1090:13
+     |
+1090 |         let mut aliases = RetainedBuilder::default();
+     |             ^^^^^^^^^^^
+...
+1105 |                 if aliases[representative].0 != representative {
+     |                    ----------------------- type must be known at this point
+     |
+help: consider giving `aliases` an explicit type, where the type for type parameter `T` is specified
+     |
+1090 |         let mut aliases: context::retained::RetainedBuilder<T> = RetainedBuilder::default();
+     |                        +++++++++++++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:113:46
+    |
+113 | ...                   [values.original(&start)?, values.original(&end)?],
+    |                               -------- ^^^^^^ expected `&GeometricRational`, found `&&LonLat`
+    |                               |
+    |                               arguments to this method are incorrect
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&&geographic::LonLat`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:29:19
+    |
+ 29 |     pub(crate) fn original(
+    |                   ^^^^^^^^
+ 30 |         &self,
+ 31 |         value: &Rat,
+    |         -----------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:113:72
+    |
+113 | ...                   [values.original(&start)?, values.original(&end)?],
+    |                                                         -------- ^^^^ expected `&GeometricRational`, found `&&LonLat`
+    |                                                         |
+    |                                                         arguments to this method are incorrect
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&&geographic::LonLat`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:29:19
+    |
+ 29 |     pub(crate) fn original(
+    |                   ^^^^^^^^
+ 30 |         &self,
+ 31 |         value: &Rat,
+    |         -----------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:131:38
+    |
+131 |                 edge_parameter(left, &start, &phases[0], &axis, context, progress)?,
+    |                 --------------       ^^^^^^ expected `&LonLat`, found `&GeometricRational`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected reference `&geographic::LonLat`
+               found reference `&purrdf_xsd::exact::GeometricRational`
+note: function defined here
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:262:4
+    |
+262 | fn edge_parameter(
+    |    ^^^^^^^^^^^^^^
+263 |     edge: &PreparedEdge,
+264 |     point: &LonLat,
+    |     --------------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:132:38
+    |
+132 |                 edge_parameter(left, &end, &phases[1], &axis, context, progress)?,
+    |                 --------------       ^^^^ expected `&LonLat`, found `&GeometricRational`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected reference `&geographic::LonLat`
+               found reference `&purrdf_xsd::exact::GeometricRational`
+note: function defined here
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:262:4
+    |
+262 | fn edge_parameter(
+    |    ^^^^^^^^^^^^^^
+263 |     edge: &PreparedEdge,
+264 |     point: &LonLat,
+    |     --------------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:147:39
+    |
+147 |                 edge_parameter(right, &start, &first_phase?, &axis, context, progress)?,
+    |                 --------------        ^^^^^^ expected `&LonLat`, found `&GeometricRational`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected reference `&geographic::LonLat`
+               found reference `&purrdf_xsd::exact::GeometricRational`
+note: function defined here
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:262:4
+    |
+262 | fn edge_parameter(
+    |    ^^^^^^^^^^^^^^
+263 |     edge: &PreparedEdge,
+264 |     point: &LonLat,
+    |     --------------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:148:39
+    |
+148 |                 edge_parameter(right, &end, &last_phase?, &axis, context, progress)?,
+    |                 --------------        ^^^^ expected `&LonLat`, found `&GeometricRational`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected reference `&geographic::LonLat`
+               found reference `&purrdf_xsd::exact::GeometricRational`
+note: function defined here
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:262:4
+    |
+262 | fn edge_parameter(
+    |    ^^^^^^^^^^^^^^
+263 |     edge: &PreparedEdge,
+264 |     point: &LonLat,
+    |     --------------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:155:21
+    |
+155 |                     start,
+    |                     ^^^^^ expected `LonLat`, found `GeometricRational`
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:156:21
+    |
+156 |                     end,
+    |                     ^^^ expected `LonLat`, found `GeometricRational`
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/constant.rs:363:79
+    |
+363 |             admission.expression_result(RationalCompare, &[a, b], 1, |values| values.compare(a, b))
+    |                                                                               ^^^^^^^^^^^^^^^^^^^^ expected `Result<_, GeoError>`, found `Result<Ordering, LimbScratchError>`
+    |
+    = note: expected enum `Result<_, error::GeoError>`
+               found enum `Result<std::cmp::Ordering, purrdf_xsd::bigint::LimbScratchError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+363 |             admission.expression_result(RationalCompare, &[a, b], 1, |values| Ok(values.compare(a, b)?))
+    |                                                                               +++                    ++
+
+error[E0061]: this method takes 4 arguments but 3 arguments were supplied
+   --> crates/geo-kernel/src/atlas/arcs/polynomial.rs:57:14
+    |
+ 57 |             .expression(operation, operands, evaluate)
+    |              ^^^^^^^^^^                      -------- argument #3 of type `u64` is missing
+    |
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:585:19
+    |
+585 |     pub(crate) fn expression<T>(
+    |                   ^^^^^^^^^^
+...
+589 |         count: u64,
+    |         ----------
+help: provide the argument
+    |
+ 57 |             .expression(operation, operands, /* u64 */, evaluate)
+    |                                              ++++++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/subset.rs:109:42
+    |
+109 |             |values| Ok((values.original(&start)?, values.original(&end)?)),
+    |                                 -------- ^^^^^^ expected `&GeometricRational`, found `&&LonLat`
+    |                                 |
+    |                                 arguments to this method are incorrect
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&&geographic::LonLat`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:29:19
+    |
+ 29 |     pub(crate) fn original(
+    |                   ^^^^^^^^
+ 30 |         &self,
+ 31 |         value: &Rat,
+    |         -----------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/subset.rs:109:68
+    |
+109 |             |values| Ok((values.original(&start)?, values.original(&end)?)),
+    |                                                           -------- ^^^^ expected `&GeometricRational`, found `&&LonLat`
+    |                                                           |
+    |                                                           arguments to this method are incorrect
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&&geographic::LonLat`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:29:19
+    |
+ 29 |     pub(crate) fn original(
+    |                   ^^^^^^^^
+ 30 |         &self,
+ 31 |         value: &Rat,
+    |         -----------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/subset.rs:115:17
+    |
+115 |                 start,
+    |                 ^^^^^ expected `LonLat`, found `GeometricRational`
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arcs/subset.rs:116:17
+    |
+116 |                 end,
+    |                 ^^^ expected `LonLat`, found `GeometricRational`
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/atlas/arrangement.rs:194:13
+    |
+194 |             Ok([
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+194 |             Ok::<[geographic::LonLat; 2], E>([
+    |               ++++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/atlas/arrangement.rs:223:18
+    |
+223 |         |values| LonLat::validate_with(point.x(), point.y(), values),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<_, GeoError>`, found `Result<Result<(), GeoError>, _>`
+    |
+    = note: expected enum `Result<_, error::GeoError>`
+               found enum `Result<std::result::Result<(), error::GeoError>, purrdf_xsd::bigint::LimbScratchError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::result::Result<(), error::GeoError>, purrdf_xsd::bigint::LimbScratchError>` value, panicking if the value is a `Result::Err`
+    |
+223 |         |values| LonLat::validate_with(point.x(), point.y(), values).expect("REASON"),
+    |                                                                     +++++++++++++++++
+
+error[E0277]: `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` is not an iterator
+   --> crates/geo-kernel/src/atlas/oriented.rs:218:28
+    |
+218 |             for contact in progress.absorb_child_result(context, &child, contacts)? {
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::iter::IntoIterator` is not implemented for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>`
+    |
+    = note: the trait bound `context::retained::RetainedValues<atlas::arcs::CurveIntersection>: std::iter::IntoIterator` is not satisfied
+    = note: required for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` to implement `std::iter::IntoIterator`
+help: consider borrowing here
+    |
+218 |             for contact in &progress.absorb_child_result(context, &child, contacts)? {
+    |                            +
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/atlas/union.rs:265:13
+    |
+265 |             Ok(order.then_with(|| a.cmp(b)))
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+265 |             Ok::<std::cmp::Ordering, E>(order.then_with(|| a.cmp(b)))
+    |               +++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/atlas.rs:1259:18
+     |
+1259 |         |values| values.original(point.y()),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<_, GeoError>`, found `Result<GeometricRational, _>`
+     |
+     = note: expected enum `Result<_, error::GeoError>`
+                found enum `Result<purrdf_xsd::exact::GeometricRational, purrdf_xsd::bigint::LimbScratchError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+1259 |         |values| Ok(values.original(point.y())?),
+     |                  +++                          ++
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+    --> crates/geo-kernel/src/atlas.rs:1547:27
+     |
+1547 |     let shift = admission.expression_result(
+     |                           ^^^^^^^^^^^^^^^^^ expected closure that takes 1 argument
+...
+1551 |         || {
+     |         -- takes 0 arguments
+     |
+help: consider changing the closure to take and ignore the expected argument
+     |
+1551 |         |_| {
+     |          +
+
+error[E0593]: closure is expected to take 0 arguments, but it takes 1 argument
+    --> crates/geo-kernel/src/atlas.rs:1578:27
+     |
+1578 |     let shift = admission.rational(
+     |                           ^^^^^^^^ expected closure that takes 0 arguments
+...
+1582 |         |_| {
+     |         --- takes 1 argument
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/binding.rs:1520:41
+     |
+1520 |                         .decimal_digits(integer)
+     |                          -------------- ^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+     |                          |
+     |                          arguments to this method are incorrect
+     |
+     = note: expected reference `&BigInt`
+                     found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+    --> crates/geo-kernel/src/numerical.rs:61:19
+     |
+  61 |     pub(crate) fn decimal_digits(
+     |                   ^^^^^^^^^^^^^^
+  62 |         &self,
+  63 |         value: &Int,
+     |         -----------
+help: consider borrowing here
+     |
+1520 |                         .decimal_digits(&integer)
+     |                                         +
+
+error[E0277]: `?` couldn't convert the error to `purrdf_xsd::math::MathError`
+   --> crates/geo-kernel/src/buffer/materialize/covering.rs:740:49
+    |
+740 |             .compare(&values.absolute(&latitude)?, &ninety)?
+    |                              -------------------^ the trait `std::convert::From<purrdf_xsd::bigint::LimbScratchError>` is not implemented for `purrdf_xsd::math::MathError`
+    |                              |
+    |                              this can't be annotated with `?` because it has type `Result<_, purrdf_xsd::bigint::LimbScratchError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `purrdf_xsd::math::MathError`
+   --> crates/geo-kernel/src/buffer/materialize/covering.rs:740:60
+    |
+740 |             .compare(&values.absolute(&latitude)?, &ninety)?
+    |              ----------------------------------------------^ the trait `std::convert::From<purrdf_xsd::bigint::LimbScratchError>` is not implemented for `purrdf_xsd::math::MathError`
+    |              |
+    |              this can't be annotated with `?` because it has type `Result<_, purrdf_xsd::bigint::LimbScratchError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0282]: type annotations needed for `context::retained::RetainedBuilder<_>`
+   --> crates/geo-kernel/src/buffer/materialize.rs:610:17
+    |
+610 |             let mut ring = RetainedBuilder::default();
+    |                 ^^^^^^^^
+...
+650 |                         ring.last().expect("nonempty").x(),
+    |                         ------------------------------ type must be known at this point
+    |
+help: consider giving `ring` an explicit type, where the type for type parameter `T` is specified
+    |
+610 |             let mut ring: context::retained::RetainedBuilder<T> = RetainedBuilder::default();
+    |                         +++++++++++++++++++++++++++++++++++++++
+
+warning: method call on a diverging inference variable
+   --> crates/geo-kernel/src/buffer.rs:410:22
+    |
+410 |             &[source.x(), source.y()],
+    |                      ^
+    |
+    = help: consider providing a type annotation
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #156047 <https://github.com/rust-lang/rust/issues/156047>
+    = note: `-D method-call-on-diverging-infer-var` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(method_call_on_diverging_infer_var)]`
+    = note: the `method_call_on_diverging_infer_var` lint ignores `-D warnings`
+
+error[E0599]: no method named `x` found for type `_` in the current scope
+   --> crates/geo-kernel/src/buffer.rs:410:22
+    |
+410 |             &[source.x(), source.y()],
+    |                      ^ method not found in `_`
+
+error[E0599]: no method named `y` found for type `!` in the current scope
+   --> crates/geo-kernel/src/buffer.rs:410:34
+    |
+410 |             &[source.x(), source.y()],
+    |                                  ^ method not found in `!`
+
+warning: unreachable call
+   --> crates/geo-kernel/src/buffer.rs:410:34
+    |
+410 |             &[source.x(), source.y()],
+    |                           ------ ^ unreachable call
+    |                           |
+    |                           any code following this expression is unreachable
+    |
+    = note: `-D unreachable-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unreachable_code)]`
+    = note: the `unreachable_code` lint ignores `-D warnings`
+
+warning: unreachable call
+   --> crates/geo-kernel/src/buffer.rs:412:47
+    |
+412 |             || PreparedCoordinate::new(source.clone(), &reference),
+    |                                        ------ ^^^^^ unreachable call
+    |                                        |
+    |                                        any code following this expression is unreachable
+
+error[E0599]: no method named `owned_heap_bytes` found for reference `&purrdf_core::TermValue` in the current scope
+   --> crates/geo-kernel/src/carrier/term.rs:125:26
+    |
+124 |                       let bytes = term
+    |  _________________________________-
+125 | |                         .owned_heap_bytes()
+    | |                         -^^^^^^^^^^^^^^^^ method not found in `&purrdf_core::TermValue`
+    | |_________________________|
+    |
+
+error[E0599]: no method named `text_payload_bytes` found for reference `&purrdf_core::TermValue` in the current scope
+   --> crates/geo-kernel/src/carrier/term.rs:131:26
+    |
+130 |                       let text = term
+    |  ________________________________-
+131 | |                         .text_payload_bytes()
+    | |                         -^^^^^^^^^^^^^^^^^^ method not found in `&purrdf_core::TermValue`
+    | |_________________________|
+    |
+
+error[E0277]: `?` couldn't convert the error to `std::collections::TryReserveError`
+   --> crates/geo-kernel/src/carrier.rs:87:65
+    |
+ 87 |         memory.add_bytes(core::alloc::Layout::new::<T>().size())?;
+    |                -------------------------------------------------^ the trait `std::convert::From<purrdf_lex::allocation::StorageError>` is not implemented for `std::collections::TryReserveError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, purrdf_lex::allocation::StorageError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<purrdf_lex::allocation::StorageError>` is not implemented for `std::collections::TryReserveError`
+      but trait `From<std::collections::TryReserveErrorKind>` is implemented for it
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/mod.rs:153:1
+    |
+153 | const impl From<TryReserveErrorKind> for TryReserveError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `std::collections::TryReserveErrorKind`, found `purrdf_lex::allocation::StorageError`
+
+error[E0308]: mismatched types
+  --> crates/geo-kernel/src/carrier.rs:86:5
+   |
+85 |   ) -> Result<Box<T>, StorageError> {
+   |        ---------------------------- expected `std::result::Result<std::boxed::Box<T>, purrdf_lex::allocation::StorageError>` because of return type
+86 | /     with_storage(storage, |memory| {
+87 | |         memory.add_bytes(core::alloc::Layout::new::<T>().size())?;
+88 | |         purrdf_lex::allocation::try_boxed(value)
+89 | |     })
+   | |______^ expected `Result<Box<T>, StorageError>`, found `Result<Box<T>, TryReserveError>`
+   |
+   = note: expected enum `Result<_, purrdf_lex::allocation::StorageError>`
+              found enum `Result<_, std::collections::TryReserveError>`
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/cells/cover/chart.rs:327:17
+    |
+327 |                 Ok((
+    |                 ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+327 |                 Ok::<(purrdf_xsd::exact::GeometricRational, purrdf_xsd::exact::GeometricRational), E>((
+    |                   +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/cells/index.rs:279:13
+    |
+279 |             Ok(a.key.cmp(&b.key))
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+279 |             Ok::<std::cmp::Ordering, E>(a.key.cmp(&b.key))
+    |               +++++++++++++++++++++++++
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/cells/index.rs:671:13
+    |
+671 |             Ok(a.cmp(b))
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+671 |             Ok::<std::cmp::Ordering, E>(a.cmp(b))
+    |               +++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/cells/index.rs:741:47
+    |
+741 |                         values.decimal_digits(value.numerator())?,
+    |                                -------------- ^^^^^^^^^^^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+    |                                |
+    |                                arguments to this method are incorrect
+    |
+    = note: expected reference `&BigInt`
+                    found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:61:19
+    |
+ 61 |     pub(crate) fn decimal_digits(
+    |                   ^^^^^^^^^^^^^^
+ 62 |         &self,
+ 63 |         value: &Int,
+    |         -----------
+help: consider borrowing here
+    |
+741 |                         values.decimal_digits(&value.numerator())?,
+    |                                               +
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/cells/index.rs:742:47
+    |
+742 |                         values.decimal_digits(value.denominator())?,
+    |                                -------------- ^^^^^^^^^^^^^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+    |                                |
+    |                                arguments to this method are incorrect
+    |
+    = note: expected reference `&BigInt`
+                    found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:61:19
+    |
+ 61 |     pub(crate) fn decimal_digits(
+    |                   ^^^^^^^^^^^^^^
+ 62 |         &self,
+ 63 |         value: &Int,
+    |         -----------
+help: consider borrowing here
+    |
+742 |                         values.decimal_digits(&value.denominator())?,
+    |                                               +
+
+error[E0283]: type annotations needed
+   --> crates/geo-kernel/src/construct.rs:420:9
+    |
+419 |     let mut run = memory.try_map(positions, |&(x, y), _| {
+    |                          ------- type must be known at this point
+420 |         Ok(Coord::xy(arithmetic.original(x)?, arithmetic.original(y)?))
+    |         ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+note: multiple `impl`s satisfying `_: std::convert::From<purrdf_lex::allocation::StorageError>` found
+   --> crates/geo-kernel/src/geojson.rs:264:1
+    |
+264 |   impl From<StorageError> for ReadFailure {
+    |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/geo-kernel/src/error.rs:571:1
+    |
+571 | / purrdf_lex::variant_from!(GeoError {
+572 | |     Storage(purrdf_lex::allocation::StorageError),
+573 | |     NumericalScratch(purrdf_xsd::integer::LimbScratchError),
+574 | | });
+    | |__^
+    = note: and more `impl`s found in the following crates: `purrdf_cdt`, `purrdf_core`, `purrdf_iri`, `purrdf_lex`, `purrdf_xsd`:
+            - impl std::convert::From<purrdf_lex::allocation::StorageError> for purrdf_cdt::memory::ReadError;
+            - impl std::convert::From<purrdf_lex::allocation::StorageError> for purrdf_core::DiagnosticPresentationError;
+            - impl std::convert::From<purrdf_lex::allocation::StorageError> for purrdf_core::NativeBuildError;
+            - impl std::convert::From<purrdf_lex::allocation::StorageError> for purrdf_iri::IriReadError;
+            - impl std::convert::From<purrdf_lex::allocation::StorageError> for purrdf_lex::walk::DebugWriteError;
+            - impl std::convert::From<purrdf_lex::allocation::StorageError> for purrdf_xsd::exact::DecimalTextError;
+note: required by a bound in `purrdf_lex::allocation::Memory::<'a, S>::try_map`
+   --> crates/lex/src/allocation.rs:480:29
+    |
+480 |     pub fn try_map<T, U, E: From<StorageError>>(
+    |                             ^^^^^^^^^^^^^^^^^^ required by this bound in `Memory::<'a, S>::try_map`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider specifying the generic arguments
+    |
+420 |         Ok::<geom::Coord, E>(Coord::xy(arithmetic.original(x)?, arithmetic.original(y)?))
+    |           ++++++++++++++++++
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/construct.rs:466:9
+    |
+466 |         Ok(arithmetic.compare_coord(left, right)?.is_eq())
+    |         ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+466 |         Ok::<bool, E>(arithmetic.compare_coord(left, right)?.is_eq())
+    |           +++++++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/context/retained.rs:452:30
+    |
+438 | pub fn retain_produced_with_storage<S: Admission + Send + Sync + 'static>(
+    |                                     - found this type parameter
+...
+452 |             producer.produce(&mut memory)
+    |                      ------- ^^^^^^^^^^^ expected `&mut Memory<'_, dyn Admission>`, found `&mut Memory<'_, S>`
+    |                      |
+    |                      arguments to this method are incorrect
+    |
+    = note: expected mutable reference `&mut Memory<'_, dyn purrdf_lex::allocation::Admission>`
+               found mutable reference `&mut Memory<'_, S>`
+    = help: type parameters must be constrained to match other types
+    = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters
+note: method defined here
+   --> crates/geo-kernel/src/context/retained.rs:386:8
+    |
+386 |     fn produce(&mut self, memory: &mut Memory<'_, dyn Admission + '_>) -> Result<(), GeoError>;
+    |        ^^^^^^^            ------
+
+error[E0599]: no method named `is_negative` found for reference `&purrdf_xsd::exact::GeometricRational` in the current scope
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:106:77
+    |
+106 |             Self::Physical(threshold) => MinimumAnswer::Physical(!threshold.is_negative()),
+    |                                                                             ^^^^^^^^^^^ method not found in `&purrdf_xsd::exact::GeometricRational`
+
+error[E0689]: can't call method `checked_add` on ambiguous numeric type `{integer}`
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:709:37
+    |
+709 |                 retained = retained.checked_add(result.workspace_bytes).ok_or(
+    |                                     ^^^^^^^^^^^
+    |
+help: you must specify a type for this binding, like `i32`
+    |
+697 |     let mut retained: i32 = 0;
+    |                     +++++
+
+error[E0599]: no method named `is_negative` found for reference `&purrdf_xsd::exact::GeometricRational` in the current scope
+   --> crates/geo-kernel/src/ellipsoidal/distance.rs:794:22
+    |
+794 |         && threshold.is_negative()
+    |                      ^^^^^^^^^^^ method not found in `&purrdf_xsd::exact::GeometricRational`
+
+error[E0599]: no method named `is_negative` found for struct `purrdf_xsd::exact::GeometricRational` in the current scope
+    --> crates/geo-kernel/src/ellipsoidal/distance.rs:1263:18
+     |
+1263 |         if lower.is_negative() {
+     |                  ^^^^^^^^^^^ method not found in `purrdf_xsd::exact::GeometricRational`
+
+error[E0599]: no method named `is_negative` found for struct `purrdf_xsd::exact::GeometricRational` in the current scope
+    --> crates/geo-kernel/src/ellipsoidal/distance.rs:1279:21
+     |
+1279 |     if sample_lower.is_negative() {
+     |                     ^^^^^^^^^^^ method not found in `purrdf_xsd::exact::GeometricRational`
+
+error[E0599]: no method named `is_negative` found for struct `purrdf_xsd::exact::GeometricRational` in the current scope
+    --> crates/geo-kernel/src/ellipsoidal/distance.rs:1326:19
+     |
+1326 |     if node.lower.is_negative() {
+     |                   ^^^^^^^^^^^ method not found in `purrdf_xsd::exact::GeometricRational`
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/geodesic/arc_view.rs:320:14
+    |
+320 |             |values| values.normalize(azimuth, 0),
+    |              ^^^^^^  ------ type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+320 |             |values: /* Type */| values.normalize(azimuth, 0),
+    |                    ++++++++++++
+
+error[E0282]: type annotations needed
+  --> crates/geo-kernel/src/geodesic/coefficients.rs:73:17
+   |
+73 |                 value
+   |                 ^^^^^ cannot infer type
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/geojson.rs:136:39
+    |
+136 |                 body(&mut self.inner, &mut memory)
+    |                 ----                  ^^^^^^^^^^^ expected `&mut Memory<'_, dyn Admission>`, found `&mut Memory<'_, Resident>`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected mutable reference `&mut Memory<'_, dyn purrdf_lex::allocation::Admission>`
+               found mutable reference `&mut Memory<'_, purrdf_lex::allocation::Resident>`
+    = help: `purrdf_lex::allocation::Resident` implements `Admission` so you could box the found value and coerce it to the trait object `Box<dyn Admission>`, you will have to change the expected type as well
+note: type parameter defined here
+   --> crates/geo-kernel/src/geojson.rs:126:15
+    |
+126 |           body: impl FnOnce(
+    |  _______________^
+127 | |             &mut JsonReader<'a>,
+128 | |             &mut Memory<'_, dyn Admission + '_>,
+129 | |         ) -> Result<T, purrdf_lex::json::Error>,
+    | |_______________________________________________^
+
+error[E0277]: expected an `FnOnce(std::string::String)` closure, found `fn(std::borrow::Cow<'static, str>) -> error::GeoError {error::GeoError::Domain}`
+   --> crates/geo-kernel/src/geom.rs:935:22
+    |
+935 |                 .map(GeoError::Domain)
+    |                  --- ^^^^^^^^^^^^^^^^ expected an `FnOnce(std::string::String)` closure, found `fn(std::borrow::Cow<'static, str>) -> error::GeoError {error::GeoError::Domain}`
+    |                  |
+    |                  required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(std::string::String)` is not implemented for fn item `fn(std::borrow::Cow<'static, str>) -> error::GeoError {error::GeoError::Domain}`
+    = note: expected a closure with signature `fn(std::string::String)`
+               found a closure with signature `fn(std::borrow::Cow<'static, str>)`
+note: required by a bound in `std::result::Result::<T, E>::map`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:834:12
+    |
+832 |     pub const fn map<U, F>(self, op: F) -> Result<U, E>
+    |                  --- required by a bound in this associated function
+833 |     where
+834 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map`
+
+error[E0599]: no method named `text_payload_bytes` found for reference `&purrdf_core::TermValue` in the current scope
+   --> crates/geo-kernel/src/index/projection.rs:433:34
+    |
+432 |   ...                   let bytes = term
+    |  ___________________________________-
+433 | | ...                       .text_payload_bytes()
+    | |                           -^^^^^^^^^^^^^^^^^^ method not found in `&purrdf_core::TermValue`
+    | |___________________________|
+    |
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/index.rs:546:40
+    |
+546 |                     let iri = work.iri(vocab.term(term))?;
+    |                                    --- ^^^^^^^^^^^^^^^^ expected `&str`, found `String`
+    |                                    |
+    |                                    arguments to this method are incorrect
+    |
+note: method defined here
+   --> crates/geo-kernel/src/index/projection.rs:178:19
+    |
+178 |     pub(super) fn iri(&mut self, text: &str) -> Result<TermValue, GeoError> {
+    |                   ^^^            ----------
+help: consider borrowing here
+    |
+546 |                     let iri = work.iri(&vocab.term(term))?;
+    |                                        +
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/geo-kernel/src/metric/unit.rs:129:23
+    |
+129 |             Ok(values.compare(&(metres_per_unit.signum()), &(0))?.is_gt())
+    |                       ^^^^^^^ ---------------------------  ---- expected `&GeometricRational`, found `&{integer}`
+    |                               |
+    |                               expected `&GeometricRational`, found `&i32`
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&i32`
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&{integer}`
+note: method defined here
+   --> crates/geo-kernel/src/numerical.rs:389:19
+    |
+389 |     pub(crate) fn compare(
+    |                   ^^^^^^^
+390 |         &self,
+391 |         a: &Rat,
+    |         -------
+392 |         b: &Rat,
+    |         -------
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:125:17
+    |
+121 |             match prepare_image(
+    |                   ------------- arguments to this function are incorrect
+...
+125 |                 image.chain.clone(),
+    |                 ^^^^^^^^^^^^^^^^^^^ expected `Arc<OperationChain>`, found `OperationChain`
+    |
+    = note: expected struct `std::sync::Arc<OperationChain>`
+               found struct `OperationChain`
+note: function defined here
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:313:32
+    |
+313 | pub(in super::super::super) fn prepare_image(
+    |                                ^^^^^^^^^^^^^
+...
+317 |     chain: Arc<OperationChain>,
+    |     --------------------------
+help: call `Into::into` on this expression to convert `operation::OperationChain` into `std::sync::Arc<operation::OperationChain>`
+    |
+125 |                 image.chain.clone().into(),
+    |                                    +++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:206:13
+    |
+202 |         prepare_image(
+    |         ------------- arguments to this function are incorrect
+...
+206 |             image.chain.clone(),
+    |             ^^^^^^^^^^^^^^^^^^^ expected `Arc<OperationChain>`, found `OperationChain`
+    |
+    = note: expected struct `std::sync::Arc<OperationChain>`
+               found struct `OperationChain`
+note: function defined here
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:313:32
+    |
+313 | pub(in super::super::super) fn prepare_image(
+    |                                ^^^^^^^^^^^^^
+...
+317 |     chain: Arc<OperationChain>,
+    |     --------------------------
+help: call `Into::into` on this expression to convert `operation::OperationChain` into `std::sync::Arc<operation::OperationChain>`
+    |
+206 |             image.chain.clone().into(),
+    |                                +++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:305:9
+    |
+301 |     prepare_image(
+    |     ------------- arguments to this function are incorrect
+...
+305 |         image.chain.clone(),
+    |         ^^^^^^^^^^^^^^^^^^^ expected `Arc<OperationChain>`, found `OperationChain`
+    |
+    = note: expected struct `std::sync::Arc<OperationChain>`
+               found struct `OperationChain`
+note: function defined here
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:313:32
+    |
+313 | pub(in super::super::super) fn prepare_image(
+    |                                ^^^^^^^^^^^^^
+...
+317 |     chain: Arc<OperationChain>,
+    |     --------------------------
+help: call `Into::into` on this expression to convert `operation::OperationChain` into `std::sync::Arc<operation::OperationChain>`
+    |
+305 |         image.chain.clone().into(),
+    |                            +++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:448:9
+    |
+444 |     prepare_image(
+    |     ------------- arguments to this function are incorrect
+...
+448 |         image.chain.clone(),
+    |         ^^^^^^^^^^^^^^^^^^^ expected `Arc<OperationChain>`, found `OperationChain`
+    |
+    = note: expected struct `std::sync::Arc<OperationChain>`
+               found struct `OperationChain`
+note: function defined here
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:313:32
+    |
+313 | pub(in super::super::super) fn prepare_image(
+    |                                ^^^^^^^^^^^^^
+...
+317 |     chain: Arc<OperationChain>,
+    |     --------------------------
+help: call `Into::into` on this expression to convert `operation::OperationChain` into `std::sync::Arc<operation::OperationChain>`
+    |
+448 |         image.chain.clone().into(),
+    |                            +++++++
+
+error[E0599]: no method named `admit_output` found for struct `carrier::output::MaterializationStorage` in the current scope
+   --> crates/geo-kernel/src/operation/geometry.rs:409:64
+    |
+409 |         let admission = output_bytes.and_then(|bytes| retained.admit_output(bytes, context));
+    |                                                                ^^^^^^^^^^^^
+    |
+   ::: crates/geo-kernel/src/carrier/output.rs:11:1
+    |
+ 11 | pub(crate) struct MaterializationStorage {
+    | ---------------------------------------- method `admit_output` not found for this struct
+    |
+help: there is a method `adopt_admitted_output` with a similar name
+    |
+409 -         let admission = output_bytes.and_then(|bytes| retained.admit_output(bytes, context));
+409 +         let admission = output_bytes.and_then(|bytes| retained.adopt_admitted_output(bytes, context));
+    |
+
+error[E0599]: no method named `finish` found for struct `carrier::output::MaterializationStorage` in the current scope
+   --> crates/geo-kernel/src/operation/geometry.rs:411:22
+    |
+411 |             retained.finish(false, context, &mut progress)?;
+    |                      ^^^^^^ method not found in `carrier::output::MaterializationStorage`
+    |
+   ::: crates/geo-kernel/src/carrier/output.rs:11:1
+    |
+ 11 | pub(crate) struct MaterializationStorage {
+    | ---------------------------------------- method `finish` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `finish`, perhaps you need to implement one of them:
+            candidate #1: `index::PairWorker`
+            candidate #2: `purrdf_events::RdfEventSink`
+            candidate #3: `regex_syntax::ast::visitor::Visitor`
+            candidate #4: `regex_syntax::hir::visitor::Visitor`
+            candidate #5: `std::hash::Hasher`
+
+error[E0599]: no method named `finish` found for struct `carrier::output::MaterializationStorage` in the current scope
+   --> crates/geo-kernel/src/operation/geometry.rs:444:39
+    |
+444 |         let output_receipt = retained.finish(result.is_ok(), context, &mut progress)?;
+    |                                       ^^^^^^ method not found in `carrier::output::MaterializationStorage`
+    |
+   ::: crates/geo-kernel/src/carrier/output.rs:11:1
+    |
+ 11 | pub(crate) struct MaterializationStorage {
+    | ---------------------------------------- method `finish` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `finish`, perhaps you need to implement one of them:
+            candidate #1: `index::PairWorker`
+            candidate #2: `purrdf_events::RdfEventSink`
+            candidate #3: `regex_syntax::ast::visitor::Visitor`
+            candidate #4: `regex_syntax::hir::visitor::Visitor`
+            candidate #5: `std::hash::Hasher`
+
+error[E0599]: no method named `admit_output` found for struct `carrier::output::MaterializationStorage` in the current scope
+   --> crates/geo-kernel/src/operation/geometry.rs:512:23
+    |
+512 |         self.retained.admit_output(bytes, self.context)?;
+    |                       ^^^^^^^^^^^^
+    |
+   ::: crates/geo-kernel/src/carrier/output.rs:11:1
+    |
+ 11 | pub(crate) struct MaterializationStorage {
+    | ---------------------------------------- method `admit_output` not found for this struct
+    |
+help: there is a method `adopt_admitted_output` with a similar name
+    |
+512 -         self.retained.admit_output(bytes, self.context)?;
+512 +         self.retained.adopt_admitted_output(bytes, self.context)?;
+    |
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:706:13
+    |
+700 |         let left = binary(
+    |                    ------ arguments to this function are incorrect
+...
+706 |             crate::numerical::ExactValues::subtract,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::subtract}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:714:13
+    |
+708 |         let left = binary(
+    |                    ------ arguments to this function are incorrect
+...
+714 |             crate::numerical::ExactValues::subtract,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::subtract}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:722:13
+    |
+716 |         let mixed = binary(
+    |                     ------ arguments to this function are incorrect
+...
+722 |             crate::numerical::ExactValues::add,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::add}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:733:13
+    |
+727 |         let dx = binary(
+    |                  ------ arguments to this function are incorrect
+...
+733 |             crate::numerical::ExactValues::subtract,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::subtract}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:749:13
+    |
+743 |         let dy = binary(
+    |                  ------ arguments to this function are incorrect
+...
+749 |             crate::numerical::ExactValues::subtract,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::subtract}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:765:13
+    |
+759 |         matrix[axis][0] = binary(
+    |                           ------ arguments to this function are incorrect
+...
+765 |             crate::numerical::ExactValues::add,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::add}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:773:13
+    |
+767 |         matrix[axis][1] = binary(
+    |                           ------ arguments to this function are incorrect
+...
+773 |             crate::numerical::ExactValues::add,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::add}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:781:13
+    |
+775 |         let x = binary(
+    |                 ------ arguments to this function are incorrect
+...
+781 |             crate::numerical::ExactValues::multiply,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::multiply}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:789:13
+    |
+783 |         let y = binary(
+    |                 ------ arguments to this function are incorrect
+...
+789 |             crate::numerical::ExactValues::multiply,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::multiply}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:797:13
+    |
+791 |         let c = binary(
+    |                 ------ arguments to this function are incorrect
+...
+797 |             crate::numerical::ExactValues::subtract,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::subtract}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/models_inverse.rs:805:13
+    |
+799 |         constant[axis] = binary(
+    |                          ------ arguments to this function are incorrect
+...
+805 |             crate::numerical::ExactValues::subtract,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ one type is more general than the other
+    |
+    = note: expected fn pointer `for<'a, 'b, 'c, 'd> fn(&'a ExactValues<'b>, &'c Rat, &'d Rat) -> Result<_, _>`
+                  found fn item `for<'a, 'b, 'c> fn(&'a ExactValues<'_>, &'b Rat, &'c Rat) -> Result<_, _> {numerical::ExactValues::<'_>::subtract}`
+note: function defined here
+   --> crates/geo-kernel/src/operation/models_inverse.rs:662:4
+    |
+662 |   fn binary(
+    |      ^^^^^^
+...
+668 | /     evaluate: fn(
+669 | |         &crate::numerical::ExactValues<'_>,
+670 | |         &Rat,
+671 | |         &Rat,
+672 | |     ) -> Result<Rat, purrdf_xsd::integer::LimbScratchError>,
+    | |___________________________________________________________-
+
+error[E0277]: the trait bound `&mut purrdf_hash::blake3::Streaming<16384>: purrdf_hash::Digest` is not satisfied
+   --> crates/geo-kernel/src/operation.rs:68:47
+    |
+ 68 |             purrdf_hash::frame::frame_le_into(transverse, field);
+    |             --------------------------------- ^^^^^^^^^^ the trait `purrdf_hash::Digest` is not implemented for `&mut purrdf_hash::blake3::Streaming<16384>`
+    |             |
+    |             required by a bound introduced by this call
+    |
+help: the trait `purrdf_hash::Digest` is implemented for `purrdf_hash::blake3::Streaming<BUFFER>`
+   --> crates/hash/src/blake3.rs:476:1
+    |
+476 | impl<const BUFFER: usize> crate::Digest for Streaming<BUFFER> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `purrdf_hash::frame::frame_le_into`
+   --> crates/hash/src/frame.rs:122:25
+    |
+122 | pub fn frame_le_into<D: Digest + ?Sized>(digest: &mut D, bytes: &[u8]) {
+    |                         ^^^^^^ required by this bound in `frame_le_into`
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/operation.rs:1917:39
+     |
+1917 |                 values.decimal_digits(value.numerator())?,
+     |                        -------------- ^^^^^^^^^^^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+     |                        |
+     |                        arguments to this method are incorrect
+     |
+     = note: expected reference `&BigInt`
+                     found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+    --> crates/geo-kernel/src/numerical.rs:61:19
+     |
+  61 |     pub(crate) fn decimal_digits(
+     |                   ^^^^^^^^^^^^^^
+  62 |         &self,
+  63 |         value: &Int,
+     |         -----------
+help: consider borrowing here
+     |
+1917 |                 values.decimal_digits(&value.numerator())?,
+     |                                       +
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/operation.rs:1918:39
+     |
+1918 |                 values.decimal_digits(value.denominator())?,
+     |                        -------------- ^^^^^^^^^^^^^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+     |                        |
+     |                        arguments to this method are incorrect
+     |
+     = note: expected reference `&BigInt`
+                     found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+    --> crates/geo-kernel/src/numerical.rs:61:19
+     |
+  61 |     pub(crate) fn decimal_digits(
+     |                   ^^^^^^^^^^^^^^
+  62 |         &self,
+  63 |         value: &Int,
+     |         -----------
+help: consider borrowing here
+     |
+1918 |                 values.decimal_digits(&value.denominator())?,
+     |                                       +
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:461:28
+    |
+461 |                 arithmetic.exact(Linear, &[value[0], point[0]], || value[0] == point[0])?
+    |                            ^^^^^                                -- takes 0 arguments
+    |                            |
+    |                            expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+461 |                 arithmetic.exact(Linear, &[value[0], point[0]], |_| value[0] == point[0])?
+    |                                                                  +
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:462:35
+    |
+462 |                     && arithmetic.exact(Linear, &[value[1], point[1]], || value[1] == point[1])?,
+    |                                   ^^^^^                                -- takes 0 arguments
+    |                                   |
+    |                                   expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+462 |                     && arithmetic.exact(Linear, &[value[1], point[1]], |_| value[1] == point[1])?,
+    |                                                                         +
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:476:24
+    |
+476 |             arithmetic.exact(RationalAdd, &[end[0], start[0]], || end[0].sub(start[0]))?;
+    |                        ^^^^^                                   -- takes 0 arguments
+    |                        |
+    |                        expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+476 |             arithmetic.exact(RationalAdd, &[end[0], start[0]], |_| end[0].sub(start[0]))?;
+    |                                                                 +
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:478:24
+    |
+478 |             arithmetic.exact(RationalAdd, &[end[1], start[1]], || end[1].sub(start[1]))?;
+    |                        ^^^^^                                   -- takes 0 arguments
+    |                        |
+    |                        expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+478 |             arithmetic.exact(RationalAdd, &[end[1], start[1]], |_| end[1].sub(start[1]))?;
+    |                                                                 +
+
+warning: method call on a diverging inference variable
+   --> crates/geo-kernel/src/prepared.rs:479:39
+    |
+479 |         let parameter = if !longitude.is_zero() {
+    |                                       ^^^^^^^
+    |
+    = help: consider providing a type annotation
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #156047 <https://github.com/rust-lang/rust/issues/156047>
+
+error[E0599]: no method named `is_zero` found for type `_` in the current scope
+   --> crates/geo-kernel/src/prepared.rs:479:39
+    |
+479 |         let parameter = if !longitude.is_zero() {
+    |                                       ^^^^^^^ method not found in `_`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `IntervalBound` which provides `is_zero` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_xsd::math::IntervalBound;
+    |
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:480:36
+    |
+480 |             let delta = arithmetic.exact(RationalAdd, &[point[0], start[0]], || {
+    |                                    ^^^^^                                     -- takes 0 arguments
+    |                                    |
+    |                                    expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+480 |             let delta = arithmetic.exact(RationalAdd, &[point[0], start[0]], |_| {
+    |                                                                               +
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/prepared.rs:483:56
+    |
+483 |             arithmetic.exact(RationalDivide, &[&delta, &longitude], || {
+    |                                                        ^^^^^^^^^^ expected `&GeometricRational`, found `&!`
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&!`
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:483:24
+    |
+483 |             arithmetic.exact(RationalDivide, &[&delta, &longitude], || {
+    |                        ^^^^^ expected closure that takes 1 argument -- takes 0 arguments
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+483 |             arithmetic.exact(RationalDivide, &[&delta, &longitude], |_| {
+    |                                                                      +
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/prepared.rs:484:27
+    |
+484 |                 delta.div(&longitude)
+    |                       --- ^^^^^^^^^^ expected `&GeometricRational`, found `&!`
+    |                       |
+    |                       arguments to this method are incorrect
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&!`
+note: method defined here
+   --> crates/xsd/src/exact/rational/geometry.rs:221:12
+    |
+221 |     pub fn div(&self, other: &Self) -> Option<Self> {
+    |            ^^^
+
+warning: method call on a diverging inference variable
+   --> crates/geo-kernel/src/prepared.rs:486:29
+    |
+486 |         } else if !latitude.is_zero() {
+    |                             ^^^^^^^
+    |
+    = help: consider providing a type annotation
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #156047 <https://github.com/rust-lang/rust/issues/156047>
+
+error[E0599]: no method named `is_zero` found for type `_` in the current scope
+   --> crates/geo-kernel/src/prepared.rs:486:29
+    |
+486 |         } else if !latitude.is_zero() {
+    |                             ^^^^^^^ method not found in `_`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `IntervalBound` which provides `is_zero` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_xsd::math::IntervalBound;
+    |
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:487:36
+    |
+487 |             let delta = arithmetic.exact(RationalAdd, &[point[1], start[1]], || {
+    |                                    ^^^^^                                     -- takes 0 arguments
+    |                                    |
+    |                                    expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+487 |             let delta = arithmetic.exact(RationalAdd, &[point[1], start[1]], |_| {
+    |                                                                               +
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/prepared.rs:490:56
+    |
+490 |             arithmetic.exact(RationalDivide, &[&delta, &latitude], || {
+    |                                                        ^^^^^^^^^ expected `&GeometricRational`, found `&!`
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&!`
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:490:24
+    |
+490 |             arithmetic.exact(RationalDivide, &[&delta, &latitude], || {
+    |                        ^^^^^                                       -- takes 0 arguments
+    |                        |
+    |                        expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+490 |             arithmetic.exact(RationalDivide, &[&delta, &latitude], |_| {
+    |                                                                     +
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/prepared.rs:491:27
+    |
+491 |                 delta.div(&latitude)
+    |                       --- ^^^^^^^^^ expected `&GeometricRational`, found `&!`
+    |                       |
+    |                       arguments to this method are incorrect
+    |
+    = note: expected reference `&purrdf_xsd::exact::GeometricRational`
+               found reference `&!`
+note: method defined here
+   --> crates/xsd/src/exact/rational/geometry.rs:221:12
+    |
+221 |     pub fn div(&self, other: &Self) -> Option<Self> {
+    |            ^^^
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:500:24
+    |
+500 |             arithmetic.exact(RationalCompare, &[&parameter], || Rat::zero() <= parameter)?;
+    |                        ^^^^^                                 -- takes 0 arguments
+    |                        |
+    |                        expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+500 |             arithmetic.exact(RationalCompare, &[&parameter], |_| Rat::zero() <= parameter)?;
+    |                                                               +
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:502:24
+    |
+502 |             arithmetic.exact(RationalCompare, &[&parameter], || parameter <= Rat::one())?;
+    |                        ^^^^^                                 -- takes 0 arguments
+    |                        |
+    |                        expected closure that takes 1 argument
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+502 |             arithmetic.exact(RationalCompare, &[&parameter], |_| parameter <= Rat::one())?;
+    |                                                               +
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+   --> crates/geo-kernel/src/prepared.rs:513:24
+    |
+513 |             arithmetic.exact(Linear, &[&longitude, &latitude, point[0], point[1]], || {
+    |                        ^^^^^ expected closure that takes 1 argument                -- takes 0 arguments
+    |
+help: consider changing the closure to take and ignore the expected argument
+    |
+513 |             arithmetic.exact(Linear, &[&longitude, &latitude, point[0], point[1]], |_| {
+    |                                                                                     +
+
+warning: method call on a diverging inference variable
+   --> crates/geo-kernel/src/prepared.rs:516:18
+    |
+516 |         Ok(equal.then_some(parameter))
+    |                  ^^^^^^^^^
+    |
+    = help: consider providing a type annotation
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #156047 <https://github.com/rust-lang/rust/issues/156047>
+
+error[E0599]: no method named `then_some` found for type `_` in the current scope
+   --> crates/geo-kernel/src/prepared.rs:516:18
+    |
+516 |         Ok(equal.then_some(parameter))
+    |                  ^^^^^^^^^ method not found in `_`
+
+error[E0282]: type annotations needed
+    --> crates/geo-kernel/src/prepared.rs:1281:17
+     |
+1281 |                 Ok(())
+     |                 ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+     |
+help: consider specifying the generic arguments
+     |
+1281 |                 Ok::<(), E>(())
+     |                   +++++++++
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/prepared.rs:3272:33
+     |
+3272 |                 .decimal_digits(value.numerator())
+     |                  -------------- ^^^^^^^^^^^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BigInt`
+                     found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+    --> crates/geo-kernel/src/numerical.rs:61:19
+     |
+  61 |     pub(crate) fn decimal_digits(
+     |                   ^^^^^^^^^^^^^^
+  62 |         &self,
+  63 |         value: &Int,
+     |         -----------
+help: consider borrowing here
+     |
+3272 |                 .decimal_digits(&value.numerator())
+     |                                 +
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/prepared.rs:3275:33
+     |
+3275 |                 .decimal_digits(value.denominator())
+     |                  -------------- ^^^^^^^^^^^^^^^^^^^ expected `&BigInt`, found `Cow<'_, BigInt>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&BigInt`
+                     found enum `std::borrow::Cow<'_, BigInt>`
+note: method defined here
+    --> crates/geo-kernel/src/numerical.rs:61:19
+     |
+  61 |     pub(crate) fn decimal_digits(
+     |                   ^^^^^^^^^^^^^^
+  62 |         &self,
+  63 |         value: &Int,
+     |         -----------
+help: consider borrowing here
+     |
+3275 |                 .decimal_digits(&value.denominator())
+     |                                 +
+
+error[E0277]: expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:148:45: 148:51}`
+   --> crates/geo-kernel/src/topology/relate.rs:148:24
+    |
+148 |     relate_inner(a, b, &mut LegacyWork(&mut |_, _| Ok::<_, GeoError>(())))
+    |     ------------       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:148:45: 148:51}`
+    |     |
+    |     required by a bound introduced by this call
+    |
+    = help: the trait `for<'a> FnOnce(u64, std::option::Option<&'a geom::Coord>)` is not implemented for closure `{closure@crates/geo-kernel/src/topology/relate.rs:148:45: 148:51}`
+    = note: expected a closure with signature `for<'a> fn(_, Option<&'a Coord>)`
+               found a closure with signature `fn(_, Option<&Coord>)`
+note: required for `LegacyWork<'_, {closure@relate.rs:148:45}>` to implement `topology::relate::RelateWork`
+   --> crates/geo-kernel/src/topology/relate.rs:202:61
+    |
+202 | impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for LegacyWork<'_, F> {
+    |                                       --------------------  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^
+    |                                       |
+    |                                       unsatisfied trait bound introduced here
+note: required by a bound in `topology::relate::relate_inner`
+   --> crates/geo-kernel/src/topology/relate.rs:263:20
+    |
+263 | fn relate_inner<W: RelateWork>(
+    |                    ^^^^^^^^^^ required by this bound in `relate_inner`
+    = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/024c713b6b1e158d/out/purrdf_geo_kernel-024c713b6b1e158d.long-type-12063173982489904181.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+warning: unused import: `crate::context::NativeDetached`
+   --> crates/geo-kernel/src/profile.rs:526:13
+    |
+526 |         use crate::context::NativeDetached;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+   --> crates/geo-kernel/src/profile.rs:541:13
+    |
+541 |         use crate::context::NativeDetached;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+   --> crates/geo-kernel/src/profile.rs:518:13
+    |
+518 |         use crate::context::NativeDetached;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+  --> crates/geo-kernel/src/prepared.rs:55:13
+   |
+55 |         use crate::context::NativeDetached;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+  --> crates/geo-kernel/src/prepared.rs:44:13
+   |
+44 |         use crate::context::NativeDetached;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+  --> crates/geo-kernel/src/prepared.rs:34:13
+   |
+34 |         use crate::context::NativeDetached;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0505]: cannot move out of `axis` because it is borrowed
+   --> crates/geo-kernel/src/cells/carrier.rs:119:9
+    |
+ 94 |         axis,
+    |         ---- binding `axis` declared here
+...
+109 |     sources.extend([axis.longitude(), axis.latitude(), &south, &north, upper]);
+    |                     ---- borrow of `axis` occurs here
+...
+119 |         axis,
+    |         ^^^^ move out of `axis` occurs here
+...
+126 | }
+    | - borrow might be used here, when `sources` is dropped and runs the `Drop` code for type `purrdf_core::SmallVec`
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+109 |     sources.extend([axis.clone().longitude(), axis.latitude(), &south, &north, upper]);
+    |                         ++++++++
+
+error[E0505]: cannot move out of `south` because it is borrowed
+   --> crates/geo-kernel/src/cells/carrier.rs:120:9
+    |
+ 95 |         south,
+    |         ----- binding `south` declared here
+...
+109 |     sources.extend([axis.longitude(), axis.latitude(), &south, &north, upper]);
+    |                                                        ------ borrow of `south` occurs here
+...
+120 |         south,
+    |         ^^^^^ move out of `south` occurs here
+...
+126 | }
+    | - borrow might be used here, when `sources` is dropped and runs the `Drop` code for type `purrdf_core::SmallVec`
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+109 |     sources.extend([axis.longitude(), axis.latitude(), &south.clone(), &north, upper]);
+    |                                                              ++++++++
+
+error[E0505]: cannot move out of `north` because it is borrowed
+   --> crates/geo-kernel/src/cells/carrier.rs:121:9
+    |
+ 96 |         north,
+    |         ----- binding `north` declared here
+...
+109 |     sources.extend([axis.longitude(), axis.latitude(), &south, &north, upper]);
+    |                                                                ------ borrow of `north` occurs here
+...
+121 |         north,
+    |         ^^^^^ move out of `north` occurs here
+...
+126 | }
+    | - borrow might be used here, when `sources` is dropped and runs the `Drop` code for type `purrdf_core::SmallVec`
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+109 |     sources.extend([axis.longitude(), axis.latitude(), &south, &north.clone(), upper]);
+    |                                                                      ++++++++
+
+error[E0505]: cannot move out of `walls` because it is borrowed
+   --> crates/geo-kernel/src/cells/carrier.rs:122:21
+    |
+101 |     let walls = longitudes;
+    |         ----- binding `walls` declared here
+...
+110 |     for (west, east) in &walls {
+    |                         ------ borrow of `walls` occurs here
+...
+122 |         longitudes: walls,
+    |                     ^^^^^ move out of `walls` occurs here
+...
+126 | }
+    | - borrow might be used here, when `sources` is dropped and runs the `Drop` code for type `purrdf_core::SmallVec`
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+110 |     for (west, east) in &walls.clone() {
+    |                               ++++++++
+
+error[E0716]: temporary value dropped while borrowed
+    --> crates/geo-kernel/src/prepared.rs:1746:55
+     |
+1746 |           let mut admission = PreparationAdmission::new(context.policy().limits(), None)?;
+     |                                                         ^^^^^^^^^^^^^^^^                 - temporary value is freed at the end of this statement
+     |                                                         |
+     |                                                         creates a temporary value which is freed while still in use
+1747 | /         admission.bytes = u64::try_from(rings.admitted_bytes())
+1748 | |             .map_err(|_| GeoError::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))?;
+     | |________________________________________________________________________________________________- borrow later used here
+     |
+help: consider using a `let` binding to create a longer lived value
+     |
+1746 ~         let binding = context.policy();
+1747 ~         let mut admission = PreparationAdmission::new(binding.limits(), None)?;
+     |
+
+Some errors have detailed explanations: E0061, E0277, E0282, E0283, E0308, E0425, E0432, E0433, E0505...
+For more information about an error, try `rustc --explain E0061`.
+warning: `purrdf-geo-kernel` (lib) generated 44 warnings
+error: could not compile `purrdf-geo-kernel` (lib) due to 117 previous errors; 48 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+ --> crates/geo-kernel/src/atlas/tests.rs:8:5
+  |
+8 | use purrdf_iri::vocab::ogc;
+  |     ^^^^^^^^^^^^^^^^^^^---
+  |                        |
+  |                        no `ogc` in `vocab`
+
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+   --> crates/geo-kernel/src/binding/prepared_image.rs:886:9
+    |
+886 |     use purrdf_iri::vocab::ogc;
+    |         ^^^^^^^^^^^^^^^^^^^---
+    |                            |
+    |                            no `ogc` in `vocab`
+
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+  --> crates/geo-kernel/src/cells/region/tests.rs:11:5
+   |
+11 | use purrdf_iri::vocab::ogc;
+   |     ^^^^^^^^^^^^^^^^^^^---
+   |                        |
+   |                        no `ogc` in `vocab`
+   |
+   = note: unresolved item `crate::binding::tests::ogc` exists but is inaccessible
+
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+   --> crates/geo-kernel/src/index/geographic.rs:774:9
+    |
+774 |     use purrdf_iri::vocab::ogc;
+    |         ^^^^^^^^^^^^^^^^^^^---
+    |                            |
+    |                            no `ogc` in `vocab`
+    |
+    = note: unresolved item `crate::binding::tests::ogc` exists but is inaccessible
+
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+  --> crates/geo-kernel/src/index/projection/tests.rs:11:5
+   |
+11 | use purrdf_iri::vocab::ogc;
+   |     ^^^^^^^^^^^^^^^^^^^---
+   |                        |
+   |                        no `ogc` in `vocab`
+   |
+   = note: unresolved item `crate::binding::tests::ogc` exists but is inaccessible
+
+error[E0432]: unresolved import `purrdf_iri::vocab::ogc`
+ --> crates/geo-kernel/src/prepared/tests.rs:6:5
+  |
+6 | use purrdf_iri::vocab::ogc;
+  |     ^^^^^^^^^^^^^^^^^^^---
+  |                        |
+  |                        no `ogc` in `vocab`
+  |
+  = note: unresolved item `crate::binding::tests::ogc` exists but is inaccessible
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/boundary.rs:540:47
+    |
+540 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/boundary.rs:599:47
+    |
+599 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/boundary.rs:627:47
+    |
+627 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/boundary.rs:667:47
+    |
+667 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/chart_index.rs:289:50
+    |
+289 |         let target = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                                  ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/relate.rs:661:47
+    |
+661 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/union.rs:674:47
+    |
+674 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/union.rs:826:47
+    |
+826 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/union.rs:883:47
+    |
+883 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/union.rs:927:47
+    |
+927 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/atlas/union.rs:989:47
+    |
+989 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/buffer/materialize/global.rs:484:50
+    |
+484 |         let target = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+    |                                                  ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1465:47
+     |
+1465 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1536:47
+     |
+1536 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1600:47
+     |
+1600 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1745:47
+     |
+1745 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1808:47
+     |
+1808 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1862:47
+     |
+1862 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1887:47
+     |
+1887 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:1979:47
+     |
+1979 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:2026:47
+     |
+2026 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/buffer/materialize.rs:2122:47
+     |
+2122 |         let crs = Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                               ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/buffer.rs:486:66
+    |
+486 |             crate::wkt::parse(text, &Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap()).unwrap();
+    |                                                                  ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+  --> crates/geo-kernel/src/carrier/tests.rs:11:32
+   |
+11 |             purrdf_iri::vocab::ogc::geo::GEO_JSON_LITERAL
+   |                                ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+  --> crates/geo-kernel/src/carrier/tests.rs:13:32
+   |
+13 |             purrdf_iri::vocab::ogc::geo::WKT_LITERAL
+   |                                ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+  --> crates/geo-kernel/src/carrier/tests.rs:52:46
+   |
+52 |         datatype.push_str(purrdf_iri::vocab::ogc::geo::WKT_LITERAL);
+   |                                              ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/carrier/tests.rs:246:65
+    |
+246 |     let required = (size_of::<TermValue>() + purrdf_iri::vocab::ogc::geo::WKT_LITERAL.len()) as u64;
+    |                                                                 ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+   --> crates/geo-kernel/src/carrier/tests.rs:270:39
+    |
+270 |     let datatype = purrdf_iri::vocab::ogc::geo::WKT_LITERAL;
+    |                                       ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/context/retained.rs:1526:54
+     |
+1526 |         let crs = crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                                      ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/context/retained.rs:1610:54
+     |
+1610 |         let crs = crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                                      ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/context/retained.rs:1681:54
+     |
+1681 |         let crs = crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                                      ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/ellipsoidal/distance.rs:1761:54
+     |
+1761 |         let crs = crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                                      ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/ellipsoidal.rs:1579:54
+     |
+1579 |         let crs = crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap();
+     |                                                      ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/ellipsoidal.rs:1783:49
+     |
+1783 |             &crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap(),
+     |                                                 ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find `ogc` in `vocab`
+    --> crates/geo-kernel/src/ellipsoidal.rs:1856:49
+     |
+1856 |             &crate::Crs::new(purrdf_iri::vocab::ogc::CRS84).unwrap(),
+     |                                                 ^^^ could not find `ogc` in `vocab`
+
+error[E0433]: cannot find type `Memory` in this scope
+    --> crates/geo-kernel/src/context/retained.rs:1756:35
+     |
+1756 |             producer.produce(&mut Memory::resume(&mut self.1, admitted), &mut work)
+     |                                   ^^^^^^ use of undeclared type `Memory`
+     |
+help: consider importing one of these structs
+     |
+1468 +     use crate::context::retained::Memory;
+     |
+1468 +     use purrdf_lex::allocation::Memory;
+     |
+
+error[E0433]: cannot find type `Arc` in this scope
+   --> crates/geo-kernel/src/prepared/tests.rs:872:17
+    |
+872 |     let chain = Arc::new(
+    |                 ^^^ use of undeclared type `Arc`
+    |
+    = note: struct `crate::operation::geometry::tests::Arc` exists but is inaccessible
+help: consider importing this struct
+    |
+  4 + use std::sync::Arc;
+    |
+
+warning: unnecessary qualification
+  --> crates/geo-kernel/src/atlas/tests.rs:60:10
+   |
+60 |         &crate::context::WorkProgress::integer(None),
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+60 -         &crate::context::WorkProgress::integer(None),
+60 +         &WorkProgress::integer(None),
+   |
+
+warning: unnecessary qualification
+   --> crates/geo-kernel/src/atlas/tests.rs:197:10
+    |
+197 |         &crate::context::WorkProgress::integer(None),
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+197 -         &crate::context::WorkProgress::integer(None),
+197 +         &WorkProgress::integer(None),
+    |
+
+warning: unused import: `reserve_metadata_for_push`
+  --> crates/geo-kernel/src/carrier.rs:20:74
+   |
+20 |     GeometryStorageVisitor, owned_coordinates_storage, reserve_metadata, reserve_metadata_for_push,
+   |                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2642:44
+     |
+2642 |             .map(|(x, y)| crate::Coord::xy(crate::Rat::from_i64(x), crate::Rat::from_i64(y)));
+     |                                            ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2642 -             .map(|(x, y)| crate::Coord::xy(crate::Rat::from_i64(x), crate::Rat::from_i64(y)));
+2642 +             .map(|(x, y)| crate::Coord::xy(Rat::from_i64(x), crate::Rat::from_i64(y)));
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2642:69
+     |
+2642 |             .map(|(x, y)| crate::Coord::xy(crate::Rat::from_i64(x), crate::Rat::from_i64(y)));
+     |                                                                     ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2642 -             .map(|(x, y)| crate::Coord::xy(crate::Rat::from_i64(x), crate::Rat::from_i64(y)));
+2642 +             .map(|(x, y)| crate::Coord::xy(crate::Rat::from_i64(x), Rat::from_i64(y)));
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2693:17
+     |
+2693 |                 crate::Rat::zero(),
+     |                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2693 -                 crate::Rat::zero(),
+2693 +                 Rat::zero(),
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2694:17
+     |
+2694 |                 crate::Rat::zero(),
+     |                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2694 -                 crate::Rat::zero(),
+2694 +                 Rat::zero(),
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2695:22
+     |
+2695 |                 Some(crate::Rat::zero()),
+     |                      ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2695 -                 Some(crate::Rat::zero()),
+2695 +                 Some(Rat::zero()),
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2730:17
+     |
+2730 |                 crate::Rat::zero(),
+     |                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2730 -                 crate::Rat::zero(),
+2730 +                 Rat::zero(),
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2731:17
+     |
+2731 |                 crate::Rat::zero(),
+     |                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2731 -                 crate::Rat::zero(),
+2731 +                 Rat::zero(),
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2732:22
+     |
+2732 |                 Some(crate::Rat::zero()),
+     |                      ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2732 -                 Some(crate::Rat::zero()),
+2732 +                 Some(Rat::zero()),
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2779:22
+     |
+2779 |         let source = crate::Rat::new(
+     |                      ^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2779 -         let source = crate::Rat::new(
+2779 +         let source = Rat::new(
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2787:22
+     |
+2787 |         let factor = crate::Rat::new(crate::Int::from_i64(11), crate::Int::from_i64(17)).unwrap();
+     |                      ^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2787 -         let factor = crate::Rat::new(crate::Int::from_i64(11), crate::Int::from_i64(17)).unwrap();
+2787 +         let factor = Rat::new(crate::Int::from_i64(11), crate::Int::from_i64(17)).unwrap();
+     |
+
+error[E0277]: can't compare `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` with `[_; 0]`
+    --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:944:9
+     |
+ 944 | /         assert_eq!(
+ 945 | |             super::super::intersections(&left, &separate, &mut context).unwrap(),
+ 946 | |             []
+ 947 | |         );
+     | |_________^ no implementation for `context::retained::RetainedValues<atlas::arcs::CurveIntersection> == [_; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[_; 0]>` is not implemented for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>`
+    --> crates/geo-kernel/src/context/retained.rs:852:1
+     |
+ 852 | pub struct RetainedValues<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedValues<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1021:1
+     |
+1021 | impl<T: PartialEq> PartialEq for RetainedValues<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+...
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` with `[_; 0]`
+    --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:986:9
+     |
+ 986 | /         assert_eq!(
+ 987 | |             super::super::intersections(&constant, &away, &mut context).unwrap(),
+ 988 | |             []
+ 989 | |         );
+     | |_________^ no implementation for `context::retained::RetainedValues<atlas::arcs::CurveIntersection> == [_; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[_; 0]>` is not implemented for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>`
+    --> crates/geo-kernel/src/context/retained.rs:852:1
+     |
+ 852 | pub struct RetainedValues<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedValues<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1021:1
+     |
+1021 | impl<T: PartialEq> PartialEq for RetainedValues<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+...
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` is not an iterator
+   --> crates/geo-kernel/src/atlas/arcs/constant.rs:457:28
+    |
+457 |             for contact in contacts {
+    |                            ^^^^^^^^ the trait `std::iter::IntoIterator` is not implemented for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>`
+    |
+    = note: the trait bound `context::retained::RetainedValues<atlas::arcs::CurveIntersection>: std::iter::IntoIterator` is not satisfied
+    = note: required for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` to implement `std::iter::IntoIterator`
+help: consider borrowing here
+    |
+457 |             for contact in &contacts {
+    |                            +
+
+error[E0277]: can't compare `context::retained::RetainedValues<atlas::arcs::CurveIntersection>` with `[_; 0]`
+    --> crates/geo-kernel/src/atlas/arcs/source_join.rs:338:9
+     |
+ 338 | /         assert_eq!(
+ 339 | |             super::super::intersections(&full, &distinct, &mut context).unwrap(),
+ 340 | |             []
+ 341 | |         );
+     | |_________^ no implementation for `context::retained::RetainedValues<atlas::arcs::CurveIntersection> == [_; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[_; 0]>` is not implemented for `context::retained::RetainedValues<atlas::arcs::CurveIntersection>`
+    --> crates/geo-kernel/src/context/retained.rs:852:1
+     |
+ 852 | pub struct RetainedValues<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedValues<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1021:1
+     |
+1021 | impl<T: PartialEq> PartialEq for RetainedValues<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+...
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `context::retained::RetainedBuilder<[geographic::LonLat; 2]>` with `[[geographic::LonLat; 2]; 0]`
+    --> crates/geo-kernel/src/atlas/boundary.rs:614:13
+     |
+ 614 |             assert_eq!(selected.edges, [] as [[LonLat; 2]; 0]);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `context::retained::RetainedBuilder<[geographic::LonLat; 2]> == [[geographic::LonLat; 2]; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[[geographic::LonLat; 2]; 0]>` is not implemented for `context::retained::RetainedBuilder<[geographic::LonLat; 2]>`
+    --> crates/geo-kernel/src/context/retained.rs:1067:1
+     |
+1067 | pub struct RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedBuilder<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1030:9
+     |
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+1036 |
+1037 | impl<T: PartialEq> PartialEq for RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `context::retained::RetainedBuilder<prepared::PreparedCurve>` with `[prepared::PreparedCurve; 0]`
+    --> crates/geo-kernel/src/atlas/boundary.rs:615:13
+     |
+ 615 |             assert_eq!(selected.curves, [] as [crate::PreparedCurve; 0]);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `context::retained::RetainedBuilder<prepared::PreparedCurve> == [prepared::PreparedCurve; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[prepared::PreparedCurve; 0]>` is not implemented for `context::retained::RetainedBuilder<prepared::PreparedCurve>`
+    --> crates/geo-kernel/src/context/retained.rs:1067:1
+     |
+1067 | pub struct RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedBuilder<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1030:9
+     |
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+1036 |
+1037 | impl<T: PartialEq> PartialEq for RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `context::retained::RetainedBuilder<[geographic::LonLat; 2]>` with `[[geographic::LonLat; 2]; 0]`
+    --> crates/geo-kernel/src/atlas/tests.rs:338:5
+     |
+ 338 |     assert_eq!(boundary.edges, [] as [[LonLat; 2]; 0]);
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `context::retained::RetainedBuilder<[geographic::LonLat; 2]> == [[geographic::LonLat; 2]; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[[geographic::LonLat; 2]; 0]>` is not implemented for `context::retained::RetainedBuilder<[geographic::LonLat; 2]>`
+    --> crates/geo-kernel/src/context/retained.rs:1067:1
+     |
+1067 | pub struct RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedBuilder<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1030:9
+     |
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+1036 |
+1037 | impl<T: PartialEq> PartialEq for RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `context::retained::RetainedBuilder<prepared::PreparedCurve>` with `[prepared::PreparedCurve; 0]`
+    --> crates/geo-kernel/src/atlas/tests.rs:339:5
+     |
+ 339 |     assert_eq!(boundary.curves, [] as [PreparedCurve; 0]);
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `context::retained::RetainedBuilder<prepared::PreparedCurve> == [prepared::PreparedCurve; 0]`
+     |
+help: the trait `std::cmp::PartialEq<[prepared::PreparedCurve; 0]>` is not implemented for `context::retained::RetainedBuilder<prepared::PreparedCurve>`
+    --> crates/geo-kernel/src/context/retained.rs:1067:1
+     |
+1067 | pub struct RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: `context::retained::RetainedBuilder<T>` implements trait `std::cmp::PartialEq<Rhs>`
+    --> crates/geo-kernel/src/context/retained.rs:1030:9
+     |
+1030 |         impl<T: PartialEq> PartialEq<Vec<T>> for $array<T> {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq<std::vec::Vec<T>>`
+...
+1035 | resident_array_equality!(RetainedValues, RetainedBuilder);
+     | --------------------------------------------------------- in this macro invocation
+1036 |
+1037 | impl<T: PartialEq> PartialEq for RetainedBuilder<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::cmp::PartialEq`
+     = note: this error originates in the macro `assert_eq` which comes from the expansion of the macro `resident_array_equality` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `owned_heap_bytes` found for enum `purrdf_core::TermValue` in the current scope
+   --> crates/geo-kernel/src/carrier/tests.rs:124:24
+    |
+124 |         1_024 + source.owned_heap_bytes().unwrap() as u64
+    |                        ^^^^^^^^^^^^^^^^ method not found in `purrdf_core::TermValue`
+
+error[E0599]: no method named `copy` found for mutable reference `&mut cells::cover::CoverBudget<'_>` in the current scope
+   --> crates/geo-kernel/src/cells/cover/chart.rs:161:16
+    |
+161 |         self.0.copy(value)
+    |                ^^^^ method not found in `&mut cells::cover::CoverBudget<'_>`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `copy`, perhaps you need to implement it:
+            candidate #1: `purrdf_lex::walk::VecReserve`
+
+error[E0599]: no method named `add` found for mutable reference `&mut cells::cover::CoverBudget<'_>` in the current scope
+   --> crates/geo-kernel/src/cells/cover/chart.rs:164:16
+    |
+164 |         self.0.add(a, b)
+    |                ^^^ method not found in `&mut cells::cover::CoverBudget<'_>`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `add`, perhaps you need to implement one of them:
+            candidate #1: `cells::cover::chart::Arithmetic`
+            candidate #2: `geodesic::normal::NormalArithmetic`
+            candidate #3: `purrdf_xsd::math::CertifiedInterval`
+            candidate #4: `std::ops::Add`
+
+error[E0599]: no method named `subtract` found for mutable reference `&mut cells::cover::CoverBudget<'_>` in the current scope
+   --> crates/geo-kernel/src/cells/cover/chart.rs:167:16
+    |
+167 |         self.0.subtract(a, b)
+    |                ^^^^^^^^ method not found in `&mut cells::cover::CoverBudget<'_>`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+note: `cells::cover::chart::Arithmetic` defines an item `subtract`, perhaps you need to implement it
+   --> crates/geo-kernel/src/cells/cover/chart.rs:64:1
+    |
+ 64 | pub(in crate::cells) trait Arithmetic {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `multiply` found for mutable reference `&mut cells::cover::CoverBudget<'_>` in the current scope
+   --> crates/geo-kernel/src/cells/cover/chart.rs:170:16
+    |
+170 |         self.0.multiply(a, b)
+    |                ^^^^^^^^ method not found in `&mut cells::cover::CoverBudget<'_>`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `multiply`, perhaps you need to implement one of them:
+            candidate #1: `cells::cover::chart::Arithmetic`
+            candidate #2: `prepared::PathScaleArithmetic`
+
+error[E0599]: no method named `divide` found for mutable reference `&mut cells::cover::CoverBudget<'_>` in the current scope
+   --> crates/geo-kernel/src/cells/cover/chart.rs:174:14
+    |
+173 | /         self.0
+174 | |             .divide(a, b)
+    | |             -^^^^^^ method not found in `&mut cells::cover::CoverBudget<'_>`
+    | |_____________|
+    |
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `divide`, perhaps you need to implement one of them:
+            candidate #1: `cells::cover::chart::Arithmetic`
+            candidate #2: `prepared::PathScaleArithmetic`
+
+error[E0599]: no method named `absolute` found for mutable reference `&mut cells::cover::CoverBudget<'_>` in the current scope
+   --> crates/geo-kernel/src/cells/cover/chart.rs:178:16
+    |
+178 |         self.0.absolute(a)
+    |                ^^^^^^^^ method not found in `&mut cells::cover::CoverBudget<'_>`
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+note: `cells::cover::chart::Arithmetic` defines an item `absolute`, perhaps you need to implement it
+   --> crates/geo-kernel/src/cells/cover/chart.rs:64:1
+    |
+ 64 | pub(in crate::cells) trait Arithmetic {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/cells/cover/chart.rs:624:48
+    |
+624 |                 assert_eq!(bounded.longitudes, expected);
+    |                                                ^^^^^^^^ expected `Bands<GeometricRational>`, found `Vec<_>`
+    |
+    = note: expected enum `cells::cover::chart::Bands<purrdf_xsd::exact::GeometricRational>`
+             found struct `std::vec::Vec<(purrdf_xsd::exact::GeometricRational, purrdf_xsd::exact::GeometricRational)>`
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> crates/geo-kernel/src/construct.rs:1404:58
+     |
+1404 |               GeometryBody::GeometryCollection(members) => planar(GeometryBody::GeometryCollection(
+     |  __________________________________________________________^^^^^^-
+1405 | |                 members.iter().map(reference_boundary).collect(),
+1406 | |             )),
+     | |______________- argument #2 of type `&construct::arithmetic::Arithmetic<'_, '_, '_>` is missing
+     |
+note: function defined here
+    --> crates/geo-kernel/src/construct.rs:241:4
+     |
+ 241 | fn planar(body: GeometryBody, arithmetic: &Arithmetic<'_, '_, '_>) -> Result<Geometry, GeoError> {
+     |    ^^^^^^                     -----------------------------------
+help: provide the argument
+     |
+1404 |             GeometryBody::GeometryCollection(members) => planar(GeometryBody::GeometryCollection(
+1405 |                 members.iter().map(reference_boundary).collect(),
+1406 ~             ), /* &Arithmetic<'_, '_, '_> */),
+     |
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/construct.rs:1404:58
+     |
+1402 |       fn reference_boundary(geometry: &Geometry) -> Geometry {
+     |                                                     -------- expected `geom::Geometry` because of return type
+1403 |           match geometry.body() {
+1404 |               GeometryBody::GeometryCollection(members) => planar(GeometryBody::GeometryCollection(
+     |  __________________________________________________________^
+1405 | |                 members.iter().map(reference_boundary).collect(),
+1406 | |             )),
+     | |______________^ expected `Geometry`, found `Result<Geometry, GeoError>`
+     |
+     = note: expected struct `Geometry`
+                  found enum `std::result::Result<Geometry, error::GeoError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<geom::Geometry, error::GeoError>` value, panicking if the value is a `Result::Err`
+     |
+1406 |             )).expect("REASON"),
+     |               +++++++++++++++++
+
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
+    --> crates/geo-kernel/src/construct.rs:1407:18
+     |
+1407 |             _ => member_boundary(geometry),
+     |                  ^^^^^^^^^^^^^^^---------- two arguments of type `&mut purrdf_lex::allocation::Memory<'_, _>` and `&construct::arithmetic::Arithmetic<'_, '_, '_>` are missing
+     |
+note: function defined here
+    --> crates/geo-kernel/src/construct.rs:276:4
+     |
+ 276 | fn member_boundary<S: Admission + ?Sized>(
+     |    ^^^^^^^^^^^^^^^
+ 277 |     geometry: &Geometry,
+ 278 |     memory: &mut Memory<'_, S>,
+     |     --------------------------
+ 279 |     arithmetic: &Arithmetic<'_, '_, '_>,
+     |     -----------------------------------
+help: provide the arguments
+     |
+1407 |             _ => member_boundary(geometry, /* memory */, /* &Arithmetic<'_, '_, '_> */),
+     |                                          +++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0618]: expected function, found `context::retained::tests::Observer`
+    --> crates/geo-kernel/src/context/retained.rs:1557:39
+     |
+1531 |         let (account, mut observer) = observer(usize::MAX);
+     |                       ------------ `observer` has type `context::retained::tests::Observer`
+...
+1557 |         let (account, mut observer) = observer(0);
+     |                                       ^^^^^^^^---
+     |                                       |
+     |                                       call expression requires function
+...
+1921 |     fn observer(limit: usize) -> (Arc<Account>, Observer) {
+     |     ----------------------------------------------------- this function of the same name is available here, but it's shadowed by the local binding
+
+error[E0277]: expected an `FnOnce(purrdf_lex::allocation::StorageError)` closure, found `fn(LimbScratchError) -> GeoError {GeoError::NumericalScratch}`
+    --> crates/geo-kernel/src/context/retained.rs:1796:26
+     |
+1796 |                 .map_err(GeoError::NumericalScratch)
+     |                  ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(purrdf_lex::allocation::StorageError)` closure, found `fn(LimbScratchError) -> GeoError {GeoError::NumericalScratch}`
+     |                  |
+     |                  required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(purrdf_lex::allocation::StorageError)` is not implemented for fn item `fn(LimbScratchError) -> GeoError {GeoError::NumericalScratch}`
+     = note: expected a closure with signature `fn(purrdf_lex::allocation::StorageError)`
+                found a closure with signature `fn(purrdf_xsd::bigint::LimbScratchError)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+     |
+ 961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+     |                  ------- required by a bound in this associated function
+ 962 |     where
+ 963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+     = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-4889613201078710487.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:148:45: 148:51}`
+   --> crates/geo-kernel/src/topology/relate.rs:148:24
+    |
+148 |     relate_inner(a, b, &mut LegacyWork(&mut |_, _| Ok::<_, GeoError>(())))
+    |     ------------       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:148:45: 148:51}`
+    |     |
+    |     required by a bound introduced by this call
+    |
+    = help: the trait `for<'a> FnOnce(u64, std::option::Option<&'a geom::Coord>)` is not implemented for closure `{closure@crates/geo-kernel/src/topology/relate.rs:148:45: 148:51}`
+    = note: expected a closure with signature `for<'a> fn(_, Option<&'a Coord>)`
+               found a closure with signature `fn(_, Option<&Coord>)`
+note: required for `LegacyWork<'_, {closure@relate.rs:148:45}>` to implement `topology::relate::RelateWork`
+   --> crates/geo-kernel/src/topology/relate.rs:202:61
+    |
+202 | impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for LegacyWork<'_, F> {
+    |                                       --------------------  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^
+    |                                       |
+    |                                       unsatisfied trait bound introduced here
+note: required by a bound in `topology::relate::relate_inner`
+   --> crates/geo-kernel/src/topology/relate.rs:263:20
+    |
+263 | fn relate_inner<W: RelateWork>(
+    |                    ^^^^^^^^^^ required by this bound in `relate_inner`
+    = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-7887378407479209306.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1674:38: 1674:44}`
+    --> crates/geo-kernel/src/topology/relate.rs:1674:17
+     |
+1671 |             _ => collect_edges(
+     |                  ------------- required by a bound introduced by this call
+...
+1674 |                 &mut LegacyWork(&mut |_, _| Ok::<_, crate::GeoError>(())),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1674:38: 1674:44}`
+     |
+     = help: the trait `for<'a> FnOnce(u64, std::option::Option<&'a geom::Coord>)` is not implemented for closure `{closure@crates/geo-kernel/src/topology/relate.rs:1674:38: 1674:44}`
+     = note: expected a closure with signature `for<'a> fn(_, Option<&'a Coord>)`
+                found a closure with signature `fn(_, Option<&Coord>)`
+note: required for `LegacyWork<'_, {closure@relate.rs:1674:38}>` to implement `topology::relate::RelateWork`
+    --> crates/geo-kernel/src/topology/relate.rs:202:61
+     |
+ 202 | impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for LegacyWork<'_, F> {
+     |                                       --------------------  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^
+     |                                       |
+     |                                       unsatisfied trait bound introduced here
+note: required by a bound in `topology::relate::collect_edges`
+    --> crates/geo-kernel/src/topology/relate.rs:322:25
+     |
+ 322 | fn collect_edges<'a, W: RelateWork>(
+     |                         ^^^^^^^^^^ required by this bound in `collect_edges`
+     = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-3898216615514472164.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1674:38: 1674:44}`
+    --> crates/geo-kernel/src/topology/relate.rs:1671:18
+     |
+1671 |               _ => collect_edges(
+     |  __________________^
+1672 | |                 geometry,
+1673 | |                 out,
+1674 | |                 &mut LegacyWork(&mut |_, _| Ok::<_, crate::GeoError>(())),
+1675 | |             )
+     | |_____________^ expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1674:38: 1674:44}`
+     |
+     = help: the trait `for<'a> FnOnce(u64, std::option::Option<&'a geom::Coord>)` is not implemented for closure `{closure@crates/geo-kernel/src/topology/relate.rs:1674:38: 1674:44}`
+     = note: expected a closure with signature `for<'a> fn(_, Option<&'a Coord>)`
+                found a closure with signature `fn(_, Option<&Coord>)`
+note: required for `LegacyWork<'_, {closure@relate.rs:1674:38}>` to implement `topology::noding::NodingWork`
+    --> crates/geo-kernel/src/topology/noding.rs:49:57
+     |
+  49 | impl<E, F: FnMut(u64, Option<&Coord>) -> Result<(), E>> NodingWork for LegacyWork<'_, F> {
+     |                                          -------------  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^
+     |                                          |
+     |                                          unsatisfied trait bound introduced here
+     = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-17440496074089728501.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: the method `leaves` exists for struct `LegacyWork<'_, {closure@relate.rs:1716:32}>`, but its trait bounds were not satisfied
+    --> crates/geo-kernel/src/topology/relate.rs:1718:30
+     |
+1716 |             let mut callback = |_, _| Ok::<_, crate::GeoError>(());
+     |                                ------ doesn't satisfy `_: FnOnce<(u64, Option<&Coord>)>`
+1717 |             let mut work = LegacyWork(&mut callback);
+1718 |             for leaf in work.leaves(&tree).unwrap() {
+     |                              ^^^^^^ method cannot be called on `LegacyWork<'_, {closure@relate.rs:1716:32}>` due to unsatisfied trait bounds
+     |
+    ::: crates/geo-kernel/src/topology/noding.rs:48:1
+     |
+  48 | pub(crate) struct LegacyWork<'callback, F>(pub(crate) &'callback mut F);
+     | ------------------------------------------ method `leaves` not found for this struct because it doesn't satisfy `_: RelateWork`
+     |
+note: trait bound `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}: std::ops::FnOnce<(u64, std::option::Option<&geom::Coord>)>` was not satisfied
+    --> crates/geo-kernel/src/topology/relate.rs:202:39
+     |
+ 202 | impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for LegacyWork<'_, F> {
+     |                                       ^^^^^^^^^^^^^^^^^^^^  ----------     -----------------
+     |                                       |
+     |                                       unsatisfied trait bound introduced here
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `topology::relate::RelateWork` defines an item `leaves`, perhaps you need to implement it
+    --> crates/geo-kernel/src/topology/relate.rs:194:1
+     |
+ 194 | trait RelateWork: NodingWork<Error = GeoError> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-16266588729157900635.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}`
+    --> crates/geo-kernel/src/topology/relate.rs:1719:49
+     |
+1719 |                 collect_edges(leaf, &mut edges, &mut work).unwrap();
+     |                 -------------                   ^^^^^^^^^ expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}`
+     |                 |
+     |                 required by a bound introduced by this call
+     |
+     = help: the trait `for<'a> FnOnce(u64, std::option::Option<&'a geom::Coord>)` is not implemented for closure `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}`
+     = note: expected a closure with signature `for<'a> fn(_, Option<&'a Coord>)`
+                found a closure with signature `fn(_, Option<&Coord>)`
+note: required for `LegacyWork<'_, {closure@relate.rs:1716:32}>` to implement `topology::relate::RelateWork`
+    --> crates/geo-kernel/src/topology/relate.rs:202:61
+     |
+ 202 | impl<F: FnMut(u64, Option<&Coord>) -> Result<(), GeoError>> RelateWork for LegacyWork<'_, F> {
+     |                                       --------------------  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^
+     |                                       |
+     |                                       unsatisfied trait bound introduced here
+note: required by a bound in `topology::relate::collect_edges`
+    --> crates/geo-kernel/src/topology/relate.rs:322:25
+     |
+ 322 | fn collect_edges<'a, W: RelateWork>(
+     |                         ^^^^^^^^^^ required by this bound in `collect_edges`
+     = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-1258178737538172621.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}`
+    --> crates/geo-kernel/src/topology/relate.rs:1719:17
+     |
+1719 |                 collect_edges(leaf, &mut edges, &mut work).unwrap();
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(u64, std::option::Option<&geom::Coord>)` closure, found `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}`
+     |
+     = help: the trait `for<'a> FnOnce(u64, std::option::Option<&'a geom::Coord>)` is not implemented for closure `{closure@crates/geo-kernel/src/topology/relate.rs:1716:32: 1716:38}`
+     = note: expected a closure with signature `for<'a> fn(_, Option<&'a Coord>)`
+                found a closure with signature `fn(_, Option<&Coord>)`
+note: required for `LegacyWork<'_, {closure@relate.rs:1716:32}>` to implement `topology::noding::NodingWork`
+    --> crates/geo-kernel/src/topology/noding.rs:49:57
+     |
+  49 | impl<E, F: FnMut(u64, Option<&Coord>) -> Result<(), E>> NodingWork for LegacyWork<'_, F> {
+     |                                          -------------  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^
+     |                                          |
+     |                                          unsatisfied trait bound introduced here
+     = note: the full name for the type has been written to '/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/c29f96fa1e18cc86/out/purrdf_geo_kernel-c29f96fa1e18cc86.long-type-4560294140973538959.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+warning: `purrdf-geo-kernel` (lib test) generated 54 warnings (41 duplicates)
+error: could not compile `purrdf-geo-kernel` (lib test) due to 182 previous errors; 58 warnings emitted
+warning: `purrdf-core` (lib test) generated 1 warning (1 duplicate)

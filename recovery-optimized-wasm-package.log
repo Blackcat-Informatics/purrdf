@@ -1,0 +1,653 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash)
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling rayon-core v1.13.0
+   Compiling quote v1.0.46
+   Compiling rustversion v1.0.22
+   Compiling either v1.16.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling bumpalo v3.20.3
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.118
+   Compiling wasm-bindgen v0.2.125
+   Compiling once_cell v1.21.4
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/deflate)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling regex-automata v0.4.14
+   Compiling rayon v1.12.0
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/stack)
+   Compiling ctutils v0.4.2
+   Compiling fastrand v2.4.1
+   Compiling digest v0.11.3
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling sha2 v0.11.0
+   Compiling polyval v0.7.3
+   Compiling twox-hash v2.1.2
+   Compiling structured-zstd v0.0.49
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling ghash v0.6.0
+   Compiling aead v0.6.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/ed25519)
+   Compiling aes-gcm v0.11.1
+   Compiling visual-hashing v1.0.0
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling regex v1.12.4
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/iri)
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/purrdf)
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm)
+    Finished `release` profile [optimized] target(s) in 4m 12s
+cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+wasm-opt -Oz \
+	--enable-bulk-memory --enable-nontrapping-float-to-int \
+	--enable-sign-ext --enable-mutable-globals --enable-simd \
+	-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+   Compiling leb128fmt v0.1.0
+   Compiling wasm-encoder v0.259.0
+   Compiling wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/wasm-link)
+    Finished `release` profile [optimized] target(s) in 3.42s
+     Running `/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/release/wasm-link crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`
+OK: wasm-link linked crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: stack pointer is global 0 (exported as purrdf_stack_pointer); purrdf_jspi_suspend is function 28, called only from $suspend (function 17268), which 1 call site(s) reach; 52 other import(s) behind trampolines with 420 reference(s) routed; purrdf_jspi_run wrapped by function 17293 (region top appended as its last parameter); 411 exported function(s) behind the poison gate (366 trapping, 45 inert release function(s); globals idle=3, poisoned=4, active=5, parked=6, outbound=7); validated under ["mutable-globals", "nontrapping-float-to-int", "sign-ext", "bulk-memory", "simd"]
+OK: verified 391396 SIMD opcode(s) present in the optimized wasm artifact
+OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)
+cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+
+added 3 packages in 2s
+npm notice
+npm notice New major version of npm available! 11.20.0 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice
+
+> @blackcatinformatics/purrdf@3.0.1 check
+> npm run typecheck && npm test && npm run smoke:pack
+
+
+> @blackcatinformatics/purrdf@3.0.1 typecheck
+> tsc -p tsconfig.types.json
+
+
+> @blackcatinformatics/purrdf@3.0.1 test
+> node --test tests/*.test.mjs
+
+✔ queryGoverned computes MEDIAN through aggregateNamespace (484.27356ms)
+✔ omitting aggregateNamespace leaves the ten names unregistered, with the existing typed error (6.096133ms)
+✔ updateGoverned reaches MEDIAN from a DELETE/INSERT WHERE nested SELECT (160.259221ms)
+✔ an ungoverned entry refuses aggregateNamespace rather than ignoring it (6.753792ms)
+✔ queryEntailmentGoverned computes MEDIAN through aggregateNamespace over an entailed closure (131.989523ms)
+✔ omitting aggregateNamespace leaves queryEntailmentGoverned's statistical set unregistered (3.40433ms)
+✔ three interleaved async queries resume out of order and all answer correctly (458.854121ms)
+✔ a deep sync query during a suspension is answered (219.794801ms)
+✔ jobs suspended inside a property path's walk scope, interleaved with each other and with synchronous paths, all answer their synchronous baselines (2495.159271ms)
+✔ an async job started from inside a sync callback runs and returns (39.162658ms)
+✔ a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included (1841121.905233ms)
+✔ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (524.891873ms)
+ℹ admitted nesting endpoints: {"synchronous":219,"job":219}
+✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, on both lanes (5.205712ms)
+✔ nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is the synchronous lane's refusal past that (255.160261ms)
+✖ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (253.428504ms)
+✔ beginAsync beyond maxConcurrentJobs is refused (9.338664ms)
+✔ every sync-suite query answers identically through queryAsync, eight at a time, yielding at every poll (7041.022268ms)
+✔ every corpus query's asynchronous job stays inside the top quarter of its stack region (54.743056ms)
+✔ explainQueryAsync on a SERVICE-free query is byte-identical to explainQuery (304.719012ms)
+✔ explainQueryAsync explains a SERVICE join over the host's answer; the synchronous twin refuses it (46.637816ms)
+✔ SERVICE SILENT under explainQueryAsync: a failing resolver is the join identity, as on queryAsync (9.537603ms)
+✔ a CPU-heavy explainQueryAsync yields to the event loop; the synchronous twin does not (6511.945028ms)
+✔ an AbortSignal aborted mid-explain rejects with the abort reason (60.094994ms)
+✔ a deadline stops explainQueryAsync as it stops the other ungoverned twins (57.75107ms)
+✔ a parse error rejects with the synchronous twin's words (3.843226ms)
+✔ async SHACL twins return exactly their synchronous twins' results on core and SHACL-SPARQL fixtures, conforming and not (1605.228369ms)
+✔ the change, entailment and product twins return their synchronous twins' values (374.524443ms)
+✔ a refused product rejects with the synchronous twin's ShaclProductRefusal, dimension and all (35.193335ms)
+✔ a SERVICE in a SHACL-SPARQL target is refused on both lanes and no host handler is asked; the local target answers (55.004696ms)
+✔ the shapes-graph arguments reach the job exactly as they reach the synchronous twin (61.130378ms)
+✔ a heavy validation with no SPARQL in it yields to the event loop; the synchronous twin does not (1972.384948ms)
+✔ a signal stops a SHACL validation: its reason, a timeout, and an already-aborted signal (1701.160177ms)
+✔ concurrent SHACL validations suspended at every poll, interleaved with synchronous validations, all answer their synchronous baselines (4111.446864ms)
+✔ two concurrent jobs issuing the same request without deadlines share one host call (325.044526ms)
+✔ a job stopped while it waits abandons only itself; the host's signal waits for the other job (26.854984ms)
+✔ the host's signal aborts once every job waiting on the call has been stopped (4.139347ms)
+✔ the same request under SERVICE and SERVICE SILENT is two host calls, each told its own silent (12.862595ms)
+✔ a different cell ceiling is its own host call; the same ceiling is shared (16.943404ms)
+✔ a job whose deadline is later than the in-flight call's is its own call; an earlier one shares it (14.129934ms)
+✔ a job without a deadline never joins a call bounded by one; a job with one joins an unbounded call (5.925139ms)
+✔ a short-deadline job's timed-out call is never a SILENT failure for a job with a longer deadline (10.474812ms)
+✔ one job asks the host once for a request it repeats; sequential jobs each ask (37.768132ms)
+✔ jobs sharing a call each abandon it at their request's timeout, and the call aborts when the last leaves (43.262714ms)
+✔ host-effect deadlines settle in otherwise idle Node, with every timer released (5445.309869ms)
+✔ a 20,000-level SERVICE term can be walked, cloned, compared and dropped without poisoning (954.70113ms)
+✔ queryAsync joins remote bindings with local rows (453.656318ms)
+✔ a delayed promise is awaited, not raced (61.285923ms)
+✔ a transport failure is a thrown error without SILENT (36.693017ms)
+✔ a transport failure is the join identity under SILENT (14.063377ms)
+✔ a resolver that throws fails its invocation: the join identity under SILENT, recorded as a fault; native-sparql-host-fault without (96.590975ms)
+✔ a host denial with no catalog installed fails the query, is the identity under SILENT, and never invents a catalog cause (45.439074ms)
+✔ a catalog denies an endpoint it does not list, before any host call (66.512605ms)
+✔ SERVICE SILENT with a resolver still forwards the request (7.989832ms)
+✔ a variable endpoint bound by VALUES resolves per row (111.200633ms)
+✔ an endpoint variable nothing binds is refused, under SILENT too (125.515212ms)
+✔ SERVICE SILENT with no source, or with an endpoint that is not an IRI, is the join identity on both lanes (188.22308ms)
+✔ a group join binding the endpoint on its right answers as the left-bound form (51.580366ms)
+✔ a variable endpoint some solution cannot name refuses the query before any request, in either row order (28.908208ms)
+✔ a variable endpoint bound by an OPTIONAL, group join or MINUS left side is asked once per endpoint (60.621835ms)
+✔ SILENT swallows one variable endpoint's failure for that endpoint only (28.51797ms)
+✔ a nested SERVICE is forwarded inside the outer request text (10.885179ms)
+✔ queryAsync without resolveService fails like the sync path (17.848954ms)
+✔ synchronous query methods are unchanged (98.503413ms)
+✔ every async twin evaluates (624.389015ms)
+✔ a yielding job lets a setTimeout(…, 0) timer another party scheduled fire between its turns; a job that never yields does not (549.272749ms)
+✔ AbortSignal cancels a running query (80.299731ms)
+✔ a resolver that ignores ctx.signal still cancels promptly (532.709536ms)
+✔ deadlineMs spans the awaited SERVICE time (129.872613ms)
+✔ maxRemoteRequests governs async SERVICE dispatch (8.98919ms)
+✔ maxIntermediateCells bounds the decoded remote answer (34.112891ms)
+✔ an unconfigured cell ceiling never reaches the resolver as the metering sentinel (6.968865ms)
+✔ LOAD resolves through resolveLoad (43.382741ms)
+✔ LOAD without resolveLoad fails unless SILENT (2.213109ms)
+✔ LOAD: a host policy denial reads distinctly from a catalog capability denial, and LOAD SILENT loads nothing over either (3.061381ms)
+✔ LOAD redirect: every hop is resolved and authorized in Rust, with its own profile's headers (4.147276ms)
+✔ a LOAD parse error is the LOAD's decode failure (1.829811ms)
+✔ INSERT WHERE federates through resolveService (12.828046ms)
+✔ dataset mutation during an async update is refused (8.787566ms)
+✔ commitUpdate refuses a different dataset (3.199867ms)
+✔ queries see a snapshot; mutation during a query is allowed (2.79645ms)
+✔ refusal pair: an update begun while another update of the dataset is in flight is refused; a sequential one applies (4.592892ms)
+✔ hasAsyncQueries reports JSPI (0.228363ms)
+✔ async methods hard-fail without JSPI (351.916545ms)
+✔ governor vectors: service transport cases certify identically on the async lane (26.886723ms)
+✔ refusal pair: yieldEveryPolls -1 is refused, 0 yields at every poll (21.799137ms)
+✔ a job's stack region is the size of the module's own shadow stack (3.982961ms)
+✔ refusal pair: a failure kind "nope" is a host fault the request reports, "denied" is a denial; SILENT answers both with the join identity (14.217081ms)
+✔ refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads (2.605256ms)
+✔ refusal pair: the cancel option is refused, signal is accepted (1.825221ms)
+✔ refusal pair: a localServices value that is not a Dataset is refused; a Dataset serves, and stays the caller's (12.906024ms)
+✔ refusal pair: a catalog that is not a ServiceCatalog is refused; a ServiceCatalog governs, and stays usable (13.182385ms)
+✔ refusal pair: a profile timeout no JavaScript timer can honour is refused; the longest one is accepted (1.787552ms)
+✔ a job's memo keeps rows only: a repeated request whose first answer failed asks again (30.287904ms)
+✔ a fresh engine keeps scope: two same-label blanks in different scopes stay distinct (437.507839ms)
+✔ blankScope = "merge" drops the scope: the same blanks become one node (3.211377ms)
+✔ the mode is per engine, and can be set back to keep (52.145589ms)
+✔ a value that is not a mode throws with the options code and leaves the mode alone (4.35504ms)
+✔ an unscoped blank and an IRI are the same under both modes (5.381516ms)
+✔ the dataset's own quads are not affected by the option (4.767717ms)
+✔ an asynchronous job takes the mode in force when it begins (65.034542ms)
+✔ typed scoped blanks retain identity through insertion, serialization and parsing (80.60684ms)
+✔ SparqlProtocolRequest reads an operation and its dataset parameters (104.577637ms)
+✔ SparqlProtocolRequest reads an update's USING and USING NAMED parameters in request order (18.443895ms)
+✔ refusal pair: a protocol refusal is a typed Error with name, status and parameter (4.120587ms)
+✔ refusal pair: effectiveText refuses a malformed operation, not a well-formed one (0.781795ms)
+✔ the negotiated twin serializes by Accept and names the formats a dataset needs (302.9125ms)
+✔ refusal pair: accept is refused by every twin but the negotiated one (94.154183ms)
+✔ refusal pair: the service resolver refuses an option it would ignore; its own options build (17.291982ms)
+✔ refusal pair: cache options are all-or-nothing (3.198977ms)
+✔ refusal pair: a bindings key must be an origin (0.570351ms)
+✔ a request to a bound origin goes through its binding; any other through fetch (20.340654ms)
+✔ headers are sent protocol first, then the profile's, then the credential (2.217919ms)
+✔ the effect's headers are the catalog profile's, then its credential, end to end (67.770195ms)
+✔ a request is abandoned when the query abandons it: at its profile's timeout, a transport failure SILENT absorbs; the prompt neighbour answers (67.536552ms)
+✔ a non-2xx answer is a transport failure and its body is cancelled, unread (7.593615ms)
+✔ a transport failure fails a query, and SERVICE SILENT swallows it (45.639948ms)
+✔ SERVICE redirect: a 302 to an unlisted origin is a transport failure, never fetched; SILENT matches the endpoint being down (31.891081ms)
+✔ SERVICE redirect: a 307 is never followed — no body or header ever reaches the Location (0.959039ms)
+✔ SERVICE redirect: an opaque-redirect response is also a transport failure, its Location withheld (4.02191ms)
+✔ the cache answers a repeated cacheable request, and a different request is a miss (91.927205ms)
+✔ refusal pair: a request the job marks not cacheable never touches the cache; a cacheable one is cached (13.154096ms)
+✔ the job marks a request carrying a credential not cacheable, end to end (30.492797ms)
+✔ refusal pair: a cache whose match or put rejects fails the request as a transport failure; a healthy cache answers (21.252695ms)
+✔ a failed cache call fails a plain SERVICE and is the join identity under SERVICE SILENT, recorded (47.434211ms)
+✔ refusal pair: the load resolver refuses an option it would ignore; its own options build (0.817964ms)
+✔ one LOAD hop sends the job's Accept, User-Agent and headers, and answers the document (1.164652ms)
+✔ refusal pair: a LOAD the catalog does not authorize is denied before any fetch; an authorized one is fetched with its profile (66.000022ms)
+✔ a LOAD response without a Content-Type is a transport failure; with one it loads (26.04184ms)
+✔ a redirect is handed back to the job, never followed; an opaque one withholds its Location (1.995906ms)
+✔ LOAD redirect: a redirect to an unlisted origin is denied, and the unlisted origin is never fetched (13.901272ms)
+✔ LOAD redirect: the valid neighbour — a redirect to a listed origin loads, and a relative IRI resolves against the final URL (26.137457ms)
+✔ LOAD redirect: a redirect loop fails as typed transport after exactly five hops; four hops load (48.467657ms)
+✔ LOAD redirect: the redirected origin's own profile headers are sent, never the source's (19.065465ms)
+✔ refusal pair: handleSparqlRequest requires governors with deadlineMs (36.916089ms)
+✔ every request form answers (81.148903ms)
+✔ each Accept is answered in its format, byte for byte what queryRaw writes (209.647699ms)
+✔ refusal pair: 406 before evaluation, and after it for named graphs (81.182682ms)
+✔ refusal pair: protocol refusals are 400/405/415 problems; the valid neighbour is 200 (38.1504ms)
+✔ dataset parameters are honoured, and without them the query's own dataset answers (125.29034ms)
+✔ the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters (65.688262ms)
+✔ refusal pair: maxRequestBytes must be a positive integer when given; without it, 1 MiB is the default (5.708996ms)
+✔ refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit (5.478903ms)
+✔ a deterministic ceiling is a 422 carrying its dimension; the unbounded neighbour is 200 (5.809072ms)
+✔ a deadline or a cancelled request is a 503 without Retry-After, not a 422 (49.62923ms)
+✔ refusal pair: a SERVICE no resolver reaches is a 500 with its engine code and a correlation id; with a resolver it answers 200 (30.921313ms)
+✔ refusal pair: an unbound SERVICE ?e is a 400 with the engine's refusal; a host fault stays a sanitized 500 (28.052125ms)
+✔ refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it (8.282853ms)
+✔ SERVICE SILENT over a resolveService bug is the join identity, a 200 whose body never carries the bug's words, and the bug still reaches onInternalError under a correlation id; the neighbour is a genuine typed transport failure, which never touches the hook (13.95505ms)
+✔ the default onInternalError hook writes one console.error line carrying the original error and the correlation id (4.931881ms)
+✔ an onInternalError that throws synchronously still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (13.110167ms)
+✔ an onInternalError that returns a rejecting promise still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (5.559071ms)
+✔ valid neighbour: a non-throwing onInternalError (sync, and async-resolving) is called exactly once and console.error is never called (27.820582ms)
+✔ an unexpected exception anywhere else in the adapter is also a 500 with a correlation id, never a bare rejection (12.438639ms)
+✔ the catalog denies an unlisted endpoint before any fetch; a listed one is fetched (37.795811ms)
+✔ refusal pair: a SERVICE the catalog denies is a 403 with its engine code and none of the catalog's configuration; an endpoint the same catalog allows answers 200 (55.070915ms)
+✔ refusal pair: a SERVICE the resolver's own policy denies is a 403 with its engine code and none of the resolver's words; a request it allows answers 200 (14.095425ms)
+✔ refusal pair: a SERVICE endpoint that answers an HTTP error is a 502 with its engine code and none of its words; an allowed endpoint that answers is 200 (12.980081ms)
+✔ refusal pair: a SERVICE whose transport throws is a 502 with its engine code and none of the exception's words; an allowed endpoint that answers is 200 (11.17221ms)
+✔ refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails a 502, each with its engine code and none of its words; an allowed, answering source is 204 (9.233602ms)
+✔ refusal pair: an operation this endpoint misconfigured is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200 (4.03455ms)
+✔ refusal pair: the first stack guard keeps its status, code and words; the shallow neighbour answers 200 (1875.136206ms)
+✔ a federated query runs end to end through a service binding (4.04503ms)
+✔ CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without (6.553759ms)
+✔ a poisoned instance still answers every request with the sanitized 500 and a correlation id (409.913316ms)
+✔ an engine starts at eighteen digits truncated toward zero (173.31413ms)
+✔ exact answers a terminating quotient and leaves a non-terminating one unbound (42.15943ms)
+✔ a rounded policy rounds in its named direction (2.998203ms)
+✔ an unreadable policy is refused and the previous one stays in force (2.14686ms)
+✔ the policy reaches the governed, update and entailment entries (317.760961ms)
+✔ governed evidence counts each absorbed expression error by its F&O code (18.843832ms)
+✔ an asynchronous job takes the policy and reports its expression errors (90.887549ms)
+✔ the README and the book say the remote endpoint's CORS policy governs a browser host (43.39502ms)
+✔ the book's recipes are the README's, byte for byte (10.166412ms)
+✔ the resolveService recipe joins the remote rows, and reports a network failure as transport (1121.468187ms)
+✔ the Worker recipe answers a SPARQL Protocol request with the joined results (412.200707ms)
+✔ parse resolves a relative IRI against the supplied base (46.415663ms)
+✔ parse without a base refuses a relative IRI with the shared code (12.323022ms)
+✔ parse rejects a base that is not an absolute IRI (0.59208ms)
+✔ an in-document base wins over the supplied one (1.371156ms)
+✔ serializeConfigured carries the document base into JSON-LD (37.403784ms)
+✔ serializeWithContext carries the same document base (10.425784ms)
+✔ serializeConfigured rejects a base that is not an absolute IRI (0.554762ms)
+✔ omitting the egress base leaves the document absolute (2.443531ms)
+✔ serialize emits the base declaration, with a no-base control (1.484643ms)
+✔ serialize to a base-incapable format stays absolute rather than throwing (0.436356ms)
+✔ serialize rejects a base that is not an absolute IRI (0.346249ms)
+✔ serialize without a base is byte-identical to omitting the argument (0.32195ms)
+✔ serialize keeps the RDF 1.2 statement layer under a base (3.399261ms)
+✔ a format with no triple-term surface fails closed rather than dropping rows (3.073691ms)
+✔ entailCheckProofGoldenVectors runs the committed proof artifact ON WASM (291.787549ms)
+✔ an answer nobody recorded is never presented as verified ON WASM (16.860616ms)
+✔ the session records proofs only when asked ON WASM (8.180376ms)
+✔ entailCheckGoldenVectors runs the committed tri-host artifact ON WASM (450.18363ms)
+✔ an inconsistent input is refused WITH its certificate ON WASM (82.859348ms)
+✔ every golden case is byte-identical across the wasm/JS boundary (454.496493ms)
+✔ entailMaterialize's evaluation limits refuse naming this host's arguments (209.962868ms)
+✔ entailMaterialize and entailConsistency close over the import table (159.68764ms)
+✔ the conclusion-directed services take the evaluation limits, naming this host's argument (156.511563ms)
+✔ entailMaterialize closes under rdfs and always returns a report (57.014201ms)
+✔ entailMaterialize under simple is the identity closure (7.082431ms)
+✔ entailMaterialize is byte-stable across repeated calls (157.707834ms)
+✔ entailMaterialize rejects an unknown regime, naming the accepted set (5.2781ms)
+✔ entailMaterialize materializes every regime spelling (80.556592ms)
+✔ a rule document belongs to rif alone and is refused elsewhere (0.502713ms)
+✔ entailMaterialize rejects a malformed document (never a silent empty closure) (13.02947ms)
+✔ entailMaterialize throws on a reserved-vocabulary closure, naming it (0.755876ms)
+✔ entailMaterialize still closes an ordinary document neighbouring the reserved one (0.378077ms)
+✔ the rule inventories are the specification tables, and the gap is measurable (65.314034ms)
+✔ the rule inventories reject an unknown regime, naming the accepted set (4.087458ms)
+✔ entailExtensions names what this build adds beyond the specification table (20.442961ms)
+✔ entailConsistency decides consistency ON WASM, with its certificate (0.660678ms)
+✔ entailClassify reaches the full subsumption hierarchy ON WASM (0.687098ms)
+✔ entailRealize reaches the individuals' entailed types ON WASM (1.589189ms)
+✔ entailInstances retrieves instances for a class the schema never asserts them of ON WASM (3.536665ms)
+✔ entailEntails decides an axiom entailed nowhere by assertion ON WASM (5.133514ms)
+✔ entailEntails answers unknown (never false) on an exhausted budget ON WASM (0.878181ms)
+✔ entailProfile certifies the most restrictive profile first ON WASM (6.068484ms)
+✔ entailExtractModule extracts a locality module as canonical N-Quads ON WASM (2.500729ms)
+✔ entailExtractModule rejects an unknown method, naming the accepted set (0.373428ms)
+✔ entailJustify finds a minimal entailing subset ON WASM (5.808173ms)
+✔ entailExplainConclusion derives a chase conclusion never asserted ON WASM (36.854201ms)
+✔ the existential refusal is per conclusion, not per regime ON WASM (13.96033ms)
+✔ every DL reasoning service is reachable from the package root, not only ./pkg/ (0.233772ms)
+✔ every conclusion-directed entailment service is reachable from the package root (43.643223ms)
+✔ a variable in PREDICATE position is projected like any other (15.410993ms)
+✔ a conclusion nothing derives has no warrant, and says so (9.836522ms)
+✔ the two regimes defined by a missing input are refused by name (2.268827ms)
+✔ webont-imports-011 answers from its own premise, owl:imports intact (125.843683ms)
+✔ an unsupplied import throws by name rather than reasoning without it (9.172675ms)
+✔ the import arrays are parallel, and a length mismatch is refused (4.413097ms)
+✔ a malformed import table is refused by entry (7.532608ms)
+✔ wasm_entail_premise_iris: the three services honour premiseIris (1.698565ms)
+✔ literal(value, { language, direction }) builds an RDF 1.2 directional literal (10.054946ms)
+✔ Dataset.from and DataFactory.dataset build chainable datasets from quads (43.470188ms)
+✔ Dataset#toStream is the instance form of datasetToStream (11.836678ms)
+✔ native geographic response and strict semantic refusal cross the package root (175.374143ms)
+✔ an original work refusal throws instead of allocating a partial JSON response (36.477943ms)
+✔ point buckets and their profile outlive the creating session (95.129652ms)
+✔ explicit axes reach sync queries and an already started async profile snapshot (423.420693ms)
+✔ an ungoverned query is unchanged: same rows, and no governor vocabulary reaches it (405.20721ms)
+✔ an ungoverned entry refuses a governor option rather than ignoring it (8.428018ms)
+✔ queryGoverned with no ceiling completes and still hands back a receipt (27.186393ms)
+✔ queryEntailmentGoverned carries the query outcome and closure report together (293.034918ms)
+✔ queryEntailmentGoverned closes over the dataset's owl:imports table (150.424089ms)
+✔ queryEntailmentGoverned takes the closure's evaluation limits, naming its own option (178.295521ms)
+✔ queryEntailmentGoverned exposes a closure stop without an answer or report (3.543036ms)
+✔ the evidence maps are keyed by the engine's own dimension vocabulary (14.133035ms)
+✔ the answer cap is inclusive: cap == answer size completes (19.273649ms)
+✔ the answer cap is inclusive: cap == answer size - 1 exhausts and certifies what it reached (6.457622ms)
+✔ a zero fuel ceiling trips on the first charged unit of work (19.53495ms)
+✔ a fuel ceiling large enough to cover the query completes it (22.969709ms)
+✔ a zero wall deadline trips on the first stop poll inside the real wasm module (10.279848ms)
+✔ a non-zero wall deadline trips a query it cannot cover, so the wasm clock advances (69.13658ms)
+✔ the same query completes when the wall deadline is not the binding constraint (11.987003ms)
+✔ a cancelled token stops the query as an outcome and survives the call (16.493379ms)
+✔ an uncancelled token leaves the query complete (6.892787ms)
+✔ cancellation outranks a deadline when both fire at the same point (10.133084ms)
+✔ every governor trip is a returned outcome, not a throw (56.311984ms)
+✔ a ceiling the planner's estimate already exceeds is REFUSED, and reports an estimate rather than a measurement (11.434611ms)
+✔ the scratch ceiling binds a value-constructing query and leaves a plain one alone (19.018126ms)
+✔ a genuine query error still throws — a trip is not the only outcome shape (33.218809ms)
+✔ a negative ceiling is refused rather than wrapping into an unreachable one (12.126358ms)
+✔ the answer cap counts RDF 1.2 triple-term solutions like any other (25.338653ms)
+✔ the answer cap counts RDF 1.2 reifier statements in a CONSTRUCT answer sequence (29.040013ms)
+✔ a governed UPDATE that fits its budget applies and reports a receipt (52.761678ms)
+✔ a tripped UPDATE applies NOTHING and leaves the dataset byte-identical (38.039203ms)
+✔ a cancelled token stops an UPDATE as an outcome (8.809016ms)
+✔ updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set (9.488393ms)
+✔ explainQuery renders the charge ledger a budget is sized from (18.536702ms)
+✔ dataset identities and mutation generations use exact bigint transport (143.648537ms)
+✔ isomorphic() is true for the same graph under blank-node relabeling (31.496195ms)
+✔ isomorphic() is false for a structurally different graph (0.576412ms)
+✔ canonicalize() is stable and identifies isomorphic graphs byte-for-byte (4.401387ms)
+✔ canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting (1.120644ms)
+✔ an ordinary IRI neighbouring the reserved namespace still canonicalizes (12.906404ms)
+✔ configured Dataset serialization reuses compiled contexts (156.438094ms)
+✔ configured graph results and YAML schema headers use the same engine (274.830486ms)
+✔ closed options fail before output (9.140115ms)
+✔ frozen lexical capability inventory accounts for every file (2.022885ms)
+✔ every frozen JSON string vector crosses the package decoder (341.96026ms)
+✔ every JSON code unit and surrogate pair matches the frozen answer digest (23970.841616ms)
+✔ every unreserved percent vector crosses SPARQL ENCODE_FOR_URI (10064.35465ms)
+✔ every frozen string escape preserves its consumed-prefix boundary (34.699447ms)
+✔ every UCHAR scalar and refusal matches the frozen answer digests (14492.947843ms)
+✔ parsePackument accepts the npm 11 array response (9.413696ms)
+✔ parsePackument accepts the npm 12 package-name map (0.262792ms)
+✔ parsePackument rejects zero or multiple package records (0.525043ms)
+✔ parsePackument rejects a malformed package record (0.169185ms)
+✔ missingPackedFiles accepts a tarball holding every promised path (0.464295ms)
+✔ missingPackedFiles names a files entry npm silently omitted (0.177284ms)
+✔ missingPackedFiles names an exports target the tarball lacks (0.180045ms)
+✔ missingPackedFiles refuses a pack record without a file list (0.165725ms)
+✔ missingPackedFiles accepts nested contents of an explicit directory promise (0.173284ms)
+✔ missingPackedFiles refuses an empty directory marker (1.151972ms)
+✔ missingPackedFiles refuses a directory prefix lookalike (0.213123ms)
+✔ missingPackedFiles keeps exact file promises strict (0.134946ms)
+✔ missingPackedFiles never turns an export target into a directory promise (0.139225ms)
+✖ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (890.239656ms)
+✔ a refused query carries sparql-parse-lex on both lanes (109.886936ms)
+✔ a refused query carries sparql-parse-syntax on both lanes (53.415387ms)
+✔ a refused query carries sparql-parse-unsupported on both lanes (33.191019ms)
+✔ a refused query carries sparql-parse-iri on both lanes (19.953387ms)
+✔ a refused query carries sparql-parse-cdt-arity on both lanes (16.936364ms)
+✔ a relative IRI without a base names its typed cause (10.462232ms)
+✔ a refused update carries its typed presentation on both lanes (42.78085ms)
+✔ a failure without a typed presentation carries none; the valid neighbour answers (203.828376ms)
+✔ projection archive matches the shared Rust/Python bytes (395.155605ms)
+✔ write-only profiles and mismatched tagged config fail explicitly (21.469238ms)
+✔ all research-object profiles execute through the shared WASM carrier (488.493306ms)
+✔ DCAT RDF executes deterministically and remains write-only through WASM (290.508101ms)
+✔ VoID executes deterministically and remains write-only through WASM (32.366466ms)
+✔ attached RO-Crate matches the cross-host archive through generated WASM (43.895434ms)
+✔ SELECT returns SPARQL Results JSON bindings (255.068403ms)
+✔ SELECT over the default graph does not see named-graph triples (4.934341ms)
+✔ ASK returns a boolean result document (25.139439ms)
+✔ QueryEngine SELECT returns typed package-root bindings (19.375825ms)
+✔ NOW and RAND read the live JavaScript clock and entropy on wasm (33.355524ms)
+✔ QueryEngine SELECT rows are a single-owner stream (4.040529ms)
+✔ QueryEngine query routes ASK and graph results into discriminated objects (19.296997ms)
+✔ QueryEngine raw serialization supports result and graph formats (14.707505ms)
+✔ CONSTRUCT returns Turtle (16.635073ms)
+✔ a malformed query throws, never a silent empty result (25.631703ms)
+✔ a SERVICE clause hard-fails offline (no resolver in the browser) (20.531718ms)
+✔ QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolver (61.147558ms)
+✔ queryRaw provenanceNamespace populates and round-trips through JSON (23.155723ms)
+✔ queryRaw provenanceNamespace populates and round-trips through XML (17.923192ms)
+✔ omitting provenanceNamespace emits pure W3C output (1.84617ms)
+✔ a lone provenanceNamespace half is refused (3.663152ms)
+✔ serialize supports JSON-LD (the docs 'copy as' transcode surface) (61.756638ms)
+✔ the default query() format never returns an empty string for a named-graph CONSTRUCT (19.53895ms)
+✔ the default query() format is still Turtle for a default-graph CONSTRUCT (12.044052ms)
+✔ an explicit single-graph format throws for a named-graph CONSTRUCT (20.206468ms)
+✔ an explicit quad-capable format carries a named-graph CONSTRUCT (9.860972ms)
+✔ an explicit single-graph format still serializes a default-graph CONSTRUCT (1.937498ms)
+✔ the default query() format carries a named-graph DESCRIBE instead of emptying it (29.374933ms)
+✔ an explicit single-graph format throws for a named-graph DESCRIBE (10.24085ms)
+✔ serializeWithLoss reports the named-graph rows a single-graph syntax drops (10.286998ms)
+✔ SERVICE SILENT and LOAD SILENT succeed with nothing fetched (17.869894ms)
+✔ nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that (739.762094ms)
+✔ on the synchronous lane the deepest answer and the first refusal are neighbours (599.722442ms)
+✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, and the engine answers afterwards (10.84511ms)
+✔ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (815.611013ms)
+✔ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (6746.104482ms)
+✔ a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches (11.557698ms)
+✔ inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert (2.277137ms)
+✔ a synchronous failure carries its code; the well-formed neighbour answers (2.517848ms)
+✔ the synchronous and asynchronous lanes answer and refuse identically (16.1475ms)
+✔ a snapshot is an independent dataset with its own identity (1.701325ms)
+✔ every results alias has the same bytes through all raw format APIs (302.848202ms)
+✔ every governed twin exposes metered and explicit no-ceiling execution (395.186395ms)
+✔ no-ceiling execution preserves cancellation and refuses ignored options (218.832603ms)
+✔ strict JSON options refuse repeated members and arrays with diagnostic pointers (32.807442ms)
+✔ generated host Reflect.get preserves throwing getter refusal (1.161773ms)
+✔ version() returns the crate semver (4.832414ms)
+✔ DataFactory builds RDF/JS terms (10.065695ms)
+✔ literal() refuses a non-tag where the caller named it (7.585116ms)
+✔ polymorphic literal(value, datatype) dispatches to a typed literal (2.353164ms)
+✔ parse → serialize → reparse round-trips N-Triples (45.837371ms)
+✔ expanded JSON-LD and YAML-LD wasm bytes are frozen (29.379062ms)
+✔ DatasetCore add/has/delete/match/iterate (26.378899ms)
+✔ DatasetCore.add/delete chain (RDF/JS return-this) (0.487004ms)
+✔ DatasetCore.match treats a Variable as a wildcard (RDF/JS idiom) (0.535892ms)
+✔ RDF-1.2 wedge — directional literal round-trips through N-Quads (12.632052ms)
+✔ RDF-1.2 wedge — quoted-triple term round-trips through N-Quads (8.566834ms)
+✔ Sink streams quads into a dataset (2.103992ms)
+✔ datasetToStream → streamToDataset round-trips via the Sink (3.566985ms)
+✔ an unsupported format is a rejected error (18.377648ms)
+✔ RDF-1.2 — directional literal: .datatype.value derives rdf:dirLangString (0.352318ms)
+✔ RDF-1.2 — directional literal: in-memory add/has without serialize round-trip (0.376548ms)
+✔ RDF-1.2 — directional literal: parse then factory-built has() (cross-path) (3.952202ms)
+✔ Term.equals(null) returns false (RDF/JS spec) (0.169335ms)
+✔ Term.equals(undefined) returns false (RDF/JS spec) (0.076677ms)
+✔ Term.equals sanity: same term is true, different term is false (3.955792ms)
+✔ Quad.equals(null) returns false (RDF/JS spec) (0.210764ms)
+✔ Quad.equals(undefined) returns false (RDF/JS spec) (0.107397ms)
+✔ Quad.equals sanity: same quad is true, different quad is false (0.236682ms)
+✔ Term.equals does not consume its argument (0.120346ms)
+✔ Quad.equals does not consume its argument (0.199863ms)
+✔ serialize refuses what serializeWithLoss projects, for a star-incapable target (33.204359ms)
+✔ serializeWithLoss counts the declared empty graphs a target cannot write (350.070509ms)
+✔ a sink receives the same bytes serialize returns (144.605856ms)
+✔ a sink that throws aborts instead of truncating (52.327262ms)
+✔ an object without write is refused rather than silently producing nothing (5.220421ms)
+✔ SHA-3 built-ins reach their published FIPS 202 digests through the wasm module (274.369772ms)
+✔ SEP-0008's underscored spelling reaches the same digests through the wasm module (1.811922ms)
+✔ SHA-3 digests survive the typed QueryEngine.select surface (4.544753ms)
+✔ the SHA-3 hyphen is part of the name, and a spaced hyphen still subtracts (40.976898ms)
+✔ wasm_shacl_import_unresolved: shaclValidateToSarif rejects an unresolved owl:imports with the typed ShaclImportError (84.389428ms)
+✔ wasm_shacl_import_unresolved: shaclValidateChangesToSarif rejects an unresolved owl:imports with the typed ShaclImportError (47.44773ms)
+✔ wasm_shacl_import_unresolved: shaclEntail rejects an unresolved owl:imports with the typed ShaclImportError (11.885997ms)
+✔ wasm_shacl_import_unresolved: shaclApplyRules rejects an unresolved owl:imports with the typed ShaclImportError (10.970387ms)
+✔ wasm_shacl_import_unresolved: shaclEvalNodeExpr rejects an unresolved owl:imports with the typed ShaclImportError (27.001719ms)
+✔ wasm_shacl_import_unresolved: shaclLintShapes rejects an unresolved owl:imports with the typed ShaclImportError (14.329378ms)
+✔ wasm_shacl_import_unresolved: shaclPackProduct rejects an unresolved owl:imports with the typed ShaclImportError (42.397253ms)
+✔ wasm_shacl_import_supplied: every entry point applies a supplied import (665.233057ms)
+✔ wasm_shacl_import_declared_in_place: an ontology declared in place resolves the import, and its neighbour does not (17.379359ms)
+✔ wasm_shacl_import_unreached_entry: a table entry nothing imports is refused, and a reached one is not (7.500568ms)
+✔ wasm_shacl_import_array_lengths: import arrays of different lengths are refused, never truncated (3.486387ms)
+✔ wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a header import does not (492.349433ms)
+✔ shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME verdict shaclValidateToSarif reaches (229.331793ms)
+✔ shaclProductExplain reports well-formed identity/format fields without admitting the product (2.633495ms)
+✔ shaclProductCertify succeeds on a genuine product (1.769303ms)
+✔ shaclProductValidateToSarifRebuild validates and agrees with the admit path (2.827909ms)
+✔ *Expecting variants accept the product's own identity digest (5.515162ms)
+✔ *Expecting variants refuse a product bound to a DIFFERENT identity digest, with a neighbouring valid case beside it (8.204996ms)
+✔ a corrupted product is refused as a ShaclProductRefusal carrying its dimension label across the boundary, with a valid neighbour beside it (5.59676ms)
+✔ wasm_shacl_shapes_graph: shapesGraph-001 through shaclValidateToSarif (706.745598ms)
+✔ wasm_shacl_shapes_graph: the change path, a packed product and lint carry it (479.427571ms)
+✔ wasm_shacl_shapes_graph: a relative shapes graph with no base is refused (5.663037ms)
+✔ wasm_rules_shapes_graph: shaclApplyRules and shaclEntail pre-bind $shapesGraph (116.674618ms)
+✔ shaclValidateToSarif emits SARIF 2.1.0 with a violation (299.86343ms)
+✔ shaclValidateToSarif rejects malformed shapes (never a silent pass) (12.344872ms)
+✔ wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformanceDisallows (21.753219ms)
+✔ wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed (431.983571ms)
+✔ wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph (13.252573ms)
+✔ wasm_shacl_sparql_expr_declaration: shaclValidateToSarif evaluates sh:sparqlExpr beside its vocabulary declaration (133.634611ms)
+✔ wasm_shacl_message_languages: shaclValidateToSarif carries every message with its language (1.84633ms)
+✔ shaclEntail materializes the inferred triple and keeps the base fact (44.96017ms)
+✔ wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict (11.067403ms)
+✔ shaclValidateChangesToSarif validates the change and reports its scope (9.493494ms)
+✔ shaclValidateChangesToSarif honours the retract half (2.260697ms)
+✔ shaclValidateChangesToSarif reports an unbounded footprint rather than guessing (80.808664ms)
+✔ shaclValidateChangesToSarif rejects a malformed change document (3.275534ms)
+✔ wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit (666.522836ms)
+✔ wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope (36.255721ms)
+✔ shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour (12.158808ms)
+✔ wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle (50.956077ms)
+✔ wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one (397.181003ms)
+✔ wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised (6963.404937ms)
+✔ wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised (17.05949ms)
+✔ wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing (2.368074ms)
+✖ a trap that is not a panic, in a synchronous call, poisons every entry point (1208.019484ms)
+✔ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (37.21542ms)
+✔ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (22.566532ms)
+✔ visualization APIs preserve RDF 1.2 statement semantics (327.17069ms)
+✔ visualization modes share the same model (43.818377ms)
+✔ cross-graph reifier roles survive graph selection without leaking occurrences (20.422331ms)
+✔ typed refusal and healthy nullable-count neighbor: xpath-2.0-2010-12-14 (607.397554ms)
+✔ large finite REGEX shapes through the optimized package: xpath-2.0-2010-12-14 (4039.890212ms)
+✔ large finite REPLACE retains the last capture: xpath-2.0-2010-12-14 (316.046015ms)
+✔ typed refusal and healthy nullable-count neighbor: xpath-3.1-2017-03-21 (64.601338ms)
+✔ large finite REGEX shapes through the optimized package: xpath-3.1-2017-03-21 (3527.09735ms)
+✔ large finite REPLACE retains the last capture: xpath-3.1-2017-03-21 (251.274787ms)
+✔ an integer past i128 has its exact canonical lexical form (18.362458ms)
+✔ a long decimal has its exact canonical lexical form (12.39077ms)
+✔ a malformed lexical has no canonical form, and its well-formed neighbour does (0.649139ms)
+✔ long integers compare exactly (1.145433ms)
+✔ malformed and incomparable values have no order, and their neighbours do (11.607755ms)
+✔ a SPARQL sum past i128 returns its exact lexical form (317.57171ms)
+ℹ tests 449
+ℹ suites 0
+ℹ pass 446
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1846002.605825
+
+✖ failing tests:
+
+test at tests/async-concurrency.test.mjs:568:1
+✖ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (253.428504ms)
+  AssertionError [ERR_ASSERTION]: engine.setGeoSession()
+  + actual - expected
+  
+    {
+  +   message: 'expected instance of GeoSession',
+  -   message: 'the wasm instance trapped (RangeError: Maximum call stack size exceeded) and cannot be used again; load the package in a fresh JavaScript realm (a new page, Worker isolate or process)',
+      name: 'Error',
+      settled: 'rejected'
+    }
+  
+      at assertSurfacePoisoned (file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs:99:17)
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm/js/tests/async-concurrency.test.mjs:644:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: 'rejected', name: 'Error', message: 'expected instance of GeoSession' },
+    expected: { settled: 'rejected', name: 'Error', message: 'the wasm instance trapped (RangeError: Maximum call stack size exceeded) and cannot be used again; load the package in a fresh JavaScript realm (a new page, Worker isolate or process)' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/panic-poison.test.mjs:21:1
+✖ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (890.239656ms)
+  AssertionError [ERR_ASSERTION]: engine.setGeoSession()
+  + actual - expected
+  
+    {
+  +   message: 'expected instance of GeoSession',
+  -   message: 'the wasm instance trapped (panicked at crates/rdf-wasm/src/lib.rs:173:5: the armed test panic fired) and cannot be used again; load the package in a fresh JavaScript realm (a new page, Worker isolate or process)',
+      name: 'Error',
+      settled: 'rejected'
+    }
+  
+      at assertSurfacePoisoned (file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs:99:17)
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm/js/tests/panic-poison.test.mjs:95:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: 'rejected', name: 'Error', message: 'expected instance of GeoSession' },
+    expected: { settled: 'rejected', name: 'Error', message: 'the wasm instance trapped (panicked at crates/rdf-wasm/src/lib.rs:173:5: the armed test panic fired) and cannot be used again; load the package in a fresh JavaScript realm (a new page, Worker isolate or process)' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/trap-poison.test.mjs:33:1
+✖ a trap that is not a panic, in a synchronous call, poisons every entry point (1208.019484ms)
+  AssertionError [ERR_ASSERTION]: engine.setGeoSession()
+  + actual - expected
+  
+    {
+  +   message: 'expected instance of GeoSession',
+  -   message: 'the wasm instance trapped (a call into the instance was unwound by a trap or a thrown exception, and its poison gate closed) and cannot be used again; load the package in a fresh JavaScript realm (a new page, Worker isolate or process)',
+      name: 'Error',
+      settled: 'rejected'
+    }
+  
+      at assertSurfacePoisoned (file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs:99:17)
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm/js/tests/trap-poison.test.mjs:110:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: 'rejected', name: 'Error', message: 'expected instance of GeoSession' },
+    expected: { settled: 'rejected', name: 'Error', message: 'the wasm instance trapped (a call into the instance was unwound by a trap or a thrown exception, and its poison gate closed) and cannot be used again; load the package in a fresh JavaScript realm (a new page, Worker isolate or process)' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+make: *** [Makefile:915: wasm-pkg-test] Error 1

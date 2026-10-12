@@ -1,0 +1,10 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 42.56s
+     Running unittests src/lib.rs (target/geo-build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+test topology::relate::tests::all_small_map_pairs_complete_in_one_default_work_budget ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 713 filtered out; finished in 0.00s
+
+terminal_status=0

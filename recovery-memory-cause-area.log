@@ -1,0 +1,21 @@
+    Finished `test` profile [optimized] target(s) in 0.42s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+test atlas::area::tests::returned_large_area_stays_charged_and_cancelled_attempts_release_owners ... FAILED
+
+failures:
+
+---- atlas::area::tests::returned_large_area_stays_charged_and_cancelled_attempts_release_owners stdout ----
+
+thread 'atlas::area::tests::returned_large_area_stays_charged_and_cancelled_attempts_release_owners' (3985963) panicked at crates/geo-kernel/src/atlas/area.rs:1090:10:
+called `Result::unwrap()` on an `Err` value: MemoryExhausted { limit: 67108864 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    atlas::area::tests::returned_large_area_stays_charged_and_cancelled_attempts_release_owners
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 700 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p purrdf-geo-kernel --lib`

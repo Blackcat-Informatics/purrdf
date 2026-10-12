@@ -1,0 +1,19 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 1m 39s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 11 tests
+test geodesic::tests::borrowed_batches_refuse_a_false_iterator_length_without_partial_outputs ... ok
+test geodesic::tests::exact_equator_and_meridian_reference_quantization ... ok
+test geodesic::tests::easy_antipodal_branches_keep_the_same_work_at_higher_precision_limits ... ok
+test geodesic::tests::insufficient_precision_refuses_even_an_ordinary_point_pair ... ok
+test geodesic::tests::directly_cold_reference_entries_refuse_before_identity_allocation ... ok
+test geodesic::tests::pole_and_seam_aliases_have_exact_zero_answers ... ok
+test geodesic::tests::physical_zero_uses_original_metric_identity_for_subnormal_neighbors ... ok
+test geodesic::tests::public_inverse_reference_rows_agree_with_certified_quantization ... ok
+test geodesic::tests::public_submetre_and_metre_rows_complete_under_default_limits ... ok
+test geodesic::tests::cut_locus_distance_finishes_with_default_work_in_cold_and_prepared_paths ... ok
+test geodesic::tests::forced_arithmetic_paths_preserve_completed_distance_inverse_direct_and_batches ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 696 filtered out; finished in 3.32s
+

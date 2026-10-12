@@ -1,0 +1,19 @@
+Implement native geodesic kernel and physical spatial ownership
+
+Provide the neutral first-party geodesic, geographic geometry, native cell,
+cover, operation and index implementations through the evaluator and shared
+host surfaces. Admit original native allocations before birth and retain their
+grants through payload destruction, including inline values and shared owners.
+
+Correct the planar noder's exact axis crossings, stream remaining area witnesses,
+reuse validated geographic inventories and publish original intrinsic scalar
+owners. Keep original numerical equations, complete output, typed refusals,
+work policies and cover allocation bounds.
+
+Native kernel acceptance passes 705 cases; affected evaluator and validate geo
+acceptance passes 142 cases. Original failed receipts remain in selected Stage.
+
+This is an unqualified local implementation checkpoint for normal base
+integration. Portable and installed-host execution, full public/private corpora,
+performance, generated projections and mandatory final qualification remain
+required. This commit does not claim issue completion or publication.

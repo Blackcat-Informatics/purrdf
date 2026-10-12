@@ -1,0 +1,45 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+error: lifetime may not live long enough
+   --> crates/geo-kernel/src/topology/relate.rs:349:17
+    |
+346 |     edges: &mut W::Array<(&Coord, &Coord)>,
+    |     -----
+    |     |
+    |     has type `&mut <W as NodingWork>::Array<(&'1 Coord, &Coord)>`
+    |     has type `&mut <W as NodingWork>::Array<(&Coord, &'2 Coord)>`
+...
+349 |     for edge in edges.iter_mut() {
+    |                 ^^^^^^^^^^^^^^^^ argument requires that `'1` must outlive `'2`
+    |
+    = note: requirement occurs because of a mutable reference to `[(&geom::Coord, &geom::Coord)]`
+    = note: mutable references are invariant over their type parameter
+    = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider introducing a named lifetime parameter
+    |
+345 ~ fn unique_edge_supports<'a, W: RelateWork>(
+346 ~     edges: &mut W::Array<(&'a Coord, &'a Coord)>,
+    |
+
+error: lifetime may not live long enough
+   --> crates/geo-kernel/src/topology/relate.rs:349:17
+    |
+346 |     edges: &mut W::Array<(&Coord, &Coord)>,
+    |     -----
+    |     |
+    |     has type `&mut <W as NodingWork>::Array<(&Coord, &'2 Coord)>`
+    |     has type `&mut <W as NodingWork>::Array<(&'1 Coord, &Coord)>`
+...
+349 |     for edge in edges.iter_mut() {
+    |                 ^^^^^^^^^^^^^^^^ argument requires that `'2` must outlive `'1`
+    |
+    = note: requirement occurs because of a mutable reference to `[(&geom::Coord, &geom::Coord)]`
+    = note: mutable references are invariant over their type parameter
+    = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider introducing a named lifetime parameter
+    |
+345 ~ fn unique_edge_supports<'a, W: RelateWork>(
+346 ~     edges: &mut W::Array<(&'a Coord, &'a Coord)>,
+    |
+
+error: could not compile `purrdf-geo-kernel` (lib test) due to 2 previous errors
+terminal_status=101

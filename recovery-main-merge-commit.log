@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 7 changed non-Rust path(s) in the staged index against e89e288ef476 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/lex/src/allocation.rs'.
+Recorded resolution for 'docs/book/po/zh-Hans.po'.
+[paudley/409-geo-deterministic-hierarchical-spatial 1f4feb501] Merge remote-tracking branch 'origin/main' into paudley/409-geo-deterministic-hierarchical-spatial

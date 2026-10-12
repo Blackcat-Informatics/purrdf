@@ -1,0 +1,5 @@
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+error: could not compile `purrdf-sparql-eval` (lib) due to 5 previous errors; 2 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 11 previous errors; 2 warnings emitted

@@ -1,0 +1,25 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Radius and box search over point literals needs a hierarchical cell index: each\npoint is keyed by the cell that contains it at a fixed resolution, and a query\ncovers its region with a set of cells and refines by exact distance. `purrdf-geo`\nhas no cell index, so a consumer doing this keeps a third-party hexagonal-grid\nlibrary beside purrdf, and the cell ids it stores are only as stable as that\nlibrary's version.\n\n## Ask\n\nA deterministic hierarchical spatial cell index in `purrdf-geo` for CRS84 points:\n\n- **Cell assignment:** point (longitude, latitude) and resolution to a cell id, a\n  pure function of its inputs, identical on every host and target (no floating\n  point that a platform `libm` can move; exact or fixed-point arithmetic, or a\n  declared, tested rounding contract).\n- **Parent / children** across resolutions, so a cell can be coarsened (for\n  example to bound disclosure precision) or refined.\n- **Covering:** the set of cells at a resolution that covers a disk of a given\n  radius in metres (paired with the geodesic distance requested separately) and a\n  bounding box, with a declared, finite bound on the cover size and a typed refusal\n  past it rather than a silently truncated cover.\n- **Range checks:** latitude outside [-90, 90] or longitude outside [-180, 180]\n  refused with a typed error; never assigned a plausible cell.\n- **Identity:** the grid and its parameters named in a versioned profile, so a\n  change re-mints the identity of every index built on it.\n\nH3 compatibility (same cell ids as the H3 reference) would be welcome but is not\nrequired; determinism and a stable, versioned definition are.\n\n## Acceptance\n\n- Conformance vectors for assignment, parent/child, and covering, including the\n  poles, the antimeridian, and resolution extremes.\n- The cover of a radius contains every cell that holds a point within the radius\n  (no false negatives), checked exhaustively on small radii.\n- Out-of-range coordinates refuse.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-04T05:05:05Z",
+  "labels": [],
+  "milestone": {
+    "number": 4,
+    "title": "v4.0",
+    "description": "",
+    "dueOn": "2026-10-12T00:00:00Z"
+  },
+  "number": 409,
+  "state": "OPEN",
+  "title": "geo: deterministic hierarchical spatial cell index for CRS84 points (assignment, parent/child, covering)",
+  "updatedAt": "2026-10-04T18:15:11Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/409"
+}

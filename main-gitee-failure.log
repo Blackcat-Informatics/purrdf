@@ -1,0 +1,86 @@
+sync	Push and verify main and tags	﻿2026-10-11T00:03:08.1512298Z ##[group]Run set -euo pipefail
+sync	Push and verify main and tags	2026-10-11T00:03:08.1512739Z ^[[36;1mset -euo pipefail^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1513186Z ^[[36;1mtest -n "$GITEE_USERNAME" || { echo 'Missing GITEE_USERNAME secret' >&2; exit 1; }^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1513791Z ^[[36;1mtest -n "$GITEE_PASSWORD" || { echo 'Missing GITEE_PASSWORD secret' >&2; exit 1; }^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1514233Z ^[[36;1maskpass=$(mktemp)^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1514502Z ^[[36;1mtrap 'rm -f "$askpass"' EXIT^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1514793Z ^[[36;1mcat > "$askpass" <<'ASKPASS'^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1515063Z ^[[36;1m#!/usr/bin/env bash^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1515510Z ^[[36;1mset -euo pipefail^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1515749Z ^[[36;1mcase "$1" in^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1516164Z ^[[36;1m  "Username for 'https://gitee.com': "*) printf '%s\n' "$GITEE_USERNAME" ;;^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1516733Z ^[[36;1m  "Password for 'https://"*"@gitee.com': "*) printf '%s\n' "$GITEE_PASSWORD" ;;^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1517154Z ^[[36;1m  *) exit 1 ;;^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1517386Z ^[[36;1mesac^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1517639Z ^[[36;1mASKPASS^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1517856Z ^[[36;1mchmod 700 "$askpass"^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1518173Z ^[[36;1mexport GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1518682Z ^[[36;1mexport GIT_CONFIG_COUNT=4 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1519252Z ^[[36;1m# Avoid chunked encoding for the initial pack on this mirror endpoint.^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1519877Z ^[[36;1mexport GIT_CONFIG_KEY_1=http.https://gitee.com/blackcat-informatics/purrdf.git.postBuffer^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1520590Z ^[[36;1mexport GIT_CONFIG_VALUE_1=134217728^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1521107Z ^[[36;1mexport GIT_CONFIG_KEY_2=http.https://gitee.com/blackcat-informatics/purrdf.git.lowSpeedLimit^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1521607Z ^[[36;1mexport GIT_CONFIG_VALUE_2=1^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1522076Z ^[[36;1mexport GIT_CONFIG_KEY_3=http.https://gitee.com/blackcat-informatics/purrdf.git.lowSpeedTime^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1522574Z ^[[36;1mexport GIT_CONFIG_VALUE_3=300^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1522962Z ^[[36;1m# The empty mirror needs a full-history upload; keep reads at 45s.^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1523353Z ^[[36;1mpython3 - <<'PY'^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1523606Z ^[[36;1mimport importlib.util^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1523850Z ^[[36;1m^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1524233Z ^[[36;1mspec = importlib.util.spec_from_file_location("git_sync", "scripts/sync-git-refs.py")^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1524744Z ^[[36;1mgit_sync = importlib.util.module_from_spec(spec)^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1525097Z ^[[36;1mspec.loader.exec_module(git_sync)^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1525404Z ^[[36;1moriginal_git = git_sync.git^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1525668Z ^[[36;1m^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1525900Z ^[[36;1mdef bootstrap_git(arguments, deadline):^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1526215Z ^[[36;1m    if arguments[0] == "push":^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1526574Z ^[[36;1m        print("Workflow push deadline: 1800 seconds.", flush=True)^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1527090Z ^[[36;1m    return original_git(arguments, 1800 if arguments[0] == "push" else deadline)^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1527511Z ^[[36;1m^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1527713Z ^[[36;1mgit_sync.git = bootstrap_git^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1528094Z ^[[36;1mgit_sync.sync("https://gitee.com/blackcat-informatics/purrdf.git")^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1528479Z ^[[36;1mPY^[[0m
+sync	Push and verify main and tags	2026-10-11T00:03:08.1807762Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+sync	Push and verify main and tags	2026-10-11T00:03:08.1808175Z env:
+sync	Push and verify main and tags	2026-10-11T00:03:08.1808724Z   GITEE_USERNAME: ***
+sync	Push and verify main and tags	2026-10-11T00:03:08.1809056Z   GITEE_PASSWORD: ***
+sync	Push and verify main and tags	2026-10-11T00:03:08.1809300Z   LC_ALL: C
+sync	Push and verify main and tags	2026-10-11T00:03:08.1809529Z ##[endgroup]
+sync	Push and verify main and tags	2026-10-11T00:03:08.2283613Z Source snapshot: main and 97 tags.
+sync	Push and verify main and tags	2026-10-11T00:03:08.2284298Z Destination preflight 1/3: reading refs (45 second deadline).
+sync	Push and verify main and tags	2026-10-11T00:03:10.5159755Z git ls-remote transport after 2.3 seconds: HTTP/1.1 observed; HTTP status 401 observed; HTTP status 200 observed; latest HTTP request is POST; latest HTTP request final response 200 observed
+sync	Push and verify main and tags	2026-10-11T00:03:10.5161511Z Destination preflight read 1 refs.
+sync	Push and verify main and tags	2026-10-11T00:03:10.5161866Z Atomic push 1/3: main and 97 tags (300 second deadline).
+sync	Push and verify main and tags	2026-10-11T00:03:10.5162216Z Workflow push deadline: 1800 seconds.
+sync	Push and verify main and tags	2026-10-11T00:03:12.5535697Z git push transport after 2.0 seconds: HTTP/1.1 observed; HTTP status 401 observed; HTTP status 200 observed; latest HTTP request is GET; latest HTTP request final response 200 observed
+sync	Push and verify main and tags	2026-10-11T00:03:12.5536629Z Sync attempt 1/3 failed: git push: ref conflict (exit status 1)
+sync	Push and verify main and tags	2026-10-11T00:03:14.5538213Z Destination preflight 2/3: reading refs (45 second deadline).
+sync	Push and verify main and tags	2026-10-11T00:03:18.6376926Z git ls-remote transport after 4.1 seconds: HTTP/1.1 observed; HTTP status 401 observed; HTTP status 200 observed; latest HTTP request is POST; latest HTTP request final response 200 observed
+sync	Push and verify main and tags	2026-10-11T00:03:18.6377943Z Destination preflight read 1 refs.
+sync	Push and verify main and tags	2026-10-11T00:03:18.6378319Z Atomic push 2/3: main and 97 tags (300 second deadline).
+sync	Push and verify main and tags	2026-10-11T00:03:18.6378709Z Workflow push deadline: 1800 seconds.
+sync	Push and verify main and tags	2026-10-11T00:03:20.3215123Z git push transport after 1.7 seconds: HTTP/1.1 observed; HTTP status 401 observed; HTTP status 200 observed; latest HTTP request is GET; latest HTTP request final response 200 observed
+sync	Push and verify main and tags	2026-10-11T00:03:20.3216044Z Sync attempt 2/3 failed: git push: ref conflict (exit status 1)
+sync	Push and verify main and tags	2026-10-11T00:03:24.3217542Z Destination preflight 3/3: reading refs (45 second deadline).
+sync	Push and verify main and tags	2026-10-11T00:03:26.4999766Z git ls-remote transport after 2.2 seconds: HTTP/1.1 observed; HTTP status 401 observed; HTTP status 200 observed; latest HTTP request is POST; latest HTTP request final response 200 observed
+sync	Push and verify main and tags	2026-10-11T00:03:26.5000983Z Destination preflight read 1 refs.
+sync	Push and verify main and tags	2026-10-11T00:03:26.5001335Z Atomic push 3/3: main and 97 tags (300 second deadline).
+sync	Push and verify main and tags	2026-10-11T00:03:26.5001686Z Workflow push deadline: 1800 seconds.
+sync	Push and verify main and tags	2026-10-11T00:03:30.9662058Z git push transport after 4.5 seconds: HTTP/1.1 observed; HTTP status 401 observed; HTTP status 200 observed; latest HTTP request is GET; latest HTTP request final response 200 observed
+sync	Push and verify main and tags	2026-10-11T00:03:30.9663046Z Sync attempt 3/3 failed: git push: ref conflict (exit status 1)
+sync	Push and verify main and tags	2026-10-11T00:03:31.0382428Z Traceback (most recent call last):
+sync	Push and verify main and tags	2026-10-11T00:03:31.0383258Z   File "/home/runner/work/purrdf/purrdf/scripts/sync-git-refs.py", line 295, in sync
+sync	Push and verify main and tags	2026-10-11T00:03:31.0384262Z     git(["push", "--atomic", "--progress", "--", remote, *refspecs], push_timeout)
+sync	Push and verify main and tags	2026-10-11T00:03:31.0384992Z   File "<stdin>", line 11, in bootstrap_git
+sync	Push and verify main and tags	2026-10-11T00:03:31.0385779Z   File "/home/runner/work/purrdf/purrdf/scripts/sync-git-refs.py", line 211, in git
+sync	Push and verify main and tags	2026-10-11T00:03:31.0386551Z     raise SyncError(
+sync	Push and verify main and tags	2026-10-11T00:03:31.0386918Z git_sync.SyncError: git push: ref conflict (exit status 1)
+sync	Push and verify main and tags	2026-10-11T00:03:31.0387203Z 
+sync	Push and verify main and tags	2026-10-11T00:03:31.0387424Z The above exception was the direct cause of the following exception:
+sync	Push and verify main and tags	2026-10-11T00:03:31.0387743Z 
+sync	Push and verify main and tags	2026-10-11T00:03:31.0387860Z Traceback (most recent call last):
+sync	Push and verify main and tags	2026-10-11T00:03:31.0388163Z   File "<stdin>", line 14, in <module>
+sync	Push and verify main and tags	2026-10-11T00:03:31.0388641Z   File "/home/runner/work/purrdf/purrdf/scripts/sync-git-refs.py", line 309, in sync
+sync	Push and verify main and tags	2026-10-11T00:03:31.0389270Z     raise SyncError("synchronization failed after three attempts") from error
+sync	Push and verify main and tags	2026-10-11T00:03:31.0389822Z git_sync.SyncError: synchronization failed after three attempts
+sync	Push and verify main and tags	2026-10-11T00:03:31.0548496Z ##[error]Process completed with exit code 1.

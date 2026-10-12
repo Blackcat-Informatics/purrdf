@@ -1,0 +1,4 @@
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+error: could not compile `purrdf-geo-kernel` (lib) due to 17 previous errors; 165 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-geo-kernel` (lib test) due to 17 previous errors; 167 warnings emitted

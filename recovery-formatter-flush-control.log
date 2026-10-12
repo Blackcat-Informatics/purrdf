@@ -1,0 +1,34 @@
+   Compiling typenum v1.20.1
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling regex-syntax v0.8.11
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 40.28s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-xsd/0386de0c7b24ad92/out/purrdf_xsd-0386de0c7b24ad92)
+
+running 1 test
+test numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush ... FAILED
+
+failures:
+
+---- numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush stdout ----
+
+thread 'numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush' (1916166) panicked at crates/xsd/src/numeric.rs:2792:13:
+assertion `left == right` failed
+  left: "0.0E0"
+ right: "5.0E-324"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 412 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-xsd --lib`

@@ -1,0 +1,41 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-events)
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-geo-private-qualification v0.0.0 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/.stage/geo-deterministic-hierarchical-spatial/owned-private-probe)
+error[E0277]: `Rat` doesn't implement `std::fmt::Display`
+    --> main.rs.txt:1226:13
+     |
+1200 |               "status=complete\narchive_sha256={}\nmanifest_sha256={}\nprobe_source_sha256={}\nprobe_binary_sha256={}\ntoolchain_sha256={}\ncomputation_blake3={}\nbundles={}\nfeatures={}\nparts={}\nvertices={}\nedges={}\nprojected_vertices={}\naxis_vertices={}\ncontinuous_edges={}\nmaterialized_vertices={}\nbox_memberships={}\nindexed_vertices={}\nindex_self_hits={}\nmetric_features={}\nidentity_features={}\ninvalid_refusals={}\nmissing_operation_refusals={}\nmissing_height_refusals={}\nmax_work_items={}\nmax_workspace_bytes={}\nmax_roundtrip_angular_degrees={}\nm...
+     |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      -- required by this formatting parameter
+...
+1226 | /             receipt
+1227 | |                 .max_roundtrip_angular
+1228 | |                 .as_ref()
+1229 | |                 .ok_or(Failure::Input("complete_certificate_population"))?,
+     | |__________________________________________________________________________^ `Rat` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `Rat`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+     = note: required for `&Rat` to implement `std::fmt::Display`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-geo-private-qualification` (bin "geo-private-qualification") due to 1 previous error

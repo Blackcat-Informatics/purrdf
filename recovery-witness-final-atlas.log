@@ -1,0 +1,32 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 37.24s
+     Running unittests src/lib.rs (target/geo-build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 23 tests
+test atlas::relate::tests::curved_equator_overlap_uses_the_original_written_formal_faces ... ok
+test atlas::relate::tests::exact_polynomial_retraversal_uses_the_selected_set_without_changing_source_metrics ... ok
+test atlas::relate::tests::identified_cut_meridians_and_poles_have_physical_matrices ... ok
+test atlas::relate::tests::isolated_native_nodes_and_selected_curve_endpoints_use_relative_strata ... ok
+test atlas::relate::tests::native_closed_intersections_retain_boundary_only_curves_and_points ... ok
+test atlas::relate::tests::native_curve_boundary_nodes_use_physical_pole_and_seam_aliases ... ok
+test atlas::relate::tests::curved_relation_refuses_before_allocating_and_preserves_midphase_cancellation ... ok
+test atlas::relate::tests::native_curves_node_crossings_overlaps_and_reversed_endpoint_boundaries ... ok
+test atlas::relate::tests::native_mixed_dimensional_sets_ignore_redundant_lower_members ... ok
+test atlas::relate::tests::nonaxis_direct_arcs_exclude_the_parameter_diagonal_without_losing_endpoints ... ok
+test atlas::relate::tests::nonsymmetric_polynomial_critical_branches_have_the_complete_selected_range ... ok
+test atlas::relate::tests::original_transformed_and_nonaxis_shortest_curves_node_all_transverse_contacts ... ok
+test atlas::relate::tests::rank_lost_regions_retain_the_complete_selected_curve_and_point_support ... ok
+test atlas::relate::tests::relation_admission_counts_original_objects_without_content_deduplication ... ok
+test atlas::relate::tests::repeated_equatorial_coverage_has_no_artificial_endpoint_boundary ... ok
+test atlas::relate::tests::repeated_meridian_coverage_uses_original_pole_frames_and_has_no_boundary ... ok
+test atlas::relate::tests::symbolic_points_retain_original_equality_and_prove_positive_separation ... ok
+test atlas::relate::tests::transformed_constant_images_have_point_dimension_despite_distinct_source_endpoints ... ok
+test atlas::relate::tests::whole_surface_has_no_exterior_and_refusals_publish_no_matrix ... ok
+test atlas::relate::tests::written_long_paths_holes_and_native_parallel_regions_share_membership ... ok
+test atlas::relate::tests::finite_points_use_original_geodesic_jordan_proof ... ok
+test atlas::relate::tests::a_single_nonaxis_polynomial_loop_has_the_complete_selected_contact_graph ... ok
+test atlas::relate::tests::native_geodesic_regions_node_original_faces_complements_and_transverse_boundaries ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 691 filtered out; finished in 4.31s
+
+terminal_status=0

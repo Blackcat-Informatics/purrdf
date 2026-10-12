@@ -1,0 +1,13 @@
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cli)
+    Finished `test` profile [optimized] target(s) in 2.72s
+     Running tests/geo_cli.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-cli/25d0bd8f84b082ba/out/geo_cli-25d0bd8f84b082ba)
+
+running 5 tests
+test index_query_preserves_stable_caller_keys_and_negative_reported_law ... ok
+test scalar_request_and_typed_refusal_are_complete_process_outputs ... ok
+test explicit_transform_grid_crosses_the_profile_and_request_boundary ... ok
+test zero_buffer_process_output_preserves_the_original_decimal_closure ... ok
+test explicit_latitude_longitude_profile_reaches_query_admission_and_execution ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

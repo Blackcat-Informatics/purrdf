@@ -1,0 +1,15 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "e88a8e0e22c0745d8a9f3b305fe526b70b891817",
+  "headRefName": "paudley/467-xpath-regex-large-finite-counted",
+  "headRefOid": "677e5c0a2e779f9a31ab3df5828c0ef72942170b",
+  "isDraft": false,
+  "mergeCommit": {
+    "oid": "e89e288ef476ed06c80c6593094c4d583d1f5214"
+  },
+  "mergedAt": "2026-10-11T00:01:58Z",
+  "number": 530,
+  "state": "MERGED",
+  "title": "Handle large finite XPath regex repetitions",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/530"
+}

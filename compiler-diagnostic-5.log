@@ -1,0 +1,324 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/helper-census)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/conformance-kit)
+warning: empty line after doc comment
+   --> crates/geo-kernel/src/geodesic/seed.rs:123:1
+    |
+123 | / /// Exact sign change, without floating arithmetic.
+124 | |
+    | |_^
+125 |   fn signed(value: f64, positive: bool) -> f64 {
+    |   --------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = note: the `clippy::empty_line_after_doc_comments` lint ignores `-D warnings`
+    = help: if the empty line is unintentional, remove it
+
+warning: unused import: `try_fold`
+   --> crates/geo-kernel/src/geom.rs:555:85
+    |
+555 |     FoldError, LeafCoords, copy_rings_with_memory, copy_sequence_with_memory, fold, try_fold,
+    |                                                                                     ^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+    = note: the `unused_imports` lint ignores `-D warnings`
+
+error[E0282]: type annotations needed
+    --> crates/geo-kernel/src/binding.rs:1511:28
+     |
+1511 |                     return Ok(identity);
+     |                            ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+     |
+help: consider specifying the generic arguments
+     |
+1511 |                     return Ok::<profile::GeoBindingId, E>(identity);
+     |                              ++++++++++++++++++++++++++++
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/buffer/materialize.rs:708:13
+    |
+708 |             Ok(coordinate_order(&a[0][0], &b[0][0], context, progress)?
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+708 |             Ok::<std::cmp::Ordering, E>(coordinate_order(&a[0][0], &b[0][0], context, progress)?
+    |               +++++++++++++++++++++++++
+
+error[E0282]: type annotations needed
+   --> crates/geo-kernel/src/cells/index.rs:317:13
+    |
+317 |             Ok((a.cell.key(), a.key).cmp(&(b.cell.key(), b.key)))
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+317 |             Ok::<std::cmp::Ordering, E>((a.cell.key(), a.key).cmp(&(b.cell.key(), b.key)))
+    |               +++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/operation/geometry/curve/selected/range.rs:297:62
+    |
+297 |     let mut value = super::prepare_image(image, first, last, chain, context, progress, retained)?;
+    |                     --------------------                     ^^^^^ expected `OperationChain`, found `Arc<OperationChain>`
+    |                     |
+    |                     arguments to this function are incorrect
+    |
+    = note: expected struct `OperationChain`
+               found struct `std::sync::Arc<OperationChain>`
+note: function defined here
+   --> crates/geo-kernel/src/operation/geometry/curve/selected.rs:312:32
+    |
+312 | pub(in super::super::super) fn prepare_image(
+    |                                ^^^^^^^^^^^^^
+...
+316 |     chain: OperationChain,
+    |     ---------------------
+
+warning: unused import: `crate::context::NativeDetached`
+   --> crates/geo-kernel/src/profile.rs:526:13
+    |
+526 |         use crate::context::NativeDetached;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+   --> crates/geo-kernel/src/profile.rs:541:13
+    |
+541 |         use crate::context::NativeDetached;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+   --> crates/geo-kernel/src/profile.rs:518:13
+    |
+518 |         use crate::context::NativeDetached;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+  --> crates/geo-kernel/src/prepared.rs:55:13
+   |
+55 |         use crate::context::NativeDetached;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+  --> crates/geo-kernel/src/prepared.rs:44:13
+   |
+44 |         use crate::context::NativeDetached;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::context::NativeDetached`
+  --> crates/geo-kernel/src/prepared.rs:34:13
+   |
+34 |         use crate::context::NativeDetached;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0499]: cannot borrow `*context` as mutable more than once at a time
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:154:62
+    |
+150 |             ExactAdmission::new(context, progress).push_detached(
+    |                                 -------            ------------- first borrow later used by call
+    |                                 |
+    |                                 first mutable borrow occurs here
+...
+154 |                     right: super::overlap_parameters(second, context, progress)?,
+    |                                                              ^^^^^^^ second mutable borrow occurs here
+
+error[E0499]: cannot borrow `*progress` as mutable more than once at a time
+   --> crates/geo-kernel/src/atlas/arcs/axis_overlap.rs:154:71
+    |
+150 |             ExactAdmission::new(context, progress).push_detached(
+    |                                          --------  ------------- first borrow later used by call
+    |                                          |
+    |                                          first mutable borrow occurs here
+...
+154 |                     right: super::overlap_parameters(second, context, progress)?,
+    |                                                                       ^^^^^^^^ second mutable borrow occurs here
+
+error[E0597]: `native_edges` does not live long enough
+   --> crates/geo-kernel/src/atlas/arrangement.rs:155:17
+    |
+100 |     let mut native_edges = RetainedBuilder::default();
+    |         ---------------- binding `native_edges` declared here
+...
+155 |     for pair in native_edges.iter() {
+    |                 ^^^^^^^^^^^^ borrowed value does not live long enough
+...
+211 | }
+    | -
+    | |
+    | `native_edges` dropped here while still borrowed
+    | borrow might be used here, when `edges` is dropped and runs the destructor for type `context::retained::RetainedBuilder<(&geom::Coord, &geom::Coord)>`
+    |
+    = note: values in a scope are dropped in the opposite order they are defined
+
+Some errors have detailed explanations: E0282, E0308, E0499, E0597.
+For more information about an error, try `rustc --explain E0282`.
+warning: `purrdf-geo-kernel` (lib) generated 8 warnings
+error: could not compile `purrdf-geo-kernel` (lib) due to 7 previous errors; 8 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: cannot find type `Arithmetic` in this scope
+    --> crates/geo-kernel/src/construct.rs:1406:18
+     |
+1406 |                 &Arithmetic::resident(),
+     |                  ^^^^^^^^^^ use of undeclared type `Arithmetic`
+     |
+note: trait `crate::cells::cover::chart::Arithmetic` exists but is inaccessible
+    --> crates/geo-kernel/src/cells/cover/chart.rs:64:1
+     |
+  64 | pub(in crate::cells) trait Arithmetic {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing one of these items
+     |
+1395 +     use crate::construct::Arithmetic;
+     |
+1395 +     use purrdf_core::distance::Arithmetic;
+     |
+
+error[E0425]: cannot find function `resident` in this scope
+    --> crates/geo-kernel/src/construct.rs:1409:18
+     |
+1409 |             _ => resident(|memory| member_boundary(geometry, memory, &Arithmetic::resident())),
+     |                  ^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+1395 +     use crate::construct::resident;
+     |
+
+error[E0433]: cannot find type `Arithmetic` in this scope
+    --> crates/geo-kernel/src/construct.rs:1409:71
+     |
+1409 |             _ => resident(|memory| member_boundary(geometry, memory, &Arithmetic::resident())),
+     |                                                                       ^^^^^^^^^^ use of undeclared type `Arithmetic`
+     |
+note: trait `crate::cells::cover::chart::Arithmetic` exists but is inaccessible
+    --> crates/geo-kernel/src/cells/cover/chart.rs:64:1
+     |
+  64 | pub(in crate::cells) trait Arithmetic {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing one of these items
+     |
+1395 +     use crate::construct::Arithmetic;
+     |
+1395 +     use purrdf_core::distance::Arithmetic;
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:1686:39
+     |
+1686 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+     = note: the `unused_qualifications` lint ignores `-D warnings`
+help: remove the unnecessary path segments
+     |
+1686 -         let (account, mut observer) = self::observer(0);
+1686 +         let (account, mut observer) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:1899:39
+     |
+1899 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1899 -         let (account, mut observer) = self::observer(0);
+1899 +         let (account, mut observer) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2030:39
+     |
+2030 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2030 -         let (account, mut observer) = self::observer(0);
+2030 +         let (account, mut observer) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2136:39
+     |
+2136 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2136 -         let (account, mut observer) = self::observer(0);
+2136 +         let (account, mut observer) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2190:39
+     |
+2190 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2190 -         let (account, mut observer) = self::observer(0);
+2190 +         let (account, mut observer) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2259:37
+     |
+2259 |         let (account, mut denied) = self::observer(0);
+     |                                     ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2259 -         let (account, mut denied) = self::observer(0);
+2259 +         let (account, mut denied) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2478:39
+     |
+2478 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2478 -         let (account, mut observer) = self::observer(0);
+2478 +         let (account, mut observer) = observer(0);
+     |
+
+warning: unnecessary qualification
+    --> crates/geo-kernel/src/context/retained.rs:2724:39
+     |
+2724 |         let (account, mut observer) = self::observer(0);
+     |                                       ^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2724 -         let (account, mut observer) = self::observer(0);
+2724 +         let (account, mut observer) = observer(0);
+     |
+
+Some errors have detailed explanations: E0282, E0308, E0425, E0433, E0499, E0597.
+warning: `purrdf-geo-kernel` (lib test) generated 16 warnings (8 duplicates)
+error: could not compile `purrdf-geo-kernel` (lib test) due to 10 previous errors; 16 warnings emitted

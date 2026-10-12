@@ -1,0 +1,12 @@
+cargo fmt --all --check
+Diff in /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel/src/cells/cover.rs:1023:
+                         budget
+                             .execution
+                             .max_precision_bits
+-                        .min(ExecutionLimits::GEOMETRY.max_precision_bits),
++                            .min(ExecutionLimits::GEOMETRY.max_precision_bits),
+                     )?
+                     .max(usize::try_from(required).map_err(|_| {
+                         GeoError::ArithmeticOverflow("cover exact destination width")
+make: *** [Makefile:92: check] Error 1
+terminal_status=2

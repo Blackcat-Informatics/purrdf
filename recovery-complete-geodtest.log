@@ -1,0 +1,59 @@
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running `/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/release/examples/geodesic_corpus 500000 standard all portable c1cabdddbcd7d5cfc6e6111db4608fa55be292b15ba2c5bcd6372a178848c692`
+processed_rows=10000 complete=10000 fallbacks=10000 refusals=0 mismatches=0
+processed_rows=20000 complete=20000 fallbacks=20000 refusals=0 mismatches=0
+processed_rows=30000 complete=30000 fallbacks=30000 refusals=0 mismatches=0
+processed_rows=40000 complete=40000 fallbacks=40000 refusals=0 mismatches=0
+processed_rows=50000 complete=50000 fallbacks=50000 refusals=0 mismatches=0
+processed_rows=60000 complete=60000 fallbacks=60000 refusals=0 mismatches=0
+processed_rows=70000 complete=70000 fallbacks=70000 refusals=0 mismatches=0
+processed_rows=80000 complete=80000 fallbacks=80000 refusals=0 mismatches=0
+processed_rows=90000 complete=90000 fallbacks=90000 refusals=0 mismatches=0
+processed_rows=100000 complete=100000 fallbacks=100000 refusals=0 mismatches=0
+processed_rows=110000 complete=110000 fallbacks=110000 refusals=0 mismatches=0
+processed_rows=120000 complete=120000 fallbacks=120000 refusals=0 mismatches=0
+processed_rows=130000 complete=130000 fallbacks=130000 refusals=0 mismatches=0
+processed_rows=140000 complete=140000 fallbacks=140000 refusals=0 mismatches=0
+processed_rows=150000 complete=150000 fallbacks=150000 refusals=0 mismatches=0
+processed_rows=160000 complete=160000 fallbacks=160000 refusals=0 mismatches=0
+processed_rows=170000 complete=170000 fallbacks=170000 refusals=0 mismatches=0
+processed_rows=180000 complete=180000 fallbacks=180000 refusals=0 mismatches=0
+processed_rows=190000 complete=190000 fallbacks=190000 refusals=0 mismatches=0
+processed_rows=200000 complete=200000 fallbacks=200000 refusals=0 mismatches=0
+processed_rows=210000 complete=210000 fallbacks=210000 refusals=0 mismatches=0
+processed_rows=220000 complete=220000 fallbacks=220000 refusals=0 mismatches=0
+processed_rows=230000 complete=230000 fallbacks=230000 refusals=0 mismatches=0
+processed_rows=240000 complete=240000 fallbacks=240000 refusals=0 mismatches=0
+processed_rows=250000 complete=250000 fallbacks=250000 refusals=0 mismatches=0
+processed_rows=260000 complete=260000 fallbacks=260000 refusals=0 mismatches=0
+processed_rows=270000 complete=270000 fallbacks=270000 refusals=0 mismatches=0
+processed_rows=280000 complete=280000 fallbacks=280000 refusals=0 mismatches=0
+processed_rows=290000 complete=290000 fallbacks=290000 refusals=0 mismatches=0
+processed_rows=300000 complete=300000 fallbacks=300000 refusals=0 mismatches=0
+processed_rows=310000 complete=310000 fallbacks=310000 refusals=0 mismatches=0
+processed_rows=320000 complete=320000 fallbacks=320000 refusals=0 mismatches=0
+processed_rows=330000 complete=330000 fallbacks=330000 refusals=0 mismatches=0
+processed_rows=340000 complete=340000 fallbacks=340000 refusals=0 mismatches=0
+processed_rows=350000 complete=350000 fallbacks=350000 refusals=0 mismatches=0
+processed_rows=360000 complete=360000 fallbacks=360000 refusals=0 mismatches=0
+processed_rows=370000 complete=370000 fallbacks=370000 refusals=0 mismatches=0
+processed_rows=380000 complete=380000 fallbacks=380000 refusals=0 mismatches=0
+processed_rows=390000 complete=390000 fallbacks=390000 refusals=0 mismatches=0
+processed_rows=400000 complete=400000 fallbacks=400000 refusals=0 mismatches=0
+processed_rows=410000 complete=410000 fallbacks=410000 refusals=0 mismatches=0
+processed_rows=420000 complete=420000 fallbacks=420000 refusals=0 mismatches=0
+processed_rows=430000 complete=430000 fallbacks=430000 refusals=0 mismatches=0
+processed_rows=440000 complete=440000 fallbacks=440000 refusals=0 mismatches=0
+processed_rows=450000 complete=450000 fallbacks=450000 refusals=0 mismatches=0
+processed_rows=460000 complete=460000 fallbacks=460000 refusals=0 mismatches=0
+processed_rows=470000 complete=470000 fallbacks=470000 refusals=0 mismatches=0
+processed_rows=480000 complete=480000 fallbacks=480000 refusals=0 mismatches=0
+processed_rows=490000 complete=490000 fallbacks=490000 refusals=0 mismatches=0
+processed_rows=500000 complete=500000 fallbacks=500000 refusals=0 mismatches=0
+backend=portable mode=all rows=500000 complete=500000 fallbacks=500000 refusals=0 mismatches=0 inverse_rows=500000 inverse_witness_rows=500000 inverse_witness_mismatches=0 direct_rows=500000 direct_refusals=0 direct_mismatches=0 elapsed_ns=7082137956720 work_total=56219473328 workspace_peak=866768
+nominal_metadata=forward_azimuth excesses=54276 conjugate_attributed=4405 conditioned_excesses=0 maximum_disagreement=0.000000656038311 allowance=0.000000000001
+nominal_metadata=final_azimuth excesses=54276 conjugate_attributed=4405 conditioned_excesses=0 maximum_disagreement=0.000000656038335783 allowance=0.000000000001
+nominal_metadata=arc excesses=0 conjugate_attributed=0 conditioned_excesses=0 maximum_disagreement=0.000000000000008904 allowance=0.000000000001
+nominal_metadata=reduced_length excesses=0 conjugate_attributed=0 conditioned_excesses=0 maximum_disagreement=0.0000005001601 allowance=0.0000006
+nominal_metadata=quadrilateral_area excesses=57560 conjugate_attributed=4405 conditioned_excesses=0 maximum_disagreement=929506.642742 allowance=0.02
+input_sha256=c1cabdddbcd7d5cfc6e6111db4608fa55be292b15ba2c5bcd6372a178848c692

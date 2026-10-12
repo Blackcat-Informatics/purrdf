@@ -1,0 +1,48 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 1m 28s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 12 tests
+test context::retained::tests::refused_arc_view_never_publishes_a_raw_copy_or_retains_failed_scratch ... ok
+test context::tests::requested_scratch_growth_preserves_live_values_and_refuses_before_allocation ... ok
+test context::tests::relaxed_scratch_ceilings_admit_only_the_attempted_working_set ... ok
+test geodesic::arc_view::tests::normal_taylor_equator_coefficients_follow_the_exact_geodesic_equations ... ok
+test ellipsoidal::tests::relaxed_scratch_ceilings_preserve_complete_geometry_metrics ... ok
+test geodesic::direct::tests::borrowed_direct_batches_charge_every_entry_and_retained_plus_scratch_peak ... ok
+test geodesic::coefficients::tests::inline_coefficient_arrays_do_not_require_pooled_endpoints ... ok
+test operation::tests::compiled_original_width_includes_large_coefficients_and_inverse_domains ... ok
+test topology::segment::tests::planar_equality_does_not_admit_unread_wide_ordinate_or_allocate_scratch ... ok
+test numerical::tests::original_source_width_prepares_scratch_before_fixed_conversion ... ok
+test geodesic::preparation::tests::immutable_coefficients_preserve_completed_answers_and_identity ... ok
+test geodesic::integral_fallback::tests::adaptive_coefficients_grow_at_actual_order_and_keep_live_outer_arrays ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 700 filtered out; finished in 0.64s
+
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-xsd/22ff188ffb44de7d/out/purrdf_xsd-22ff188ffb44de7d)
+
+running 19 tests
+test bigint::scratch::native_owner_tests::native_arena_admits_before_birth_and_preserves_original_refusal ... ok
+test bigint::scratch::native_owner_tests::original_arena_owner_survives_handle_drop_and_last_numeric_clone ... ok
+test bigint::scratch::native_owner_tests::packed_arena_partial_birth_destroys_payload_before_refunding_owner ... ok
+test bigint::scratch::tests::held_immutable_values_refuse_without_fallback_and_return_last_slot ... ok
+test bigint::scratch::tests::unused_arena_requires_the_last_worker_handle_and_last_immutable_destination ... ok
+test bigint::scratch::tests::full_worker_arena_has_constant_birth_allocations_and_exact_live_layout ... ok
+test bigint::scratch::tests::inline_capability_executes_the_native_product_and_division_without_heap_storage ... ok
+test bigint::scratch::tests::working_set_preflight_counts_shared_live_values_without_allocating ... ok
+test bigint::scratch::tests::values_outlive_context_and_concurrent_final_drops_recycle_destination ... ok
+test bigint::tests::detaching_owned_coefficients_returns_their_reusable_destinations ... ok
+test bigint::scratch::tests::bounded_original_arithmetic_matches_unbounded_without_allocating ... ok
+test exact::decimal::physical_render_tests::decimal_groups_share_spelling_and_release_only_destroyed_scratch ... ok
+test exact::certified_cost::tests::ratio_root_cost_uses_exact_quotient_width_and_bounds_live_scratch ... ok
+test math::taylor::scratch::native_owner_tests::native_taylor_original_owner_survives_all_shallow_handle_clones ... ok
+test math::taylor::scratch::native_owner_tests::original_taylor_refusal_precedes_every_buffer_birth ... ok
+test math::taylor::scratch::native_owner_tests::unrepresentable_taylor_layout_never_calls_the_factory_or_original_admission ... ok
+test math::tests::exact_cost_refuses_before_charging_or_retaining_failed_scratch ... ok
+test math::tests::insufficient_scale_destination_restores_the_owned_scratch_reservation ... ok
+test math::taylor::tests::exact_sine_coefficients_and_derivative_enclosures ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 395 filtered out; finished in 0.00s
+

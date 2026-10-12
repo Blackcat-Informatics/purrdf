@@ -1,0 +1,145 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.65s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_loss_matrix transcode`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_rule_inventory`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_blocks`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables case-context`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables xpath-compatibility`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_html_entities`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2566 file(s); entailment-overclaim ban swept 36 of 258 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2578 unit(s) outside that set).
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 3.09s
+     Running `/opt/purrdf-geo-qualification/target/debug/examples/viz_samples /opt/purrdf-geo-qualification/target/gate-scratch/check-generated.Yt3AIX/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /opt/purrdf-geo-qualification/target/gate-scratch/check-generated.Yt3AIX/visualization
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-events)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/alloc-probe)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/testkit)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/deflate)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 1m 19s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1242 filtered out; finished in 0.00s
+
+/usr/bin/make license-bundles
+python3 scripts/fetch-locked-deps.py
+python3 scripts/package-licenses.py --write
+license bundles generated: 37 profiles
+python3 scripts/capi-header.py --write crates/rdf-capi/include/purrdf.h
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling either v1.16.0
+   Compiling libc v0.2.186
+   Compiling rayon v1.12.0
+   Compiling getrandom v0.3.4
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/stack)
+   Compiling cpubits v0.1.1
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling structured-zstd v0.0.49
+   Compiling regex-automata v0.4.14
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling aes-gcm v0.11.1
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/ed25519)
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/purrdf)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-capi)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6m 26s
+    Building pkg-config files
+    Building header file using cbindgen
+  Populating uninstalled header directory
+regenerated crates/rdf-capi/include/purrdf.h from the private cargo-c build

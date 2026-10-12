@@ -1,0 +1,81 @@
+    Finished `test` profile [optimized] target(s) in 0.10s
+     Running unittests src/lib.rs (target/geo-build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 73 tests
+test topology::arrangement::tests::inventory_work_and_cancellation_refuse_before_index_reservation ... ok
+test topology::arrangement::tests::rectangular_contacts_and_collinear_overlap_need_only_endpoint_events ... ok
+test topology::arrangement::tests::exact_crossings_contacts_and_coincident_edges_keep_complete_strips ... ok
+test topology::arrangement::tests::exact_wide_corners_keep_limb_owners_after_construction ... ok
+test topology::arrangement::tests::union_coalescing_keeps_positive_width_holes_and_original_affine_boundaries ... ok
+test topology::arrangement::tests::strip_growth_and_exact_memory_ceiling_keep_complete_or_refused_outcomes ... ok
+test topology::locate::tests::a_geometry_collection_combines_and_nests ... ok
+test topology::locate::tests::a_hole_is_exterior_inside_and_boundary_on_its_ring ... ok
+test topology::locate::tests::a_multi_point_is_interior_at_its_members_and_never_a_boundary ... ok
+test topology::locate::tests::a_point_has_an_empty_boundary ... ok
+test topology::locate::tests::a_ray_through_a_vertex_counts_it_exactly_once ... ok
+test topology::locate::tests::a_shared_edge_of_a_multi_polygon_is_interior_to_the_union ... ok
+test topology::locate::tests::a_square_locates_its_interior_boundary_and_exterior_exactly ... ok
+test topology::locate::tests::a_zero_length_curve_is_located_without_dividing_by_zero ... ok
+test topology::locate::tests::admitted_horizontal_crossings_preserve_strictness_and_original_precision_limits ... ok
+test topology::arrangement::tests::sparse_vertical_events_release_all_temporary_storage ... ok
+test topology::locate::tests::an_endpoint_landing_inside_another_member_is_boundary_not_interior ... ok
+test topology::locate::tests::an_open_curve_has_two_boundary_points_and_a_closed_one_has_none ... ok
+test topology::locate::tests::curve_boundary_points_is_mod_two_sorted_and_order_independent ... ok
+test topology::locate::tests::dimension_is_minus_one_when_empty_and_agrees_with_has_area ... ok
+test topology::locate::tests::admitted_surface_preserves_exact_holes_vertices_and_large_source_refusal ... ok
+test topology::locate::tests::elevation_and_measure_are_ignored_in_every_location ... ok
+test topology::locate::tests::every_empty_geometry_puts_every_position_in_its_exterior ... ok
+test topology::locate::tests::the_horizontal_crossing_is_exact_and_strictly_straddling ... ok
+test topology::locate::tests::two_curves_joined_end_to_end_have_an_interior_join ... ok
+test topology::locate::tests::directional_surface_matches_independent_small_exact_displacements ... ok
+test topology::relate::nesting_tests::edge_collection_agrees_with_the_recursive_reference_on_generated_trees ... ok
+test topology::relate::tests::a_line_touching_a_polygon_boundary_without_entering_is_not_inside_it ... ok
+test topology::relate::tests::a_polygon_with_a_hole_is_related_correctly_in_all_three_regions ... ok
+test topology::relate::tests::a_self_intersecting_rings_interior_is_still_found_by_the_scan_line ... ok
+test topology::relate::tests::a_zero_length_line_is_related_rather_than_dropped ... ok
+test topology::relate::tests::all_small_map_pairs_complete_in_one_default_work_budget ... ok
+test topology::relate::tests::collinear_overlapping_lines_share_a_one_dimensional_interior ... ok
+test topology::relate::tests::disjoint_is_the_negation_of_intersects_and_the_symmetric_relations_are_symmetric ... ok
+test topology::relate::tests::elevation_and_measure_never_reach_the_matrix ... ok
+test topology::relate::tests::empty_geometries_are_answered_in_every_position ... ok
+test topology::relate::tests::equality_is_reflexive_on_every_non_empty_corpus_member ... ok
+test topology::relate::tests::every_well_formed_pair_is_answered_and_none_is_refused ... ok
+test topology::relate::tests::native_matrix_owner_preserves_every_original_golden_and_relation_family ... ok
+test topology::relate::tests::point_witness_settlement_preserves_degenerate_and_repeated_supports ... ok
+test topology::relate::tests::relate_is_a_pure_function_of_the_two_geometries ... ok
+test topology::relate::tests::relate_is_symmetric_under_transposition_across_the_corpus ... ok
+test topology::locate::nesting_tests::the_four_walks_agree_with_the_recursive_references_on_generated_trees ... ok
+test topology::relate::tests::relate_pattern_agrees_with_matching_the_computed_matrix ... ok
+test topology::relate::tests::the_golden_matrices_for_a_point_against_a_polygon_hold ... ok
+test topology::relate::tests::the_golden_matrices_for_lines_hold ... ok
+test topology::relate::tests::the_golden_matrices_for_tangential_lines_hold ... ok
+test topology::relate::tests::the_golden_matrices_for_two_points_hold ... ok
+test topology::relate::tests::the_golden_matrices_for_two_polygons_hold ... ok
+test topology::relate::tests::within_and_contains_are_converses_across_the_corpus ... ok
+test topology::segment::tests::a_crossing_at_a_third_is_exact_rather_than_rounded ... ok
+test topology::segment::tests::a_crossing_outside_either_span_is_a_miss_but_the_neighbouring_hit_is_not ... ok
+test topology::segment::tests::a_proper_crossing_is_an_exact_rational_that_lies_on_both_segments ... ok
+test topology::segment::tests::a_vertical_collinear_overlap_is_ordered_by_y ... ok
+test topology::segment::tests::a_zero_length_segment_behaves_as_the_point_it_is ... ok
+test topology::segment::tests::admitted_midpoint_preserves_original_xy_and_drops_metadata ... ok
+test topology::segment::tests::axial_formal_direction_uses_the_exact_first_nonzero_coefficient ... ok
+test topology::segment::tests::axis_orientation_matches_the_original_determinant_for_exact_rationals ... ok
+test topology::segment::tests::collinear_segments_touching_at_one_point_report_a_point ... ok
+test topology::segment::tests::degenerate_segments_are_handled_in_every_combination ... ok
+test topology::segment::tests::intersection_ignores_z_and_m_and_returns_a_planar_coordinate ... ok
+test topology::segment::tests::midpoint_is_exact_and_planar ... ok
+test topology::segment::tests::on_segment_is_collinearity_and_containment_not_collinearity_alone ... ok
+test topology::segment::tests::orientation_is_the_exact_sign_of_the_cross_product ... ok
+test topology::segment::tests::parallel_disjoint_misses_and_collinear_overlap_reports_its_two_extremes ... ok
+test topology::segment::tests::perpendicular_axis_intersections_admit_only_original_coordinate_copies ... ok
+test topology::segment::tests::planar_equality_does_not_admit_unread_wide_ordinate_or_allocate_scratch ... ok
+test topology::segment::tests::shared_noncollinear_endpoints_retain_exact_planar_witnesses_in_every_order ... ok
+test topology::segment::tests::the_collinear_overlap_is_canonical_under_every_argument_order ... ok
+test topology::segment::tests::the_internal_helpers_do_exactly_what_they_claim ... ok
+test topology::relate::tests::the_exact_matrix_dominates_the_sampling_oracle_across_the_corpus ... ok
+test topology::locate::nesting_tests::a_hundred_thousand_deep_collection_is_located_bounded_and_measured_like_its_member ... ok
+test topology::relate::nesting_tests::a_hundred_thousand_deep_collection_relates_like_its_member ... ok
+
+test result: ok. 73 passed; 0 failed; 0 ignored; 0 measured; 641 filtered out; finished in 0.48s
+
+terminal_status=0

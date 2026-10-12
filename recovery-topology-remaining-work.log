@@ -1,0 +1,54 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 42.32s
+     Running unittests src/lib.rs (target/geo-build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+PLANAR_REMAINING name=point inside polygon work=12667
+PLANAR_REMAINING name=point on polygon edge work=12649
+PLANAR_REMAINING name=point on polygon corner work=11352
+PLANAR_REMAINING name=point outside polygon work=12333
+PLANAR_REMAINING name=polygon against point inside work=12683
+PLANAR_REMAINING name=identical points work=387
+PLANAR_REMAINING name=distinct points work=355
+PLANAR_REMAINING name=point on line interior work=3282
+PLANAR_REMAINING name=point on line endpoint work=2424
+PLANAR_REMAINING name=point off line work=2889
+PLANAR_REMAINING name=identical polygons work=24899
+PLANAR_REMAINING name=polygon contains polygon work=67260
+PLANAR_REMAINING name=polygon inside polygon work=67118
+PLANAR_REMAINING name=polygons touching at a corner work=68881
+PLANAR_REMAINING name=polygons sharing an edge work=55390
+PLANAR_REMAINING name=polygons overlapping work=89674
+PLANAR_REMAINING name=polygons disjoint work=62864
+PLANAR_REMAINING name=line crossing polygon work=37757
+PLANAR_REMAINING name=line inside polygon work=26073
+PLANAR_REMAINING name=line along a polygon edge work=35358
+PLANAR_REMAINING name=line touching a polygon boundary from outside work=26870
+PLANAR_REMAINING name=lines crossing work=57900
+PLANAR_REMAINING name=identical lines work=8924
+PLANAR_REMAINING name=disjoint lines work=6740
+PLANAR_REMAINING name=collinear overlapping lines work=12995
+PLANAR_REMAINING name=lines meeting end to end work=8699
+PLANAR_REMAINING name=closed line against polygon work=45907
+PLANAR_REMAINING name=polygon with a hole against a point in the hole work=28078
+PLANAR_REMAINING name=polygon with a hole against a point on the hole boundary work=25868
+PLANAR_REMAINING name=polygon with a hole against itself work=84099
+PLANAR_REMAINING name=polygon with a hole against a polygon filling the hole work=75895
+PLANAR_REMAINING name=multipolygon against a polygon straddling both members work=117527
+PLANAR_REMAINING name=multipoint against a polygon work=20494
+PLANAR_REMAINING name=multilinestring joined end to end against a polygon work=50860
+PLANAR_REMAINING name=geometry collection against a polygon work=41640
+PLANAR_REMAINING name=zero-length line against a polygon work=21595
+PLANAR_REMAINING name=zero-length line against a zero-length line work=1608
+PLANAR_REMAINING name=empty point against a polygon work=16943
+PLANAR_REMAINING name=polygon against an empty polygon work=17087
+PLANAR_REMAINING name=empty against empty work=0
+PLANAR_REMAINING name=empty collection against a line work=7126
+PLANAR_REMAINING name=point against an empty line work=97
+PLANAR_REMAINING name=closed line against itself work=22522
+PLANAR_REMAINING name=bowtie polygon against a point at its waist work=47562
+test topology::relate::tests::native_matrix_owner_preserves_every_original_golden_and_relation_family ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 712 filtered out; finished in 0.01s
+
+terminal_status=0

@@ -1,0 +1,18 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 47.63s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 10 tests
+test cells::cover::tests::finite_submetre_neighbors_and_quantized_zero_use_distinct_refinement_laws ... ok
+test cells::cover::tests::physical_zero_index_uses_proved_identity_and_preserves_reported_neighbors ... ok
+test cells::cover::tests::disk_covers_are_complete_under_both_public_threshold_laws ... ok
+test cells::cover::tests::reported_threshold_conversion_refuses_before_extreme_owner_allocation ... ok
+test cells::cover::tests::reported_threshold_padding_preserves_original_cover_and_cumulative_receipt ... ok
+test cells::cover::tests::point_index_identity_order_and_refinement_match_scalar_laws ... ok
+test cells::tests::combined_scale_selection_reuses_exact_factors_under_one_default_admission ... ok
+test cells::cover::chart::tests::interval_walls_equal_directed_exact_walls_on_faces_poles_and_seams ... ok
+test cells::tests::admitted_physical_scales_preserve_exact_values_and_default_level_selection ... ok
+test cells::cover::chart::tests::interval_box_decisions_preserve_the_original_exact_classifier ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 702 filtered out; finished in 0.25s
+

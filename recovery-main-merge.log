@@ -1,0 +1,11 @@
+Auto-merging Makefile
+Auto-merging crates/lex/src/allocation.rs
+CONFLICT (content): Merge conflict in crates/lex/src/allocation.rs
+Auto-merging crates/lex/src/assoc.rs
+Auto-merging docs/CONFORMANCE.md
+Auto-merging docs/book/po/zh-Hans.po
+CONFLICT (content): Merge conflict in docs/book/po/zh-Hans.po
+Auto-merging docs/design/purrdf-simd.md
+Recorded preimage for 'crates/lex/src/allocation.rs'
+Recorded preimage for 'docs/book/po/zh-Hans.po'
+Automatic merge failed; fix conflicts and then commit the result.

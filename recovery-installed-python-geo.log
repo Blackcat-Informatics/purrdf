@@ -1,0 +1,14 @@
+Using Python 3.13.5 environment at: target/python-release-candidate/attempt.NvaaLP/install
+Resolved 5 packages in 119ms
+Downloading pygments (1.2MiB)
+ Downloaded pygments
+Prepared 4 packages in 184ms
+Installed 5 packages in 14ms
+ + iniconfig==2.3.0
+ + packaging==26.2
+ + pluggy==1.6.0
+ + pygments==2.20.0
+ + pytest==9.0.3
+/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/python-release-candidate/attempt.NvaaLP/install/lib/python3.13/site-packages/purrdf/__init__.py
+.....                                                                    [100%]
+5 passed in 0.11s

@@ -1,0 +1,62 @@
+python3 scripts/build-capi-bundle.py
+license bundles verified: 1 profiles
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/purrdf)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-capi)
+    Finished `release` profile [optimized] target(s) in 4m 34s
+    Building pkg-config files
+    Building header file using cbindgen
+  Populating uninstalled header directory
+  Installing pkg-config file
+  Installing header file
+  Installing static library
+  Installing shared library
+Rust standard-library recipient notices captured
+{
+  "artifacts": [
+    {
+      "artifact": "purrdf-capi-3.0.1-x86_64-unknown-linux-gnu.tar.gz",
+      "notice_files": 141,
+      "profile": "c",
+      "runtime_notice_files": 14,
+      "sha256": "eb99d264d3013c3e93a55cabd708eb434b033a4da76999c867d7aef6f51f72e7",
+      "status": "passed"
+    }
+  ],
+  "schema": 1
+}
+libpurrdf ABI 0.10.0
+geo: session, typed refusals, retained index and query profile passed
+  quad: subject=http://a
+entailment golden vector: 9 case(s) matched through the C ABI
+webont-imports-011: entailed through the C ABI with its support ontology supplied
+entail_extensions(owl-rl): ext-eq-diff-sym
+shapes_graph_iri: named pre-binds $shapesGraph, NULL leaves it unbound
+check_rules: the level decides, and a refusal names its stage
+xpath_regex: each dated law decides REGEX and sh:pattern; NULL is compatibility
+xsd: exact canonical forms and order past every C integer type
+division: policy set, refused, applied and counted
+C smoke OK
+Verified private cargo-c outputs against installed header and libraries
+/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target/dist/purrdf-capi-3.0.1-x86_64-unknown-linux-gnu.tar.gz
+terminal_status=0

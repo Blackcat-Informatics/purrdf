@@ -1,0 +1,25 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+error: this function has too many arguments (8/7)
+   --> crates/geo-kernel/src/topology/relate.rs:569:1
+    |
+569 | / fn scan_for_areas<W: RelateWork>(
+570 | |     a: &Geometry,
+571 | |     b: &Geometry,
+572 | |     events: &[Coord],
+...   |
+577 | |     work: &mut W,
+578 | | ) -> Result<(), GeoError> {
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: could not compile `purrdf-geo-kernel` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-geo-kernel` (lib test) due to 1 previous error
+make: *** [Makefile:94: check] Error 101
+terminal_status=2

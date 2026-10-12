@@ -1,0 +1,353 @@
+--- a/crates/rdf-capi/tests/support/hosted.rs
++++ b/crates/rdf-capi/tests/support/hosted.rs
+@@ -34,7 +34,7 @@
+ cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+ "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt""#;
+ const RECLAMATION: &str = "\"$PURRDF_HOSTED_CONTROLLER\" hosted-reclaim \"$PROFILE_CASE\"";
+-const FIXTURE_SETUP: &str = "sudo mkdir -p /opt/purrdf-native-profile-tests\nsudo chown \"$(id -u):$(id -g)\" /opt/purrdf-native-profile-tests";
++const SETUP_START: &str = "date +%s%N > \"$campaign/setup-start.txt\"";
+ 
+ fn selection(case: &str) -> IoResult<(&str, bool)> {
+     if case == "profile-before-capi" {
+@@ -228,31 +228,13 @@
+         .pointer("/test-shard/steps")
+         .and_then(Value::as_array)
+         .ok_or_else(|| invalid("native shard steps missing"))?;
+-    let execution = steps
++    steps
+         .iter()
+         .position(|step| {
+             step.get("run").and_then(Value::as_str)
+                 == Some("make test-shard SHARD=${{ matrix.shard }}")
+         })
+         .ok_or_else(|| invalid("native shard execution missing"))?;
+-    let provision = steps
+-        .iter()
+-        .enumerate()
+-        .filter(|(_, step)| {
+-            step.get("run")
+-                .and_then(Value::as_str)
+-                .is_some_and(|run| run.trim() == FIXTURE_SETUP)
+-        })
+-        .collect::<Vec<_>>();
+-    if provision.len() != 1
+-        || provision[0].0 >= execution
+-        || provision[0].1.get("if").and_then(Value::as_str)
+-            != Some("matrix.shard == 'integration-5'")
+-    {
+-        return Err(invalid(
+-            "one owned fixture parent setup must precede only the native integration-5 shard",
+-        ));
+-    }
+     for job in [
+         "native-profile-admission",
+         "native-profile",
+@@ -384,39 +366,45 @@
+         .iter()
+         .position(|step| step.get("id").and_then(Value::as_str) == Some("profile-setup"))
+         .ok_or_else(|| invalid("shared setup missing"))?;
+-    let fixture_setup = steps
++    let setup_start = steps
+         .iter()
+         .enumerate()
+         .filter(|(_, step)| {
+             step.get("run")
+                 .and_then(Value::as_str)
+-                .is_some_and(|run| run.contains(FIXTURE_SETUP))
++                .is_some_and(|run| run.contains(SETUP_START))
+         })
+         .collect::<Vec<_>>();
+-    if fixture_setup.len() != 1
+-        || fixture_setup[0].0 >= setup_index
+-        || fixture_setup[0].1.get("if").is_some()
++    if setup_start.len() != 1
++        || setup_start[0].0 >= setup_index
++        || setup_start[0].1.get("if").is_some()
+     {
+         return Err(invalid(
+-            "owned fixture parent setup must be inside shared setup before measurements",
++            "one unconditional setup start must precede the shared controller build",
+         ));
+     }
+-    let fixture_run = fixture_setup[0]
++    let setup_run = setup_start[0]
+         .1
+         .get("run")
+         .and_then(Value::as_str)
+-        .ok_or_else(|| invalid("fixture setup command missing"))?;
+-    let start = fixture_run
+-        .find("date +%s%N > \"$campaign/setup-start.txt\"")
+-        .ok_or_else(|| invalid("fixture provisioning must follow the observed setup start"))?;
+-    if start
+-        >= fixture_run
+-            .find(FIXTURE_SETUP)
+-            .ok_or_else(|| invalid("fixture provisioning missing"))?
+-    {
+-        return Err(invalid(
+-            "fixture provisioning must follow the observed setup start",
+-        ));
++        .ok_or_else(|| invalid("setup start command missing"))?;
++    let start = setup_run
++        .find(SETUP_START)
++        .ok_or_else(|| invalid("observed setup start missing"))?;
++    for command in [
++        "mkdir -p \"$campaign/resources\"",
++        "cp \"$campaign/setup-start.txt\" \"$campaign/resources/setup-start.txt\"",
++        "df -h /opt > \"$campaign/resources/setup-disk-before.txt\"",
++    ] {
++        if start
++            >= setup_run
++                .find(command)
++                .ok_or_else(|| invalid("setup evidence command missing"))?
++        {
++            return Err(invalid(
++                "setup evidence must follow the observed setup start",
++            ));
++        }
+     }
+     if steps[..=setup_index]
+         .iter()
+@@ -1049,51 +1037,43 @@
+     fn actual_workflow_preserves_full_optional_inventory_and_failure_uploads() {
+         let text = include_str!("../../../../.github/workflows/ci.yaml");
+         workflow_contract(text).unwrap();
+-        for job in ["test-shard", "native-profile"] {
+-            for change in ["missing", "conditional", "late"] {
+-                let mut workflow = purrdf_lex::yaml::read(text).unwrap();
+-                let steps = workflow
+-                    .pointer_mut(&format!("/jobs/{job}/steps"))
+-                    .unwrap()
+-                    .as_array_mut()
+-                    .unwrap();
+-                let position = steps
+-                    .iter()
+-                    .position(|step| {
+-                        step.get("run")
+-                            .and_then(Value::as_str)
+-                            .is_some_and(|run| run.contains(FIXTURE_SETUP))
+-                    })
+-                    .unwrap();
+-                match change {
+-                    "missing" => {
+-                        steps.remove(position);
+-                    }
+-                    "conditional" => {
+-                        steps[position]
+-                            .as_object_mut()
+-                            .unwrap()
+-                            .insert("if", "matrix.shard == 'lib'");
+-                    }
+-                    "late" => {
+-                        let provision = steps.remove(position);
+-                        steps.push(provision);
+-                    }
+-                    _ => unreachable!(),
++        for change in ["missing", "conditional", "late"] {
++            let mut workflow = purrdf_lex::yaml::read(text).unwrap();
++            let steps = workflow
++                .pointer_mut("/jobs/native-profile/steps")
++                .unwrap()
++                .as_array_mut()
++                .unwrap();
++            let position = steps
++                .iter()
++                .position(|step| {
++                    step.get("run")
++                        .and_then(Value::as_str)
++                        .is_some_and(|run| run.contains(SETUP_START))
++                })
++                .unwrap();
++            match change {
++                "missing" => {
++                    steps.remove(position);
+                 }
+-                assert!(
+-                    workflow_contract(&purrdf_lex::yaml::write(&workflow)).is_err(),
+-                    "{job}: {change}"
+-                );
++                "conditional" => {
++                    steps[position]
++                        .as_object_mut()
++                        .unwrap()
++                        .insert("if", "matrix.shard == 'lib'");
++                }
++                "late" => {
++                    let provision = steps.remove(position);
++                    steps.push(provision);
++                }
++                _ => unreachable!(),
+             }
++            assert!(
++                workflow_contract(&purrdf_lex::yaml::write(&workflow)).is_err(),
++                "native-profile: {change}"
++            );
+         }
+-        assert!(
+-            workflow_contract(&text.replace(
+-                "date +%s%N > \"$campaign/setup-start.txt\"\n          sudo mkdir",
+-                "echo unobserved-setup\n          sudo mkdir",
+-            ))
+-            .is_err()
+-        );
++        assert!(workflow_contract(&text.replace(SETUP_START, "echo unobserved-setup",)).is_err());
+         assert!(
+             workflow_contract(&text.replace(
+                 "PROFILE_CASE: after-integration-4",
+@@ -1251,28 +1231,27 @@
+ 
+     #[test]
+     fn uploaded_case_reclamation_preserves_proof_and_all_siblings() {
+-        let temporary =
+-            purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
+-        let directory = temporary.path().join("case");
++        let temporary = purrdf_testkit::temp_dir!().unwrap();
++        let root = temporary.path().canonicalize().unwrap();
++        let directory = root.join("case");
+         retained_case(&directory);
+         for name in ["source", "controller-target", "sibling"] {
+-            std::fs::create_dir(temporary.path().join(name)).unwrap();
+-            std::fs::write(temporary.path().join(name).join("sentinel"), name).unwrap();
++            std::fs::create_dir(root.join(name)).unwrap();
++            std::fs::write(root.join(name).join("sentinel"), name).unwrap();
+         }
+         let proof = completed_case(&directory, "lib").unwrap();
+-        let mut recorder =
+-            Recorder::new(temporary.path().join("reclaim.json"), Object::new().into()).unwrap();
++        let mut recorder = Recorder::new(root.join("reclaim.json"), Object::new().into()).unwrap();
+         reclaim_at(&directory, "lib", &mut recorder).unwrap();
+         assert!(!directory.join("target").exists());
+         assert!(!directory.join("build").exists());
+         assert_eq!(completed_case(&directory, "lib").unwrap(), proof);
+         for name in ["source", "controller-target", "sibling"] {
+             assert_eq!(
+-                std::fs::read_to_string(temporary.path().join(name).join("sentinel")).unwrap(),
++                std::fs::read_to_string(root.join(name).join("sentinel")).unwrap(),
+                 name
+             );
+         }
+-        let receipt = profile::read(&temporary.path().join("reclaim.json")).unwrap();
++        let receipt = profile::read(&root.join("reclaim.json")).unwrap();
+         assert!(
+             receipt
+                 .get("phases")
+@@ -1297,9 +1276,9 @@
+             "changed-child",
+             "wrong-lane",
+         ] {
+-            let temporary =
+-                purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
+-            let directory = temporary.path().join("case");
++            let temporary = purrdf_testkit::temp_dir!().unwrap();
++            let root = temporary.path().canonicalize().unwrap();
++            let directory = root.join("case");
+             retained_case(&directory);
+             let path = directory.join("lib-warm-receipt.json");
+             let mut warm = profile::read(&path).unwrap();
+@@ -1335,7 +1314,7 @@
+                 std::fs::write(&path, json::write_pretty(&warm)).unwrap();
+             }
+             let mut recorder =
+-                Recorder::new(temporary.path().join("reclaim.json"), Object::new().into()).unwrap();
++                Recorder::new(root.join("reclaim.json"), Object::new().into()).unwrap();
+             assert!(
+                 reclaim_at(
+                     &directory,
+@@ -1357,12 +1336,12 @@
+ 
+     #[test]
+     fn private_cache_boundaries_and_upload_outputs_are_mandatory() {
+-        let temporary =
+-            purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
+-        let directory = temporary.path().join("case");
++        let temporary = purrdf_testkit::temp_dir!().unwrap();
++        let root = temporary.path().canonicalize().unwrap();
++        let directory = root.join("case");
+         retained_case(&directory);
+         assert!(private_build_trees(&directory).is_ok());
+-        assert!(private_build_trees(temporary.path()).is_err());
++        assert!(private_build_trees(&root).is_err());
+         assert!(private_build_trees(&directory.join("target").join("..")).is_err());
+         std::fs::remove_dir_all(directory.join("build")).unwrap();
+         assert!(private_build_trees(&directory).is_err());
+@@ -1386,14 +1365,14 @@
+     #[cfg(unix)]
+     #[test]
+     fn symlinked_case_or_cache_never_reclaims_foreign_bytes() {
+-        let temporary =
+-            purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
+-        let directory = temporary.path().join("case");
++        let temporary = purrdf_testkit::temp_dir!().unwrap();
++        let root = temporary.path().canonicalize().unwrap();
++        let directory = root.join("case");
+         retained_case(&directory);
+-        let foreign = temporary.path().join("foreign");
++        let foreign = root.join("foreign");
+         std::fs::create_dir(&foreign).unwrap();
+         std::fs::write(foreign.join("sentinel"), "protected").unwrap();
+-        let alias = temporary.path().join("alias");
++        let alias = root.join("alias");
+         std::os::unix::fs::symlink(&directory, &alias).unwrap();
+         assert!(private_build_trees(&alias).is_err());
+         std::fs::remove_dir_all(directory.join("target")).unwrap();
+--- a/crates/rdf-capi/tests/support/profile.rs
++++ b/crates/rdf-capi/tests/support/profile.rs
+@@ -1930,19 +1930,20 @@
+         // inject configuration. These subprocesses query only; none compiles.
+         let cargo = sdk_cargo();
+         // env_clear/CARGO_HOME do not disable Cargo's ancestor configuration
+-        // discovery; keep the absence probe outside the developer's home tree.
+-        let holder = purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
++        // discovery. Query absence at the filesystem root without writing there;
++        // all fixture files and the isolated Cargo home stay in the owned tree.
++        let holder = purrdf_testkit::temp_dir!().unwrap();
+         let root = holder.path();
+-        let query = || {
++        let query = |directory: &Path| {
+             query_configuration(
+                 Command::new(&cargo)
+                     .env_clear()
+                     .env("CARGO_HOME", root.join("cargo-home"))
+                     .env("PATH", cargo.parent().unwrap())
+-                    .current_dir(root),
++                    .current_dir(directory),
+             )
+         };
+-        let absent = query().unwrap();
++        let absent = query(Path::new(std::path::MAIN_SEPARATOR_STR)).unwrap();
+         assert_eq!(
+             absent.pointer("/build/state").and_then(Value::as_str),
+             Some("absent")
+@@ -1950,7 +1951,7 @@
+         std::fs::create_dir(root.join(".cargo")).unwrap();
+         let config = root.join(".cargo/config.toml");
+         std::fs::write(&config, "[build]\njobs=4\n[profile.dev]\nopt-level=3\n[target.x86_64-unknown-linux-gnu]\nrustflags=['-Ctarget-cpu=x86-64']\n[registries.private]\ntoken='DO_NOT_PERSIST'\n").unwrap();
+-        let configured = query().unwrap();
++        let configured = query(root).unwrap();
+         assert_eq!(
+             configured
+                 .pointer("/build/value/jobs")
+@@ -1959,7 +1960,7 @@
+         );
+         assert!(!json::write_compact(&configured).contains("DO_NOT_PERSIST"));
+         std::fs::write(config, "DO_NOT_PERSIST = [ malformed private config").unwrap();
+-        let error = query().unwrap_err().to_string();
++        let error = query(root).unwrap_err().to_string();
+         assert!(error.contains("Cargo config get --format json-value failed"));
+         assert!(error.contains("supported nightly Cargo and valid configuration"));
+         assert!(!error.contains("DO_NOT_PERSIST"));
+--- a/.github/workflows/ci.yaml
++++ b/.github/workflows/ci.yaml
+@@ -378,8 +378,2 @@
+ 
+-      - name: Provision the owned native profiling fixture parent
+-        if: matrix.shard == 'integration-5'
+-        run: |
+-          sudo mkdir -p /opt/purrdf-native-profile-tests
+-          sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
+-
+       - name: Run workspace tests (this shard; the seven include the doc tests)
+@@ -1459,4 +1453,2 @@
+           date +%s%N > "$campaign/setup-start.txt"
+-          sudo mkdir -p /opt/purrdf-native-profile-tests
+-          sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
+           mkdir -p "$campaign/resources"

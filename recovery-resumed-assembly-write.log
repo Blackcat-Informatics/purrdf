@@ -1,0 +1,33 @@
+python3 scripts/check-simd-asm.py --doc --write-doc --jobs 1
+== x86_64: 8 Cargo jobs
+== x86_64 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/494166b951f8b77534f57bd8b646ef60404134d1bf93963cd522635d33121dc3/cargo.graph-0.stderr.log
+== x86_64 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/494166b951f8b77534f57bd8b646ef60404134d1bf93963cd522635d33121dc3/cargo.graph-1.stderr.log
+== x86_64: {"analysis_seconds": 16.62935818801634, "build_seconds": 369.0405787329946, "fresh_artifacts": 65, "lock_seconds": 0.0004050679854117334, "parsed_units": 74, "reused_units": 65, "rustc_invocations": 74, "seconds": 386.06242743501207}
+== x86_64-v3: 8 Cargo jobs
+== x86_64-v3 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/e9fe327e38afdbb437a27a4890c3dd07af8ddb694e3e4e09d45afc0a5e446b7c/cargo.graph-0.stderr.log
+== x86_64-v3 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/e9fe327e38afdbb437a27a4890c3dd07af8ddb694e3e4e09d45afc0a5e446b7c/cargo.graph-1.stderr.log
+== x86_64-v3: {"analysis_seconds": 14.470153635978932, "build_seconds": 337.710130913998, "fresh_artifacts": 65, "lock_seconds": 0.00025950197596102953, "parsed_units": 74, "reused_units": 65, "rustc_invocations": 74, "seconds": 352.5812415969849}
+== x86_64-v4: 8 Cargo jobs
+== x86_64-v4 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/c1cae533ffa1e825ea3ad87f6372c2985c2c15a54a558f2db00678d2cfa61030/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/c1cae533ffa1e825ea3ad87f6372c2985c2c15a54a558f2db00678d2cfa61030/cargo.graph-1.stderr.log
+== x86_64-v4: {"analysis_seconds": 12.606626713997684, "build_seconds": 368.1599699489889, "fresh_artifacts": 65, "lock_seconds": 0.00019359399448148906, "parsed_units": 74, "reused_units": 65, "rustc_invocations": 74, "seconds": 381.21268002598663}
+== aarch64: 8 Cargo jobs
+== aarch64 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/fc641ae1a33b368aaeaff8b8b4dd140729a723c88cee36920dbfeda5b9ba536c/cargo.graph-0.stderr.log
+== aarch64 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/fc641ae1a33b368aaeaff8b8b4dd140729a723c88cee36920dbfeda5b9ba536c/cargo.graph-1.stderr.log
+== aarch64: {"analysis_seconds": 14.13647218598635, "build_seconds": 415.94437861198094, "fresh_artifacts": 65, "lock_seconds": 0.00026321198674850166, "parsed_units": 74, "reused_units": 65, "rustc_invocations": 74, "seconds": 430.42051527800504}
+== aarch64-neoverse-v1: 8 Cargo jobs
+== aarch64-neoverse-v1 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/d8007cf150d0c78aa853cc5532e4a67c9d5f3ae98a2da7bd069b10cf8361e098/cargo.graph-0.stderr.log
+== aarch64-neoverse-v1 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/d8007cf150d0c78aa853cc5532e4a67c9d5f3ae98a2da7bd069b10cf8361e098/cargo.graph-1.stderr.log
+== aarch64-neoverse-v1: {"analysis_seconds": 15.040880590997403, "build_seconds": 381.4981960369623, "fresh_artifacts": 65, "lock_seconds": 0.00027794198831543326, "parsed_units": 74, "reused_units": 65, "rustc_invocations": 74, "seconds": 396.81612536800094}
+== wasm32: 8 Cargo jobs
+== wasm32 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/c9ae6ea930fa8418486b571587954e44a982935b4e6cea62f80acb6bad862412/cargo.graph-0.stderr.log
+== wasm32 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/c9ae6ea930fa8418486b571587954e44a982935b4e6cea62f80acb6bad862412/cargo.graph-1.stderr.log
+== wasm32-simd128: 8 Cargo jobs
+== wasm32-simd128 graph 0: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/e6dbcca3c0e01e178e5721b4a6983ab3e811769fc934bf7f224dc4dd6b896d72/cargo.graph-0.stderr.log
+== wasm32-simd128 graph 1: /home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/simd-asm/contexts/e6dbcca3c0e01e178e5721b4a6983ab3e811769fc934bf7f224dc4dd6b896d72/cargo.graph-1.stderr.log
+FAIL: `results.json-escape` [call site] on wasm32: no function of crate `purrdf_lex` has `purrdf_lex::json_escape::escape_body::<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`slice.prefix-json-string` [call site] on wasm32: no function of crate `purrdf_slice` has `purrdf_slice::prefix_emit::json_string` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`results.json-escape` [call site] on wasm32-simd128: no function of crate `purrdf_lex` has `purrdf_lex::json_escape::escape_body::<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`slice.prefix-json-string` [call site] on wasm32-simd128: no function of crate `purrdf_slice` has `purrdf_slice::prefix_emit::json_string` in its path -- the symbol was renamed or inlined away, and the evidence with it
+make: *** [Makefile:700: simd-asm] Error 1
+terminal_status=2

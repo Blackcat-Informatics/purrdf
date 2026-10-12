@@ -1,0 +1,21 @@
+   Compiling geo-planar-byte-differential v0.0.0 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/.stage/geo-deterministic-hierarchical-spatial/planar-byte-differential)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.77s
+     Running `/opt/purrdf-geo-qualification/target/debug/geo-planar-byte-differential`
+original=9667c2ee2cd3ad4b native=cae63e406267a3d7 original_inputs=1057 native_inputs=1057
+input=462 category=exact measure original=[48] native=[52]
+input=465 category=exact measure original=[48] native=[52]
+input=468 category=exact measure original=[48] native=[50, 48]
+input=495 category=exact measure original=[49, 46, 52, 49, 52, 50, 49, 51, 53, 54, 50, 51, 55, 51, 48, 57, 53, 48, 52, 56] native=[51, 46, 52, 49, 52, 50, 49, 51, 53, 54, 50, 51, 55, 51, 48, 57, 53, 48, 52, 56]
+input=498 category=exact measure original=[48] native=[54, 46, 56, 50, 56, 52, 50, 55, 49, 50, 52, 55, 52, 54, 49, 57, 48, 48, 57, 54]
+input=1019 category=constructor or binary64 original=[0, 0, 0, 0, 0, 0, 0, 0] native=[64, 16, 0, 0, 0, 0, 0, 0]
+input=1022 category=constructor or binary64 original=[0, 0, 0, 0, 0, 0, 0, 0] native=[64, 16, 0, 0, 0, 0, 0, 0]
+input=1025 category=constructor or binary64 original=[0, 0, 0, 0, 0, 0, 0, 0] native=[64, 52, 0, 0, 0, 0, 0, 0]
+input=1052 category=constructor or binary64 original=[63, 246, 160, 158, 102, 127, 59, 205] native=[64, 11, 80, 79, 51, 63, 157, 230]
+input=1055 category=constructor or binary64 original=[0, 0, 0, 0, 0, 0, 0, 0] native=[64, 27, 80, 79, 51, 63, 157, 230]
+differing_inputs=10
+
+thread 'main' (3143695) panicked at main.rs.txt:87:5:
+assertion `left == right` failed: native output must preserve every original folded byte input
+  left: 10
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,0 +1,7 @@
+b70d4368b89df81ce68447591eb9478d60bc19cd
+100644 93c63d5953296e22f277ef33dfacd1d8cc2112bd 2	README_zh.md
+100644 b9e626a70ab9ee12ed887a802875945bb7614f81 3	README_zh.md
+
+CONFLICT (rename/delete): README.zh-Hans.md renamed to README_zh.md in refs/stage/409/recovery-gitee-main, but deleted in main.
+Auto-merging README_zh.md
+CONFLICT (add/add): Merge conflict in README_zh.md

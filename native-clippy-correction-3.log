@@ -1,0 +1,65 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+error[E0425]: cannot find function `try_fold` in module `crate::geom`
+    --> crates/geo-kernel/src/geojson.rs:1498:18
+     |
+1498 |     crate::geom::try_fold(
+     |                  ^^^^^^^^ not found in `crate::geom`
+     |
+note: function `crate::geom::tree::try_fold` exists but is inaccessible
+    --> crates/geo-kernel/src/geom/tree.rs:153:1
+     |
+ 153 | / pub(crate) fn try_fold<'a, T, E>(
+ 154 | |     root: &'a Geometry,
+ 155 | |     mut leaf: impl FnMut(&'a Geometry) -> Result<T, E>,
+ 156 | |     mut collection: impl FnMut(&'a Geometry, Vec<T>) -> Result<T, E>,
+...    |
+ 169 | | }
+     | |_^ not accessible
+
+error: method `into_exact` is never used
+  --> crates/geo-kernel/src/metric.rs:53:27
+   |
+40 |         impl $name {
+   |         ---------- method in this implementation
+...
+53 |             pub(crate) fn into_exact(self) -> Rat {
+   |                           ^^^^^^^^^^
+...
+67 | quantity!(Metres, "An exact signed distance in metres.");
+   | -------------------------------------------------------- in this macro invocation
+   |
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+   = note: this error originates in the macro `quantity` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: method `into_exact` is never used
+  --> crates/geo-kernel/src/metric.rs:53:27
+   |
+40 |         impl $name {
+   |         ---------- method in this implementation
+...
+53 |             pub(crate) fn into_exact(self) -> Rat {
+   |                           ^^^^^^^^^^
+...
+68 | quantity!(SquareMetres, "An exact signed area in square metres.");
+   | ----------------------------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `quantity` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `purrdf-geo-kernel` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-geo-kernel` (lib test) due to 1 previous error

@@ -1,0 +1,63 @@
+ellipsoidal_point/context_construct time:   [3.890 µs 3.918 µs 3.928 µs]  mad: 12.37 ns  (10 samples × 2550 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+ellipsoidal_point/context_validate time:   [36.06 ns 36.61 ns 37.22 ns]  mad: 560.0 ps  (10 samples × 269987 iterations)
+ellipsoidal_point/plain  time:   [34.85 µs 35.30 µs 35.36 µs]  mad: 85.62 ns  (10 samples × 280 iterations)
+                         outliers: 2 of 10 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+ellipsoidal_point/coefficient_prepare time:   [352.4 µs 355.5 µs 355.9 µs]  mad: 705.1 ns  (10 samples × 28 iterations)
+ellipsoidal_point/prepared time:   [23.39 µs 23.64 µs 23.74 µs]  mad: 112.6 ns  (10 samples × 425 iterations)
+ellipsoidal_point/inverse_metadata time:   [3.421 ms 3.466 ms 3.471 ms]  mad: 9.663 µs  (10 samples × 3 iterations)
+ellipsoidal_point/direct time:   [1.873 ms 1.886 ms 1.888 ms]  mad: 2.029 µs  (10 samples × 6 iterations)
+                         outliers: 3 of 10 (2 low severe, 0 low mild, 0 high mild, 1 high severe)
+ellipsoidal_point/point_prepare time:   [51.07 µs 51.19 µs 51.90 µs]  mad: 139.4 ns  (10 samples × 197 iterations)
+ellipsoidal_point/prepared_point time:   [22.77 µs 23.10 µs 23.23 µs]  mad: 122.9 ns  (10 samples × 427 iterations)
+ellipsoidal_point/batch1 time:   [23.43 µs 23.71 µs 23.80 µs]  mad: 186.2 ns  (10 samples × 420 iterations)
+                         thrpt:  [42.03 Kelem/s 42.17 Kelem/s 42.67 Kelem/s]
+ellipsoidal_point/inverse_batch1 time:   [3.397 ms 3.428 ms 3.471 ms]  mad: 34.96 µs  (10 samples × 3 iterations)
+                         thrpt:  [288.1 elem/s 291.7 elem/s 294.3 elem/s]
+ellipsoidal_point/direct_batch1 time:   [1.858 ms 1.871 ms 1.886 ms]  mad: 14.04 µs  (10 samples × 6 iterations)
+                         thrpt:  [530.2 elem/s 534.5 elem/s 538.4 elem/s]
+ellipsoidal_point/batch4 time:   [91.48 µs 92.29 µs 93.22 µs]  mad: 745.9 ns  (10 samples × 107 iterations)
+                         thrpt:  [42.91 Kelem/s 43.34 Kelem/s 43.72 Kelem/s]
+ellipsoidal_point/inverse_batch4 time:   [13.57 ms 13.66 ms 13.90 ms]  mad: 124.8 µs  (10 samples × 1 iterations)
+                         thrpt:  [287.8 elem/s 292.8 elem/s 294.7 elem/s]
+ellipsoidal_point/direct_batch4 time:   [7.379 ms 7.420 ms 7.527 ms]  mad: 49.39 µs  (10 samples × 2 iterations)
+                         thrpt:  [531.4 elem/s 539.1 elem/s 542.1 elem/s]
+ellipsoidal_point/batch16 time:   [366.3 µs 370.7 µs 375.9 µs]  mad: 4.130 µs  (10 samples × 27 iterations)
+                         thrpt:  [42.56 Kelem/s 43.16 Kelem/s 43.67 Kelem/s]
+warning: ellipsoidal_point/inverse_batch16: 10 samples cannot finish in 0.1 s; they will take about 0.5 s
+ellipsoidal_point/inverse_batch16 time:   [54.63 ms 55.06 ms 55.22 ms]  mad: 316.2 µs  (10 samples × 1 iterations)
+                         thrpt:  [289.7 elem/s 290.6 elem/s 292.9 elem/s]
+warning: ellipsoidal_point/direct_batch16: 10 samples cannot finish in 0.1 s; they will take about 0.3 s
+ellipsoidal_point/direct_batch16 time:   [29.79 ms 29.95 ms 30.08 ms]  mad: 130.1 µs  (10 samples × 1 iterations)
+                         thrpt:  [531.9 elem/s 534.3 elem/s 537.2 elem/s]
+ellipsoidal_point/batch256 time:   [5.971 ms 6.060 ms 6.073 ms]  mad: 23.51 µs  (10 samples × 2 iterations)
+                         thrpt:  [42.16 Kelem/s 42.25 Kelem/s 42.87 Kelem/s]
+warning: ellipsoidal_point/inverse_batch256: 10 samples cannot finish in 0.1 s; they will take about 8.8 s
+ellipsoidal_point/inverse_batch256 time:   [880.8 ms 882.2 ms 885.6 ms]  mad: 1.760 ms  (10 samples × 1 iterations)
+                         thrpt:  [289.1 elem/s 290.2 elem/s 290.7 elem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: ellipsoidal_point/direct_batch256: 10 samples cannot finish in 0.1 s; they will take about 4.8 s
+ellipsoidal_point/direct_batch256 time:   [480.4 ms 481.3 ms 482.8 ms]  mad: 863.6 µs  (10 samples × 1 iterations)
+                         thrpt:  [530.2 elem/s 531.8 elem/s 532.9 elem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: ellipsoidal_point/batch4096: 10 samples cannot finish in 0.1 s; they will take about 1.0 s
+ellipsoidal_point/batch4096 time:   [95.31 ms 95.93 ms 96.67 ms]  mad: 634.3 µs  (10 samples × 1 iterations)
+                         thrpt:  [42.37 Kelem/s 42.70 Kelem/s 42.98 Kelem/s]
+warning: ellipsoidal_point/inverse_batch4096: 10 samples cannot finish in 0.1 s; they will take about 142.8 s
+ellipsoidal_point/inverse_batch4096 time:   [14.20 s 14.31 s 21.53 s]  mad: 148.6 ms  (10 samples × 1 iterations)
+                         thrpt:  [190.2 elem/s 286.3 elem/s 288.4 elem/s]
+warning: ellipsoidal_point/direct_batch4096: 10 samples cannot finish in 0.1 s; they will take about 102.6 s
+ellipsoidal_point/direct_batch4096 time:   [7.711 s 7.739 s 7.786 s]  mad: 35.19 ms  (10 samples × 1 iterations)
+                         thrpt:  [526.1 elem/s 529.2 elem/s 531.2 elem/s]
+ellipsoidal_backend/avx2/prepared time:   [23.84 µs 23.87 µs 23.89 µs]  mad: 34.72 ns  (20 samples × 1057 iterations)
+                         outliers: 2 of 20 (1 low severe, 1 low mild, 0 high mild, 0 high severe)
+ellipsoidal_backend/avx2/prepared_point time:   [23.45 µs 23.51 µs 23.53 µs]  mad: 26.95 ns  (20 samples × 1062 iterations)
+ellipsoidal_backend/sse2/prepared time:   [23.69 µs 23.86 µs 23.91 µs]  mad: 65.63 ns  (20 samples × 1051 iterations)
+ellipsoidal_backend/sse2/prepared_point time:   [23.10 µs 23.29 µs 23.60 µs]  mad: 309.6 ns  (20 samples × 1068 iterations)
+ellipsoidal_backend/avx512/prepared time:   [23.33 µs 23.59 µs 23.71 µs]  mad: 259.0 ns  (20 samples × 1053 iterations)
+ellipsoidal_backend/avx512/prepared_point time:   [23.34 µs 23.50 µs 23.55 µs]  mad: 67.77 ns  (20 samples × 1065 iterations)
+ellipsoidal_backend/portable/prepared time:   [23.40 µs 23.57 µs 23.82 µs]  mad: 262.2 ns  (20 samples × 1058 iterations)
+ellipsoidal_backend/portable/prepared_point time:   [23.45 µs 23.48 µs 23.51 µs]  mad: 41.14 ns  (20 samples × 1062 iterations)
+                         outliers: 2 of 20 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+
+32 benchmarks measured; 0 failed

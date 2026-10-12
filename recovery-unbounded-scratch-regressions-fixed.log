@@ -1,0 +1,83 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+error[E0308]: mismatched types
+   --> crates/geo-kernel/src/context/preparation.rs:309:56
+    |
+309 |         let buffers = super::scratch_destination_count(self.policy.limits(), 0);
+    |                       -------------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `ExecutionLimits`, found `&ExecutionLimits`
+    |                       |
+    |                       arguments to this function are incorrect
+    |
+note: function defined here
+   --> crates/geo-kernel/src/context.rs:24:15
+    |
+ 24 | pub(crate) fn scratch_destination_count(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+ 25 |     limits: crate::ExecutionLimits,
+    |     ------------------------------
+help: consider dereferencing the borrow
+    |
+309 |         let buffers = super::scratch_destination_count(*self.policy.limits(), 0);
+    |                                                        +
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/context.rs:1803:35
+     |
+1803 |         scratch_destination_count(self.policy.limits(), 0)
+     |         ------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `ExecutionLimits`, found `&ExecutionLimits`
+     |         |
+     |         arguments to this function are incorrect
+     |
+note: function defined here
+    --> crates/geo-kernel/src/context.rs:24:15
+     |
+  24 | pub(crate) fn scratch_destination_count(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  25 |     limits: crate::ExecutionLimits,
+     |     ------------------------------
+help: consider dereferencing the borrow
+     |
+1803 |         scratch_destination_count(*self.policy.limits(), 0)
+     |                                   +
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/context.rs:1821:49
+     |
+1821 |         let buffers = scratch_destination_count(self.policy.limits(), precision_bits);
+     |                       ------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `ExecutionLimits`, found `&ExecutionLimits`
+     |                       |
+     |                       arguments to this function are incorrect
+     |
+note: function defined here
+    --> crates/geo-kernel/src/context.rs:24:15
+     |
+  24 | pub(crate) fn scratch_destination_count(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  25 |     limits: crate::ExecutionLimits,
+     |     ------------------------------
+help: consider dereferencing the borrow
+     |
+1821 |         let buffers = scratch_destination_count(*self.policy.limits(), precision_bits);
+     |                                                 +
+
+error[E0308]: mismatched types
+    --> crates/geo-kernel/src/prepared.rs:2869:69
+     |
+2869 |             let buffers = crate::context::scratch_destination_count(self.limits, 0);
+     |                           ----------------------------------------- ^^^^^^^^^^^ expected `ExecutionLimits`, found `&ExecutionLimits`
+     |                           |
+     |                           arguments to this function are incorrect
+     |
+note: function defined here
+    --> crates/geo-kernel/src/context.rs:24:15
+     |
+  24 | pub(crate) fn scratch_destination_count(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  25 |     limits: crate::ExecutionLimits,
+     |     ------------------------------
+help: consider dereferencing the borrow
+     |
+2869 |             let buffers = crate::context::scratch_destination_count(*self.limits, 0);
+     |                                                                     +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-geo-kernel` (lib test) due to 4 previous errors

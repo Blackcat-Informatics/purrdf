@@ -1,0 +1,214 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+warning: replacing a value of type `T` with `T::default()`
+    --> crates/xsd/src/bigint.rs:1482:36
+     |
+1482 |             let Mag::Heap(words) = core::mem::replace(&mut self.magnitude, Mag::new()) else {
+     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using `std::mem::take` instead: `std::mem::take(&mut self.magnitude)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#mem_replace_with_default
+     = note: `-D clippy::mem-replace-with-default` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::mem_replace_with_default)]`
+     = note: the `clippy::mem_replace_with_default` lint ignores `-D warnings`
+
+warning: it looks like you're trying to convert a tuple to an array
+   --> crates/xsd/src/exact/rational/geometry.rs:166:9
+    |
+166 |         [widths.0, widths.1]
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: use `.into()` instead, or `<[T; N]>::from` if type annotations are needed
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+    = note: `-D clippy::tuple-array-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::tuple_array_conversions)]`
+    = note: the `clippy::tuple_array_conversions` lint ignores `-D warnings`
+
+warning: this could be rewritten as `let...else`
+  --> crates/xsd/src/math/taylor/scratch.rs:86:9
+   |
+86 | /         let required = match Self::required_bytes_with_storage::<S>(coefficients, jets) {
+87 | |             Some(required) => required,
+88 | |             None => {
+89 | |                 return Err((
+...  |
+94 | |         };
+   | |__________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+   = note: `-D clippy::manual-let-else` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+   = note: the `clippy::manual_let_else` lint ignores `-D warnings`
+help: consider writing
+   |
+86 ~         let Some(required) = Self::required_bytes_with_storage::<S>(coefficients, jets) else {
+87 +                 return Err((
+88 +                     TaylorScratchError::Storage(StorageError::SizeOverflow),
+89 +                     storage,
+90 +                 ));
+91 +             };
+   |
+
+warning: this argument is passed by value, but not consumed in the function body
+   --> crates/xsd/src/math/taylor.rs:170:14
+    |
+170 |     factory: TaylorScratchFactory<S>,
+    |              ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: or consider marking this type as `Copy`
+   --> crates/xsd/src/math/taylor.rs:23:1
+    |
+ 23 | pub struct TaylorScratchFactory<S> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+    = note: the `clippy::needless_pass_by_value` lint ignores `-D warnings`
+help: consider taking a reference instead
+    |
+170 |     factory: &TaylorScratchFactory<S>,
+    |              +
+
+warning: this could be rewritten as `let...else`
+   --> crates/xsd/src/math/floating/fast.rs:101:9
+    |
+101 | /         let owner = match SharedOwned::try_from_admitted_with(|| {
+102 | |             pending.take().expect("one coefficient publication")
+103 | |         }) {
+104 | |             Ok(owner) => owner,
+...   |
+111 | |         };
+    | |__________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+help: consider writing
+    |
+101 ~         let Ok(owner) = SharedOwned::try_from_admitted_with(|| {
+102 +             pending.take().expect("one coefficient publication")
+103 +         }) else {
+104 +                 let (_, storage) = pending.take().expect("refused coefficients remain owned");
+105 +                 self.release_workspace(bytes)
+106 +                     .expect("coefficient reservation is balanced");
+107 +                 return Err((MathError::Storage(StorageError::AllocationFailed), storage));
+108 +             };
+    |
+
+warning: `purrdf-xsd` (lib) generated 5 warnings (run `cargo clippy --fix --lib -p purrdf-xsd -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+warning: `purrdf-xsd` (lib test) generated 5 warnings (5 duplicates)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/helper-census)
+error[E0432]: unresolved imports `purrdf_xsd::numeric::CANONICAL_IEEE_MAX_BYTES`, `purrdf_xsd::numeric::canonical_double_into`, `purrdf_xsd::numeric::canonical_float_into`
+  --> crates/xsd/tests/certified_numerical.rs:23:9
+   |
+23 |         CANONICAL_IEEE_MAX_BYTES, canonical_double, canonical_double_into, canonical_float_into,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^                    ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^ no `canonical_float_into` in `numeric`
+   |         |                                           |
+   |         |                                           no `canonical_double_into` in `numeric`
+   |         no `CANONICAL_IEEE_MAX_BYTES` in `numeric`
+   |
+help: a similar name exists in the module
+   |
+23 -         CANONICAL_IEEE_MAX_BYTES, canonical_double, canonical_double_into, canonical_float_into,
+23 +         CANONICAL_IEEE_MAX_BYTES, canonical_double, canonical_double_text, canonical_float_into,
+   |
+help: a similar name exists in the module
+   |
+23 -         CANONICAL_IEEE_MAX_BYTES, canonical_double, canonical_double_into, canonical_float_into,
+23 +         CANONICAL_IEEE_MAX_BYTES, canonical_double, canonical_double_into, canonical_float_text,
+   |
+
+error[E0308]: mismatched types
+   --> crates/xsd/tests/certified_numerical.rs:229:9
+    |
+227 |     let copied = Rat::new(
+    |                  -------- arguments to this function are incorrect
+228 |         source.numerator().copy_in(&scratch).unwrap(),
+229 |         source.denominator().clone(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `BigInt`, found `Cow<'_, BigInt>`
+    |
+    = note: expected struct `BigInt`
+                 found enum `std::borrow::Cow<'_, BigInt>`
+note: associated function defined here
+   --> crates/xsd/src/exact/rational/geometry.rs:80:12
+    |
+ 80 |     pub fn new(num: Int, den: Int) -> Option<Self> {
+    |            ^^^
+
+Some errors have detailed explanations: E0308, E0432.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-xsd` (test "certified_numerical") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+warning: redundant closure
+   --> crates/rdf-core/src/ir/term_walk.rs:994:39
+    |
+994 |     compare_pairs_with(a, b, shallow, |pending, pair| pending.try_push(pair))
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_lex::walk::WorkList::try_push`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+    = note: the `clippy::redundant_closure_for_method_calls` lint ignores `-D warnings`
+
+warning: `purrdf-core` (lib) generated 1 warning (run `cargo clippy --fix --lib -p purrdf-core -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+error: no rules expected `=>`
+   --> crates/geo-kernel/src/error.rs:571:36
+    |
+571 | purrdf_lex::variant_from!(GeoError => Storage(purrdf_lex::allocation::StorageError));
+    |                                    ^^ no rules expected this token in macro call
+    |
+note: while trying to match `{`
+   --> crates/lex/src/constructors.rs:241:15
+    |
+241 |     ($type:ty { $($items:tt)* }) => {
+    |               ^
+
+error: no rules expected `=>`
+   --> crates/geo-kernel/src/error.rs:572:36
+    |
+572 | purrdf_lex::variant_from!(GeoError => NumericalScratch(purrdf_xsd::integer::LimbScratchError));
+    |                                    ^^ no rules expected this token in macro call
+    |
+note: while trying to match `{`
+   --> crates/lex/src/constructors.rs:241:15
+    |
+241 |     ($type:ty { $($items:tt)* }) => {
+    |               ^
+
+error: could not compile `purrdf-geo-kernel` (lib) due to 2 previous errors
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+error[E0004]: non-exhaustive patterns: `purrdf_lex::json::ErrorKind::Interrupted` not covered
+   --> crates/json/src/parse.rs:90:11
+    |
+ 90 |     match error.kind() {
+    |           ^^^^^^^^^^^^ pattern `purrdf_lex::json::ErrorKind::Interrupted` not covered
+    |
+note: `purrdf_lex::json::ErrorKind` defined here
+   --> crates/lex/src/json/error.rs:12:1
+    |
+ 12 | pub enum ErrorKind {
+    | ^^^^^^^^^^^^^^^^^^
+ 13 |     /// The caller's original progress capability refused further input work.
+ 14 |     Interrupted,
+    |     ----------- not covered
+    = note: the matched value is of type `purrdf_lex::json::ErrorKind`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+122 ~         },
+123 ~         purrdf_lex::json::ErrorKind::Interrupted => todo!(),
+    |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `purrdf-json` (lib) due to 1 previous error
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/conformance-kit)
+warning: `purrdf-core` (lib test) generated 1 warning (1 duplicate)
+error: could not compile `purrdf-geo-kernel` (lib test) due to 2 previous errors

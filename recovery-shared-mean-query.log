@@ -1,0 +1,23 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 43s
+     Running tests/query_rewrite_e2e.rs (target/geo-build/debug/build/purrdf-geo/eff7cfb3ee03e0a9/out/query_rewrite_e2e-eff7cfb3ee03e0a9)
+
+running 9 tests
+test an_asserted_within_triple_matches_alongside_the_computed_rows_and_is_not_duplicated ... ok
+test a_declared_but_unregistered_relation_iri_is_refused_while_its_registered_neighbour_answers ... ok
+test all_four_rewrite_branches_are_reachable_from_query_text ... ok
+test an_undeclared_unregistered_geo_iri_is_an_ordinary_triple_pattern_matching_the_asserted_data ... ok
+test the_rewritten_predicate_joins_back_through_the_subject_into_a_basic_graph_pattern ... ok
+test the_rewritten_within_predicate_answers_exactly_the_entailed_rows_from_query_text ... ok
+test contains_is_the_converse_of_within_over_the_same_data ... ok
+test the_serialized_answer_is_byte_identical_across_runs_and_across_ingestion_orders ... ok
+test limit_k_returns_exactly_the_prefix_of_the_unlimited_answer ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+terminal_status=0

@@ -1,0 +1,45 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+error[E0425]: cannot find value `retained` in this scope
+   --> crates/geo-kernel/src/geodesic/point.rs:349:32
+    |
+349 |         math.release_workspace(retained)
+    |                                ^^^^^^^^ not found in this scope
+    |
+note: function `crate::binding::prepared_image::retained` exists but is inaccessible
+   --> crates/geo-kernel/src/binding/prepared_image.rs:845:1
+    |
+845 | fn retained(context: &MetricContext) -> u64 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0277]: `?` couldn't convert the error to `SolveError`
+   --> crates/geo-kernel/src/geodesic/point.rs:324:40
+    |
+319 |               .try_fold(0usize, |bytes, field| {
+    |  ______________-
+320 | |                 bytes
+321 | |                     .checked_add(field?)
+322 | |                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)
+323 | |             })
+    | |______________- this has type `Result<_, purrdf_lex::allocation::StorageError>`
+324 |               .map_err(GeoError::Storage)?;
+    |                --------------------------^ the trait `From<error::GeoError>` is not implemented for `SolveError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, error::GeoError>`
+    |
+note: `SolveError` needs to implement `From<error::GeoError>`
+   --> crates/geo-kernel/src/geodesic.rs:878:1
+    |
+878 | enum SolveError {
+    | ^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<error::GeoError>` is not implemented for `SolveError`
+      but trait `From<purrdf_xsd::math::MathError>` is implemented for it
+   --> crates/geo-kernel/src/geodesic.rs:884:1
+    |
+884 | impl From<MathError> for SolveError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `purrdf_xsd::math::MathError`, found `error::GeoError`
+
+Some errors have detailed explanations: E0277, E0425.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-geo-kernel` (lib test) due to 2 previous errors

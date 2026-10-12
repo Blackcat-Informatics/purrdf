@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "geo-planar-byte-differential"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "geo-planar-byte-differential"
+path = "main.rs.txt"
+
+[dependencies]
+purrdf-geo-kernel = { path = "../../../crates/geo-kernel" }
+purrdf-sparql-eval = { path = "../../../crates/sparql-eval" }
+purrdf-core = { path = "../../../crates/rdf-core" }
+purrdf-xsd = { path = "../../../crates/xsd" }
+purrdf-iri = { path = "../../../crates/iri" }
+purrdf-lex = { path = "../../../crates/lex" }
+purrdf-hash = { path = "../../../crates/hash" }
+

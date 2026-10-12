@@ -1,0 +1,29 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `bench` profile [optimized] target(s) in 7.31s
+     Running `/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/release/examples/geodesic_allocations`
+integer_size=64 context_size=1264
+operation=distance count=1 elapsed_ns=29339 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=inverse_metadata count=1 elapsed_ns=3889990 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=direct count=1 elapsed_ns=2122555 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=zero_inverse_metadata count=1 elapsed_ns=2500 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=mixed_zero_inverse_metadata count=1 elapsed_ns=2150 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=distance count=4 elapsed_ns=104377 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=inverse_metadata count=4 elapsed_ns=14900539 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=direct count=4 elapsed_ns=8239455 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=zero_inverse_metadata count=4 elapsed_ns=8990 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=mixed_zero_inverse_metadata count=4 elapsed_ns=7504578 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=distance count=16 elapsed_ns=413737 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=inverse_metadata count=16 elapsed_ns=55467594 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=direct count=16 elapsed_ns=32413217 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=zero_inverse_metadata count=16 elapsed_ns=32709 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=mixed_zero_inverse_metadata count=16 elapsed_ns=28011393 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=distance count=256 elapsed_ns=6568357 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=inverse_metadata count=256 elapsed_ns=992815727 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=direct count=256 elapsed_ns=517422075 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=zero_inverse_metadata count=256 elapsed_ns=499005 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=mixed_zero_inverse_metadata count=256 elapsed_ns=705003074 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=distance count=4096 elapsed_ns=152994978 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=inverse_metadata count=4096 elapsed_ns=19140281779 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=direct count=4096 elapsed_ns=11835148001 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=zero_inverse_metadata count=4096 elapsed_ns=13087587 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=mixed_zero_inverse_metadata count=4096 elapsed_ns=12011553050 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }

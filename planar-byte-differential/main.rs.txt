@@ -1,0 +1,88 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Diagnostic-only execution of the unchanged accepted planar implementation.
+//! Every original module is borrowed from the protected checkout. The sole
+//! instrumentation records the inputs to the original FNV fold; its native
+//! operation body and frozen expected digest remain unchanged. This standalone
+//! Stage target is never linked into a shipping library.
+
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/de9im.rs"]
+mod de9im;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/error.rs"]
+mod error;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/exact.rs"]
+pub mod exact;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/construct.rs"]
+pub mod construct;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/geojson.rs"]
+pub mod geojson;
+#[path = "original-geom.rs.txt"]
+pub mod geom;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/json.rs"]
+pub mod json;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/measure.rs"]
+pub mod measure;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/topology/mod.rs"]
+pub mod topology;
+#[path = "/home/paudley/Active/purrdf/crates/geo/src/wkt.rs"]
+pub mod wkt;
+
+pub use de9im::{Dim, IntersectionMatrix, Pattern, Set, Slot};
+pub use error::GeoError;
+pub use exact::{Int, Rat};
+pub use geom::{
+    Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral, Rings,
+};
+pub use json::JsonValue;
+
+#[path = "original-digest.rs.txt"]
+mod original_digest;
+#[path = "native-digest.rs.txt"]
+mod native_digest;
+
+mod trace {
+    use std::cell::RefCell;
+    thread_local! {
+        static INPUTS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
+    pub fn fold(state: u64, bytes: &[u8]) -> u64 {
+        INPUTS.with_borrow_mut(|inputs| inputs.push(bytes.to_vec()));
+        purrdf_hash::fnv::fold(state, bytes)
+    }
+    pub fn collect(digest: impl FnOnce() -> u64) -> (u64, Vec<Vec<u8>>) {
+        INPUTS.with_borrow_mut(Vec::clear);
+        let value = digest();
+        (value, INPUTS.with_borrow_mut(core::mem::take))
+    }
+}
+
+fn category(index: usize) -> &'static str {
+    match index {
+        0..20 => "WKT",
+        20..40 => "GeoJSON",
+        40..440 => "DE9IM",
+        440..500 => "exact measure",
+        500..900 => "distance",
+        _ => "constructor or binary64",
+    }
+}
+
+fn main() {
+    assert_eq!(original_digest::corpus_len(), 20);
+    assert_eq!(native_digest::corpus_len(), original_digest::corpus_len());
+    let (original, expected) = trace::collect(original_digest::digest);
+    assert_eq!(original, 0x9667_c2ee_2cd3_ad4b, "unchanged oracle must retain its accepted digest");
+    let (native, actual) = trace::collect(native_digest::digest);
+    println!("original={original:016x} native={native:016x} original_inputs={} native_inputs={}", expected.len(), actual.len());
+    assert_eq!(expected.len(), actual.len(), "all original producer calls must remain present");
+    let mut differences = 0;
+    for (i, (old, new)) in expected.iter().zip(&actual).enumerate() {
+        if old != new {
+            differences += 1;
+            println!("input={i} category={} original={old:?} native={new:?}", category(i));
+        }
+    }
+    println!("differing_inputs={differences}");
+    assert_eq!(differences, 0, "native output must preserve every original folded byte input");
+}

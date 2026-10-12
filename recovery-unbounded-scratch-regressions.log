@@ -1,0 +1,25 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 1m 41s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 2 tests
+test context::tests::relaxed_scratch_ceilings_admit_only_the_attempted_working_set ... ok
+test ellipsoidal::tests::relaxed_scratch_ceilings_preserve_complete_geometry_metrics ... FAILED
+
+failures:
+
+---- ellipsoidal::tests::relaxed_scratch_ceilings_preserve_complete_geometry_metrics stdout ----
+
+thread 'ellipsoidal::tests::relaxed_scratch_ceilings_preserve_complete_geometry_metrics' (3846563) panicked at crates/geo-kernel/src/ellipsoidal.rs:1800:9:
+assertion `left == right` failed
+  left: [48, 0, 0, 0, 0, 0, 0, 0, 112, 117, 114, 114, 100, 102, 45, 103, 101, 111, 45, 107, 101, 114, 110, 101, 108, 47, 103, 101, 111, 109, 101, 116, 114, 121, 45, 109, 101, 116, 114, 105, 99, 45, 99, 101, 114, 116, 105, 102, 105, 99, 97, 116, 101, 47, 118, 49, 32, 0, 0, 0, 0, 0, 0, 0, 70, 105, 2, 87, 137, 60, 90, 84, 95, 227, 196, 155, 251, 102, 53, 76, 61, 81, 173, 52, 198, 13, 204, 59, 162, 231, 122, 200, 198, 108, 49, 11, 32, 0, 0, 0, 0, 0, 0, 0, 4, 145, 151, 201, 198, 66, 68, 55, 136, 53, 142, 158, 141, 170, 83, 108, 80, 246, 166, 207, 53, 252, 52, 151, 124, 79, 33, 61, 28, 182, 183, 240, 13, 0, 0, 0, 0, 0, 0, 0, 49, 52, 51, 48, 51, 57, 46, 52, 57, 55, 48, 53, 53, 1, 0, 0, 0, 0, 0, 0, 0, 49, 4, 0, 0, 0, 0, 0, 0, 0, 49, 48, 48, 48, 8, 0, 0, 0, 0, 0, 0, 0, 65, 1, 117, 251, 249, 247, 248, 203]
+ right: [48, 0, 0, 0, 0, 0, 0, 0, 112, 117, 114, 114, 100, 102, 45, 103, 101, 111, 45, 107, 101, 114, 110, 101, 108, 47, 103, 101, 111, 109, 101, 116, 114, 121, 45, 109, 101, 116, 114, 105, 99, 45, 99, 101, 114, 116, 105, 102, 105, 99, 97, 116, 101, 47, 118, 49, 32, 0, 0, 0, 0, 0, 0, 0, 177, 179, 173, 138, 211, 169, 92, 32, 237, 61, 90, 160, 37, 65, 161, 80, 23, 84, 63, 14, 180, 160, 249, 56, 212, 55, 14, 238, 104, 101, 35, 172, 32, 0, 0, 0, 0, 0, 0, 0, 4, 145, 151, 201, 198, 66, 68, 55, 136, 53, 142, 158, 141, 170, 83, 108, 80, 246, 166, 207, 53, 252, 52, 151, 124, 79, 33, 61, 28, 182, 183, 240, 13, 0, 0, 0, 0, 0, 0, 0, 49, 52, 51, 48, 51, 57, 46, 52, 57, 55, 48, 53, 53, 1, 0, 0, 0, 0, 0, 0, 0, 49, 4, 0, 0, 0, 0, 0, 0, 0, 49, 48, 48, 48, 8, 0, 0, 0, 0, 0, 0, 0, 65, 1, 117, 251, 249, 247, 248, 203]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ellipsoidal::tests::relaxed_scratch_ceilings_preserve_complete_geometry_metrics
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 707 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-geo-kernel --lib`

@@ -1,0 +1,553 @@
+OK: non-Rust ratchet: 5 changed non-Rust path(s) in the staged index against a4bb1232d3b4 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+pre-commit: rustfmt --check failed on staged sources:
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement/relation.rs:296:
+               )
+               .and_then(|bytes| bytes.checked_add(owned))
+               .ok_or(GeoError::ArithmeticOverflow("selected stratum retention"))?;
+  -        let receipt = source_retained.checked_add(output.retained)
+  +        let receipt = source_retained
+  +            .checked_add(output.retained)
+               .ok_or(GeoError::ArithmeticOverflow("selected source allowance"))?;
+           Ok((retained, receipt))
+       })();
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:591:
+       let mut boundary = native_boundary_in(region, context, &mut progress)?;
+       let bytes = boundary.workspace_receipt;
+       let publication = (|| {
+  -        let fragments = boundary.fragments.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native boundary publication is shared"),
+  -        )?;
+  -        let points = boundary.isolated_points.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native point publication is shared"),
+  -        )?;
+  +        let fragments =
+  +            boundary
+  +                .fragments
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native boundary publication is shared",
+  +                ))?;
+  +        let points =
+  +            boundary
+  +                .isolated_points
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native point publication is shared",
+  +                ))?;
+           let receipt = context.register_materialized_output(bytes, &mut progress)?;
+           for fragment in fragments {
+               for parameter in &mut fragment.parameters {
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:740:
+       let retained = inventory.retained;
+       drop(inventory);
+       let released = if result.is_ok() {
+  -        retained.checked_sub(source_retained).ok_or(GeoError::ArithmeticOverflow(
+  -            "native source ownership transfer",
+  -        )).and_then(|bytes| context.release_workspace(bytes))
+  +        retained
+  +            .checked_sub(source_retained)
+  +            .ok_or(GeoError::ArithmeticOverflow(
+  +                "native source ownership transfer",
+  +            ))
+  +            .and_then(|bytes| context.release_workspace(bytes))
+       } else {
+           context.release_workspace(retained)
+       };
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement/relation.rs:296:
+               )
+               .and_then(|bytes| bytes.checked_add(owned))
+               .ok_or(GeoError::ArithmeticOverflow("selected stratum retention"))?;
+  -        let receipt = source_retained.checked_add(output.retained)
+  +        let receipt = source_retained
+  +            .checked_add(output.retained)
+               .ok_or(GeoError::ArithmeticOverflow("selected source allowance"))?;
+           Ok((retained, receipt))
+       })();
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:591:
+       let mut boundary = native_boundary_in(region, context, &mut progress)?;
+       let bytes = boundary.workspace_receipt;
+       let publication = (|| {
+  -        let fragments = boundary.fragments.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native boundary publication is shared"),
+  -        )?;
+  -        let points = boundary.isolated_points.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native point publication is shared"),
+  -        )?;
+  +        let fragments =
+  +            boundary
+  +                .fragments
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native boundary publication is shared",
+  +                ))?;
+  +        let points =
+  +            boundary
+  +                .isolated_points
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native point publication is shared",
+  +                ))?;
+           let receipt = context.register_materialized_output(bytes, &mut progress)?;
+           for fragment in fragments {
+               for parameter in &mut fragment.parameters {
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:740:
+       let retained = inventory.retained;
+       drop(inventory);
+       let released = if result.is_ok() {
+  -        retained.checked_sub(source_retained).ok_or(GeoError::ArithmeticOverflow(
+  -            "native source ownership transfer",
+  -        )).and_then(|bytes| context.release_workspace(bytes))
+  +        retained
+  +            .checked_sub(source_retained)
+  +            .ok_or(GeoError::ArithmeticOverflow(
+  +                "native source ownership transfer",
+  +            ))
+  +            .and_then(|bytes| context.release_workspace(bytes))
+       } else {
+           context.release_workspace(retained)
+       };
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement/relation.rs:296:
+               )
+               .and_then(|bytes| bytes.checked_add(owned))
+               .ok_or(GeoError::ArithmeticOverflow("selected stratum retention"))?;
+  -        let receipt = source_retained.checked_add(output.retained)
+  +        let receipt = source_retained
+  +            .checked_add(output.retained)
+               .ok_or(GeoError::ArithmeticOverflow("selected source allowance"))?;
+           Ok((retained, receipt))
+       })();
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:591:
+       let mut boundary = native_boundary_in(region, context, &mut progress)?;
+       let bytes = boundary.workspace_receipt;
+       let publication = (|| {
+  -        let fragments = boundary.fragments.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native boundary publication is shared"),
+  -        )?;
+  -        let points = boundary.isolated_points.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native point publication is shared"),
+  -        )?;
+  +        let fragments =
+  +            boundary
+  +                .fragments
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native boundary publication is shared",
+  +                ))?;
+  +        let points =
+  +            boundary
+  +                .isolated_points
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native point publication is shared",
+  +                ))?;
+           let receipt = context.register_materialized_output(bytes, &mut progress)?;
+           for fragment in fragments {
+               for parameter in &mut fragment.parameters {
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:740:
+       let retained = inventory.retained;
+       drop(inventory);
+       let released = if result.is_ok() {
+  -        retained.checked_sub(source_retained).ok_or(GeoError::ArithmeticOverflow(
+  -            "native source ownership transfer",
+  -        )).and_then(|bytes| context.release_workspace(bytes))
+  +        retained
+  +            .checked_sub(source_retained)
+  +            .ok_or(GeoError::ArithmeticOverflow(
+  +                "native source ownership transfer",
+  +            ))
+  +            .and_then(|bytes| context.release_workspace(bytes))
+       } else {
+           context.release_workspace(retained)
+       };
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement/relation.rs:296:
+               )
+               .and_then(|bytes| bytes.checked_add(owned))
+               .ok_or(GeoError::ArithmeticOverflow("selected stratum retention"))?;
+  -        let receipt = source_retained.checked_add(output.retained)
+  +        let receipt = source_retained
+  +            .checked_add(output.retained)
+               .ok_or(GeoError::ArithmeticOverflow("selected source allowance"))?;
+           Ok((retained, receipt))
+       })();
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding/prepared_image.rs:1534:
+               )
+               .unwrap();
+               let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+  -            let result =
+  -                profile.prepare_transformed_edge_named(&name, &wide_start, &end, None, &mut limited);
+  +            let result = profile.prepare_transformed_edge_named(
+  +                &name,
+  +                &wide_start,
+  +                &end,
+  +                None,
+  +                &mut limited,
+  +            );
+               let allocation = window.close();
+               assert!(matches!(
+                   result,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding.rs:1632:
+                   .followed_by(binding)
+                   .ok_or(GeoError::ArithmeticOverflow("registration work"))?;
+               let mut cost = arithmetic
+  -                .followed_by(purrdf_xsd::integer::ExactArithmeticCost::for_operation(
+  +                .followed_by(
+  +                    purrdf_xsd::integer::ExactArithmeticCost::for_operation(
+                           purrdf_xsd::integer::ExactOperation::Linear,
+                           scan_bits,
+                           8,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding.rs:1639:
+  -                    ).ok_or(GeoError::ArithmeticOverflow("registration scan work"))?)
+  +                    )
+  +                    .ok_or(GeoError::ArithmeticOverflow("registration scan work"))?,
+  +                )
+                   .ok_or(GeoError::ArithmeticOverflow("registration work"))?;
+               // The existing input tables remain admitted throughout the new
+               // buffer/control birth. The shared builder supplies its exact
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding/prepared_image.rs:1534:
+               )
+               .unwrap();
+               let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+  -            let result =
+  -                profile.prepare_transformed_edge_named(&name, &wide_start, &end, None, &mut limited);
+  +            let result = profile.prepare_transformed_edge_named(
+  +                &name,
+  +                &wide_start,
+  +                &end,
+  +                None,
+  +                &mut limited,
+  +            );
+               let allocation = window.close();
+               assert!(matches!(
+                   result,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement/relation.rs:296:
+               )
+               .and_then(|bytes| bytes.checked_add(owned))
+               .ok_or(GeoError::ArithmeticOverflow("selected stratum retention"))?;
+  -        let receipt = source_retained.checked_add(output.retained)
+  +        let receipt = source_retained
+  +            .checked_add(output.retained)
+               .ok_or(GeoError::ArithmeticOverflow("selected source allowance"))?;
+           Ok((retained, receipt))
+       })();
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:591:
+       let mut boundary = native_boundary_in(region, context, &mut progress)?;
+       let bytes = boundary.workspace_receipt;
+       let publication = (|| {
+  -        let fragments = boundary.fragments.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native boundary publication is shared"),
+  -        )?;
+  -        let points = boundary.isolated_points.unpublished_mut().ok_or(
+  -            GeoError::ArithmeticOverflow("native point publication is shared"),
+  -        )?;
+  +        let fragments =
+  +            boundary
+  +                .fragments
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native boundary publication is shared",
+  +                ))?;
+  +        let points =
+  +            boundary
+  +                .isolated_points
+  +                .unpublished_mut()
+  +                .ok_or(GeoError::ArithmeticOverflow(
+  +                    "native point publication is shared",
+  +                ))?;
+           let receipt = context.register_materialized_output(bytes, &mut progress)?;
+           for fragment in fragments {
+               for parameter in &mut fragment.parameters {
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/atlas/arcs/arrangement.rs:740:
+       let retained = inventory.retained;
+       drop(inventory);
+       let released = if result.is_ok() {
+  -        retained.checked_sub(source_retained).ok_or(GeoError::ArithmeticOverflow(
+  -            "native source ownership transfer",
+  -        )).and_then(|bytes| context.release_workspace(bytes))
+  +        retained
+  +            .checked_sub(source_retained)
+  +            .ok_or(GeoError::ArithmeticOverflow(
+  +                "native source ownership transfer",
+  +            ))
+  +            .and_then(|bytes| context.release_workspace(bytes))
+       } else {
+           context.release_workspace(retained)
+       };
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding/prepared_image.rs:1534:
+               )
+               .unwrap();
+               let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+  -            let result =
+  -                profile.prepare_transformed_edge_named(&name, &wide_start, &end, None, &mut limited);
+  +            let result = profile.prepare_transformed_edge_named(
+  +                &name,
+  +                &wide_start,
+  +                &end,
+  +                None,
+  +                &mut limited,
+  +            );
+               let allocation = window.close();
+               assert!(matches!(
+                   result,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding.rs:1632:
+                   .followed_by(binding)
+                   .ok_or(GeoError::ArithmeticOverflow("registration work"))?;
+               let mut cost = arithmetic
+  -                .followed_by(purrdf_xsd::integer::ExactArithmeticCost::for_operation(
+  +                .followed_by(
+  +                    purrdf_xsd::integer::ExactArithmeticCost::for_operation(
+                           purrdf_xsd::integer::ExactOperation::Linear,
+                           scan_bits,
+                           8,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/binding.rs:1639:
+  -                    ).ok_or(GeoError::ArithmeticOverflow("registration scan work"))?)
+  +                    )
+  +                    .ok_or(GeoError::ArithmeticOverflow("registration scan work"))?,
+  +                )
+                   .ok_or(GeoError::ArithmeticOverflow("registration work"))?;
+               // The existing input tables remain admitted throughout the new
+               // buffer/control birth. The shared builder supplies its exact
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/arrangement.rs:747:
+               assert_eq!(strip.lower, [point(x, -1), point(x + 1, -1)]);
+               assert_eq!(strip.upper, [point(x, 2), point(x + 1, 2)]);
+           }
+  -        assert_eq!(
+  -            retained,
+  -            u64::try_from(strips.admitted_bytes()).unwrap()
+  -        );
+  +        assert_eq!(retained, u64::try_from(strips.admitted_bytes()).unwrap());
+           let peak = context.workspace_peak();
+           drop(strips);
+           let bytes = retained;
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/locate.rs:240:
+       b: &Coord,
+       arithmetic: &mut A,
+   ) -> Result<bool, A::Error> {
+  -    Ok(arithmetic.compare(a.x(), b.x())?.is_eq()
+  -        && arithmetic.compare(a.y(), b.y())?.is_eq())
+  +    Ok(arithmetic.compare(a.x(), b.x())?.is_eq() && arithmetic.compare(a.y(), b.y())?.is_eq())
+   }
+   
+   /// Location against a single curve: its two endpoints are its boundary unless it
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/locate.rs:912:
+       } else {
+           (to.y(), from.y())
+       };
+  -    let straddles = arithmetic.compare(low, height)?.is_lt()
+  -        && arithmetic.compare(height, high)?.is_lt();
+  +    let straddles =
+  +        arithmetic.compare(low, height)?.is_lt() && arithmetic.compare(height, high)?.is_lt();
+       if !straddles {
+           return Ok(None);
+       }
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/noding.rs:27:
+       fn persistent(&mut self, point: Coord) -> Result<Coord, Self::Error>;
+       fn visit(&mut self, work: u64, point: Option<&Coord>) -> Result<(), Self::Error>;
+       fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, Self::Error>;
+  -    fn compare_coordinate(&mut self, a: &Coord, b: &Coord)
+  -        -> Result<core::cmp::Ordering, Self::Error>;
+  +    fn compare_coordinate(
+  +        &mut self,
+  +        a: &Coord,
+  +        b: &Coord,
+  +    ) -> Result<core::cmp::Ordering, Self::Error>;
+       fn exact<T>(
+           &mut self,
+           operation: ExactOperation,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/noding.rs:141:
+       fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, GeoError> {
+           ExactAdmission::new(self.context, self.progress).compare(a, b)
+       }
+  -    fn compare_coordinate(&mut self, a: &Coord, b: &Coord) -> Result<core::cmp::Ordering, GeoError> {
+  -        super::segment::compare_inner(a, b, Some(&mut ExactAdmission::new(self.context, self.progress)))
+  +    fn compare_coordinate(
+  +        &mut self,
+  +        a: &Coord,
+  +        b: &Coord,
+  +    ) -> Result<core::cmp::Ordering, GeoError> {
+  +        super::segment::compare_inner(
+  +            a,
+  +            b,
+  +            Some(&mut ExactAdmission::new(self.context, self.progress)),
+  +        )
+       }
+       fn exact<T>(
+           &mut self,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/arrangement.rs:747:
+               assert_eq!(strip.lower, [point(x, -1), point(x + 1, -1)]);
+               assert_eq!(strip.upper, [point(x, 2), point(x + 1, 2)]);
+           }
+  -        assert_eq!(
+  -            retained,
+  -            u64::try_from(strips.admitted_bytes()).unwrap()
+  -        );
+  +        assert_eq!(retained, u64::try_from(strips.admitted_bytes()).unwrap());
+           let peak = context.workspace_peak();
+           drop(strips);
+           let bytes = retained;
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/locate.rs:240:
+       b: &Coord,
+       arithmetic: &mut A,
+   ) -> Result<bool, A::Error> {
+  -    Ok(arithmetic.compare(a.x(), b.x())?.is_eq()
+  -        && arithmetic.compare(a.y(), b.y())?.is_eq())
+  +    Ok(arithmetic.compare(a.x(), b.x())?.is_eq() && arithmetic.compare(a.y(), b.y())?.is_eq())
+   }
+   
+   /// Location against a single curve: its two endpoints are its boundary unless it
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/locate.rs:912:
+       } else {
+           (to.y(), from.y())
+       };
+  -    let straddles = arithmetic.compare(low, height)?.is_lt()
+  -        && arithmetic.compare(height, high)?.is_lt();
+  +    let straddles =
+  +        arithmetic.compare(low, height)?.is_lt() && arithmetic.compare(height, high)?.is_lt();
+       if !straddles {
+           return Ok(None);
+       }
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/arrangement.rs:747:
+               assert_eq!(strip.lower, [point(x, -1), point(x + 1, -1)]);
+               assert_eq!(strip.upper, [point(x, 2), point(x + 1, 2)]);
+           }
+  -        assert_eq!(
+  -            retained,
+  -            u64::try_from(strips.admitted_bytes()).unwrap()
+  -        );
+  +        assert_eq!(retained, u64::try_from(strips.admitted_bytes()).unwrap());
+           let peak = context.workspace_peak();
+           drop(strips);
+           let bytes = retained;
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/locate.rs:240:
+       b: &Coord,
+       arithmetic: &mut A,
+   ) -> Result<bool, A::Error> {
+  -    Ok(arithmetic.compare(a.x(), b.x())?.is_eq()
+  -        && arithmetic.compare(a.y(), b.y())?.is_eq())
+  +    Ok(arithmetic.compare(a.x(), b.x())?.is_eq() && arithmetic.compare(a.y(), b.y())?.is_eq())
+   }
+   
+   /// Location against a single curve: its two endpoints are its boundary unless it
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/locate.rs:912:
+       } else {
+           (to.y(), from.y())
+       };
+  -    let straddles = arithmetic.compare(low, height)?.is_lt()
+  -        && arithmetic.compare(height, high)?.is_lt();
+  +    let straddles =
+  +        arithmetic.compare(low, height)?.is_lt() && arithmetic.compare(height, high)?.is_lt();
+       if !straddles {
+           return Ok(None);
+       }
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/noding.rs:27:
+       fn persistent(&mut self, point: Coord) -> Result<Coord, Self::Error>;
+       fn visit(&mut self, work: u64, point: Option<&Coord>) -> Result<(), Self::Error>;
+       fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, Self::Error>;
+  -    fn compare_coordinate(&mut self, a: &Coord, b: &Coord)
+  -        -> Result<core::cmp::Ordering, Self::Error>;
+  +    fn compare_coordinate(
+  +        &mut self,
+  +        a: &Coord,
+  +        b: &Coord,
+  +    ) -> Result<core::cmp::Ordering, Self::Error>;
+       fn exact<T>(
+           &mut self,
+           operation: ExactOperation,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/noding.rs:141:
+       fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, GeoError> {
+           ExactAdmission::new(self.context, self.progress).compare(a, b)
+       }
+  -    fn compare_coordinate(&mut self, a: &Coord, b: &Coord) -> Result<core::cmp::Ordering, GeoError> {
+  -        super::segment::compare_inner(a, b, Some(&mut ExactAdmission::new(self.context, self.progress)))
+  +    fn compare_coordinate(
+  +        &mut self,
+  +        a: &Coord,
+  +        b: &Coord,
+  +    ) -> Result<core::cmp::Ordering, GeoError> {
+  +        super::segment::compare_inner(
+  +            a,
+  +            b,
+  +            Some(&mut ExactAdmission::new(self.context, self.progress)),
+  +        )
+       }
+       fn exact<T>(
+           &mut self,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/noding.rs:27:
+       fn persistent(&mut self, point: Coord) -> Result<Coord, Self::Error>;
+       fn visit(&mut self, work: u64, point: Option<&Coord>) -> Result<(), Self::Error>;
+       fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, Self::Error>;
+  -    fn compare_coordinate(&mut self, a: &Coord, b: &Coord)
+  -        -> Result<core::cmp::Ordering, Self::Error>;
+  +    fn compare_coordinate(
+  +        &mut self,
+  +        a: &Coord,
+  +        b: &Coord,
+  +    ) -> Result<core::cmp::Ordering, Self::Error>;
+       fn exact<T>(
+           &mut self,
+           operation: ExactOperation,
+  Diff in /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/crates/geo-kernel/src/topology/noding.rs:141:
+       fn compare(&mut self, a: &Rat, b: &Rat) -> Result<core::cmp::Ordering, GeoError> {
+           ExactAdmission::new(self.context, self.progress).compare(a, b)
+       }
+  -    fn compare_coordinate(&mut self, a: &Coord, b: &Coord) -> Result<core::cmp::Ordering, GeoError> {
+  -        super::segment::compare_inner(a, b, Some(&mut ExactAdmission::new(self.context, self.progress)))
+  +    fn compare_coordinate(
+  +        &mut self,
+  +        a: &Coord,
+  +        b: &Coord,
+  +    ) -> Result<core::cmp::Ordering, GeoError> {
+  +        super::segment::compare_inner(
+  +            a,
+  +            b,
+  +            Some(&mut ExactAdmission::new(self.context, self.progress)),
+  +        )
+       }
+       fn exact<T>(
+           &mut self,
+pre-commit: check-terminal-predicates failed:
+  
+  STALE ALLOWLIST entries in scripts/check-terminal-predicates.py — they no longer match anything, so prune them:
+    crates/geo/src/geojson.rs: file no longer exists: []
+    crates/geo/src/json.rs: file no longer exists: []
+pre-commit: glossary-gate failed:
+  helper-census glossary: /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/zh-Hans.po:11780: keep-English token "profile" does not survive visibly; row "canonicalization profile" (/opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/glossary-zh-Hans.md:159)
+  /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/zh-Hans.po:11880: rejected rule "/表面(?!上|看来|来看)/" for "surface (API surface)"; rendering "接口" (/opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/glossary-zh-Hans.md:183)
+  /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/zh-Hans.po:11927: rejected rule "蕴含" for "entailment"; rendering "蕴涵" (/opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/glossary-zh-Hans.md:154)
+  /opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/zh-Hans.po:11941: keep-English token "profile" does not survive visibly; row "canonicalization profile" (/opt/purrdf-geo-qualification/tmp/tmp.wAJhkYNIU9/docs/book/po/glossary-zh-Hans.md:159)
+pre-commit: check-python-stub-parity failed:
+  check-python-stub-parity: this gate REFUSES a tree that is correct:
+    • bindings/python/src/shacl.rs: a `signature = (name = "…")` parameter default is not a rename
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/src/shacl.rs: a pinned label of a boundary that carries no `PlanError::refusal`
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/python/src/purrdf/__init__.pyi: the stub names the same refusals in another order
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/python/src/purrdf/__init__.pyi: a hyphenated word in the stub's prose, unbackticked
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/python/src/purrdf/__init__.pyi: a backticked code term in the stub's prose, before the enumeration
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/python/src/purrdf/__init__.pyi: a backticked code term in the stub's prose, after the enumeration
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/src/py_retrieval.rs: a backticked code term in the `create_exception!` prose, before the enumeration
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • bindings/python/src/py_retrieval.rs: a backticked code term in the `create_exception!` prose, after the enumeration
+    • GeoPointIndex (bindings/python/src/py_geo.rs:74): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoPointIndex:` nor `class _GeoPointIndex:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoProfile (bindings/python/src/py_geo.rs:9): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoProfile:` nor `class _GeoProfile:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+    • GeoSession (bindings/python/src/py_geo.rs:36): the extension exposes this class and bindings/python/python/src/purrdf/__init__.pyi declares NEITHER `class GeoSession:` nor `class _GeoSession:`. The package ships `py.typed`, so a class the stub does not declare is unreachable from every checked caller.
+  
+  Each block above is a valid spelling this gate reports as a defect — an over-refusal, which is the mirror of a missed member and just as much a bug in the check. Fix the check, not the spelling.
+pre-commit: the staged snapshot fails the gates above; fix and re-stage.

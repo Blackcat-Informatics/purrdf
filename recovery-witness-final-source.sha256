@@ -1,0 +1,8 @@
+16986bd84f52edcace1e3ffe775ec37a99a1161c98f67183a93e28eb0f018aae  crates/geo-kernel/src/topology/relate.rs
+cff243472d3da358c0c5ec9b1bfe8a3357c68ebd0c2b55099f1f109a834b46a2  crates/geo-kernel/src/topology/noding.rs
+20ff22ef3eada8ad0704f1ae93e06018ec9e7da0f5e4c760c87906cf588da8f6  crates/geo-kernel/src/topology/segment.rs
+a4ad2db4ef6d891bb6ac6d06074465e4395cfa0900246a74e79ca44387099b93  crates/geo-kernel/src/topology/arrangement.rs
+845c9de201f2592ea68c226dbcb5c6e1711ce422396262634bf43cd9edbf0e90  crates/geo-kernel/src/topology/mod.rs
+0cd7c1ef68663564d1d27e4dbd9d5d6aa9dcac8270a34bec6277c8dc3b3ae549  crates/geo-kernel/src/atlas/relate.rs
+81d494bd05f71a2193c1b6a63c65e4dd84d1732f9c4301d381e1743a6da47ea4  crates/geo-kernel/src/atlas/arcs/arrangement.rs
+beabba37edfd4fbf75f6c981b21ebebf4a8b190cb0a36a07a35bf500175ff7bd  crates/geo-kernel/src/context/retained.rs

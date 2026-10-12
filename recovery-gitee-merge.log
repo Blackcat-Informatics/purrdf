@@ -1,0 +1,5 @@
+CONFLICT (rename/delete): README.zh-Hans.md renamed to README_zh.md in refs/stage/409/recovery-gitee-main, but deleted in HEAD.
+Auto-merging README_zh.md
+CONFLICT (add/add): Merge conflict in README_zh.md
+Recorded preimage for 'README_zh.md'
+Automatic merge failed; fix conflicts and then commit the result.

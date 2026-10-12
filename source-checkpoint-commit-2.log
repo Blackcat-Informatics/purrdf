@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 7 changed non-Rust path(s) in the staged index against a4bb1232d3b4 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+pre-commit: glossary-gate failed:
+  helper-census glossary: surface (API surface): regex anchor "/(?<!whole )surface/" needs explicit positive/negative compatibility specimens
+pre-commit: the staged snapshot fails the gates above; fix and re-stage.

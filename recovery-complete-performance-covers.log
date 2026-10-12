@@ -1,0 +1,30 @@
+receipt radius=Metres(Rat { num: BigInt { negative: false, magnitude: [1000] }, den: BigInt { negative: false, magnitude: [1] } }) levels=CoverLevels { min: 0, max: 16 } emitted=54 CoverReceipt { visited_nodes: 438, work_items: 10561, workspace_peak: 436944, level_histogram: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 5, 14, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+warning: native-covers/radius-1000-level-16: 10 samples cannot finish in 0.1 s; they will take about 0.2 s
+native-covers/radius-1000-level-16 time:   [9.249 ms 9.259 ms 9.271 ms]  mad: 10.90 µs  (10 samples × 2 iterations)
+receipt radius=Metres(Rat { num: BigInt { negative: false, magnitude: [30000] }, den: BigInt { negative: false, magnitude: [1] } }) levels=CoverLevels { min: 0, max: 16 } emitted=1948 CoverReceipt { visited_nodes: 9922, work_items: 14826, workspace_peak: 553248, level_histogram: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 16, 26, 54, 124, 223, 487, 1015, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+warning: native-covers/radius-30000-level-16: 10 samples cannot finish in 0.1 s; they will take about 3.4 s
+native-covers/radius-30000-level-16 time:   [328.6 ms 339.7 ms 340.0 ms]  mad: 336.6 µs  (10 samples × 1 iterations)
+                         outliers: 2 of 10 (2 low severe, 0 low mild, 0 high mild, 0 high severe)
+receipt radius=Metres(Rat { num: BigInt { negative: false, magnitude: [400000] }, den: BigInt { negative: false, magnitude: [1] } }) levels=CoverLevels { min: 0, max: 16 } emitted=27770 CoverReceipt { visited_nodes: 142010, work_items: 73670, workspace_peak: 2396448, level_histogram: [0, 0, 0, 0, 0, 2, 11, 15, 46, 79, 211, 394, 764, 1571, 3281, 6476, 14920, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+warning: native-covers/radius-400000-level-16: 10 samples cannot finish in 0.1 s; they will take about 37.4 s
+native-covers/radius-400000-level-16 time:   [4.438 s 6.188 s 6.908 s]  mad: 740.2 ms  (10 samples × 1 iterations)
+receipt radius=Metres(Rat { num: BigInt { negative: false, magnitude: [1000] }, den: BigInt { negative: false, magnitude: [1] } }) levels=CoverLevels { min: 0, max: 17 } emitted=114 CoverReceipt { visited_nodes: 766, work_items: 10703, workspace_peak: 439504, level_histogram: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 16, 32, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+native-covers/radius-1000-level-17 time:   [11.84 ms 12.16 ms 12.79 ms]  mad: 393.4 µs  (10 samples × 1 iterations)
+receipt radius=Metres(Rat { num: BigInt { negative: false, magnitude: [30000] }, den: BigInt { negative: false, magnitude: [1] } }) levels=CoverLevels { min: 0, max: 17 } emitted=3806 CoverReceipt { visited_nodes: 19822, work_items: 19159, workspace_peak: 676128, level_histogram: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 15, 29, 55, 122, 221, 461, 924, 1976, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+warning: native-covers/radius-30000-level-17: 10 samples cannot finish in 0.1 s; they will take about 5.6 s
+native-covers/radius-30000-level-17 time:   [608.9 ms 744.3 ms 745.9 ms]  mad: 3.961 ms  (10 samples × 1 iterations)
+receipt radius=Metres(Rat { num: BigInt { negative: false, magnitude: [400000] }, den: BigInt { negative: false, magnitude: [1] } }) levels=CoverLevels { min: 0, max: 17 } emitted=55215 CoverReceipt { visited_nodes: 290098, work_items: 138137, workspace_peak: 4362528, level_histogram: [0, 0, 0, 0, 0, 2, 11, 15, 46, 79, 209, 390, 771, 1537, 3203, 6322, 12779, 29851, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+warning: native-covers/radius-400000-level-17: 10 samples cannot finish in 0.1 s; they will take about 120.6 s
+native-covers/radius-400000-level-17 time:   [7.658 s 7.691 s 7.729 s]  mad: 27.71 ms  (10 samples × 1 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+geometry receipt metric=length work=58901 workspace_peak=793984 retained_bytes=14472 allocations=Measurement { allocations: 86, requested_bytes: 26184, retained_bytes: 0, peak_working_bytes: 12736 }
+geographic_polygon/length time:   [1.006 ms 1.015 ms 1.020 ms]  mad: 5.558 µs  (10 samples × 10 iterations)
+geometry receipt metric=perimeter work=58900 workspace_peak=793984 retained_bytes=14472 allocations=Measurement { allocations: 86, requested_bytes: 26184, retained_bytes: 0, peak_working_bytes: 12736 }
+geographic_polygon/perimeter time:   [995.1 µs 999.6 µs 1.002 ms]  mad: 2.687 µs  (10 samples × 10 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+geometry receipt metric=area work=44987 workspace_peak=793320 retained_bytes=14472 allocations=Measurement { allocations: 62, requested_bytes: 13808, retained_bytes: 0, peak_working_bytes: 6048 }
+geographic_polygon/area  time:   [663.9 µs 664.6 µs 665.9 µs]  mad: 1.028 µs  (10 samples × 15 iterations)
+
+thread 'main' (3085195) panicked at crates/geo-kernel/benches/covers.rs:100:69:
+called `Result::unwrap()` on an `Err` value: WorkExhausted { limit: 12100 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

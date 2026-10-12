@@ -1,0 +1,1562 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Local aggregate-only qualification driver. No input identity, pathname,
+//! coordinate, DBF value or private WKT is embedded here or emitted by this
+//! program. Caller acquisition bytes remain read-only. GNU tar streams each
+//! original ZIP to this Rust host; no archive entry is extracted to disk.
+//!
+//! This host owns its input buffers. The geometry, numerical, operation, cover,
+//! index and source-carrier algorithms are the shipping native implementations.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Instant;
+
+use purrdf_geo_kernel::cells::{
+    ClosedBox, CoverLevels, CubeHilbertQ62V1, MixedCoverLimits, NativeGridProfile, PointCellIndex,
+    PointIndexLimits, PointIndexPoint,
+};
+use purrdf_geo_kernel::operation::{
+    CoordinateOperation, CoordinateUnit, Hemisphere, ImageMetric, OperationChain, OperationModel,
+    OperationPoint, OperationReference, TransverseMercator, ZoneFamily,
+};
+use purrdf_geo_kernel::{
+    Coord, CoordDim, Crs, ExecutionLimits, ExecutionPolicy, GeoError, GeoProfile,
+    GeographicReference, Geometry, GeometryBody, GeometryLiteral, LonLat, Metres, MetricContext,
+    PreparedEllipsoid, PreparedGeometry, Rat, SourceLinearEdge,
+};
+use purrdf_hash::{blake3, crc32::Crc32, hex::Digest32};
+use sha2::{Digest, Sha256};
+
+const EXPECTED: [u64; 4] = [31, 5_580, 6_424, 1_691_348];
+const LEVEL: u8 = 17;
+const SOURCE_CRS: &str = "urn:purrdf:qualification:cgcs2000-geographic-lonlat";
+const WGS_CRS: &str = "urn:purrdf:qualification:wgs84-geographic-lonlat";
+
+/// Retain the original native failure while presenting only a static phase
+/// and error class. In particular, neither GeoError Display nor Debug is used.
+enum Failure {
+    Input(&'static str),
+    Native {
+        phase: &'static str,
+        cause: GeoError,
+    },
+}
+impl Failure {
+    fn public_class(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Input(phase) => (*phase, "input_or_host"),
+            Self::Native { phase, cause } => (
+                *phase,
+                match cause.original() {
+                    GeoError::CoordinateOutOfRange { .. } => "coordinate_out_of_range",
+                    GeoError::WorkExhausted { .. } => "work_exhausted",
+                    GeoError::MemoryExhausted { .. } => "workspace_exhausted",
+                    GeoError::PrecisionExhausted { .. } => "precision_exhausted",
+                    GeoError::OutputExhausted { .. } => "output_exhausted",
+                    GeoError::MissingHeight => "missing_height",
+                    GeoError::MissingOperation { .. } => "missing_operation",
+                    GeoError::Storage(_) => "physical_storage",
+                    GeoError::NumericalScratch(_) => "integer_scratch",
+                    GeoError::NumericalTaylorScratch(_) => "taylor_scratch",
+                    GeoError::ArithmeticOverflow(_) => "arithmetic_overflow",
+                    GeoError::InvalidNativeStorage(_) => "invalid_native_storage",
+                    GeoError::InvalidExecutionPolicy(_) => "invalid_execution_policy",
+                    GeoError::InvalidEllipsoid(_) => "invalid_ellipsoid",
+                    // Only match fixed production messages; never render an
+                    // unknown message, which could include original input.
+                    GeoError::Domain(message) => match message.as_ref() {
+                        "point contradicts the explicitly declared projection hemisphere" => {
+                            "projection_point_hemisphere"
+                        }
+                        "point is outside the UTM latitude domain" => "projection_point_latitude",
+                        "point is outside the explicitly declared transverse Mercator zone" => {
+                            "projection_point_zone"
+                        }
+                        "intermediate coordinate outside declared projection latitude/hemisphere" => {
+                            "projection_interval_latitude"
+                        }
+                        "intermediate coordinate outside declared projection zone" => {
+                            "projection_interval_zone"
+                        }
+                        "image curve leaves actual geographic latitude domain" => "image_latitude",
+                        _ => "domain",
+                    },
+                    GeoError::AmbiguousGeodesic => "ambiguous_geodesic",
+                    GeoError::AmbiguousTransform { .. } => "ambiguous_transform",
+                    GeoError::ConvergenceExhausted { .. } => "convergence_exhausted",
+                    GeoError::FloatEnvironment(_) => "float_environment",
+                    GeoError::Cancelled => "cancelled",
+                    GeoError::Unsupported(_) => "unsupported",
+                    GeoError::Literal(_) => "literal",
+                    GeoError::Config(_) => "configuration",
+                    GeoError::UnregisteredCrs(_) => "unregistered_crs",
+                    GeoError::Retained(_) => "retained_native_cause",
+                    _ => "native",
+                },
+            ),
+        }
+    }
+}
+type Result<T> = std::result::Result<T, Failure>;
+
+fn fail<T>(phase: &'static str) -> Result<T> {
+    Err(Failure::Input(phase))
+}
+fn native<T>(phase: &'static str, value: std::result::Result<T, GeoError>) -> Result<T> {
+    value.map_err(|cause| Failure::Native { phase, cause })
+}
+fn require(value: bool, phase: &'static str) -> Result<()> {
+    if value { Ok(()) } else { fail(phase) }
+}
+fn input<T, E>(phase: &'static str, value: std::result::Result<T, E>) -> Result<T> {
+    value.map_err(|_| Failure::Input(phase))
+}
+fn number(name: &'static str) -> Result<u64> {
+    let text = input(name, std::env::var(name))?;
+    let value = input(name, text.parse::<u64>())?;
+    require(value != 0, name)?;
+    Ok(value)
+}
+fn count(value: usize) -> Result<u64> {
+    input("checked_population", u64::try_from(value))
+}
+fn add(target: &mut u64, value: u64) -> Result<()> {
+    *target = target
+        .checked_add(value)
+        .ok_or(Failure::Input("checked_population"))?;
+    Ok(())
+}
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+fn hex32(value: [u8; 32]) -> String {
+    purrdf_hash::hex::encode(&value)
+}
+fn decode_digest(text: &str) -> Result<[u8; 32]> {
+    purrdf_hash::hex::decode_32_canonical(text).ok_or(Failure::Input("digest_manifest"))
+}
+fn file_digest(path: &Path) -> Result<[u8; 32]> {
+    let mut file = input("acquisition_read", std::fs::File::open(path))?;
+    let mut state = Sha256::new();
+    let mut buffer = [0_u8; 65_536];
+    loop {
+        let size = input("acquisition_read", file.read(&mut buffer))?;
+        if size == 0 {
+            break;
+        }
+        state.update(&buffer[..size]);
+    }
+    Ok(state.finalize().into())
+}
+fn limited_reader(mut reader: impl Read, limit: u64, phase: &'static str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 65_536];
+    loop {
+        let size = input(phase, reader.read(&mut buffer))?;
+        if size == 0 {
+            break;
+        }
+        let next = bytes.len().checked_add(size).ok_or(Failure::Input(phase))?;
+        require(count(next)? <= limit, phase)?;
+        input("host_allocation", bytes.try_reserve(size))?;
+        bytes.extend_from_slice(&buffer[..size]);
+    }
+    Ok(bytes)
+}
+
+struct Config {
+    archive: PathBuf,
+    manifest: PathBuf,
+    outer: [u8; 32],
+    prefix: String,
+    zip_bytes: u64,
+    member_bytes: u64,
+    limits: ExecutionLimits,
+    cover: MixedCoverLimits,
+}
+impl Config {
+    fn read() -> Result<Self> {
+        let path = |name| input("caller_input", std::env::var_os(name).ok_or(()));
+        let preset = input("caller_policy", std::env::var("PURRDF_PRIVATE_POLICY"))?;
+        let selected = match preset.as_str() {
+            "geometry" => ExecutionLimits::GEOMETRY,
+            "unbounded" => ExecutionLimits::UNBOUNDED,
+            _ => return fail("caller_policy"),
+        };
+        let limits = ExecutionLimits {
+            max_work_items: number("PURRDF_PRIVATE_WORK_ITEMS")?,
+            max_workspace_bytes: number("PURRDF_PRIVATE_WORKSPACE_BYTES")?,
+            ..selected
+        };
+        native("caller_policy", ExecutionPolicy::new(limits))?;
+        Ok(Self {
+            archive: PathBuf::from(path("PURRDF_PRIVATE_ARCHIVE")?),
+            manifest: PathBuf::from(path("PURRDF_PRIVATE_MANIFEST")?),
+            outer: decode_digest(&input(
+                "caller_input",
+                std::env::var("PURRDF_PRIVATE_ARCHIVE_SHA256"),
+            )?)?,
+            prefix: input("caller_input", std::env::var("PURRDF_PRIVATE_TAR_PREFIX"))?,
+            zip_bytes: number("PURRDF_PRIVATE_ZIP_BYTES")?,
+            member_bytes: number("PURRDF_PRIVATE_MEMBER_BYTES")?,
+            cover: MixedCoverLimits {
+                max_emitted_cells: number("PURRDF_PRIVATE_COVER_CELLS")?,
+                max_work_items: limits.max_work_items,
+                max_workspace_bytes: limits.max_workspace_bytes,
+            },
+            limits,
+        })
+    }
+    fn policy(&self) -> Result<ExecutionPolicy> {
+        native("caller_policy", ExecutionPolicy::new(self.limits))
+    }
+    fn context(&self) -> Result<MetricContext> {
+        native(
+            "caller_worker",
+            MetricContext::new(GeographicReference::cgcs2000(), self.policy()?),
+        )
+    }
+    fn index_limits(&self, points: usize) -> Result<PointIndexLimits> {
+        Ok(PointIndexLimits {
+            max_points: count(points)?,
+            max_work_items: self.limits.max_work_items,
+            max_workspace_bytes: self.limits.max_workspace_bytes,
+        })
+    }
+}
+
+struct Bundle {
+    member: String,
+    sha256: [u8; 32],
+}
+
+fn manifest(config: &Config) -> Result<(Vec<Bundle>, [u8; 32])> {
+    let bytes = input("digest_manifest", std::fs::read(&config.manifest))?;
+    let text = input("digest_manifest", std::str::from_utf8(&bytes))?;
+    let mut bundles = Vec::new();
+    let mut names = BTreeSet::new();
+    for line in text.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Read the original sha256sum manifest, including its text/binary flag.
+        let hash = line.get(..64).ok_or(Failure::Input("digest_manifest"))?;
+        let flags = line
+            .as_bytes()
+            .get(64..66)
+            .ok_or(Failure::Input("digest_manifest"))?;
+        require(flags == b"  " || flags == b" *", "digest_manifest")?;
+        let name = line.get(66..).ok_or(Failure::Input("digest_manifest"))?;
+        if !name.as_bytes().ends_with(b".zip") && !name.as_bytes().ends_with(b".ZIP") {
+            continue;
+        }
+        require(
+            !name.contains(['\n', '\r', '\0']) && !name.starts_with('/'),
+            "digest_manifest",
+        )?;
+        let member = format!("{}{}", config.prefix, name);
+        require(names.insert(member.clone()), "duplicate_bundle")?;
+        bundles.push(Bundle {
+            member,
+            sha256: decode_digest(hash)?,
+        });
+    }
+    require(
+        count(bundles.len())? == EXPECTED[0],
+        "complete_bundle_population",
+    )?;
+    Ok((bundles, digest(&bytes)))
+}
+
+fn tar_bytes(config: &Config, bundle: &Bundle) -> Result<Vec<u8>> {
+    let mut child = input(
+        "archive_stream",
+        Command::new("tar")
+            .args(["--extract", "--to-stdout", "--file"])
+            .arg(&config.archive)
+            .arg("--")
+            .arg(&bundle.member)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn(),
+    )?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(Failure::Input("archive_stream"))?;
+    let bytes = limited_reader(stdout, config.zip_bytes, "complete_zip_buffer");
+    if bytes.is_err() {
+        let _ = child.kill();
+    }
+    let status = input("archive_stream", child.wait())?;
+    let bytes = bytes?;
+    require(status.success(), "archive_stream")?;
+    require(digest(&bytes) == bundle.sha256, "inner_archive_digest")?;
+    Ok(bytes)
+}
+
+fn verify_tar_population(config: &Config, bundles: &[Bundle]) -> Result<()> {
+    let output = input(
+        "archive_directory",
+        Command::new("tar")
+            .args(["--list", "--quoting-style=literal", "--file"])
+            .arg(&config.archive)
+            .stderr(Stdio::null())
+            .output(),
+    )?;
+    require(output.status.success(), "archive_directory")?;
+    let names = input("archive_directory", std::str::from_utf8(&output.stdout))?;
+    let expected: BTreeSet<&str> = bundles
+        .iter()
+        .map(|bundle| bundle.member.as_str())
+        .collect();
+    let mut actual = BTreeSet::new();
+    for name in names.lines() {
+        if name.ends_with(".zip") || name.ends_with(".ZIP") {
+            require(actual.insert(name), "duplicate_archive_member")?;
+        }
+    }
+    require(expected == actual, "complete_archive_population")
+}
+
+fn range(bytes: &[u8], start: usize, length: usize) -> Result<&[u8]> {
+    let end = start
+        .checked_add(length)
+        .ok_or(Failure::Input("binary_layout"))?;
+    bytes.get(start..end).ok_or(Failure::Input("binary_layout"))
+}
+fn u16le(bytes: &[u8], start: usize) -> Result<u16> {
+    Ok(u16::from_le_bytes(input(
+        "binary_layout",
+        range(bytes, start, 2)?.try_into(),
+    )?))
+}
+fn u32le(bytes: &[u8], start: usize) -> Result<u32> {
+    Ok(u32::from_le_bytes(input(
+        "binary_layout",
+        range(bytes, start, 4)?.try_into(),
+    )?))
+}
+fn u32be(bytes: &[u8], start: usize) -> Result<u32> {
+    Ok(u32::from_be_bytes(input(
+        "binary_layout",
+        range(bytes, start, 4)?.try_into(),
+    )?))
+}
+fn usize32(value: u32) -> Result<usize> {
+    input("binary_layout", usize::try_from(value))
+}
+fn ieee(bytes: &[u8], start: usize) -> Result<Rat> {
+    let bits = u64::from_le_bytes(input("binary_layout", range(bytes, start, 8)?.try_into())?);
+    // from_bits performs no host mathematics; the sole native exact bridge
+    // retains the complete original dyadic, including a subnormal.
+    Rat::from_binary64(f64::from_bits(bits)).ok_or(Failure::Input("finite_original_ordinate"))
+}
+
+struct ZipEntry<'a> {
+    name: &'a [u8],
+    flags: u16,
+    method: u16,
+    crc: u32,
+    compressed: usize,
+    uncompressed: usize,
+    local: usize,
+}
+
+fn zip_entries(bytes: &[u8]) -> Result<Vec<ZipEntry<'_>>> {
+    require(bytes.len() >= 22, "zip_directory")?;
+    let start = bytes.len().saturating_sub(65_557);
+    let eocd = (start..=bytes.len() - 22)
+        .rev()
+        .find(|&offset| {
+            bytes.get(offset..offset + 4) == Some(b"PK\x05\x06")
+                && u16le(bytes, offset + 20)
+                    .ok()
+                    .is_some_and(|comment| offset + 22 + usize::from(comment) == bytes.len())
+        })
+        .ok_or(Failure::Input("zip_directory"))?;
+    require(
+        u16le(bytes, eocd + 4)? == 0 && u16le(bytes, eocd + 6)? == 0,
+        "zip_single_disk",
+    )?;
+    let count = u16le(bytes, eocd + 10)?;
+    require(
+        count != u16::MAX && u16le(bytes, eocd + 8)? == count,
+        "zip_complete_directory",
+    )?;
+    let directory = usize32(u32le(bytes, eocd + 16)?)?;
+    let size = usize32(u32le(bytes, eocd + 12)?)?;
+    require(
+        directory.checked_add(size) == Some(eocd),
+        "zip_complete_directory",
+    )?;
+    let mut entries = Vec::new();
+    let mut names = BTreeSet::new();
+    let mut offset = directory;
+    for _ in 0..count {
+        require(range(bytes, offset, 4)? == b"PK\x01\x02", "zip_directory")?;
+        require(u16le(bytes, offset + 34)? == 0, "zip_single_disk")?;
+        let name_length = usize::from(u16le(bytes, offset + 28)?);
+        let extra_length = usize::from(u16le(bytes, offset + 30)?);
+        let comment_length = usize::from(u16le(bytes, offset + 32)?);
+        let name = range(bytes, offset + 46, name_length)?;
+        require(names.insert(name), "zip_duplicate_member")?;
+        let entry = ZipEntry {
+            name,
+            flags: u16le(bytes, offset + 8)?,
+            method: u16le(bytes, offset + 10)?,
+            crc: u32le(bytes, offset + 16)?,
+            compressed: usize32(u32le(bytes, offset + 20)?)?,
+            uncompressed: usize32(u32le(bytes, offset + 24)?)?,
+            local: usize32(u32le(bytes, offset + 42)?)?,
+        };
+        require(
+            entry.flags & 1 == 0 && matches!(entry.method, 0 | 8),
+            "zip_supported_native_codec",
+        )?;
+        require(entry.local < directory, "zip_local_bounds")?;
+        entries.push(entry);
+        offset = offset
+            .checked_add(46)
+            .and_then(|v| v.checked_add(name_length))
+            .and_then(|v| v.checked_add(extra_length))
+            .and_then(|v| v.checked_add(comment_length))
+            .ok_or(Failure::Input("zip_directory"))?;
+        require(offset <= eocd, "zip_directory")?;
+    }
+    require(offset == eocd, "zip_complete_directory")?;
+    Ok(entries)
+}
+
+fn unzip(bytes: &[u8], entry: &ZipEntry<'_>, limit: u64) -> Result<Vec<u8>> {
+    require(count(entry.uncompressed)? <= limit, "member_buffer")?;
+    let offset = entry.local;
+    require(
+        range(bytes, offset, 4)? == b"PK\x03\x04",
+        "zip_local_header",
+    )?;
+    require(
+        u16le(bytes, offset + 6)? == entry.flags && u16le(bytes, offset + 8)? == entry.method,
+        "zip_local_header",
+    )?;
+    let name_length = usize::from(u16le(bytes, offset + 26)?);
+    let extra_length = usize::from(u16le(bytes, offset + 28)?);
+    require(
+        range(bytes, offset + 30, name_length)? == entry.name,
+        "zip_local_identity",
+    )?;
+    let start = offset
+        .checked_add(30)
+        .and_then(|v| v.checked_add(name_length))
+        .and_then(|v| v.checked_add(extra_length))
+        .ok_or(Failure::Input("zip_member"))?;
+    let compressed = range(bytes, start, entry.compressed)?;
+    let output = if entry.method == 0 {
+        require(entry.compressed == entry.uncompressed, "zip_stored_length")?;
+        let mut output = Vec::new();
+        input(
+            "host_allocation",
+            output.try_reserve_exact(entry.uncompressed),
+        )?;
+        output.extend_from_slice(compressed);
+        output
+    } else {
+        input(
+            "native_deflate",
+            purrdf_deflate::inflate::decompress_with_limit(compressed, count(entry.uncompressed)?),
+        )?
+    };
+    require(
+        output.len() == entry.uncompressed && Crc32::checksum(&output) == entry.crc,
+        "zip_original_crc",
+    )?;
+    Ok(output)
+}
+
+fn member<'a>(entries: &'a [ZipEntry<'a>], suffix: &[u8]) -> Result<&'a ZipEntry<'a>> {
+    let mut matches = entries.iter().filter(|entry| {
+        entry.name.len() >= suffix.len()
+            && entry.name[entry.name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+    });
+    let found = matches
+        .next()
+        .ok_or(Failure::Input("required_original_member"))?;
+    require(matches.next().is_none(), "unique_original_member")?;
+    Ok(found)
+}
+
+fn shapefile_header(bytes: &[u8]) -> Result<()> {
+    require(
+        bytes.len() >= 100
+            && u32be(bytes, 0)? == 9994
+            && u32le(bytes, 28)? == 1000
+            && u32le(bytes, 32)? == 3,
+        "original_polyline_header",
+    )?;
+    let declared = usize32(u32be(bytes, 24)?)?
+        .checked_mul(2)
+        .ok_or(Failure::Input("shp_length"))?;
+    require(declared == bytes.len(), "complete_shp_length")
+}
+
+struct Projection {
+    forward: CoordinateOperation,
+    inverse: CoordinateOperation,
+    swapped: CoordinateOperation,
+    chain: OperationChain,
+}
+type ProjectionKey = (u8, u16, bool);
+
+fn zone(longitude: &Rat, family: u8) -> Result<u16> {
+    let value = match family {
+        0 => longitude
+            .add(&Rat::parse_decimal("1.5").expect("frozen public zone width"))
+            .div(&Rat::from_i64(3))
+            .expect("nonzero frozen zone width"),
+        1 => longitude
+            .div(&Rat::from_i64(6))
+            .expect("nonzero frozen zone width")
+            .add(&Rat::one()),
+        2 => longitude
+            .add(&Rat::from_i64(180))
+            .div(&Rat::from_i64(6))
+            .expect("nonzero frozen zone width")
+            .add(&Rat::one()),
+        _ => return fail("explicit_zone_family"),
+    };
+    let (quotient, remainder) = value
+        .numerator()
+        .div_rem(&value.denominator())
+        .ok_or(Failure::Input("explicit_zone"))?;
+    let mut integer = quotient.to_i128().ok_or(Failure::Input("explicit_zone"))?;
+    if value < Rat::zero() && !remainder.is_zero() {
+        integer -= 1;
+    }
+    if family == 2 && integer == 61 && longitude == &Rat::from_i64(180) {
+        integer = 60;
+    }
+    input("explicit_zone", u16::try_from(integer))
+}
+
+/// Exact partition of the original written edge, without wrapping longitude.
+/// Every cut is an applicability wall of this caller's declared zone policy.
+/// The resulting pieces retain separate projected reference identities.
+fn edge_parameters(edge: &[Coord], family: u8) -> Result<Vec<Rat>> {
+    require(edge.len() == 2, "original_edge_pair")?;
+    let first = zone(edge[0].x(), family)?;
+    let last = zone(edge[1].x(), family)?;
+    let mut parameters = vec![Rat::zero(), Rat::one()];
+    let mut cut = |start: &Rat, end: &Rat, wall: Rat| -> Result<()> {
+        if start != end {
+            let parameter = wall
+                .sub(start)
+                .div(&end.sub(start))
+                .ok_or(Failure::Input("nonconstant_source_ordinate"))?;
+            if parameter > Rat::zero() && parameter < Rat::one() {
+                parameters.push(parameter);
+            }
+        }
+        Ok(())
+    };
+    for lower in first.min(last)..first.max(last) {
+        let lower = i64::from(lower);
+        let wall = match family {
+            0 => {
+                Rat::from_i64(3 * lower).add(&Rat::parse_decimal("1.5").expect("public zone wall"))
+            }
+            1 => Rat::from_i64(6 * lower),
+            2 => Rat::from_i64(6 * lower - 180),
+            _ => return fail("explicit_zone_family"),
+        };
+        cut(edge[0].x(), edge[1].x(), wall)?;
+    }
+    cut(edge[0].y(), edge[1].y(), Rat::zero())?;
+    parameters.sort();
+    parameters.dedup();
+    require(
+        parameters.first() == Some(&Rat::zero())
+            && parameters.last() == Some(&Rat::one())
+            && parameters.windows(2).all(|pair| pair[0] < pair[1]),
+        "complete_original_parameter_partition",
+    )?;
+    Ok(parameters)
+}
+
+fn projection(key: ProjectionKey) -> Result<Projection> {
+    let (family, zone, south) = key;
+    let (native_family, meridian, scale) = match family {
+        0 => (ZoneFamily::GaussKruger3, 3 * i64::from(zone), Rat::one()),
+        1 => (
+            ZoneFamily::GaussKruger6,
+            6 * i64::from(zone) - 3,
+            Rat::one(),
+        ),
+        2 => (
+            ZoneFamily::Utm,
+            6 * i64::from(zone) - 183,
+            Rat::parse_decimal("0.9996").expect("declared UTM scale"),
+        ),
+        _ => return fail("explicit_zone_family"),
+    };
+    let source = OperationReference {
+        realization: GeographicReference::cgcs2000().id().digest(),
+        unit: CoordinateUnit::Degrees,
+        swapped_axes: false,
+    };
+    let mut preimage = b"purrdf-private-qualification/explicit-native-zone/v1".to_vec();
+    preimage.extend_from_slice(source.realization.as_bytes());
+    preimage.extend_from_slice(&[family, u8::from(south)]);
+    preimage.extend_from_slice(&zone.to_be_bytes());
+    let target = OperationReference {
+        realization: Digest32::new(*blake3::hash(&preimage).as_bytes()),
+        unit: CoordinateUnit::Metres,
+        swapped_axes: false,
+    };
+    let model = OperationModel::TransverseMercator(Box::new(TransverseMercator {
+        ellipsoid: PreparedEllipsoid::cgcs2000(),
+        family: native_family,
+        zone,
+        central_meridian: Rat::from_i64(meridian),
+        scale,
+        false_easting: Rat::from_i64(500_000),
+        false_northing: Rat::from_i64(if south { 10_000_000 } else { 0 }),
+        hemisphere: if south {
+            Hemisphere::South
+        } else {
+            Hemisphere::North
+        },
+        zone_prefix: false,
+    }));
+    let forward = native(
+        "explicit_native_projection",
+        CoordinateOperation::compile(source.clone(), target.clone(), model.clone()),
+    )?;
+    let inverse = native("explicit_native_inverse", forward.inverse())?;
+    let swapped = native(
+        "explicit_axis_operation",
+        CoordinateOperation::compile(
+            OperationReference {
+                swapped_axes: true,
+                ..source
+            },
+            target,
+            model,
+        ),
+    )?;
+    let chain = native(
+        "explicit_native_chain",
+        OperationChain::compile(vec![forward.clone()]),
+    )?;
+    Ok(Projection {
+        forward,
+        inverse,
+        swapped,
+        chain,
+    })
+}
+
+#[derive(Default)]
+struct Receipt {
+    bundles: u64,
+    features: u64,
+    parts: u64,
+    vertices: u64,
+    edges: u64,
+    projected_vertices: u64,
+    axis_vertices: u64,
+    continuous_edges: u64,
+    continuous_pieces: u64,
+    materialized_vertices: u64,
+    box_memberships: u64,
+    indexed_vertices: u64,
+    index_self_hits: u64,
+    metric_features: u64,
+    identity_features: u64,
+    invalid_refusals: u64,
+    missing_operation_refusals: u64,
+    missing_height_refusals: u64,
+    max_work: u64,
+    max_workspace: u64,
+    max_roundtrip_angular: Option<Rat>,
+    max_metric_error: Option<Rat>,
+    max_image_error: Option<Rat>,
+    computation: blake3::Hasher,
+}
+impl Receipt {
+    fn worker(&mut self, context: &MetricContext) {
+        self.max_work = self.max_work.max(context.work_items());
+        self.max_workspace = self.max_workspace.max(context.workspace_peak());
+    }
+    fn max(target: &mut Option<Rat>, value: Rat) {
+        if target.as_ref().is_none_or(|old| value > *old) {
+            *target = Some(value);
+        }
+    }
+    fn frame(&mut self, bytes: &[u8]) {
+        purrdf_hash::frame::frame_le_into(&mut self.computation, bytes);
+    }
+}
+
+fn expected_refusals(
+    config: &Config,
+    profile: &GeoProfile,
+    source: &Crs,
+    receipt: &mut Receipt,
+) -> Result<()> {
+    for point in [
+        LonLat::new(Rat::from_i64(181), Rat::zero()),
+        LonLat::new(Rat::zero(), Rat::from_i64(91)),
+    ] {
+        require(
+            matches!(point, Err(GeoError::CoordinateOutOfRange { .. })),
+            "exact_range_refusal",
+        )?;
+        add(&mut receipt.invalid_refusals, 1)?;
+    }
+    let target = native("caller_reference", Crs::new(WGS_CRS))?;
+    require(
+        matches!(
+            profile.operation_between(source, &target),
+            Err(GeoError::MissingOperation { .. })
+        ),
+        "missing_datum_operation",
+    )?;
+    add(&mut receipt.missing_operation_refusals, 1)?;
+    let degrees = OperationReference {
+        realization: GeographicReference::cgcs2000().id().digest(),
+        unit: CoordinateUnit::Degrees,
+        swapped_axes: false,
+    };
+    let xyz = OperationReference {
+        unit: CoordinateUnit::Metres,
+        ..degrees.clone()
+    };
+    let geocentric = native(
+        "height_operation",
+        CoordinateOperation::compile(
+            degrees,
+            xyz,
+            OperationModel::GeographicToGeocentric {
+                ellipsoid: PreparedEllipsoid::cgcs2000(),
+            },
+        ),
+    )?;
+    let source = OperationPoint {
+        x: Rat::zero(),
+        y: Rat::zero(),
+        z: None,
+        epoch: None,
+    };
+    require(
+        matches!(
+            geocentric.apply(&source, &mut config.context()?),
+            Err(GeoError::MissingHeight)
+        ),
+        "missing_actual_height",
+    )?;
+    add(&mut receipt.missing_height_refusals, 1)?;
+    let denied = native(
+        "explicit_insufficient_work_policy",
+        ExecutionPolicy::new(ExecutionLimits {
+            max_work_items: 1,
+            ..config.limits
+        }),
+    )?;
+    let mut context = native(
+        "insufficient_work_worker",
+        MetricContext::new(GeographicReference::cgcs2000(), denied),
+    )?;
+    let ordinary = projection((2, 31, false))?;
+    require(
+        matches!(
+            ordinary.forward.apply(&source, &mut context),
+            Err(GeoError::WorkExhausted { .. })
+        ),
+        "native_work_refusal",
+    )?;
+    add(&mut receipt.invalid_refusals, 1)
+}
+
+fn materialize_edge(
+    edge: &[Coord],
+    family: u8,
+    config: &Config,
+    projections: &mut BTreeMap<ProjectionKey, Projection>,
+    receipt: &mut Receipt,
+) -> Result<()> {
+    let parameters = edge_parameters(edge, family)?;
+    let mut start = edge[0].clone();
+    for interval in parameters.windows(2) {
+        let end = SourceLinearEdge::interpolate_coord(&edge[0], &edge[1], &interval[1]);
+        let middle = interval[0]
+            .add(&interval[1])
+            .div(&Rat::from_i64(2))
+            .expect("positive midpoint divisor");
+        let point = SourceLinearEdge::interpolate_coord(&edge[0], &edge[1], &middle);
+        let midpoint = point.x();
+        let latitude = point.y();
+        let key = (family, zone(midpoint, family)?, latitude < &Rat::zero());
+        if !projections.contains_key(&key) {
+            projections.insert(key, projection(key)?);
+        }
+        let geometry = native(
+            "complete_original_edge",
+            Geometry::new(
+                CoordDim::Xy,
+                GeometryBody::LineString(vec![start.clone(), end.clone()]),
+            ),
+        )?;
+        let mut context = config.context()?;
+        let image = native(
+            "continuous_original_edge_materialization",
+            projections[&key].chain.materialize_geometry(
+                &geometry,
+                native(
+                    "declared_projected_carrier",
+                    Crs::new("urn:purrdf:qualification:native-projected-metres"),
+                )?,
+                &ImageMetric::CartesianMetres,
+                None,
+                &mut context,
+            ),
+        )?;
+        receipt.worker(&context);
+        require(image.source_counts().0 == 2, "complete_edge_source_receipt")?;
+        require(
+            image.error_bound().exact()
+                <= &Rat::parse_decimal("0.1").expect("native materialization certificate"),
+            "native_continuous_image_certificate",
+        )?;
+        Receipt::max(
+            &mut receipt.max_image_error,
+            image.error_bound().exact().clone(),
+        );
+        receipt.frame(&image.certificate_bytes());
+        add(&mut receipt.continuous_pieces, 1)?;
+        add(&mut receipt.materialized_vertices, image.vertices())?;
+        start = end;
+    }
+    require(start == edge[1], "complete_original_edge_endpoint")?;
+    add(&mut receipt.continuous_edges, 1)?;
+    Ok(())
+}
+
+fn process_feature(
+    parts: &[Vec<Coord>],
+    config: &Config,
+    profile: &GeoProfile,
+    crs: &Crs,
+    projections: &mut BTreeMap<ProjectionKey, Projection>,
+    receipt: &mut Receipt,
+) -> Result<()> {
+    let reference = GeographicReference::cgcs2000();
+    let grid = CubeHilbertQ62V1::new(NativeGridProfile::Cgcs2000);
+    let geometry = native(
+        "whole_original_geometry",
+        Geometry::new(CoordDim::Xy, GeometryBody::MultiLineString(parts.to_vec())),
+    )?;
+    let literal = GeometryLiteral::new(crs.clone(), geometry);
+    // The complete IEEE-rational carrier goes through the actual writer and
+    // native reader; the private spelling exists only in this host's memory.
+    let lexical = native(
+        "exact_original_spelling",
+        purrdf_geo_kernel::wkt::write_exact(&literal),
+    )?;
+    let read = native(
+        "exact_original_ingest",
+        purrdf_geo_kernel::wkt::parse(&lexical, crs),
+    )?;
+    require(read == literal, "exact_original_ingest_identity")?;
+    let prepared = native(
+        "original_preparation",
+        PreparedGeometry::from_literal_in_policy(&literal, profile, config.policy()?),
+    )?;
+    let reread = native(
+        "ingested_preparation",
+        PreparedGeometry::from_literal_in_policy(&read, profile, config.policy()?),
+    )?;
+    require(prepared.id() == reread.id(), "canonical_prepared_identity")?;
+    receipt.frame(prepared.id().as_bytes());
+    add(&mut receipt.identity_features, 1)?;
+    let mut context = config.context()?;
+    let length = native(
+        "whole_original_length",
+        purrdf_geo_kernel::ellipsoidal::length(&prepared, &mut context),
+    )?;
+    receipt.worker(&context);
+    let mut context = config.context()?;
+    let perimeter = native(
+        "whole_original_perimeter",
+        purrdf_geo_kernel::ellipsoidal::perimeter(&prepared, &mut context),
+    )?;
+    receipt.worker(&context);
+    require(
+        length.exact() == perimeter.exact(),
+        "polyline_metric_parity",
+    )?;
+    receipt.frame(&length.certificate_bytes());
+    Receipt::max(&mut receipt.max_metric_error, length.error_bound());
+    add(&mut receipt.metric_features, 1)?;
+
+    let mut index_points = Vec::new();
+    let mut extrema: Option<[Rat; 4]> = None;
+    let mut self_point = None;
+    for part in parts {
+        add(&mut receipt.parts, 1)?;
+        add(&mut receipt.vertices, count(part.len())?)?;
+        add(&mut receipt.edges, count(part.len().saturating_sub(1))?)?;
+        for coordinate in part {
+            let point = native(
+                "original_coordinate_range",
+                LonLat::new(coordinate.x().clone(), coordinate.y().clone()),
+            )?;
+            if self_point.is_none() {
+                self_point = Some(point.clone());
+            }
+            let cell = native("complete_original_assignment", grid.assign(&point, LEVEL))?;
+            for level in [0, 1, 8, LEVEL, 30] {
+                let leaf = native("native_leaf_assignment", grid.assign(&point, 30))?;
+                let ancestor = native("native_hierarchy", leaf.ancestor(level))?;
+                require(
+                    ancestor == native("native_level_assignment", grid.assign(&point, level))?,
+                    "all_level_hierarchy",
+                )?;
+            }
+            receipt.frame(&cell.to_be_bytes());
+            let key = count(index_points.len())?;
+            index_points.push(PointIndexPoint { key, point });
+            match &mut extrema {
+                None => {
+                    extrema = Some([
+                        coordinate.x().clone(),
+                        coordinate.y().clone(),
+                        coordinate.x().clone(),
+                        coordinate.y().clone(),
+                    ])
+                }
+                Some(values) => {
+                    if coordinate.x() < &values[0] {
+                        values[0] = coordinate.x().clone();
+                    }
+                    if coordinate.y() < &values[1] {
+                        values[1] = coordinate.y().clone();
+                    }
+                    if coordinate.x() > &values[2] {
+                        values[2] = coordinate.x().clone();
+                    }
+                    if coordinate.y() > &values[3] {
+                        values[3] = coordinate.y().clone();
+                    }
+                }
+            }
+            for family in 0..3 {
+                // Zone choice is this caller's declared nearest-zone policy;
+                // native kernels never infer a zone or change the source datum.
+                let key = (
+                    family,
+                    zone(coordinate.x(), family)?,
+                    coordinate.y() < &Rat::zero(),
+                );
+                if !projections.contains_key(&key) {
+                    projections.insert(key, projection(key)?);
+                }
+                let operation = &projections[&key];
+                let source = OperationPoint {
+                    x: coordinate.x().clone(),
+                    y: coordinate.y().clone(),
+                    z: None,
+                    epoch: None,
+                };
+                let mut context = config.context()?;
+                let projected = native(
+                    "whole_original_projection",
+                    operation.forward.apply(&source, &mut context),
+                )?;
+                receipt.worker(&context);
+                let mut context = config.context()?;
+                let back = native(
+                    "whole_original_inverse",
+                    operation.inverse.apply(projected.point(), &mut context),
+                )?;
+                receipt.worker(&context);
+                let mut context = config.context()?;
+                let residual = native(
+                    "inverse_original_forward_residual",
+                    operation.forward.apply(back.point(), &mut context),
+                )?;
+                receipt.worker(&context);
+                let quantum =
+                    Rat::parse_decimal("0.000001").expect("native metre output certificate");
+                require(
+                    residual.point().x.sub(&projected.point().x).abs() <= quantum
+                        && residual.point().y.sub(&projected.point().y).abs() <= quantum,
+                    "native_inverse_forward_certificate",
+                )?;
+                Receipt::max(
+                    &mut receipt.max_roundtrip_angular,
+                    back.point().x.sub(&source.x).abs(),
+                );
+                Receipt::max(
+                    &mut receipt.max_roundtrip_angular,
+                    back.point().y.sub(&source.y).abs(),
+                );
+                let mut context = config.context()?;
+                let axes = native(
+                    "whole_original_axis_operation",
+                    operation.swapped.apply(
+                        &OperationPoint {
+                            x: source.y.clone(),
+                            y: source.x.clone(),
+                            z: None,
+                            epoch: None,
+                        },
+                        &mut context,
+                    ),
+                )?;
+                receipt.worker(&context);
+                require(axes.point() == projected.point(), "explicit_axis_parity")?;
+                receipt.frame(&projected.certificate_bytes());
+                receipt.frame(&back.certificate_bytes());
+                add(&mut receipt.projected_vertices, 1)?;
+                add(&mut receipt.axis_vertices, 1)?;
+            }
+        }
+        for edge in part.windows(2) {
+            for family in 0..3 {
+                materialize_edge(edge, family, config, projections, receipt)?;
+            }
+        }
+    }
+    let [west, south, east, north] =
+        extrema.ok_or(Failure::Input("complete_feature_population"))?;
+    let area = native(
+        "original_closed_box",
+        ClosedBox::new(west, south, east, north),
+    )?;
+    let cover = native(
+        "whole_original_box_cover",
+        grid.cover_box_mixed(
+            &area,
+            native("declared_cover_levels", CoverLevels::new(0, LEVEL))?,
+            config.cover,
+        ),
+    )?;
+    receipt.max_work = receipt.max_work.max(cover.receipt().work_items);
+    receipt.max_workspace = receipt.max_workspace.max(cover.receipt().workspace_peak);
+    for point in &index_points {
+        let cell = native(
+            "cover_original_assignment",
+            grid.assign(&point.point, LEVEL),
+        )?;
+        require(
+            native("whole_original_cover_membership", cover.contains(cell))?,
+            "no_original_cover_omission",
+        )?;
+        add(&mut receipt.box_memberships, 1)?;
+    }
+    let point_count = index_points.len();
+    let index = native(
+        "whole_original_index",
+        PointCellIndex::new(
+            grid,
+            LEVEL,
+            reference,
+            None,
+            index_points,
+            config.index_limits(point_count)?,
+        ),
+    )?;
+    require(
+        index.len() == point_count,
+        "complete_original_index_population",
+    )?;
+    add(&mut receipt.indexed_vertices, count(point_count)?)?;
+    receipt.frame(index.id().digest().as_bytes());
+    let self_point = self_point.ok_or(Failure::Input("complete_feature_population"))?;
+    let matches = native(
+        "native_exact_self_search",
+        index.search_physical(
+            &self_point,
+            &Metres::new(Rat::zero()),
+            config.cover,
+            config.index_limits(point_count)?,
+        ),
+    )?;
+    require(matches.keys().contains(&0), "exact_index_self_hit")?;
+    add(&mut receipt.index_self_hits, 1)?;
+    add(&mut receipt.features, 1)
+}
+
+fn process_bundle(
+    bytes: &[u8],
+    config: &Config,
+    profile: &GeoProfile,
+    crs: &Crs,
+    projections: &mut BTreeMap<ProjectionKey, Projection>,
+    receipt: &mut Receipt,
+) -> Result<()> {
+    let entries = zip_entries(bytes)?;
+    let shp_entry = member(&entries, b".shp")?;
+    let shx_entry = member(&entries, b".shx")?;
+    let dbf_entry = member(&entries, b".dbf")?;
+    let prj_entry = member(&entries, b".prj")?;
+    for entry in [shx_entry, dbf_entry, prj_entry] {
+        require(
+            entry.name[..entry.name.len() - 4] == shp_entry.name[..shp_entry.name.len() - 4],
+            "original_bundle_stem",
+        )?;
+    }
+    let prj = unzip(bytes, prj_entry, config.member_bytes)?;
+    let prj = input("original_reference_descriptor", std::str::from_utf8(&prj))?;
+    // This is a pinned source-descriptor check, not a general CRS parser.
+    require(
+        prj.trim_start().starts_with("GEOGCS[")
+            && prj.contains("\"GCS_China_2000\"")
+            && prj.contains("6378137")
+            && prj.contains("298.257222101"),
+        "original_cgcs2000_descriptor",
+    )?;
+    let dbf = unzip(bytes, dbf_entry, config.member_bytes)?;
+    require(dbf.len() >= 32, "original_dbf_header")?;
+    let expected_features = u64::from(u32le(&dbf, 4)?);
+    let record_bytes = usize::from(u16le(&dbf, 10)?);
+    let header_bytes = usize::from(u16le(&dbf, 8)?);
+    require(
+        record_bytes != 0 && header_bytes >= 32,
+        "original_dbf_header",
+    )?;
+    let dbf_end = header_bytes
+        .checked_add(
+            usize32(u32le(&dbf, 4)?)?
+                .checked_mul(record_bytes)
+                .ok_or(Failure::Input("original_dbf_length"))?,
+        )
+        .ok_or(Failure::Input("original_dbf_length"))?;
+    require(
+        dbf.len() == dbf_end || (dbf.len() == dbf_end + 1 && dbf[dbf_end] == 0x1a),
+        "complete_original_dbf_population",
+    )?;
+    let shx = unzip(bytes, shx_entry, config.member_bytes)?;
+    shapefile_header(&shx)?;
+    require(
+        (shx.len() - 100) % 8 == 0 && count((shx.len() - 100) / 8)? == expected_features,
+        "complete_original_shx_population",
+    )?;
+    let shp = unzip(bytes, shp_entry, config.member_bytes)?;
+    shapefile_header(&shp)?;
+    let before = receipt.features;
+    let mut offset = 100_usize;
+    let mut record = 0_usize;
+    while offset < shp.len() {
+        require(
+            u32be(&shp, offset)?
+                == u32::try_from(record + 1).map_err(|_| Failure::Input("shp_record_number"))?,
+            "original_shp_record_order",
+        )?;
+        let size = usize32(u32be(&shp, offset + 4)?)?
+            .checked_mul(2)
+            .ok_or(Failure::Input("shp_record_length"))?;
+        require(
+            usize32(u32be(&shx, 100 + record * 8)?)?.checked_mul(2) == Some(offset)
+                && usize32(u32be(&shx, 104 + record * 8)?)?.checked_mul(2) == Some(size),
+            "original_shx_record_binding",
+        )?;
+        let body = range(&shp, offset + 8, size)?;
+        require(u32le(body, 0)? == 3, "every_original_type3_feature")?;
+        let part_count = usize32(u32le(body, 36)?)?;
+        let point_count = usize32(u32le(body, 40)?)?;
+        require(
+            part_count != 0 && point_count != 0,
+            "complete_original_part_population",
+        )?;
+        let points_offset = part_count
+            .checked_mul(4)
+            .and_then(|n| n.checked_add(44))
+            .ok_or(Failure::Input("shp_parts_layout"))?;
+        require(
+            points_offset.checked_add(
+                point_count
+                    .checked_mul(16)
+                    .ok_or(Failure::Input("shp_points_layout"))?,
+            ) == Some(size),
+            "complete_original_xy_layout",
+        )?;
+        let mut parts = Vec::new();
+        for part in 0..part_count {
+            let start = usize32(u32le(body, 44 + part * 4)?)?;
+            let end = if part + 1 == part_count {
+                point_count
+            } else {
+                usize32(u32le(body, 48 + part * 4)?)?
+            };
+            require(
+                (part != 0 || start == 0) && start < end && end <= point_count && end - start >= 2,
+                "complete_original_part_indices",
+            )?;
+            let mut coordinates = Vec::new();
+            input(
+                "host_allocation",
+                coordinates.try_reserve_exact(end - start),
+            )?;
+            for point in start..end {
+                coordinates.push(Coord::xy(
+                    ieee(body, points_offset + point * 16)?,
+                    ieee(body, points_offset + point * 16 + 8)?,
+                ));
+            }
+            parts.push(coordinates);
+        }
+        process_feature(&parts, config, profile, crs, projections, receipt)?;
+        offset = offset
+            .checked_add(8)
+            .and_then(|n| n.checked_add(size))
+            .ok_or(Failure::Input("shp_record_length"))?;
+        record += 1;
+    }
+    require(
+        offset == shp.len() && receipt.features - before == expected_features,
+        "complete_original_feature_population",
+    )?;
+    add(&mut receipt.bundles, 1)
+}
+
+fn run() -> Result<()> {
+    let config = Config::read()?;
+    let clock = Instant::now();
+    require(
+        file_digest(&config.archive)? == config.outer,
+        "outer_acquisition_digest",
+    )?;
+    let (bundles, manifest_digest) = manifest(&config)?;
+    verify_tar_population(&config, &bundles)?;
+    // Verify every original inner digest before any geometric processing.
+    // No earlier bundle's coordinates are admitted on a partial manifest.
+    for bundle in &bundles {
+        drop(tar_bytes(&config, bundle)?);
+    }
+    require(
+        file_digest(&config.archive)? == config.outer,
+        "outer_acquisition_recheck",
+    )?;
+    let mut profile = GeoProfile::standard();
+    let crs = native("caller_source_reference", Crs::new(SOURCE_CRS))?;
+    native(
+        "caller_source_reference",
+        profile.register_reference(crs.clone(), GeographicReference::cgcs2000()),
+    )?;
+    native(
+        "caller_target_reference",
+        profile.register_reference(
+            native("caller_target_reference", Crs::new(WGS_CRS))?,
+            GeographicReference::wgs84(),
+        ),
+    )?;
+    let profile = native("caller_profile_limits", profile.with_limits(config.limits))?;
+    let mut receipt = Receipt::default();
+    expected_refusals(&config, &profile, &crs, &mut receipt)?;
+    let mut projections = BTreeMap::new();
+    let mut first_failure = None;
+    let mut failed_bundles = 0_u64;
+    for bundle in &bundles {
+        // Acquisition identity errors still stop immediately. Once verified,
+        // separate bundles can expose independent native failures together.
+        let bytes = tar_bytes(&config, bundle)?;
+        if let Err(failure) = process_bundle(
+            &bytes,
+            &config,
+            &profile,
+            &crs,
+            &mut projections,
+            &mut receipt,
+        ) {
+            add(&mut failed_bundles, 1)?;
+            let (phase, kind) = failure.public_class();
+            input(
+                "aggregate_failures",
+                writeln!(
+                    std::io::stderr(),
+                    "failed_bundles={failed_bundles} phase={phase} class={kind}"
+                ),
+            )?;
+            // No failed worker cache supplies the next independent bundle.
+            projections.clear();
+            if first_failure.is_none() {
+                first_failure = Some(failure);
+            }
+        }
+        input(
+            "aggregate_progress",
+            writeln!(std::io::stderr(), "completed_bundles={}", receipt.bundles),
+        )?;
+    }
+    require(
+        file_digest(&config.archive)? == config.outer,
+        "final_acquisition_unchanged",
+    )?;
+    if let Some(failure) = first_failure {
+        // Partial population counters cannot reach the completion receipt.
+        return Err(failure);
+    }
+    require(
+        [
+            receipt.bundles,
+            receipt.features,
+            receipt.parts,
+            receipt.vertices,
+        ] == EXPECTED,
+        "whole_pinned_population",
+    )?;
+    require(
+        receipt.projected_vertices
+            == receipt
+                .vertices
+                .checked_mul(3)
+                .ok_or(Failure::Input("checked_population"))?
+            && receipt.axis_vertices == receipt.projected_vertices
+            && receipt.continuous_edges
+                == receipt
+                    .edges
+                    .checked_mul(3)
+                    .ok_or(Failure::Input("checked_population"))?
+            && receipt.continuous_pieces >= receipt.continuous_edges
+            && receipt.box_memberships == receipt.vertices
+            && receipt.indexed_vertices == receipt.vertices
+            && receipt.index_self_hits == receipt.features
+            && receipt.identity_features == receipt.features
+            && receipt.metric_features == receipt.features,
+        "whole_native_work_population",
+    )?;
+    let binary = file_digest(&input("host_artifact", std::env::current_exe())?)?;
+    let compiler = input(
+        "host_toolchain",
+        Command::new("rustc").arg("--version").output(),
+    )?;
+    require(compiler.status.success(), "host_toolchain")?;
+    let angular = receipt
+        .max_roundtrip_angular
+        .as_ref()
+        .ok_or(Failure::Input("complete_certificate_population"))?;
+    let metric = receipt
+        .max_metric_error
+        .as_ref()
+        .ok_or(Failure::Input("complete_certificate_population"))?;
+    let image = receipt
+        .max_image_error
+        .as_ref()
+        .ok_or(Failure::Input("complete_certificate_population"))?;
+    let mut output = std::io::stdout().lock();
+    input(
+        "aggregate_receipt",
+        writeln!(
+            output,
+            "status=complete\narchive_sha256={}\nmanifest_sha256={}\nprobe_source_sha256={}\nprobe_binary_sha256={}\ntoolchain_sha256={}\ncomputation_blake3={}\nbundles={}\nfeatures={}\nparts={}\nvertices={}\nedges={}\nprojected_vertices={}\naxis_vertices={}\ncontinuous_edges={}\ncontinuous_pieces={}\nmaterialized_vertices={}\nbox_memberships={}\nindexed_vertices={}\nindex_self_hits={}\nmetric_features={}\nidentity_features={}\ninvalid_refusals={}\nmissing_operation_refusals={}\nmissing_height_refusals={}\nmax_work_items={}\nmax_workspace_bytes={}\nmax_roundtrip_angular_degrees={}\nmax_metric_certificate_metres={}\nmax_image_certificate_metres={}\nelapsed_ns={}",
+            hex32(config.outer),
+            hex32(manifest_digest),
+            hex32(digest(include_bytes!("main.rs.txt"))),
+            hex32(binary),
+            hex32(digest(&compiler.stdout)),
+            purrdf_hash::hex::encode(receipt.computation.finalize().as_bytes()),
+            receipt.bundles,
+            receipt.features,
+            receipt.parts,
+            receipt.vertices,
+            receipt.edges,
+            receipt.projected_vertices,
+            receipt.axis_vertices,
+            receipt.continuous_edges,
+            receipt.continuous_pieces,
+            receipt.materialized_vertices,
+            receipt.box_memberships,
+            receipt.indexed_vertices,
+            receipt.index_self_hits,
+            receipt.metric_features,
+            receipt.identity_features,
+            receipt.invalid_refusals,
+            receipt.missing_operation_refusals,
+            receipt.missing_height_refusals,
+            receipt.max_work,
+            receipt.max_workspace,
+            format_args!("{}/{}", angular.numerator(), angular.denominator()),
+            format_args!("{}/{}", metric.numerator(), metric.denominator()),
+            format_args!("{}/{}", image.numerator(), image.denominator()),
+            clock.elapsed().as_nanos()
+        ),
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(x: &str, y: &str) -> Coord {
+        Coord::xy(
+            Rat::parse_decimal(x).unwrap(),
+            Rat::parse_decimal(y).unwrap(),
+        )
+    }
+
+    fn config() -> Config {
+        let limits = ExecutionLimits {
+            max_workspace_bytes: 8 * 1024 * 1024 * 1024,
+            ..ExecutionLimits::UNBOUNDED
+        };
+        Config {
+            archive: PathBuf::new(),
+            manifest: PathBuf::new(),
+            outer: [0; 32],
+            prefix: String::new(),
+            zip_bytes: 1,
+            member_bytes: 1,
+            limits,
+            cover: MixedCoverLimits {
+                max_emitted_cells: 1,
+                max_work_items: limits.max_work_items,
+                max_workspace_bytes: limits.max_workspace_bytes,
+            },
+        }
+    }
+
+    #[test]
+    fn exact_partition_preserves_forward_reverse_and_long_written_edges() {
+        let half = Rat::parse_decimal("0.5").unwrap();
+        for (family, x0, x1) in [
+            (0, "106.4", "106.6"),
+            (1, "107.9", "108.1"),
+            (2, "107.9", "108.1"),
+        ] {
+            for edge in [
+                [point(x0, "30"), point(x1, "30")],
+                [point(x1, "30"), point(x0, "30")],
+            ] {
+                let parameters =
+                    edge_parameters(&edge, family).unwrap_or_else(|_| panic!("public partition"));
+                assert_eq!(parameters, [Rat::zero(), half.clone(), Rat::one()]);
+            }
+        }
+        // The written route crosses both 106.5 and 109.5, with no shortcut.
+        let edge = [point("105", "30"), point("111", "30")];
+        let parameters = edge_parameters(&edge, 0).unwrap_or_else(|_| panic!("public long route"));
+        assert_eq!(
+            parameters,
+            [
+                Rat::zero(),
+                Rat::parse_decimal("0.25").unwrap(),
+                Rat::parse_decimal("0.75").unwrap(),
+                Rat::one()
+            ]
+        );
+        for edge in [
+            [point("106.5", "30"), point("106.6", "30")],
+            [point("106.5", "30"), point("106.5", "30")],
+        ] {
+            assert_eq!(
+                edge_parameters(&edge, 0).unwrap_or_else(|_| panic!("public boundary")),
+                [Rat::zero(), Rat::one()]
+            );
+        }
+    }
+
+    #[test]
+    fn original_zone_crossings_materialize_every_piece_in_separate_frames() {
+        let config = config();
+        for (family, x0, x1) in [
+            (0, "106.499999", "106.500001"),
+            (1, "107.999999", "108.000001"),
+            (2, "107.999999", "108.000001"),
+        ] {
+            let edge = [point(x0, "30"), point(x1, "30")];
+            let midpoint = edge[0].x().add(edge[1].x()).div(&Rat::from_i64(2)).unwrap();
+            let key = (
+                family,
+                zone(&midpoint, family).unwrap_or_else(|_| panic!("public zone")),
+                false,
+            );
+            let operation = projection(key).unwrap_or_else(|_| panic!("public projection"));
+            let original =
+                Geometry::new(CoordDim::Xy, GeometryBody::LineString(edge.to_vec())).unwrap();
+            let error = operation
+                .chain
+                .materialize_geometry(
+                    &original,
+                    Crs::new("urn:qualification:public-projected").unwrap(),
+                    &ImageMetric::CartesianMetres,
+                    None,
+                    &mut config
+                        .context()
+                        .unwrap_or_else(|_| panic!("public context")),
+                )
+                .unwrap_err();
+            assert!(matches!(error.original(), GeoError::Domain(_)));
+            let mut projections = BTreeMap::new();
+            let mut receipt = Receipt::default();
+            materialize_edge(&edge, family, &config, &mut projections, &mut receipt)
+                .unwrap_or_else(|failure| panic!("public crossing: {:?}", failure.public_class()));
+            assert_eq!(receipt.continuous_edges, 1);
+            assert_eq!(receipt.continuous_pieces, 2);
+            assert_eq!(projections.len(), 2);
+            let mut frames = projections
+                .values()
+                .map(|projection| projection.forward.target().realization);
+            assert_ne!(frames.next(), frames.next());
+        }
+    }
+
+    #[test]
+    fn hemisphere_partition_preserves_the_equator_and_actual_latitude_refusal() {
+        let config = config();
+        for family in 0..3 {
+            let edge = [point("107", "-0.000001"), point("107", "0.000001")];
+            let mut receipt = Receipt::default();
+            let mut projections = BTreeMap::new();
+            materialize_edge(&edge, family, &config, &mut projections, &mut receipt)
+                .unwrap_or_else(|failure| panic!("public equator: {:?}", failure.public_class()));
+            assert_eq!(receipt.continuous_edges, 1);
+            assert_eq!(receipt.continuous_pieces, 2);
+            assert!(projections.keys().any(|key| key.2));
+            assert!(projections.keys().any(|key| !key.2));
+        }
+        let edge = [point("107", "84.1"), point("107.000001", "84.1")];
+        let mut receipt = Receipt::default();
+        let result = materialize_edge(&edge, 2, &config, &mut BTreeMap::new(), &mut receipt);
+        assert!(
+            matches!(result, Err(Failure::Native { cause, .. }) if matches!(cause.original(), GeoError::Domain(_)))
+        );
+        assert_eq!(receipt.continuous_edges, 0);
+    }
+
+    #[test]
+    fn unknown_domain_messages_remain_private() {
+        let failure = Failure::Native {
+            phase: "public_control",
+            cause: GeoError::Domain("unrecognized payload must not be emitted".into()),
+        };
+        assert_eq!(failure.public_class(), ("public_control", "domain"));
+    }
+}
+
+fn main() {
+    // A native panic must not format a private input or its numerical payload.
+    // Install the static presentation before acquiring any original source.
+    std::panic::set_hook(Box::new(|_| {
+        let _ = writeln!(
+            std::io::stderr(),
+            "status=failed phase=internal class=panic"
+        );
+    }));
+    if let Err(failure) = run() {
+        let (phase, kind) = failure.public_class();
+        // This explicit presentation cannot accidentally reveal native source
+        // text on an unexpected or future error variant.
+        let _ = writeln!(
+            std::io::stderr(),
+            "status=failed phase={phase} class={kind}"
+        );
+        drop(failure);
+        std::process::exit(1);
+    }
+}

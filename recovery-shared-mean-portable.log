@@ -1,0 +1,192 @@
+cargo run --locked --profile release -p purrdf-geo-kernel --example qualify_determinism
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `release` profile [optimized] target(s) in 1m 23s
+     Running `target/geo-artifacts/release/examples/qualify_determinism`
+Executing purrdf-geo/determinism native
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+    Finished `test` profile [optimized] target(s) in 0.66s
+     Running tests/determinism.rs (target/geo-build/debug/build/purrdf-geo/0aaced5ffbb0f88c/out/determinism-0aaced5ffbb0f88c)
+
+running 3 tests
+test the_digest_is_not_vacuous ... ok
+determinism-digest case=the_digest_is_the_pinned_golden digest=cae63e406267a3d7 corpus_len=20
+test the_digest_is_the_pinned_golden ... ok
+determinism-digest case=the_digest_does_not_move_between_runs digest=cae63e406267a3d7 corpus_len=20
+test the_digest_does_not_move_between_runs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s
+
+Executing purrdf-geo/determinism wasm portable
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 42s
+     Running tests/determinism.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-geo/59181c65ea4701a1/out/determinism-59181c65ea4701a1.wasm)
+
+running 3 tests
+test the_digest_does_not_move_between_runs ... determinism-digest case=the_digest_does_not_move_between_runs digest=cae63e406267a3d7 corpus_len=20
+ok
+test the_digest_is_not_vacuous ... ok
+test the_digest_is_the_pinned_golden ... determinism-digest case=the_digest_is_the_pinned_golden digest=cae63e406267a3d7 corpus_len=20
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+
+Executing purrdf-geo/determinism wasm simd128
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 38s
+     Running tests/determinism.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-geo/822cd6e570352e79/out/determinism-822cd6e570352e79.wasm)
+
+running 3 tests
+test the_digest_does_not_move_between_runs ... determinism-digest case=the_digest_does_not_move_between_runs digest=cae63e406267a3d7 corpus_len=20
+ok
+test the_digest_is_not_vacuous ... ok
+test the_digest_is_the_pinned_golden ... determinism-digest case=the_digest_is_the_pinned_golden digest=cae63e406267a3d7 corpus_len=20
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s
+
+OK: purrdf-geo/determinism executed on all three paths with identical frozen records
+Executing purrdf-geo-kernel/cells_determinism native
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 0.77s
+     Running tests/cells_determinism.rs (target/geo-build/debug/build/purrdf-geo-kernel/302d7d5618a32ff5/out/cells_determinism-302d7d5618a32ff5)
+
+running 1 test
+determinism-digest case=public_grid_replay digest=abee6e5162249afe corpus_len=686
+test public_grid_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+Executing purrdf-geo-kernel/cells_determinism wasm portable
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 0.60s
+     Running tests/cells_determinism.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-geo-kernel/f9297b9a6201c768/out/cells_determinism-f9297b9a6201c768.wasm)
+
+running 1 test
+test public_grid_replay ... determinism-digest case=public_grid_replay digest=abee6e5162249afe corpus_len=686
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+Executing purrdf-geo-kernel/cells_determinism wasm simd128
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 0.44s
+     Running tests/cells_determinism.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-geo-kernel/4265a6c554e436a5/out/cells_determinism-4265a6c554e436a5.wasm)
+
+running 1 test
+test public_grid_replay ... determinism-digest case=public_grid_replay digest=abee6e5162249afe corpus_len=686
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+OK: purrdf-geo-kernel/cells_determinism executed on all three paths with identical frozen records
+Executing purrdf-geo-kernel/geo_determinism native
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 0.77s
+     Running tests/geo_determinism.rs (target/geo-build/debug/build/purrdf-geo-kernel/21c366ec99d0d768/out/geo_determinism-21c366ec99d0d768)
+
+running 1 test
+completed point replay arithmetic paths: avx2, sse2, avx512, portable
+determinism-digest case=public_geo_capability_replay digest=60a750461b26a1ea corpus_len=73
+test public_geo_capability_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+Executing purrdf-geo-kernel/geo_determinism wasm portable
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 0.57s
+     Running tests/geo_determinism.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-geo-kernel/32eda92448b3cc21/out/geo_determinism-32eda92448b3cc21.wasm)
+
+running 1 test
+test public_geo_capability_replay ... determinism-digest case=public_geo_capability_replay digest=60a750461b26a1ea corpus_len=73
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+Executing purrdf-geo-kernel/geo_determinism wasm simd128
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 0.58s
+     Running tests/geo_determinism.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-geo-kernel/d7a623bc3de76d76/out/geo_determinism-d7a623bc3de76d76.wasm)
+
+running 1 test
+test public_geo_capability_replay ... determinism-digest case=public_geo_capability_replay digest=60a750461b26a1ea corpus_len=73
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+OK: purrdf-geo-kernel/geo_determinism executed on all three paths with identical frozen records
+Executing purrdf-xsd/certified_numerical native
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/certified_numerical.rs (target/geo-build/debug/build/purrdf-xsd/4d450126628f7e5a/out/certified_numerical-4d450126628f7e5a)
+
+running 9 tests
+determinism-digest case=directed_endpoint_product_replay digest=f1508ddac398273b corpus_len=8
+test directed_endpoint_product_replay ... ok
+test numerical_refusals_are_complete ... ok
+test bounded_ieee_canonical_allocation_replay ... ok
+test bounded_rational_ownership_and_rounding_replay ... ok
+test integer_difference_interval_admission_and_original_limb_replay ... ok
+test admitted_comparison_branches_and_original_limb_replay ... ok
+test finite_decimal_scale_admission_and_original_limb_replay ... ok
+determinism-digest case=certified_elementary_replay digest=8268aff8be7630be corpus_len=7
+test certified_elementary_replay ... ok
+test reusable_taylor_pool_admission_and_allocation_replay ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Executing purrdf-xsd/certified_numerical wasm portable
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/certified_numerical.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-xsd/d68882709bd30d45/out/certified_numerical-d68882709bd30d45.wasm)
+
+running 9 tests
+test certified_elementary_replay ... determinism-digest case=certified_elementary_replay digest=8268aff8be7630be corpus_len=7
+ok
+test directed_endpoint_product_replay ... determinism-digest case=directed_endpoint_product_replay digest=f1508ddac398273b corpus_len=8
+ok
+test numerical_refusals_are_complete ... ok
+test bounded_rational_ownership_and_rounding_replay ... ok
+test reusable_taylor_pool_admission_and_allocation_replay ... ok
+test bounded_ieee_canonical_allocation_replay ... ok
+test finite_decimal_scale_admission_and_original_limb_replay ... ok
+test integer_difference_interval_admission_and_original_limb_replay ... ok
+test admitted_comparison_branches_and_original_limb_replay ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+Executing purrdf-xsd/certified_numerical wasm simd128
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/certified_numerical.rs (target/geo-build/wasm32-unknown-unknown/debug/build/purrdf-xsd/ff043407580c0fb7/out/certified_numerical-ff043407580c0fb7.wasm)
+
+running 9 tests
+test certified_elementary_replay ... determinism-digest case=certified_elementary_replay digest=8268aff8be7630be corpus_len=7
+ok
+test directed_endpoint_product_replay ... determinism-digest case=directed_endpoint_product_replay digest=f1508ddac398273b corpus_len=8
+ok
+test numerical_refusals_are_complete ... ok
+test bounded_rational_ownership_and_rounding_replay ... ok
+test reusable_taylor_pool_admission_and_allocation_replay ... ok
+test bounded_ieee_canonical_allocation_replay ... ok
+test finite_decimal_scale_admission_and_original_limb_replay ... ok
+test integer_difference_interval_admission_and_original_limb_replay ... ok
+test admitted_comparison_branches_and_original_limb_replay ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+OK: purrdf-xsd/certified_numerical executed on all three paths with identical frozen records
+OK: all twelve geographic and numerical target executions passed
+terminal_status=0

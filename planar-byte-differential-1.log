@@ -1,0 +1,189 @@
+     Locking 52 packages to highest Rust 1.100.0-nightly compatible versions
+      Adding wasm-bindgen v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro-support v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-shared v0.2.125 (available: v0.2.129)
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-events)
+   Compiling hybrid-array v0.4.15
+   Compiling cfg-if v1.0.5
+   Compiling regex-syntax v0.8.11
+   Compiling crossbeam-epoch v0.9.21
+   Compiling regex-automata v0.4.18
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling cpufeatures v0.3.1
+   Compiling crossbeam-deque v0.8.8
+   Compiling libc v0.2.190
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+   Compiling digest v0.11.3
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/deflate)
+   Compiling sha2 v0.11.0
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling regex v1.13.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.19.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/stack)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling geo-planar-byte-differential v0.0.0 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/.stage/geo-deterministic-hierarchical-spatial/planar-byte-differential)
+error[E0583]: file not found for module `tree`
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:409:1
+    |
+409 | mod tree;
+    | ^^^^^^^^^
+    |
+    = help: to create the module `tree`, create file "/home/paudley/Active/purrdf/crates/geo/src/tree.rs" or "/home/paudley/Active/purrdf/crates/geo/src/tree/mod.rs"
+    = note: if there is a `mod tree` elsewhere in the crate already, import it with `use crate::...` instead
+
+error[E0277]: can't compare `geom::Geometry` with `geom::Geometry`
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:402:12
+    |
+401 | #[derive(Eq)]
+    |          -- in this derive macro expansion
+402 | pub struct Geometry {
+    |            ^^^^^^^^ no implementation for `geom::Geometry == geom::Geometry`
+    |
+    = help: the trait `PartialEq` is not implemented for `geom::Geometry`
+note: required by a bound in `Eq`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/cmp.rs:353:21
+    |
+353 | pub const trait Eq: [const] PartialEq<Self> + PointeeSized {
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Eq`
+help: consider annotating `geom::Geometry` with `#[derive(PartialEq)]`
+    |
+402 + #[derive(PartialEq)]
+403 | pub struct Geometry {
+    |
+
+error[E0277]: the trait bound `geom::Geometry: Clone` is not satisfied
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:385:24
+    |
+370 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |          ----- in this derive macro expansion
+...
+385 |     GeometryCollection(Vec<Geometry>),
+    |                        ^^^^^^^^^^^^^ the trait `Clone` is not implemented for `geom::Geometry`
+    |
+    = note: required for `Vec<geom::Geometry>` to implement `Clone`
+help: consider annotating `geom::Geometry` with `#[derive(Clone)]`
+    |
+402 + #[derive(Clone)]
+403 | pub struct Geometry {
+    |
+
+error[E0277]: `&Vec<geom::Geometry>` doesn't implement `Debug`
+    --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:385:24
+     |
+ 370 | #[derive(Clone, Debug, PartialEq, Eq)]
+     |                 ----- in this derive macro expansion
+...
+ 385 |     GeometryCollection(Vec<Geometry>),
+     |                        ^^^^^^^^^^^^^ within `&Vec<geom::Geometry>`, the trait `Debug` is not implemented for `&Vec<geom::Geometry>`
+     |
+help: the trait `Debug` is implemented for `Vec<T, A>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4423:1
+     |
+4423 | impl<T: fmt::Debug, A: Allocator> fmt::Debug for Vec<T, A> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0369]: binary operation `==` cannot be applied to type `&Vec<geom::Geometry>`
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:385:24
+    |
+370 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |                        --------- in this derive macro expansion
+...
+385 |     GeometryCollection(Vec<Geometry>),
+    |                        ^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `geom::Geometry: Clone` is not satisfied
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:624:5
+    |
+621 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |          ----- in this derive macro expansion
+...
+624 |     geometry: Geometry,
+    |     ^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `geom::Geometry`
+    |
+help: consider annotating `geom::Geometry` with `#[derive(Clone)]`
+    |
+402 + #[derive(Clone)]
+403 | pub struct Geometry {
+    |
+
+error[E0277]: `&geom::Geometry` doesn't implement `Debug`
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:624:5
+    |
+621 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |                 ----- in this derive macro expansion
+...
+624 |     geometry: Geometry,
+    |     ^^^^^^^^^^^^^^^^^^ within `&geom::Geometry`, the trait `Debug` is not implemented for `&geom::Geometry`
+
+error[E0369]: binary operation `==` cannot be applied to type `geom::Geometry`
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:624:5
+    |
+621 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |                        --------- in this derive macro expansion
+...
+624 |     geometry: Geometry,
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+note: an implementation of `PartialEq` might be missing for `geom::Geometry`
+   --> /home/paudley/Active/purrdf/crates/geo/src/geom.rs:402:1
+    |
+402 | pub struct Geometry {
+    | ^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `geom::Geometry` with `#[derive(PartialEq)]`
+    |
+402 + #[derive(PartialEq)]
+403 | pub struct Geometry {
+    |
+
+error[E0277]: the trait bound `geom::Geometry: Clone` is not satisfied
+    --> /home/paudley/Active/purrdf/crates/geo/src/measure.rs:659:73
+     |
+ 659 |         GeometryBody::GeometryCollection(members) => members.get(index).cloned(),
+     |                                                                         ^^^^^^ the trait `Clone` is not implemented for `geom::Geometry`
+     |
+note: required by a bound in `Option::<&T>::cloned`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2164:12
+     |
+2162 |     pub fn cloned(self) -> Option<T>
+     |            ------ required by a bound in this associated function
+2163 |     where
+2164 |         T: Clone,
+     |            ^^^^^ required by this bound in `Option::<&T>::cloned`
+help: consider annotating `geom::Geometry` with `#[derive(Clone)]`
+    -->  /home/paudley/Active/purrdf/crates/geo/src/geom.rs:402:1
+     |
+ 402 + #[derive(Clone)]
+ 403 | pub struct Geometry {
+     |
+
+error[E0308]: mismatched types
+   --> /home/paudley/Active/purrdf/crates/geo/src/measure.rs:661:13
+    |
+644 | pub fn geometry_n(geometry: &Geometry, n: usize) -> Option<Geometry> {
+    |                                                     ---------------- expected `Option<geom::Geometry>` because of return type
+...
+661 |             (index == 0).then(|| geometry.clone())
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<Geometry>`, found `Option<&Geometry>`
+    |
+    = note: expected enum `Option<Geometry>`
+               found enum `Option<&Geometry>`
+
+Some errors have detailed explanations: E0277, E0308, E0369, E0583.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `geo-planar-byte-differential` (bin "geo-planar-byte-differential") due to 10 previous errors

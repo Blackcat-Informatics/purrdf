@@ -1,0 +1,9 @@
+starting=recovery-shared-mean-projections.sh
+completed=recovery-shared-mean-projections.sh terminal_status=0
+starting=recovery-helper-host-refresh.sh
+completed=recovery-helper-host-refresh.sh terminal_status=1
+starting=recovery-helper-assembly.sh
+completed=recovery-helper-assembly.sh terminal_status=0
+starting=recovery-shared-mean-full-gates.sh
+completed=recovery-shared-mean-full-gates.sh terminal_status=1
+terminal_status=1

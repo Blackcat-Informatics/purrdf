@@ -1,0 +1,4 @@
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cli)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-wasm)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.92s

@@ -1,0 +1,57 @@
+--- a/crates/geo-kernel/src/index.rs
++++ b/crates/geo-kernel/src/index.rs
+@@ -964,7 +964,16 @@
+     ) -> Result<crate::IntersectionMatrix, GeoError> {
+         match self.context.as_deref_mut() {
+             Some(context) => {
+-                crate::topology::relate_admitted(left, right, context, &mut self.progress)
++                let before = context.work_items();
++                let result = crate::topology::relate_admitted(left, right, context, &mut self.progress);
++                eprintln!(
++                    "PLANAR_PAIR left={:?} right={:?} before={before} after={} error={:?}",
++                    core::mem::discriminant(left.body()),
++                    core::mem::discriminant(right.body()),
++                    context.work_items(),
++                    result.as_ref().err(),
++                );
++                result
+             }
+             None => Ok(relate(left, right)),
+         }
+--- a/crates/geo-kernel/src/numerical.rs
++++ b/crates/geo-kernel/src/numerical.rs
+@@ -629,9 +629,17 @@
+         let cost = rational_cost(operation, operands, count).ok_or(
+             GeoError::ArithmeticOverflow("native exact arithmetic admission"),
+         )?;
+-        self.with_cost_values(cost, |values| {
++        let work = cost.work_items;
++        let before = self.context.work_items();
++        let result = self.with_cost_values(cost, |values| {
+             evaluate(values).map_err(GeoError::NumericalScratch)
+-        })
++        });
++        if matches!(&result, Err(GeoError::WorkExhausted { .. })) {
++            eprintln!(
++                "PLANAR_ARITHMETIC operation={operation:?} before={before} requested={work} count={count}"
++            );
++        }
++        result
+     }
+ 
+     pub(crate) fn expression_result<T>(
+--- a/crates/geo-kernel/src/context.rs
++++ b/crates/geo-kernel/src/context.rs
+@@ -2325,7 +2325,12 @@
+             .work_items
+             .checked_add(count)
+             .ok_or(GeoError::WorkExhausted { limit })?;
+         if next > limit {
++            eprintln!(
++                "PLANAR_REFUSAL before={} requested={count} limit={limit}\n{}",
++                self.work_items,
++                std::backtrace::Backtrace::force_capture(),
++            );
+             return Err(GeoError::WorkExhausted { limit });
+         }
+         Ok(next)

@@ -1,0 +1,159 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+   Compiling libc v0.2.186
+    Checking hybrid-array v0.4.15
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-events)
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking regex-automata v0.4.14
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/stack)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking regex v1.12.4
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking crossbeam-epoch v0.9.18
+    Checking either v1.16.0
+    Checking crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+    Checking rayon v1.12.0
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/testkit)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/deflate)
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/ed25519)
+    Checking structured-zstd v0.0.49
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+    Checking aead v0.6.1
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking visual-hashing v1.0.0
+    Checking unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.106
+    Checking aes-gcm v0.11.1
+   Compiling quote v1.0.46
+   Compiling heck v0.5.0
+    Checking utf8parse v0.2.2
+    Checking syn v2.0.118
+    Checking anstyle-parse v1.0.0
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking is_terminal_polyfill v1.70.2
+    Checking clap_lex v1.1.0
+    Checking anstream v1.0.0
+    Checking strsim v0.11.1
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling clap_derive v4.6.1
+    Checking clap_builder v4.6.0
+   Compiling rustversion v1.0.22
+   Compiling target-lexicon v0.13.5
+    Checking clap v4.6.1
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/hash-conformance)
+    Checking once_cell v1.21.4
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-build-config v0.29.0
+   Compiling pyo3-ffi v0.29.0
+    Checking leb128fmt v0.1.0
+    Checking wasm-encoder v0.259.0
+   Compiling pyo3 v0.29.0
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling wasm-bindgen-macro v0.2.125
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/wasm-link)
+error: unnecessary qualification
+   --> crates/lex/src/json_escape.rs:256:35
+    |
+256 | pub fn push_string_with_memory<S: crate::allocation::Admission + ?Sized>(
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+256 - pub fn push_string_with_memory<S: crate::allocation::Admission + ?Sized>(
+256 + pub fn push_string_with_memory<S: Admission + ?Sized>(
+    |
+
+error: unnecessary qualification
+   --> crates/lex/src/json_escape.rs:260:18
+    |
+260 |     memory: &mut crate::allocation::Memory<'_, S>,
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+260 -     memory: &mut crate::allocation::Memory<'_, S>,
+260 +     memory: &mut Memory<'_, S>,
+    |
+
+error: unnecessary qualification
+   --> crates/lex/src/json_escape.rs:261:17
+    |
+261 | ) -> Result<(), crate::allocation::StorageError> {
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+261 - ) -> Result<(), crate::allocation::StorageError> {
+261 + ) -> Result<(), StorageError> {
+    |
+
+error: method `decoded` is never used
+    --> crates/lex/src/json/read.rs:1209:8
+     |
+ 269 | impl<'a> Reader<'a> {
+     | ------------------- method in this implementation
+...
+1209 |     fn decoded(&self, raw: Str<'a>) -> Result<Cow<'a, str>, Error> {
+     |        ^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: this lint expectation is unfulfilled
+    --> crates/lex/src/json/read.rs:1052:29
+     |
+1052 | ...                   clippy::iter_with_drain,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: retain the original working buffer until its exact admission is released
+     = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: this lint expectation is unfulfilled
+    --> crates/lex/src/json/read.rs:1069:29
+     |
+1069 | ...                   clippy::iter_with_drain,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: retain the original working buffer until its exact admission is released
+
+error: this lint expectation is unfulfilled
+   --> crates/lex/src/json/value.rs:619:42
+    |
+619 | ...   #[expect(clippy::iter_with_drain, reason = "retain the original admitted scratch capacity until it is destroyed")]
+    |                ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: retain the original admitted scratch capacity until it is destroyed
+
+error: could not compile `purrdf-lex` (lib) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...
+   Compiling pyo3-macros v0.29.0
+error: could not compile `purrdf-lex` (lib test) due to 7 previous errors

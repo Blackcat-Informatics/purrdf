@@ -1,0 +1,12 @@
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (target/geo-build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 4 tests
+test determinism::tests::the_corpus_carries_three_spellings_of_one_number ... ok
+test determinism::tests::every_corpus_member_parses ... ok
+test determinism::tests::the_digest_is_not_vacuous ... ok
+test determinism::tests::the_digest_is_a_pure_function ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 710 filtered out; finished in 0.16s
+
+terminal_status=0

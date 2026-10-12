@@ -1,0 +1,88 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 47s
+     Running tests/query_rewrite_e2e.rs (target/geo-build/debug/build/purrdf-geo/eff7cfb3ee03e0a9/out/query_rewrite_e2e-eff7cfb3ee03e0a9)
+
+running 1 test
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=144 after=467 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=468 after=791 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(2) before=791 after=19449 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=19450 after=19773 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=19773 after=20096 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=20097 after=20420 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(2) before=20420 after=39078 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=39079 after=39402 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=39402 after=39725 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(2) before=39726 after=57770 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=57770 after=58093 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=58093 after=58416 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(0) before=58416 after=58739 error=None
+PLANAR_PAIR left=Discriminant(0) right=Discriminant(2) before=58740 after=76784 error=None
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(0) before=76784 after=95458 error=None
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(0) before=95458 after=113418 error=None
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(2) before=113418 after=167795 error=None
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(0) before=167796 after=186142 error=None
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(0) before=186142 after=204816 error=None
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(0) before=204816 after=222776 error=None
+PLANAR_REFUSAL before=262143 requested=16 limit=262144
+   0: <purrdf_geo_kernel::context::MetricContext>::next_work
+   1: <purrdf_geo_kernel::context::WorkProgress>::preflight_exact
+   2: <purrdf_geo_kernel::context::WorkProgress>::exact_with::<core::cmp::Ordering, <purrdf_geo_kernel::context::WorkProgress>::exact_context<core::cmp::Ordering, <purrdf_geo_kernel::context::WorkProgress>::exact<core::cmp::Ordering, <purrdf_geo_kernel::numerical::ExactAdmission>::compare::{closure#0}::{closure#0}>::{closure#0}>::{closure#0}>
+   3: <purrdf_xsd::exact::rational::Rational>::compare_admitted_using::<purrdf_geo_kernel::error::GeoError, purrdf_xsd::bigint::scratch::ProvidedScratch, <purrdf_xsd::exact::rational::Rational>::compare_admitted_by<purrdf_geo_kernel::error::GeoError, <purrdf_geo_kernel::numerical::ExactAdmission>::compare::{closure#0}>::{closure#0}>::{closure#0}
+   4: <purrdf_xsd::exact::rational::Rational>::compare_admitted_by::<purrdf_geo_kernel::error::GeoError, <purrdf_geo_kernel::numerical::ExactAdmission>::compare::{closure#0}>
+   5: purrdf_geo_kernel::topology::noding::fragments_inner::<purrdf_geo_kernel::topology::noding::AdmittedWork>
+   6: purrdf_geo_kernel::topology::relate::relate_inner::<purrdf_geo_kernel::topology::noding::AdmittedWork>
+   7: <purrdf_geo_kernel::context::MetricContext>::with_metadata::<purrdf_geo_kernel::de9im::IntersectionMatrix, purrdf_geo_kernel::topology::relate::relate_admitted::{closure#0}>
+   8: <purrdf_geo_kernel::index::PlanarPairs as purrdf_geo_kernel::index::PlanarMetric>::matrix
+   9: <purrdf_geo_kernel::index::PlanarPairs as purrdf_geo_kernel::index::PairWorker>::holds
+  10: <purrdf_geo_kernel::index::GeoIndex>::relation_pairs_with::<purrdf_geo_kernel::index::PlanarPairs>
+  11: <purrdf_geo_kernel::index::GeoIndex>::relation_pair_references_metered
+  12: <purrdf_sparql_eval::geo::relation::GeoRelation>::open_inner
+  13: <purrdf_sparql_eval::geo::relation::GeoRelation as purrdf_sparql_eval::property_fn::PropertyFunction>::open_metered
+  14: purrdf_sparql_eval::contain::call_contained_admitted::<purrdf_sparql_eval::property_fn::WorkspaceCursor, purrdf_sparql_eval::property_fn::open_with_workspace_contained::{closure#1}>
+  15: purrdf_sparql_eval::property_fn::open_with_workspace_contained
+  16: purrdf_sparql_eval::user_fn::metered_native_call::<purrdf_core::ir::dataset::RdfDataset, core::result::Result<purrdf_sparql_eval::property_fn::WorkspaceCursor, purrdf_sparql_eval::error::EvalError>, purrdf_sparql_eval::property_fn_eval::eval_call_over<purrdf_core::ir::dataset::RdfDataset>::{closure#6}>
+  17: purrdf_sparql_eval::property_fn_eval::eval_call_over::<purrdf_core::ir::dataset::RdfDataset>
+  18: purrdf_sparql_eval::property_fn_eval::eval_property_function::<purrdf_core::ir::dataset::RdfDataset>
+  19: purrdf_sparql_eval::eval::eval_evaluated::<purrdf_core::ir::dataset::RdfDataset>
+  20: purrdf_sparql_eval::service_endpoints::eval_projected::<purrdf_core::ir::dataset::RdfDataset>
+  21: purrdf_sparql_eval::modifier::eval_project::<purrdf_core::ir::dataset::RdfDataset>
+  22: purrdf_sparql_eval::eval::eval_evaluated::<purrdf_core::ir::dataset::RdfDataset>
+  23: purrdf_sparql_eval::eval::evaluate_query_over::<purrdf_core::ir::dataset::RdfDataset>
+  24: <purrdf_sparql_eval::engine::NativeSparqlEngine>::query_prepared_admitted::<purrdf_core::ir::dataset::RdfDataset>
+  25: <purrdf_core::ir::dataset::RdfDataset as purrdf_core::dataset_view::DatasetView>::checked_read::<(core::result::Result<purrdf_core::backend::SparqlResult, purrdf_sparql_eval::engine::EvaluationFailure>, ()), purrdf_sparql_eval::engine::checked_query_read_with_permit<purrdf_core::ir::dataset::RdfDataset, purrdf_core::backend::SparqlResult, purrdf_sparql_eval::engine::EvaluationFailure, (), purrdf_sparql_eval::engine::checked_query_read<purrdf_core::ir::dataset::RdfDataset, purrdf_core::backend::SparqlResult, purrdf_sparql_eval::engine::EvaluationFailure, <purrdf_sparql_eval::engine::NativeSparqlEngine>::query_with_options_view<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>::{closure#0}>::{closure#0}>
+  26: <purrdf_sparql_eval::engine::NativeSparqlEngine>::query_with_options_view::<purrdf_core::ir::dataset::RdfDataset>
+  27: query_rewrite_e2e::run
+  28: <query_rewrite_e2e::the_rewritten_within_predicate_answers_exactly_the_entailed_rows_from_query_text::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+  29: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+  30: test::run_test::{closure#0}
+  31: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+  32: <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  33: <std::sys::thread::unix::Thread>::new::thread_start
+  34: <unknown>
+  35: <unknown>
+
+PLANAR_PAIR left=Discriminant(2) right=Discriminant(2) before=222776 after=262143 error=Some(WorkExhausted { limit: 262144 })
+
+thread 'the_rewritten_within_predicate_answers_exactly_the_entailed_rows_from_query_text' (1348490) panicked at crates/geo/tests/query_rewrite_e2e.rs:345:9:
+the query must evaluate, but was refused: error native-sparql-function-operational: host function error: geometry work exhausted at 262144 items
+PREFIX geo: <http://example.org/geo#>
+PREFIX ex: <http://example.org/>
+SELECT ?f ?g WHERE { ?f geo:sfWithin ?g }
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_rewritten_within_predicate_answers_exactly_the_entailed_rows_from_query_text ... FAILED
+
+failures:
+
+failures:
+    the_rewritten_within_predicate_answers_exactly_the_entailed_rows_from_query_text
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-geo --test query_rewrite_e2e`
+terminal_status=101

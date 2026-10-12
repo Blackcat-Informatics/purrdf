@@ -1,0 +1,4 @@
+python3 scripts/check-simd-asm.py --doc --write-doc --jobs 1
+FAIL: workspace member `purrdf-geo` has no site row
+make: *** [Makefile:700: simd-asm] Error 1
+terminal_status=2

@@ -1,0 +1,43 @@
+    Finished `test` profile [optimized] target(s) in 0.40s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+work refusal: used=262138 next_cost=16 limit=262144
+   0: <purrdf_geo_kernel::context::MetricContext>::next_work
+   1: <purrdf_geo_kernel::context::WorkProgress>::preflight_exact
+   2: <purrdf_geo_kernel::context::WorkProgress>::exact_with::<core::cmp::Ordering, <purrdf_geo_kernel::context::WorkProgress>::exact_context<core::cmp::Ordering, <purrdf_geo_kernel::context::WorkProgress>::exact<core::cmp::Ordering, <purrdf_geo_kernel::numerical::ExactAdmission>::compare::{closure#0}::{closure#0}>::{closure#0}>::{closure#0}>
+   3: <purrdf_xsd::exact::rational::Rational>::compare_admitted_using::<purrdf_geo_kernel::error::GeoError, purrdf_xsd::bigint::scratch::ProvidedScratch, <purrdf_xsd::exact::rational::Rational>::compare_admitted_by<purrdf_geo_kernel::error::GeoError, <purrdf_geo_kernel::numerical::ExactAdmission>::compare::{closure#0}>::{closure#0}>::{closure#0}
+   4: <purrdf_xsd::exact::rational::Rational>::compare_admitted_by::<purrdf_geo_kernel::error::GeoError, <purrdf_geo_kernel::numerical::ExactAdmission>::compare::{closure#0}>
+   5: purrdf_geo_kernel::numerical::compare_rational
+   6: purrdf_geo_kernel::topology::segment::on_segment_inner
+   7: purrdf_geo_kernel::topology::locate::locate_surface_inner::<purrdf_geo_kernel::topology::locate::AdmittedSurface, alloc::vec::Vec<purrdf_geo_kernel::geom::Coord>>
+   8: purrdf_geo_kernel::topology::locate::locate_member_inner::<purrdf_geo_kernel::topology::locate::AdmittedSurface>
+   9: purrdf_geo_kernel::geom::tree::visit_leaves_with_progress::<purrdf_geo_kernel::topology::locate::locate_admitted::{closure#0}>
+  10: <purrdf_geo_kernel::topology::noding::AdmittedWork as purrdf_geo_kernel::topology::relate::RelateWork>::locate
+  11: purrdf_geo_kernel::topology::relate::relate_inner::<purrdf_geo_kernel::topology::noding::AdmittedWork>
+  12: <purrdf_geo_kernel::context::MetricContext>::with_metadata::<purrdf_geo_kernel::de9im::IntersectionMatrix, purrdf_geo_kernel::topology::relate::relate_admitted::{closure#0}>
+  13: purrdf_geo_kernel::topology::relate::relate_metered
+  14: purrdf_geo_kernel::context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction
+  15: <purrdf_geo_kernel::context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+  16: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+  17: test::run_test::{closure#0}
+  18: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+  19: <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  20: <std::sys::thread::unix::Thread>::new::thread_start
+  21: <unknown>
+  22: <unknown>
+
+
+thread 'context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction' (332058) panicked at crates/geo-kernel/src/context/retained.rs:1635:14:
+called `Result::unwrap()` on an `Err` value: WorkExhausted { limit: 262144 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction ... FAILED
+
+failures:
+
+failures:
+    context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 701 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p purrdf-geo-kernel --lib`

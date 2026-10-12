@@ -1,0 +1,27 @@
+    Finished `test` profile [optimized] target(s) in 0.15s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 5 tests
+test index::geographic::tests::geographic_index_admits_cold_reference_and_lookup_before_allocating ... ok
+work refusal: used=20325 next_cost=192 limit=20325
+   0: <purrdf_geo_kernel::context::MetricContext>::next_work
+   1: <purrdf_geo_kernel::index::geographic::GeographicPairs as purrdf_geo_kernel::index::PairWorker>::bindings
+   2: <purrdf_geo_kernel::index::GeoIndex>::relation_pairs_with::<purrdf_geo_kernel::index::geographic::GeographicPairs>
+   3: <purrdf_geo_kernel::index::geographic::GeographicGeoIndex>::relation_pairs_inner
+   4: purrdf_geo_kernel::index::geographic::tests::geographic_index_identity_excludes_admission_and_refusals_return_no_rows
+   5: <purrdf_geo_kernel::index::geographic::tests::geographic_index_identity_excludes_admission_and_refusals_return_no_rows::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+   6: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+   7: test::run_test::{closure#0}
+   8: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+   9: <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  10: <std::sys::thread::unix::Thread>::new::thread_start
+  11: <unknown>
+  12: <unknown>
+
+test index::geographic::tests::geographic_index_identity_excludes_admission_and_refusals_return_no_rows ... ok
+test index::geographic::tests::geographic_index_uses_actual_dimensions_of_constant_source_curves ... ok
+test index::geographic::tests::geographic_index_preserves_planar_projection_and_asserted_union ... ok
+test index::geographic::tests::prepared_index_queries_reuse_only_the_matching_construction_receipt ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 697 filtered out; finished in 0.00s
+

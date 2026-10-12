@@ -1,0 +1,9 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 57.82s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+test cells::cover::tests::warmed_street_scale_covers_allocate_only_their_output_growth ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 703 filtered out; finished in 7.63s
+

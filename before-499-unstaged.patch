@@ -1,0 +1,2147 @@
+diff --git crates/hnsw/src/relation.rs crates/hnsw/src/relation.rs
+index 7e78fafc9..8d15768d5 100644
+--- crates/hnsw/src/relation.rs
++++ crates/hnsw/src/relation.rs
+@@ -871,6 +871,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
+             ceiling,
+             purrdf_sparql_eval::WorkspaceCapability::resident(),
+         )
++        .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
+     }
+ 
+     fn open_admitted(
+@@ -878,7 +879,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: purrdf_sparql_eval::WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+         KnnInvocation::open_owned(
+             "the HNSW relation",
+             args,
+diff --git crates/lex/src/allocation.rs crates/lex/src/allocation.rs
+index 31d07d70e..dc34ca6ec 100644
+--- crates/lex/src/allocation.rs
++++ crates/lex/src/allocation.rs
+@@ -25,7 +25,7 @@ use std::string::String;
+ use std::vec::Vec;
+ 
+ /// A physical failure, separate from any native lexical language.
+-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ pub enum StorageError {
+     /// A concrete allocation layout or live-byte sum cannot be represented.
+     SizeOverflow,
+@@ -111,6 +111,31 @@ pub fn growth_capacity<T>(capacity: usize, required: usize) -> Result<usize, Sto
+         .ok_or(StorageError::SizeOverflow)
+ }
+ 
++/// Exact replacement and previous array layouts for a native heap insertion.
++/// The existing backing array remains live while the replacement is born.
++///
++/// # Errors
++/// Returns count, capacity or layout overflow before allocation.
++pub fn heap_insertion_layout<T: Ord>(
++    heap: &std::collections::BinaryHeap<T>,
++) -> Result<Option<(usize, usize)>, StorageError> {
++    let required = heap
++        .len()
++        .checked_add(1)
++        .ok_or(StorageError::SizeOverflow)?;
++    if required <= heap.capacity() {
++        return Ok(None);
++    }
++    let capacity = growth_capacity::<T>(heap.capacity(), required)?;
++    let replacement = Layout::array::<T>(capacity)
++        .map_err(|_| StorageError::SizeOverflow)?
++        .size();
++    let previous = Layout::array::<T>(heap.capacity())
++        .map_err(|_| StorageError::SizeOverflow)?
++        .size();
++    Ok(Some((replacement, previous)))
++}
++
+ /// Exact live-buffer accounting shared by native scanners, compilers and walks.
+ /// The borrowed callback itself is stack storage, never a retained payload owner.
+ /// After a native result leaves, its caller retains the original admission grant
+@@ -121,6 +146,15 @@ pub struct Memory<'a, S: Admission + ?Sized> {
+ }
+ 
+ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
++    /// Lend the original account to a native carrier that owns a resumed Memory
++    /// view. The returned total is that view's exact admitted layout counter,
++    /// never a measurement of an already constructed payload. The carrier
++    /// completes or destroys its scratch before returning the same counter.
++    pub fn with_account<T>(&mut self, body: impl FnOnce(&mut S, usize) -> (T, usize)) -> T {
++        let (value, admitted) = body(self.storage, self.live);
++        self.live = admitted;
++        value
++    }
+     /// Start one native computation with no owned heap capacity.
+     /// All nonempty buffers passed to this memory must have been allocated through
+     /// it, or explicitly included with `add_bytes` under the same original grant.
+@@ -154,12 +188,10 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+     /// This never observes or adopts a resident factory's returned payload.
+     ///
+     /// # Errors
+-    /// Returns the body's first physical failure. Refund failure after that
+-    /// failure cannot replace it; successful child payload keeps its original grant.
+-    pub fn scope<T>(
+-        &mut self,
+-        body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
+-    ) -> Result<T, StorageError> {
++    /// Returns the body's first error. Refund failure cannot replace it.
++    /// Any returned error payload must retain its own original owner independently
++    /// of the released child buffers, just as a successful retained payload does.
++    pub fn scope<T, E>(&mut self, body: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
+         let baseline = self.live;
+         match body(self) {
+             Ok(value) => Ok(value),
+@@ -334,6 +366,47 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+         Ok(())
+     }
+ 
++    /// Grow a native binary heap through the same admitted vector home.
++    /// Admission and allocation refusal leave the original entries untouched.
++    /// Successful replacement destroys the old buffer before refunding it.
++    ///
++    /// # Errors
++    /// Returns checked layout, admission, allocator or refund refusal.
++    pub fn push_heap<T: Ord>(
++        &mut self,
++        heap: &mut std::collections::BinaryHeap<T>,
++        value: T,
++    ) -> Result<(), StorageError> {
++        if let Some((_, previous)) = heap_insertion_layout(heap)? {
++            let required = heap
++                .len()
++                .checked_add(1)
++                .ok_or(StorageError::SizeOverflow)?;
++            let capacity = growth_capacity::<T>(heap.capacity(), required)?;
++            let mut replacement = Vec::new();
++            self.reserve(&mut replacement, capacity)?;
++            let mut original = core::mem::take(heap).into_vec();
++            replacement.append(&mut original);
++            drop(original);
++            self.release_bytes(previous)?;
++            *heap = std::collections::BinaryHeap::from(replacement);
++        }
++        heap.push(value);
++        Ok(())
++    }
++
++    /// Destroy the heap entries and backing buffer before refunding its layout.
++    /// Element payloads keep their independent original ownership.
++    ///
++    /// # Errors
++    /// Returns checked layout, unbalanced accounting or refund refusal.
++    pub fn release_heap<T: Ord>(
++        &mut self,
++        heap: std::collections::BinaryHeap<T>,
++    ) -> Result<(), StorageError> {
++        self.release_vec(heap.into_vec())
++    }
++
+     /// Admit amortized vector growth before constructing the value to append.
+     ///
+     /// # Errors
+@@ -394,16 +467,31 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+         &mut self,
+         values: impl IntoIterator<Item = T>,
+     ) -> Result<Vec<T>, StorageError> {
+-        let values = values.into_iter();
+-        let mut output = Vec::new();
+-        // Preserve the producer's known extent before its first payload birth.
+-        // Exact-size sources need one admitted buffer, rather than repeatedly
+-        // growing through every smaller capacity.
+-        self.reserve(&mut output, values.size_hint().0)?;
+-        for value in values {
+-            self.push(&mut output, value)?;
+-        }
+-        Ok(output)
++        self.try_map(values, |value, _| Ok(value))
++    }
++
++    /// Map a source through one fallible admitted array and element factory.
++    /// Its known extent is reserved before the first payload birth; uncertain
++    /// extents use the same native amortized growth. Partial values die before
++    /// failure cleanup. Retained element and error payloads keep their own owners.
++    ///
++    /// # Errors
++    /// Returns the first element error, layout, admission or allocator refusal.
++    pub fn try_map<T, U, E: From<StorageError>>(
++        &mut self,
++        values: impl IntoIterator<Item = T>,
++        mut make: impl FnMut(T, &mut Self) -> Result<U, E>,
++    ) -> Result<Vec<U>, E> {
++        self.scope(|memory| {
++            let values = values.into_iter();
++            let mut output = Vec::new();
++            memory.reserve(&mut output, values.size_hint().0)?;
++            for value in values {
++                memory.reserve_for_push(&mut output)?;
++                output.push(make(value, memory)?);
++            }
++            Ok(output)
++        })
+     }
+ 
+     /// Append native values without an infallible capacity-growth path.
+diff --git crates/lex/src/allocation/shared.rs crates/lex/src/allocation/shared.rs
+index 4380620f3..c67ec4fa1 100644
+--- crates/lex/src/allocation/shared.rs
++++ crates/lex/src/allocation/shared.rs
+@@ -66,6 +66,17 @@ unsafe impl<T: Send + Sync> Send for Shared<T> {}
+ unsafe impl<T: Send + Sync> Sync for Shared<T> {}
+ 
+ impl<T> Shared<T> {
++    /// Observe the current strong-owner count without allocating or cloning.
++    /// A live reference keeps the header valid; concurrent owners may change
++    /// the returned snapshot immediately after the atomic load.
++    #[must_use]
++    pub fn strong_count(&self) -> usize {
++        // SAFETY: this reference owns one strong count in the live header.
++        unsafe { self.pointer.as_ref() }
++            .strong
++            .load(Ordering::Acquire)
++    }
++
+     /// Borrow the payload mutably only while this is the sole strong owner.
+     /// There are no weak owners or raw exported pointers in this protocol.
+     pub fn get_mut(&mut self) -> Option<&mut T> {
+@@ -264,11 +275,26 @@ impl<V: Send + Sync + 'static> SharedOwned<V> {
+         value: V,
+         owner: O,
+     ) -> Result<Self, SharedAllocError> {
+-        let input = OwnedPayload {
+-            value,
+-            _owner: owner,
+-        };
+-        let shared = Shared::try_new_with(move || input)?;
++        Self::try_from_admitted_with(|| (value, owner))
++    }
++
++    /// Allocate shared control before moving an admitted value and original owner.
++    /// The infallible factory is not invoked on refusal, leaving the caller's
++    /// payload and grant available for its original failure cleanup.
++    ///
++    /// # Errors
++    /// Returns allocator refusal before ownership transfer. The returned payload
++    /// must already have admission for this concrete control layout.
++    pub fn try_from_admitted_with<O: Send + Sync + 'static>(
++        factory: impl FnOnce() -> (V, O),
++    ) -> Result<Self, SharedAllocError> {
++        let shared = Shared::try_new_with(|| {
++            let (value, owner) = factory();
++            OwnedPayload {
++                value,
++                _owner: owner,
++            }
++        })?;
+         let pointer = shared.pointer.cast();
+         core::mem::forget(shared);
+         Ok(Self {
+@@ -283,6 +309,32 @@ impl<V: Send + Sync + 'static> SharedOwned<V> {
+     }
+ }
+ 
++impl SharedOwned<()> {
++    /// Retain a producer's existing account without copying its live payloads.
++    /// Both shared controls are admitted before allocating this owner or moving
++    /// the original account. `replacement` starts a separate empty account;
++    /// its construction must not detach any of the existing payload's grants.
++    ///
++    /// # Errors
++    /// Preserves checked layout, original admission and physical refusal. On
++    /// failure the original account remains in `storage` for payload cleanup.
++    pub fn retain_current<S: super::Admission + Send + Sync + 'static>(
++        storage: &mut S,
++        replacement: S,
++        admitted: usize,
++        control: Layout,
++    ) -> Result<(Self, usize), super::StorageError> {
++        let total = admitted
++            .checked_add(control.size())
++            .and_then(|bytes| bytes.checked_add(Self::allocation_layout::<S>().size()))
++            .ok_or(super::StorageError::SizeOverflow)?;
++        storage.resize(total)?;
++        Self::try_from_admitted_with(|| ((), core::mem::replace(storage, replacement)))
++            .map(|owner| (owner, total))
++            .map_err(|_| super::StorageError::AllocationFailed)
++    }
++}
++
+ impl<V> SharedOwned<V> {
+     /// Share the original allocation without copying either payload or owner.
+     ///
+@@ -396,6 +448,16 @@ impl SharedText {
+             TextStorage::Static(text) => text,
+         }
+     }
++    /// Original owned UTF-8 capacity; static text owns no allocation.
++    /// This describes surviving storage, rather than proving a future allocation.
++    #[must_use]
++    pub fn owned_capacity(&self) -> usize {
++        match &self.0 {
++            TextStorage::Owned(text) => text.capacity(),
++            TextStorage::Static(_) => 0,
++        }
++    }
++
+     /// Clone the original shared owner without allocating.
+     ///
+     /// # Errors
+diff --git crates/rdf-core/src/ir/term_walk.rs crates/rdf-core/src/ir/term_walk.rs
+index 1b2495f42..8a9784f35 100644
+--- crates/rdf-core/src/ir/term_walk.rs
++++ crates/rdf-core/src/ir/term_walk.rs
+@@ -901,6 +901,55 @@ impl TermValue {
+             .pop()
+             .expect("the root's copy is the last one assembled"))
+     }
++
++    /// Destroy a term produced under this Memory before refunding its original
++    /// string and child-box layouts. This is a destruction adapter, never an
++    /// admission certificate for a resident term. Intrinsic separate owners
++    /// must instead be destroyed with their own ownership-carrying carrier.
++    ///
++    /// # Errors
++    /// Preserves checked layout, traversal or original refund refusal. Failed
++    /// traversal destroys this value while its enclosing original grant is live.
++    pub fn release_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        self,
++        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<(), purrdf_lex::allocation::StorageError> {
++        use purrdf_lex::allocation::StorageError;
++        let bytes = try_fold_nested_with_memory(
++            &self,
++            &mut (),
++            |(), value, _| {
++                let bytes = match value {
++                    Self::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
++                    Self::Iri(text) => text.capacity(),
++                    Self::Blank { label, .. } => label.capacity(),
++                    Self::Literal {
++                        lexical_form,
++                        datatype,
++                        language,
++                        ..
++                    } => lexical_form
++                        .capacity()
++                        .checked_add(datatype.capacity())
++                        .and_then(|bytes| {
++                            bytes.checked_add(language.as_ref().map_or(0, String::capacity))
++                        })
++                        .ok_or(StorageError::SizeOverflow)?,
++                };
++                Ok(Nested::Leaf(bytes))
++            },
++            |(), _, s: usize, p, o, _| {
++                s.checked_add(p)
++                    .and_then(|bytes| bytes.checked_add(o))
++                    .and_then(|bytes| bytes.checked_add(size_of::<Self>().checked_mul(3)?))
++                    .ok_or(StorageError::SizeOverflow)
++            },
++            |error, _| error,
++            memory,
++        )?;
++        drop(self);
++        memory.release_bytes(bytes)
++    }
+ }
+ 
+ /// A copy of a term that is not a triple term.
+@@ -942,6 +991,18 @@ fn try_compare_pairs(
+     b: &TermValue,
+     shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
+ ) -> Result<Ordering, std::collections::TryReserveError> {
++    compare_pairs_with(a, b, shallow, |pending, pair| pending.try_push(pair))
++}
++
++fn compare_pairs_with<'a, E>(
++    a: &'a TermValue,
++    b: &'a TermValue,
++    shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
++    mut push: impl FnMut(
++        &mut WorkList<(&'a TermValue, &'a TermValue), 16>,
++        (&'a TermValue, &'a TermValue),
++    ) -> Result<(), E>,
++) -> Result<Ordering, E> {
+     if !matches!(a, TermValue::Triple { .. }) || !matches!(b, TermValue::Triple { .. }) {
+         return Ok(shallow(a, b));
+     }
+@@ -965,7 +1026,7 @@ fn try_compare_pairs(
+         ) = (a, b)
+         {
+             for pair in [(&**oa, &**ob), (&**pa, &**pb), (&**sa, &**sb)] {
+-                pending.try_push(pair)?;
++                push(&mut pending, pair)?;
+             }
+         }
+     }
+@@ -1068,47 +1129,68 @@ impl TermValue {
+     /// # Errors
+     /// Returns an actual traversal allocation refusal.
+     pub fn try_cmp(&self, other: &Self) -> Result<Ordering, std::collections::TryReserveError> {
+-        try_compare_pairs(self, other, |a, b| {
+-            a.canonical_tag()
+-                .cmp(&b.canonical_tag())
+-                .then_with(|| match (a, b) {
+-                    (Self::Iri(a), Self::Iri(b)) => a.cmp(b),
+-                    (
+-                        Self::Literal {
+-                            lexical_form: la,
+-                            datatype: da,
+-                            language: ga,
+-                            direction: dira,
+-                        },
+-                        Self::Literal {
+-                            lexical_form: lb,
+-                            datatype: db,
+-                            language: gb,
+-                            direction: dirb,
+-                        },
+-                    ) => da
+-                        .cmp(db)
+-                        .then_with(|| ga.cmp(gb))
+-                        .then_with(|| la.cmp(lb))
+-                        .then_with(|| dira.cmp(dirb)),
+-                    (
+-                        Self::Blank {
+-                            label: la,
+-                            scope: sa,
+-                        },
+-                        Self::Blank {
+-                            label: lb,
+-                            scope: sb,
+-                        },
+-                    ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
+-                    // Equal tags guarantee the same variant; two triple terms are
+-                    // ordered by their components, which the walk compares next.
+-                    _ => Ordering::Equal,
+-                })
++        try_compare_pairs(self, other, compare_shallow)
++    }
++
++    /// Compare total RDF order through the same native walk, admitting each
++    /// actual work-list replacement before it is allocated.
++    ///
++    /// # Errors
++    /// Preserves the first layout, admission or allocator refusal. Temporary
++    /// traversal storage is destroyed before its original account is released.
++    pub fn try_cmp_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self,
++        other: &Self,
++        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<Ordering, purrdf_lex::allocation::StorageError> {
++        memory.scope(|memory| {
++            compare_pairs_with(self, other, compare_shallow, |pending, pair| {
++                pending.try_push_admitted(pair, memory)
++            })
+         })
+     }
+ }
+ 
++fn compare_shallow(a: &TermValue, b: &TermValue) -> Ordering {
++    use TermValue as Value;
++    a.canonical_tag()
++        .cmp(&b.canonical_tag())
++        .then_with(|| match (a, b) {
++            (Value::Iri(a), Value::Iri(b)) => a.cmp(b),
++            (
++                Value::Literal {
++                    lexical_form: la,
++                    datatype: da,
++                    language: ga,
++                    direction: dira,
++                },
++                Value::Literal {
++                    lexical_form: lb,
++                    datatype: db,
++                    language: gb,
++                    direction: dirb,
++                },
++            ) => da
++                .cmp(db)
++                .then_with(|| ga.cmp(gb))
++                .then_with(|| la.cmp(lb))
++                .then_with(|| dira.cmp(dirb)),
++            (
++                Value::Blank {
++                    label: la,
++                    scope: sa,
++                },
++                Value::Blank {
++                    label: lb,
++                    scope: sb,
++                },
++            ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
++            // Equal tags guarantee the same variant; two triple terms are
++            // ordered by their components, which the walk compares next.
++            _ => Ordering::Equal,
++        })
++}
++
+ impl PartialOrd for TermValue {
+     #[inline]
+     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+diff --git crates/sparql-eval/src/agg_fn.rs crates/sparql-eval/src/agg_fn.rs
+index e0f2676d4..61977d235 100644
+--- crates/sparql-eval/src/agg_fn.rs
++++ crates/sparql-eval/src/agg_fn.rs
+@@ -628,13 +628,8 @@ impl WorkspaceAccumulator {
+         value: A,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<Self, EvalError> {
+-        let allocation = workspace.charge(
+-            u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+-        )?;
+-        let value =
+-            purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+-                construct: "native aggregate control",
+-            })?;
++        let (value, allocation) =
++            crate::workspace::box_native(value, workspace, "native aggregate control")?;
+         Ok(Self { value, allocation })
+     }
+     fn resident(value: Box<dyn AggregateAccumulator>) -> Self {
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index cde05cc4c..b3e21b64b 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -155,6 +155,8 @@ struct PreparingQuery {
+ /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
+ #[derive(Debug)]
+ pub struct PreparedQuery {
++    /// Mathematical laws, carrier bindings and selected numerical policy.
++    geo: purrdf_geo_kernel::GeoQueryIdentity,
+     /// The parsed algebra. Private — see [`Self::query`] for why, and for the
+     /// guarantee that privacy buys.
+     query: Query,
+@@ -244,6 +246,11 @@ impl PreparedRdflibQuery {
+ }
+ 
+ impl PreparedQuery {
++    /// The laws, binding identity and execution policy this plan was prepared under.
++    #[must_use]
++    pub const fn geo_identity(&self) -> purrdf_geo_kernel::GeoQueryIdentity {
++        self.geo
++    }
+     /// Structurally admit and feasibility-order algebra a caller built or rewrote.
+     ///
+     /// This uses the same term, row, registry and call checks as
+@@ -342,6 +349,7 @@ impl PreparedQuery {
+             relations,
+             aggregates,
+             memory,
++            options.geo.query_identity(),
+         ))
+     }
+ 
+@@ -352,6 +360,7 @@ impl PreparedQuery {
+         relations: String,
+         aggregates: String,
+         memory: &PlanMemoryObserver,
++        geo: purrdf_geo_kernel::GeoQueryIdentity,
+     ) -> Self {
+         let bytes = plan_payload_bytes(
+             &query,
+@@ -361,6 +370,7 @@ impl PreparedQuery {
+             aggregates.capacity(),
+         );
+         Self {
++            geo,
+             query,
+             source,
+             source_schema,
+@@ -874,6 +884,7 @@ impl PlanCache {
+             &agg_fingerprint,
+             &[],
+             &[],
++            &purrdf_geo_kernel::binding::STANDARD_PROFILE,
+         )
+     }
+ 
+@@ -899,7 +910,14 @@ impl PlanCache {
+         base_iri: Option<&str>,
+         env: &crate::extension_env::ExtensionEnv,
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+-        self.prepare_execution_plan(query, base_iri, env, &[], &[])
++        self.prepare_execution_plan(
++            query,
++            base_iri,
++            env,
++            &[],
++            &[],
++            &purrdf_geo_kernel::binding::STANDARD_PROFILE,
++        )
+     }
+ 
+     /// [`Self::prepare_in_env`] for a prepared execution that will bind every name in
+@@ -918,6 +936,7 @@ impl PlanCache {
+         env: &crate::extension_env::ExtensionEnv,
+         parameters: &[&str],
+         exempt: &[&str],
++        geo: &purrdf_geo_kernel::GeoProfile,
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+         debug_assert!(
+             parameters.windows(2).all(|pair| pair[0] < pair[1]),
+@@ -933,6 +952,7 @@ impl PlanCache {
+             env.aggregates_fingerprint(),
+             parameters,
+             exempt,
++            geo,
+         )
+     }
+ 
+@@ -961,6 +981,7 @@ impl PlanCache {
+         agg_fingerprint: &str,
+         parameters: &[&str],
+         exempt: &[&str],
++        geo: &purrdf_geo_kernel::GeoProfile,
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+         let workspace = crate::WorkspaceCapability::resident();
+         let prepared = self
+@@ -974,6 +995,7 @@ impl PlanCache {
+                 agg_fingerprint,
+                 parameters,
+                 exempt,
++                geo,
+                 &workspace,
+             )
+             .map_err(EvaluationFailure::into_diagnostic)?;
+@@ -992,6 +1014,7 @@ impl PlanCache {
+         env: &crate::extension_env::ExtensionEnv,
+         parameters: &[&str],
+         exempt: &[&str],
++        geo: &purrdf_geo_kernel::GeoProfile,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<PreparedHandle, EvaluationFailure> {
+         self.prepare_keyed_admitted(
+@@ -1004,6 +1027,7 @@ impl PlanCache {
+             env.aggregates_fingerprint(),
+             parameters,
+             exempt,
++            geo,
+             workspace,
+         )
+     }
+@@ -1023,6 +1047,7 @@ impl PlanCache {
+         agg_fingerprint: &str,
+         parameters: &[&str],
+         exempt: &[&str],
++        geo: &purrdf_geo_kernel::GeoProfile,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<PreparedHandle, EvaluationFailure> {
+         let result = self.build_keyed_admitted(
+@@ -1035,6 +1060,7 @@ impl PlanCache {
+             agg_fingerprint,
+             parameters,
+             exempt,
++            geo,
+             workspace,
+         );
+         if result.is_err() && workspace.is_bounded() {
+@@ -1060,12 +1086,15 @@ impl PlanCache {
+         agg_fingerprint: &str,
+         parameters: &[&str],
+         exempt: &[&str],
++        geo: &purrdf_geo_kernel::GeoProfile,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<PreparedHandle, EvaluationFailure> {
+         use crate::workspace::{AdmittedVec, LexicalFrame, SharedWorkspace};
+         use purrdf_lex::allocation::Memory;
+ 
++        crate::user_fn::validate_standard_parser(options, workspace)?;
+         PlanCacheKey {
++            geo: geo.query_identity(),
+             query: text,
+             base_iri,
+             options,
+@@ -1197,6 +1226,7 @@ impl PlanCache {
+         let charge = PlanCharge::new(&self.memory, bytes);
+         let plan = crate::plan::PlanCache::default();
+         let value = PreparedQuery {
++            geo: geo.query_identity(),
+             query: preparing.query,
+             source: preparing.source,
+             source_schema: preparing.source_schema,
+@@ -1241,6 +1271,7 @@ impl PlanCache {
+ /// Length-prefixed fields cannot alias when a caller's configuration contains
+ /// separator characters. List lengths distinguish namespace-set boundaries.
+ struct PlanCacheKey<'a> {
++    geo: purrdf_geo_kernel::GeoQueryIdentity,
+     /// The query text.
+     query: &'a str,
+     /// The base IRI the query is parsed against, if any.
+@@ -1278,6 +1309,7 @@ impl PlanCacheKey<'_> {
+             purrdf_hash::frame::frame_le(out, value.as_bytes());
+         }
+         let Self {
++            geo,
+             query,
+             base_iri,
+             options,
+@@ -1292,6 +1324,8 @@ impl PlanCacheKey<'_> {
+             &options.property_fn_iris,
+         ];
+         let mut capacity = 2usize
++            .checked_add(purrdf_geo_kernel::GeoQueryIdentity::FRAMED_BYTES)
++            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?
+             .checked_add(Self::FIXED_LENGTH_PREFIXES * size_of::<u64>())
+             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+         for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
+@@ -1336,6 +1370,7 @@ impl PlanCacheKey<'_> {
+         for value in [relations, aggregates, query] {
+             field(out, value);
+         }
++        geo.append_to(out);
+         debug_assert_eq!(
+             out.len(),
+             capacity,
+@@ -1649,7 +1684,7 @@ impl NativeSparqlEngine {
+         base_iri: Option<&str>,
+         options: QueryOptions<'_>,
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+-        self.prepare_for(query, base_iri, options.env)
++        self.prepare_for(query, base_iri, options.env, options.geo)
+     }
+ 
+     /// Inspect the cached algebra a borrowed request will execute, before any
+@@ -1674,7 +1709,13 @@ impl NativeSparqlEngine {
+             Prebindings::Borrowed(request.substitutions),
+             options.declared_prebound,
+         );
+-        self.prepare_request(request.query, request.base_iri, options.env, &admitted)
++        self.prepare_request(
++            request.query,
++            request.base_iri,
++            options.env,
++            &admitted,
++            options.geo,
++        )
+     }
+ 
+     /// Evaluate a plan returned by [`Self::prepare_query`] or
+@@ -1904,6 +1945,7 @@ impl NativeSparqlEngine {
+             request.base_iri,
+             options.env,
+             &substitutions.parameters,
++            options.geo,
+             &reporting.capability(),
+         ) {
+             Ok(prepared) => prepared,
+@@ -1994,6 +2036,7 @@ impl NativeSparqlEngine {
+                 request.base_iri,
+                 options.env,
+                 &admitted.parameters,
++                options.geo,
+                 &workspace.capability(),
+             )?;
+             let state = crate::workspace::SharedWorkspace::new_admitted(
+@@ -2410,6 +2453,7 @@ impl NativeSparqlEngine {
+                 request.base_iri,
+                 options.env,
+                 &admitted.parameters,
++                options.geo,
+                 &workspace.capability(),
+             )?;
+             self.query_governed_prepared_admitted(
+@@ -2530,6 +2574,7 @@ impl NativeSparqlEngine {
+             request.base_iri,
+             options.env,
+             &admitted.parameters,
++            options.geo,
+             &reporting.capability(),
+         ) {
+             Ok(prepared) => prepared,
+@@ -2955,8 +3000,11 @@ impl NativeSparqlEngine {
+         query: &str,
+         base_iri: Option<&str>,
+         env: &crate::extension_env::ExtensionEnv,
++        geo: &purrdf_geo_kernel::GeoProfile,
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+-        self.cache.borrow_mut().prepare_in_env(query, base_iri, env)
++        self.cache
++            .borrow_mut()
++            .prepare_execution_plan(query, base_iri, env, &[], &[], geo)
+     }
+ 
+     /// [`Self::prepare_for`] for a request that carries substitutions: the plan is
+@@ -2979,6 +3027,7 @@ impl NativeSparqlEngine {
+         base_iri: Option<&str>,
+         env: &crate::extension_env::ExtensionEnv,
+         admitted: &RequestParameters<'_>,
++        geo: &purrdf_geo_kernel::GeoProfile,
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+         self.cache.borrow_mut().prepare_execution_plan(
+             query,
+@@ -2986,6 +3035,7 @@ impl NativeSparqlEngine {
+             env,
+             &admitted.names,
+             &admitted.exempt,
++            geo,
+         )
+     }
+ 
+@@ -2994,6 +3044,7 @@ impl NativeSparqlEngine {
+         query: &str,
+         base_iri: Option<&str>,
+         env: &crate::extension_env::ExtensionEnv,
++        geo: &purrdf_geo_kernel::GeoProfile,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<PreparedHandle, EvaluationFailure> {
+         self.cache.borrow_mut().prepare_execution_plan_admitted(
+@@ -3002,6 +3053,7 @@ impl NativeSparqlEngine {
+             env,
+             &[],
+             &[],
++            geo,
+             workspace,
+         )
+     }
+@@ -3012,6 +3064,7 @@ impl NativeSparqlEngine {
+         base_iri: Option<&str>,
+         env: &crate::extension_env::ExtensionEnv,
+         admitted: &RequestParameters<'_>,
++        geo: &purrdf_geo_kernel::GeoProfile,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<PreparedHandle, EvaluationFailure> {
+         self.cache.borrow_mut().prepare_execution_plan_admitted(
+@@ -3020,6 +3073,7 @@ impl NativeSparqlEngine {
+             env,
+             &admitted.names,
+             &admitted.exempt,
++            geo,
+             workspace,
+         )
+     }
+@@ -3063,6 +3117,9 @@ impl NativeSparqlEngine {
+         functions: crate::user_fn::UserFunctionRegistry,
+         env: &crate::extension_env::ExtensionEnv,
+     ) -> Result<crate::user_fn::BoundFunctionRegistry, RdfDiagnostic> {
++        functions
++            .validate_standard(&crate::WorkspaceCapability::resident())
++            .map_err(|error| EvaluationFailure::from(error).into_diagnostic())?;
+         let mut bodies = crate::DetHashMap::with_hasher(crate::DetHasher::new());
+         for (iri, func) in functions.sparql_bodied() {
+             let prepared = self
+@@ -3364,6 +3421,7 @@ impl NativeSparqlEngine {
+             query_text,
+             base_iri,
+             options.env,
++            options.geo,
+             &reporting.capability(),
+         ) {
+             Ok(prepared) => prepared,
+@@ -3435,6 +3493,7 @@ impl NativeSparqlEngine {
+                 query_text,
+                 base_iri,
+                 options.env,
++                options.geo,
+                 &workspace.capability(),
+             ) {
+                 Ok(prepared) => prepared,
+@@ -3496,7 +3555,8 @@ impl NativeSparqlEngine {
+             .with_user_function_admission(options.user_function_admission)
+             .with_property_functions(relations)
+             .with_aggregates(aggregates)
+-            .with_division_policy(options.division);
++            .with_division_policy(options.division)
++            .with_geo_profile(options.geo);
+         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+         ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
+         if let Some(source) = options.remote {
+@@ -3675,6 +3735,7 @@ impl NativeSparqlEngine {
+                 request.base_iri,
+                 options.env,
+                 &admitted.parameters,
++                options.geo,
+                 &workspace.capability(),
+             )?;
+             self.query_prepared_admitted(
+@@ -3799,6 +3860,7 @@ impl NativeSparqlEngine {
+             options.env,
+             &declared,
+             &exempt,
++            options.geo,
+         )?;
+         // The whole admission check, run ONCE here rather than on every run of this
+         // execution: the algebra soundness walk, the feasibility replanning walk,
+@@ -4292,6 +4354,7 @@ impl NativeSparqlEngine {
+                 request.base_iri,
+                 options.env,
+                 &admitted,
++                options.geo,
+                 &workspace.capability(),
+             )?;
+             let ctx = self.eval_ctx(dataset, &workspace)?;
+@@ -4348,6 +4411,7 @@ impl NativeSparqlEngine {
+                 request.base_iri,
+                 options.env,
+                 &admitted,
++                options.geo,
+                 &workspace.capability(),
+             )?;
+             admitted.check_admitted(&prepared, options, &workspace.capability())?;
+@@ -5315,6 +5379,8 @@ pub struct QueryOptions<'a> {
+     /// expansion is an expression error (unbound, err:FOAR0002 in the governed
+     /// evidence), as division by zero is.
+     pub division: purrdf_xsd::exact::DivisionPolicy,
++    /// Immutable geographic references, coordinate operations, units and execution policy.
++    pub geo: &'a purrdf_geo_kernel::GeoProfile,
+     /// Variables the caller binds before evaluation beyond the request's
+     /// substitutions — names its context binds even where this request supplies no
+     /// value for them (a SHACL node expression's scope variable whose argument
+@@ -5361,6 +5427,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
+             .field("load", &self.load.is_some())
+             .field("xpath_regex", &self.xpath_regex)
+             .field("division", &self.division)
++            .field("geo", &self.geo)
+             .field("declared_prebound", &self.declared_prebound)
+             .field("disjoint_language_strings", &self.disjoint_language_strings)
+             .finish()
+@@ -5409,6 +5476,7 @@ impl QueryOptions<'_> {
+         load: None,
+         xpath_regex: None,
+         division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
++        geo: &purrdf_geo_kernel::binding::STANDARD_PROFILE,
+         declared_prebound: &[],
+         disjoint_language_strings: false,
+     };
+@@ -5567,6 +5635,14 @@ impl<'a> QueryOptions<'a> {
+         self
+     }
+ 
++    /// Select explicit geographic bindings and independent numerical limits.
++    /// CRS84 remains the immutable WGS84 longitude/latitude reference.
++    #[must_use]
++    pub const fn with_geo(mut self, profile: &'a purrdf_geo_kernel::GeoProfile) -> Self {
++        self.geo = profile;
++        self
++    }
++
+     /// Set the source this request's `LOAD` operations fetch through (`None` falls
+     /// back to the engine's own resolver).
+     #[must_use]
+@@ -5903,6 +5979,7 @@ fn admit_structure_with_memory<const CONTEXTUAL: bool>(
+     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+ ) -> Result<(), EvaluationFailure> {
+     crate::stack::height::admit_query_with_memory(query, memory)?;
++    crate::user_fn::validate_standard_algebra_with_memory(query_pattern(query), memory)?;
+     let validation = if CONTEXTUAL {
+         query.validate_with_memory(memory)
+     } else {
+@@ -5975,6 +6052,17 @@ fn check_prepared_registries_with_memory(
+     options: QueryOptions<'_>,
+     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+ ) -> Result<(), EvaluationFailure> {
++    options
++        .functions
++        .declarations()
++        .validate_standard(memory.admission_mut().workspace())?;
++    if prepared.geo != options.geo.query_identity() {
++        return Err(EvaluationFailure::native_diagnostic(
++            "native-sparql-geo-profile-mismatch",
++            &"prepared geographic laws, carrier bindings or execution policy differ",
++            memory.admission_mut().workspace(),
++        ));
++    }
+     let supplied = crate::property_fn_plan::registry_fingerprint_with_memory(
+         options.property_functions(),
+         memory,
+@@ -6192,6 +6280,7 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
+         .with_aggregates(options.aggregates())
+         .with_call_depth(options.call_depth)
+         .with_division_policy(options.division)
++        .with_geo_profile(options.geo)
+         .with_disjoint_language_strings(options.disjoint_language_strings);
+     if let Some(graph) = options.focus_graph {
+         ctx = ctx.with_focus_graph(graph);
+@@ -6545,6 +6634,7 @@ mod tests {
+         let parameters = ["?a", "?b"];
+         let mut key = PlanKeyScratch::default();
+         PlanCacheKey {
++            geo: purrdf_geo_kernel::binding::STANDARD_PROFILE.query_identity(),
+             query: "SELECT * WHERE { ?s ?p ?o }",
+             base_iri: Some("http://example.org/base/"),
+             options: &options,
+@@ -6576,6 +6666,9 @@ mod tests {
+         for field in ["relations", "", "SELECT * WHERE { ?s ?p ?o }"] {
+             framed(&mut expected, field);
+         }
++        purrdf_geo_kernel::binding::STANDARD_PROFILE
++            .query_identity()
++            .append_to(&mut expected);
+         assert_eq!(key.bytes, expected);
+     }
+ 
+diff --git crates/sparql-eval/src/error.rs crates/sparql-eval/src/error.rs
+index 8660635a2..1e9daa886 100644
+--- crates/sparql-eval/src/error.rs
++++ crates/sparql-eval/src/error.rs
+@@ -91,6 +91,8 @@ pub enum NativeDiagnosticKind {
+     FunctionOperational,
+     /// The requested data violated the native producer's input contract.
+     Data,
++    /// An original source-read refusal, retaining its native message and grant.
++    SourceRead,
+     /// The supplied native configuration was invalid.
+     Config,
+     /// A native evaluator invariant failed.
+@@ -101,6 +103,8 @@ pub enum NativeDiagnosticKind {
+     UnclassifiedUnsupported,
+     /// A SEP-0009 semantic construction bound, with its original diagnostic code.
+     CompositeBound,
++    /// Caller declarations intercept an immutable standard scalar function.
++    StandardFunctionConflict,
+ }
+ 
+ #[derive(Debug)]
+@@ -155,6 +159,58 @@ impl NativeDiagnostic {
+         Ok(Self { kind, payload })
+     }
+ 
++    /// Publish the original native diagnostic buffer without a text copy.
++    /// The buffer's birth must already be covered by `frame`; construction
++    /// scratch has died, leaving exactly this String capacity. Every fallible
++    /// control admission precedes moving either original owner.
++    pub(crate) fn from_original_text(
++        kind: NativeDiagnosticKind,
++        text: &mut Option<String>,
++        frame: &mut crate::workspace::LexicalFrame,
++    ) -> Result<Self, EvalError> {
++        if let Some(error) = frame.take_failure() {
++            return Err(error);
++        }
++        let Some(capacity) = text.as_ref().map(String::capacity) else {
++            return Err(Self::error(
++                NativeDiagnosticKind::Internal,
++                "native diagnostic publication has no original text",
++                frame.workspace(),
++            ));
++        };
++        if capacity != frame.admitted_bytes() {
++            return Err(Self::error(
++                NativeDiagnosticKind::Internal,
++                "native diagnostic publication retains unmatched construction storage",
++                frame.workspace(),
++            ));
++        }
++        let bytes = capacity
++            .checked_add(
++                purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size(),
++            )
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++        frame.resize_live(bytes)?;
++        let payload = purrdf_core::small::Shared::try_new_with(|| {
++            let empty = crate::workspace::LexicalFrame::new(frame.workspace());
++            let original = core::mem::replace(frame, empty);
++            let allocation = original
++                .into_allocation()
++                .expect("positive native diagnostic control keeps its original grant");
++            let text = text
++                .take()
++                .expect("native diagnostic text checked before transfer");
++            NativeDiagnosticPayload {
++                text,
++                _allocation: allocation,
++            }
++        })
++        .map_err(|_| EvalError::AllocationFailed {
++            construct: "native diagnostic owner",
++        })?;
++        Ok(Self { kind, payload })
++    }
++
+     /// Stable typed classification, independent of its English message.
+     #[must_use]
+     pub const fn kind(&self) -> NativeDiagnosticKind {
+@@ -205,10 +261,12 @@ impl core::fmt::Display for NativeDiagnostic {
+                 "host function error"
+             }
+             NativeDiagnosticKind::Data => "malformed RDF input",
++            NativeDiagnosticKind::SourceRead => "dataset read failed",
+             NativeDiagnosticKind::Config => "invalid evaluation configuration",
+             NativeDiagnosticKind::Internal => "internal evaluator error",
+             NativeDiagnosticKind::Unsupported(_)
+             | NativeDiagnosticKind::UnclassifiedUnsupported => "unsupported",
++            NativeDiagnosticKind::StandardFunctionConflict => "standard scalar function conflict",
+             NativeDiagnosticKind::CompositeBound => {
+                 "the composite value this query asked for exceeds a SEP-0009 resource bound"
+             }
+@@ -656,10 +714,14 @@ impl EvalError {
+                 }
+             }
+             Self::NativeDiagnostic(message) => match message.kind() {
++                NativeDiagnosticKind::SourceRead => Some("native-sparql-source-read"),
+                 NativeDiagnosticKind::Internal => Some(Self::INTERNAL_CODE),
+                 NativeDiagnosticKind::FunctionOperational => Some(Self::FUNCTION_OPERATIONAL_CODE),
+                 NativeDiagnosticKind::Unsupported(kind) => Some(kind.code()),
+                 NativeDiagnosticKind::CompositeBound => Some(Self::COMPOSITE_BOUND_CODE),
++                NativeDiagnosticKind::StandardFunctionConflict => {
++                    Some("native-sparql-standard-function-conflict")
++                }
+                 NativeDiagnosticKind::Function
+                 | NativeDiagnosticKind::Data
+                 | NativeDiagnosticKind::Config
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index 0c1501fc0..96d51e80f 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -743,6 +743,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
+     /// pointer, never a clone.
+     pub(crate) user_functions: &'d crate::user_fn::BoundFunctionRegistry,
++    /// Immutable geographic reference, operation and numerical policy selection.
++    pub(crate) geo: &'d purrdf_geo_kernel::GeoProfile,
+     /// The request's explicit invocation law, borrowed without allocating on
+     /// healthy paths and inherited by function children and parallel workers.
+     pub(crate) user_function_admission: Option<&'d Arc<dyn crate::user_fn::UserFunctionAdmission>>,
+@@ -1302,6 +1304,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             temporary_positive_numberings: 0,
+             base_iri: None,
+             user_functions: &EMPTY_FUNCTIONS,
++            geo: &purrdf_geo_kernel::binding::STANDARD_PROFILE,
+             user_function_admission: None,
+             property_functions: &EMPTY_RELATIONS,
+             aggregates: &EMPTY_AGGREGATES,
+@@ -2790,6 +2793,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             // depth: a worker that evaluates a `Function::Custom` user-function call
+             // must see the same table and depth bound as its parent.
+             user_functions: self.user_functions,
++            geo: self.geo,
+             user_function_admission: self.user_function_admission,
+             // Read-only shared registry (a `Copy` pointer), for the same reason: a
+             // worker that evaluates a property-function call must resolve the
+@@ -2891,6 +2895,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         self
+     }
+ 
++    /// Carry the caller's geographic bindings through this context and its children.
++    #[must_use]
++    pub const fn with_geo_profile(mut self, profile: &'d purrdf_geo_kernel::GeoProfile) -> Self {
++        self.geo = profile;
++        self
++    }
++
+     /// Set the precision an `xsd:integer`/`xsd:decimal` quotient is formed at — for
+     /// `/` and for `AVG` alike. The default,
+     /// [`DivisionPolicy::xsd_default`](purrdf_xsd::exact::DivisionPolicy::xsd_default),
+@@ -3107,6 +3118,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             temporary_positive_numberings: 0,
+             base_iri: None,
+             user_functions: self.user_functions,
++            geo: self.geo,
+             user_function_admission: self.user_function_admission,
+             // Inherited with the function table: a function body is SPARQL like any
+             // other, so a property-function call inside it resolves against the same
+@@ -4608,8 +4620,15 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<(), EvalError> {
+     admit_version(AdmittedRequest::Query(query))?;
++    ctx.user_functions
++        .declarations()
++        .validate_standard(&ctx.growth)?;
+     {
+         let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
++        crate::user_fn::validate_standard_algebra_with_memory(
++            query_pattern(query),
++            &mut purrdf_lex::allocation::Memory::new(&mut frame),
++        )?;
+         crate::governor::soundness::validate_graph_pattern_depth_with_memory(
+             query_pattern(query),
+             &mut purrdf_lex::allocation::Memory::new(&mut frame),
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 5387ec402..f8286dbe7 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -5255,8 +5255,7 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
+     // makes that unrepresentable) and before the XSD-cast fallback, so a function IRI
+     // never collides with a datatype IRI.
+     if let Some(native) = ctx.user_functions.resolve_native(iri) {
+-        let result =
+-            crate::user_fn::eval_native_function(native, iri, vals, &ctx.workspace.capability())?;
++        let result = crate::user_fn::eval_native_function(native, iri, vals, ctx)?;
+         return Ok(result
+             .map(|value| ctx.intern_workspace_term(value))
+             .transpose()?
+diff --git crates/sparql-eval/src/governor/mod.rs crates/sparql-eval/src/governor/mod.rs
+index 39f71e89c..b129a7455 100644
+--- crates/sparql-eval/src/governor/mod.rs
++++ crates/sparql-eval/src/governor/mod.rs
+@@ -1815,7 +1815,13 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
+ /// decimal base conversion. Constant-time shape bounds are conservative and
+ /// cannot take exact-decimal exponent shortcuts. Machine-word dispatch remains
+ /// unchanged. Consumers must remeasure numeric fuel and scratch ceilings.
+-pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
++///
++/// # v15
++///
++/// Appends native-function-work. Native kernels price their own documented
++/// internal chunks, share physical admission, and stop between chunks. Existing
++/// seventeen point labels and prices retain their order and values.
++pub const GOVERNOR_PROFILE_VERSION: u32 = 15;
+ 
+ /// The charge schedule, as data rather than as scattered literals.
+ ///
+@@ -1852,7 +1858,7 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
+ /// define that unit for host code, so it prices it at one and lets the relation say how
+ /// many; what makes the number comparable across relations is that each one documents its
+ /// unit, not that the engine imposed one.
+-pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
++pub const CHARGE_SCHEDULE: [(&str, u64); 18] = [
+     ("algebra-node-entry", 1),
+     ("committed-output-row", 1),
+     ("bgp-candidate-quad", 1),
+@@ -1870,6 +1876,7 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
+     ("exists-definition-answered", 1),
+     ("exists-inner-solutions-consumed", 1),
+     ("property-function-work", 1),
++    ("native-function-work", 1),
+ ];
+ 
+ /// A deterministic counting point in the evaluator, and the type-safe index into
+@@ -2004,6 +2011,9 @@ pub enum ChargePoint {
+     /// searches eagerly in `open` are charged the same total. A relation that does not
+     /// override `take_work` reports zero and charges nothing.
+     PropertyFunctionWork,
++    /// Documented internal native work, charged before each bounded chunk.
++    /// The kernel releases floating control guards before any host stop poll.
++    NativeFunctionWork,
+ }
+ 
+ impl ChargePoint {
+@@ -2026,6 +2036,7 @@ impl ChargePoint {
+         Self::ExistsDefinitionAnswered,
+         Self::ExistsInnerSolutionsConsumed,
+         Self::PropertyFunctionWork,
++        Self::NativeFunctionWork,
+     ];
+ 
+     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
+@@ -2054,6 +2065,7 @@ impl ChargePoint {
+             Self::ExistsDefinitionAnswered => 14,
+             Self::ExistsInnerSolutionsConsumed => 15,
+             Self::PropertyFunctionWork => 16,
++            Self::NativeFunctionWork => 17,
+         }
+     }
+ 
+diff --git crates/sparql-eval/src/knn/invocation.rs crates/sparql-eval/src/knn/invocation.rs
+index e204af4c6..d93124dc5 100644
+--- crates/sparql-eval/src/knn/invocation.rs
++++ crates/sparql-eval/src/knn/invocation.rs
+@@ -301,23 +301,11 @@ impl AdmittedKnnInvocation {
+     pub fn cursor<S: RankSource + 'static>(
+         self,
+         source: S,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+-        let layout = std::alloc::Layout::new::<RankedCursor<S>>();
+-        let cursor_admission = self
+-            .workspace
+-            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+-        let cursor = RankedCursor::with_admission(
+-            source,
+-            self.invocation,
+-            self.admission,
+-            self.workspace,
+-            cursor_admission,
+-        );
++    ) -> Result<crate::WorkspaceCursor, EvalError> {
++        let workspace = self.workspace.clone();
+         let cursor =
+-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
+-                construct: "native ranked cursor",
+-            })?;
+-        Ok(cursor)
++            RankedCursor::with_admission(source, self.invocation, self.admission, self.workspace);
++        crate::WorkspaceCursor::new(cursor, &workspace, "native ranked cursor")
+     }
+ }
+ 
+@@ -692,7 +680,6 @@ pub struct RankedCursor<S> {
+     unreported_work: u64,
+     workspace: crate::WorkspaceCapability,
+     _invocation_admission: Option<InvocationAdmission>,
+-    _cursor_admission: Option<crate::WorkspaceAllocation>,
+ }
+ 
+ impl<S: RankSource> RankedCursor<S> {
+@@ -708,7 +695,6 @@ impl<S: RankSource> RankedCursor<S> {
+             unreported_work: 0,
+             workspace: crate::WorkspaceCapability::resident(),
+             _invocation_admission: None,
+-            _cursor_admission: None,
+         }
+     }
+ 
+@@ -717,7 +703,6 @@ impl<S: RankSource> RankedCursor<S> {
+         invocation: KnnInvocation,
+         admission: InvocationAdmission,
+         workspace: crate::WorkspaceCapability,
+-        cursor_admission: crate::WorkspaceAllocation,
+     ) -> Self {
+         Self {
+             source,
+@@ -727,7 +712,6 @@ impl<S: RankSource> RankedCursor<S> {
+             unreported_work: 0,
+             workspace,
+             _invocation_admission: Some(admission),
+-            _cursor_admission: Some(cursor_admission),
+         }
+     }
+ 
+diff --git crates/sparql-eval/src/knn/mod.rs crates/sparql-eval/src/knn/mod.rs
+index d9e7dfbf0..c40df8066 100644
+--- crates/sparql-eval/src/knn/mod.rs
++++ crates/sparql-eval/src/knn/mod.rs
+@@ -1631,6 +1631,7 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
+         ceiling: Option<u64>,
+     ) -> Result<Box<dyn PfCursor>, EvalError> {
+         self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
++            .and_then(crate::WorkspaceCursor::into_resident)
+     }
+ 
+     fn open_admitted(
+@@ -1638,7 +1639,7 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: crate::WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<crate::WorkspaceCursor, EvalError> {
+         KnnInvocation::open_owned(
+             "the embedding kNN relation",
+             args,
+diff --git crates/sparql-eval/src/lib.rs crates/sparql-eval/src/lib.rs
+index 3e6516eeb..e1faf40a8 100644
+--- crates/sparql-eval/src/lib.rs
++++ crates/sparql-eval/src/lib.rs
+@@ -98,9 +98,9 @@ pub mod eval;
+ mod exists_admission_gate;
+ mod expr;
+ pub mod extension_env;
++mod fallible;
+ /// Standard GeoSPARQL scalar and property-function adapters over the shared kernel.
+ pub mod geo;
+-mod fallible;
+ mod governed;
+ pub mod governor;
+ pub mod interned;
+@@ -275,8 +275,8 @@ pub use property_fn::{
+     DepthPlacement, DomainTag, DuplicatePolicy, ExclusionBasis, IndexGeneration, MemoryRelation,
+     OrderFidelity, PfArgs, PfArity, PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow,
+     PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration,
+-    RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
+-    generation_contained, service_level_contained,
++    RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement, WorkspaceCursor,
++    composed_order_fidelity, generation_contained, service_level_contained,
+ };
+ // The property-function registry's CONTENT-only identity. It lives in the private
+ // planning module beside the instance-bearing fingerprint, which renders it rather
+@@ -333,8 +333,9 @@ pub use solution::{
+ pub use update::{GraphResolveRequest, GraphResolver, LoadError};
+ pub use user_fn::{
+     AdmittedExprFnBody, AdmittedNativeFnBody, Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall,
+-    ExprFunction, NativeFnBody, NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
+-    UserFunction, UserFunctionAdmission, UserFunctionRefusal, UserFunctionRegistry, Volatility,
++    ExprFunction, MeteredNativeFnBody, NativeFnBody, NativeFnCall, NativeFnContext, NativeFunction,
++    NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionAdmission,
++    UserFunctionRefusal, UserFunctionRegistry, Volatility,
+ };
+ // The evidence channel the relation seam feeds: what each invoked relation attested,
+ // carried out on the governed receipt's `RelationIdentity`. Re-exported beside the
+diff --git crates/sparql-eval/src/property_fn.rs crates/sparql-eval/src/property_fn.rs
+index 53bf85b0e..938efee57 100644
+--- crates/sparql-eval/src/property_fn.rs
++++ crates/sparql-eval/src/property_fn.rs
+@@ -1793,6 +1793,68 @@ fn write_canonical_option(
+ // The relation trait
+ // ---------------------------------------------------------------------------
+ 
++/// One native cursor and its original concrete control admission. The Box is
++/// destroyed before the outside grant, including on failure or an early stop.
++pub struct WorkspaceCursor {
++    cursor: Box<dyn PfCursor>,
++    allocation: crate::WorkspaceAllocation,
++}
++purrdf_hash::debug_non_exhaustive!(WorkspaceCursor { allocation });
++
++impl WorkspaceCursor {
++    /// Box the actual concrete cursor after admitting its exact control layout.
++    /// Its fields must already retain their own original payload grants.
++    ///
++    /// # Errors
++    /// Returns checked physical overflow, admission or allocator refusal before
++    /// the cursor Box is born. Pending fields die before their original owners.
++    pub fn new<C: PfCursor + 'static>(
++        cursor: C,
++        workspace: &crate::WorkspaceCapability,
++        construct: &'static str,
++    ) -> Result<Self, EvalError> {
++        let (cursor, allocation) = crate::workspace::box_native(cursor, workspace, construct)?;
++        Ok(Self { cursor, allocation })
++    }
++
++    fn resident(cursor: Box<dyn PfCursor>) -> Self {
++        Self {
++            cursor,
++            allocation: crate::WorkspaceCapability::resident()
++                .charge(0)
++                .expect("resident zero admission"),
++        }
++    }
++
++    /// Recover a caller-owned resident cursor. A bounded native owner refuses
++    /// raw extraction and destroys its cursor before releasing its grant.
++    ///
++    /// # Errors
++    /// Refuses extraction of an operational control whose original lease is live.
++    pub fn into_resident(self) -> Result<Box<dyn PfCursor>, EvalError> {
++        if self.allocation.is_bounded() {
++            drop(self);
++            Err(EvalError::WorkspaceUnpriced(
++                "raw extraction of a bounded native cursor",
++            ))
++        } else {
++            Ok(self.cursor)
++        }
++    }
++}
++
++impl core::ops::Deref for WorkspaceCursor {
++    type Target = dyn PfCursor;
++    fn deref(&self) -> &Self::Target {
++        self.cursor.as_ref()
++    }
++}
++impl core::ops::DerefMut for WorkspaceCursor {
++    fn deref_mut(&mut self) -> &mut Self::Target {
++        self.cursor.as_mut()
++    }
++}
++
+ /// A host-injected relation invoked from predicate position.
+ ///
+ /// Object-safe and shared behind an [`Arc`] across the whole evaluation (including
+@@ -1838,6 +1900,25 @@ fn write_canonical_option(
+ /// the engine's side: it withholds the ceiling entirely for such a call rather than ask
+ /// a relation to account for something it was never told.
+ pub trait PropertyFunction: Send + Sync {
++    /// Open with the invoking query's physical, work and cancellation owners.
++    /// Native producers poll between bounded work chunks; ordinary producers
++    /// keep the existing admitted or caller-owned opening contract.
++    ///
++    /// # Errors
++    /// Preserves the producer's original operational or physical refusal.
++    fn open_metered(
++        &self,
++        args: &PfArgs<'_>,
++        ceiling: Option<u64>,
++        context: &crate::NativeFnContext<'_>,
++        _geo: &purrdf_geo_kernel::GeoProfile,
++    ) -> Result<WorkspaceCursor, EvalError> {
++        if context.workspace().is_bounded() {
++            self.open_admitted(args, ceiling, context.workspace().clone())
++        } else {
++            self.open(args, ceiling).map(WorkspaceCursor::resident)
++        }
++    }
+     /// Allocation-free declaration for an opaque producer's complete open/pull
+     /// working set and each returned row. The producer must respect both bounds.
+     /// Native producers can instead implement `open_admitted` with local owners.
+@@ -1859,26 +1940,25 @@ pub trait PropertyFunction: Send + Sync {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: crate::WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<WorkspaceCursor, EvalError> {
+         let certificate =
+             self.workspace_certificate(args, ceiling)
+                 .ok_or(EvalError::WorkspaceUnpriced(
+                     "an opaque property function without a physical workspace certificate",
+                 ))?;
+-        let wrapper = u64::try_from(size_of::<CertifiedCursor>())
+-            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+-        let bytes = certificate
+-            .working_bytes
+-            .checked_add(wrapper)
+-            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+-        let admission = workspace.charge(bytes)?;
++        let admission = workspace.charge(certificate.working_bytes)?;
+         let cursor = self.open(args, ceiling)?;
+-        Ok(Box::new(CertifiedCursor {
+-            cursor,
+-            workspace,
+-            row_bytes: certificate.row_bytes,
+-            _admission: admission,
+-        }))
++        let owner_workspace = workspace.clone();
++        WorkspaceCursor::new(
++            CertifiedCursor {
++                cursor,
++                workspace,
++                row_bytes: certificate.row_bytes,
++                _admission: admission,
++            },
++            &owner_workspace,
++            "certified property-function control",
++        )
+     }
+     /// The relation's determinism class. Read by the fork-join parallel gate exactly
+     /// as [`crate::user_fn::NativeFunction`]'s is: only
+@@ -2105,7 +2185,10 @@ pub fn open_contained(
+         args,
+         ceiling,
+         &crate::WorkspaceCapability::default(),
++        None,
++        &purrdf_geo_kernel::binding::STANDARD_PROFILE,
+     )
++    .and_then(WorkspaceCursor::into_resident)
+     .map_err(|error| match error {
+         // This public resident boundary retains its documented legacy variants.
+         // Bounded execution calls the admitted checker directly and keeps its lease.
+@@ -2129,7 +2212,9 @@ pub(crate) fn open_with_workspace_contained(
+     args: &PfArgs<'_>,
+     ceiling: Option<u64>,
+     workspace: &crate::WorkspaceCapability,
+-) -> Result<Box<dyn PfCursor>, EvalError> {
++    context: Option<&crate::NativeFnContext<'_>>,
++    geo: &purrdf_geo_kernel::GeoProfile,
++) -> Result<WorkspaceCursor, EvalError> {
+     let declared = declaration_contained_admitted(iri, "arity", || relation.arity(), workspace)?;
+     let supplied = args.arity();
+     if declared != supplied {
+@@ -2146,10 +2231,12 @@ pub(crate) fn open_with_workspace_contained(
+         iri,
+         "opening an invocation",
+         || {
+-            if workspace.is_bounded() {
++            if let Some(context) = context {
++                relation.open_metered(args, ceiling, context, geo)
++            } else if workspace.is_bounded() {
+                 relation.open_admitted(args, ceiling, workspace.clone())
+             } else {
+-                relation.open(args, ceiling)
++                relation.open(args, ceiling).map(WorkspaceCursor::resident)
+             }
+         },
+         workspace,
+diff --git crates/sparql-eval/src/property_fn_eval.rs crates/sparql-eval/src/property_fn_eval.rs
+index c2786b72a..8f0f92c19 100644
+--- crates/sparql-eval/src/property_fn_eval.rs
++++ crates/sparql-eval/src/property_fn_eval.rs
+@@ -891,13 +891,35 @@ fn eval_call_over<D: DatasetView + Sync>(
+         let invocation_ceiling = ceiling
+             .filter(|_| plan.ceiling_is_offerable)
+             .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
+-        let mut cursor = open_with_workspace_contained(
+-            relation.as_ref(),
+-            &call.iri,
+-            &pf_args,
+-            invocation_ceiling,
+-            &ctx.growth,
+-        )?;
++        let (opened, stopped, physical_failure) = crate::user_fn::metered_native_call(
++            ctx,
++            ChargePoint::PropertyFunctionWork,
++            |context| {
++                open_with_workspace_contained(
++                    relation.as_ref(),
++                    &call.iri,
++                    &pf_args,
++                    invocation_ceiling,
++                    &ctx.growth,
++                    Some(context),
++                    ctx.geo,
++                )
++            },
++        );
++        if let Some(error) = physical_failure {
++            drop(opened);
++            return Err(error);
++        }
++        if ctx.growth.has_failed() {
++            drop(opened);
++            return Err(EvalError::WorkspaceStopped);
++        }
++        if let Some(governor) = stopped {
++            drop(opened);
++            tripped = Some(governor);
++            break 'input;
++        }
++        let mut cursor = opened?;
+         // The generation, read HERE and once: an index-backed relation pins its snapshot
+         // when it opens, so this is the instant at which "which version is answering" is
+         // true of every row this cursor will go on to emit. See `PfCursor::generation`.
+diff --git crates/sparql-eval/src/user_fn.rs crates/sparql-eval/src/user_fn.rs
+index 42a01397b..fb99ae7c1 100644
+--- crates/sparql-eval/src/user_fn.rs
++++ crates/sparql-eval/src/user_fn.rs
+@@ -426,10 +426,144 @@ pub type AdmittedNativeFnBody = Arc<
+         + Sync,
+ >;
+ 
++/// An admitted native body with internal work and cancellation checkpoints.
++/// The result keeps its original physical allocation, including across clones.
++pub type MeteredNativeFnBody =
++    Arc<dyn Fn(&NativeFnCall<'_>) -> Result<Option<WorkspaceTerm>, EvalError> + Send + Sync>;
++
++/// Arguments and immutable capabilities of one native function invocation.
++#[derive(Debug)]
++#[non_exhaustive]
++pub struct NativeFnCall<'a> {
++    /// The actual call-position IRI.
++    pub iri: &'a str,
++    /// Values borrowed from the evaluator's original argument owners.
++    pub args: &'a [&'a TermValue],
++    /// Work charging and stop checks, with no evaluator or dataset access.
++    pub context: &'a NativeFnContext<'a>,
++    /// Actual physical admission shared with the invoking query.
++    pub workspace: &'a WorkspaceCapability,
++    /// Caller-selected immutable geographic bindings and numerical policy.
++    pub geo: &'a purrdf_geo_kernel::GeoProfile,
++}
++
++#[derive(Clone, Copy)]
++enum NativeCharge {
++    Work(u64),
++    WorkspaceGrowth(u64),
++    Checkpoint,
++}
++
++/// A borrowed native body's restricted work and cancellation capability.
++/// Numerical code releases its floating environment guard before invoking it.
++pub struct NativeFnContext<'a> {
++    charge: &'a dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
++    stopped: core::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
++    workspace: &'a WorkspaceCapability,
++    physical_failure: core::cell::RefCell<Option<EvalError>>,
++}
++purrdf_hash::debug_non_exhaustive!(NativeFnContext<'_> { stopped });
++
++impl NativeFnContext<'_> {
++    /// Borrow the actual query's physical admission capability.
++    #[must_use]
++    pub const fn workspace(&self) -> &WorkspaceCapability {
++        self.workspace
++    }
++
++    /// Preserve the first actual physical failure without rendering a second
++    /// diagnostic or replacing the governor's original stop cause.
++    pub(crate) fn record_physical_failure(&self, error: EvalError) {
++        let mut failure = self.physical_failure.borrow_mut();
++        if failure.is_none() {
++            *failure = Some(error);
++        }
++    }
++
++    /// Charge the operation law's documented units before the next work chunk.
++    /// # Errors
++    /// Returns the first governor that refused work or stopped this invocation.
++    pub fn charge_work(&self, units: u64) -> Result<(), purrdf_core::TrippedGovernor> {
++        self.apply(NativeCharge::Work(units))
++    }
++    /// Report additional numerical-policy workspace to the scratch governor.
++    /// Physical ownership must also use [`NativeFnCall::workspace`] before birth.
++    /// # Errors
++    /// Returns the original refusing governor; this never acquires a physical grant.
++    pub fn charge_workspace_growth(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor> {
++        self.apply(NativeCharge::WorkspaceGrowth(bytes))
++    }
++    /// Poll the selected host stop law without consuming fuel.
++    /// # Errors
++    /// Returns the governor that stopped the call.
++    pub fn checkpoint(&self) -> Result<(), purrdf_core::TrippedGovernor> {
++        self.apply(NativeCharge::Checkpoint)
++    }
++    fn apply(&self, charge: NativeCharge) -> Result<(), purrdf_core::TrippedGovernor> {
++        if let Some(stopped) = self.stopped.get() {
++            return Err(stopped);
++        }
++        let result = (self.charge)(charge);
++        if let Err(stopped) = result {
++            self.stopped.set(Some(stopped));
++        }
++        result
++    }
++}
++
++pub(crate) fn metered_native_call<D: DatasetView + Sync, T>(
++    ctx: &EvalCtx<'_, D>,
++    work_point: crate::governor::ChargePoint,
++    body: impl FnOnce(&NativeFnContext<'_>) -> T,
++) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
++    let charge = |point| match point {
++        NativeCharge::Work(units) => ctx.charge_occurrences(work_point, units),
++        NativeCharge::WorkspaceGrowth(bytes) => {
++            if let Some(stopped) = ctx.stop_check() {
++                return Err(stopped);
++            }
++            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
++        }
++        NativeCharge::Checkpoint => ctx.stop_check().map_or(Ok(()), Err),
++    };
++    native_call(&ctx.growth, &charge, body)
++}
++
++fn native_call<T>(
++    workspace: &WorkspaceCapability,
++    charge: &dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
++    body: impl FnOnce(&NativeFnContext<'_>) -> T,
++) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
++    let context = NativeFnContext {
++        charge,
++        stopped: core::cell::Cell::new(None),
++        workspace,
++        physical_failure: core::cell::RefCell::new(None),
++    };
++    let result = body(&context);
++    let failure = context.physical_failure.into_inner();
++    (result, context.stopped.get(), failure)
++}
++
++pub(crate) fn unmetered_native_call<T>(
++    workspace: &WorkspaceCapability,
++    body: impl FnOnce(&NativeFnContext<'_>) -> Result<T, EvalError>,
++) -> Result<T, EvalError> {
++    let (result, _, failure) = native_call(workspace, &|_| Ok(()), body);
++    if let Some(error) = failure {
++        drop(result);
++        Err(error)
++    } else {
++        result
++    }
++}
++
+ #[derive(Clone)]
+ enum NativeBody {
+     Resident(NativeFnBody),
+     Admitted(AdmittedNativeFnBody),
++    Metered(MeteredNativeFnBody),
++    Standard(crate::geo::functions::GeofFunction),
+ }
+ 
+ /// Everything a dataset-aware (expression-bodied) user function is given when it is
+@@ -686,6 +820,99 @@ pub struct NativeFunction {
+     pub(crate) volatility: Volatility,
+ }
+ 
++macro_rules! standard_native_population {
++    ($($index:literal),* $(,)?) => { [$(NativeFunction {
++        body: NativeBody::Standard(crate::geo::functions::GeofFunction::ALL[$index]),
++        arity: crate::geo::functions::GeofFunction::ALL[$index].arity(),
++        volatility: Volatility::Stable,
++    }),*] };
++}
++static STANDARD_NATIVE: [NativeFunction; crate::geo::functions::GeofFunction::COUNT] = standard_native_population!(
++    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
++    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
++    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
++);
++
++fn standard_native(iri: &str) -> Option<&'static NativeFunction> {
++    let local = iri.strip_prefix(purrdf_iri::vocab::ogc::geof::NS)?;
++    crate::geo::functions::GeofFunction::ALL
++        .iter()
++        .position(|function| function.local_name() == local)
++        .map(|index| &STANDARD_NATIVE[index])
++}
++
++/// A parser namespace cannot intercept an immutable standard scalar function.
++pub(crate) fn validate_standard_parser(
++    options: &purrdf_sparql_algebra::ParserOptions,
++    workspace: &WorkspaceCapability,
++) -> Result<(), EvalError> {
++    let mut conflict: Option<&str> = None;
++    for function in crate::geo::functions::GeofFunction::ALL {
++        // A namespace may end within either the official prefix or local name;
++        // compare the borrowed split spelling without constructing a String.
++        for namespace in &options.extension_fn_namespaces {
++            let prefix = purrdf_iri::vocab::ogc::geof::NS;
++            let intercepts = prefix.starts_with(namespace)
++                || namespace
++                    .strip_prefix(prefix)
++                    .is_some_and(|suffix| function.local_name().starts_with(suffix));
++            if intercepts && conflict.is_none_or(|old| function.local_name() < old) {
++                conflict = Some(function.local_name());
++            }
++        }
++    }
++    if let Some(local) = conflict {
++        return Err(NativeDiagnostic::error(
++            NativeDiagnosticKind::StandardFunctionConflict,
++            format_args!(
++                "extension parser namespace intercepts immutable standard function <{}{local}>",
++                purrdf_iri::vocab::ogc::geof::NS
++            ),
++            workspace,
++        ));
++    }
++    Ok(())
++}
++
++pub(crate) fn validate_standard_algebra_with_memory(
++    pattern: &purrdf_sparql_algebra::GraphPattern,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvalError> {
++    use purrdf_sparql_algebra::{Expression, Flow, Function, NodeRef, Visit};
++    let mut conflict = None;
++    purrdf_sparql_algebra::walk::walk_pre_post_with_memory(
++        NodeRef::Pattern(pattern),
++        |visit, node, _| -> Result<Flow, purrdf_lex::allocation::StorageError> {
++            if visit == Visit::Enter
++                && let NodeRef::Expr(Expression::FunctionCall(Function::Purrdf(call), _)) = node
++                && standard_native(&call.iri).is_some()
++            {
++                conflict = Some(call.iri.as_str());
++                return Ok(Flow::Stop);
++            }
++            Ok(Flow::Descend)
++        },
++        memory,
++    )
++    .map_err(|error| {
++        memory
++            .admission_mut()
++            .storage_error(error, "standard scalar validation walk")
++    })?;
++    // The shared walk's temporary grant must cover the work-list until it dies.
++    // Its owner callback is the lower Memory scope, not a post-traversal fee.
++    if let Some(iri) = conflict {
++        return Err(NativeDiagnostic::error(
++            NativeDiagnosticKind::StandardFunctionConflict,
++            format_args!(
++                "closed function annotation intercepts immutable standard function <{iri}>"
++            ),
++            memory.admission_mut().workspace(),
++        ));
++    }
++    Ok(())
++}
++
+ purrdf_hash::debug_non_exhaustive!(
+     /// The closure body has no `Debug` impl, so only the declared arity and
+     /// volatility are shown (the same two fields the fork-join parallel gate and
+@@ -856,6 +1083,62 @@ impl UserFunctionRegistry {
+         self.register_native_body(iri.into(), arity, volatility, NativeBody::Admitted(body));
+     }
+ 
++    /// Register a producer that admits its own allocations and meters native work.
++    pub fn register_native_metered(
++        &mut self,
++        iri: impl Into<String>,
++        arity: Arity,
++        volatility: Volatility,
++        body: MeteredNativeFnBody,
++    ) {
++        self.register_native_body(iri.into(), arity, volatility, NativeBody::Metered(body));
++    }
++
++    pub(crate) fn register_standard_geo(
++        &mut self,
++        iri: String,
++        function: crate::geo::functions::GeofFunction,
++    ) {
++        self.register_native_body(
++            iri,
++            function.arity(),
++            Volatility::Stable,
++            NativeBody::Standard(function),
++        );
++    }
++
++    /// Reject any non-identical shadow of the immutable official scalar set.
++    /// The minimum conflicting IRI makes the refusal independent of map order.
++    pub(crate) fn validate_standard(
++        &self,
++        workspace: &WorkspaceCapability,
++    ) -> Result<(), EvalError> {
++        let nonnative = self
++            .fns
++            .keys()
++            .chain(self.exprs.keys())
++            .filter(|iri| standard_native(iri).is_some());
++        let native = self.native.iter().filter_map(|(iri, native)| {
++            let standard = standard_native(iri)?;
++            let same_body = matches!((&native.body, &standard.body),
++                (NativeBody::Standard(left), NativeBody::Standard(right)) if left == right);
++            (!same_body
++                || native.arity != standard.arity
++                || native.volatility != standard.volatility)
++                .then_some(iri)
++        });
++        if let Some(iri) = nonnative.chain(native).min() {
++            return Err(NativeDiagnostic::error(
++                NativeDiagnosticKind::StandardFunctionConflict,
++                format_args!(
++                    "caller registration conflicts with immutable standard function <{iri}>"
++                ),
++                workspace,
++            ));
++        }
++        Ok(())
++    }
++
+     fn register_native_body(
+         &mut self,
+         iri: String,
+@@ -903,7 +1186,7 @@ impl UserFunctionRegistry {
+     /// Resolve a call-position IRI to its declared native function, if any.
+     #[must_use]
+     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
+-        self.native.get(iri)
++        standard_native(iri).or_else(|| self.native.get(iri))
+     }
+ 
+     /// Resolve a call-position IRI to its declared dataset-aware
+@@ -1623,12 +1906,13 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
+ /// An arity violation stays hard on purpose: the call
+ /// as written cannot be evaluated at all, which is a defect in the query text
+ /// rather than a value this row happens not to have.
+-pub(crate) fn eval_native_function(
++pub(crate) fn eval_native_function<D: DatasetView + Sync>(
+     native: &NativeFunction,
+     iri: &str,
+     args: &[Option<TermValue>],
+-    workspace: &WorkspaceCapability,
++    ctx: &EvalCtx<'_, D>,
+ ) -> Result<Option<WorkspaceTerm>, EvalError> {
++    let workspace = &ctx.growth;
+     // Fail-fast: a wrong-count call never reaches the host closure with a short
+     // or long slice.
+     if !native.arity.accepts(args.len()) {
+@@ -1665,10 +1949,51 @@ pub(crate) fn eval_native_function(
+     // surface nondeterministically. The error message is fixed and
+     // payload-free so it is identical no matter which worker panicked. Mirrors
+     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
+-    match catch_unwind(AssertUnwindSafe(|| match &native.body {
+-        NativeBody::Resident(body) => body(&values).map(|value| value.map(WorkspaceTerm::resident)),
+-        NativeBody::Admitted(body) => body(&values, workspace),
+-    })) {
++    if let Err(stopped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
++        ctx.expression_barrier.record(stopped);
++        return Ok(None);
++    }
++    let (result, stopped, physical_failure) = metered_native_call(
++        ctx,
++        crate::governor::ChargePoint::NativeFunctionWork,
++        |context| {
++            let call = NativeFnCall {
++                iri,
++                args: &values,
++                context,
++                workspace,
++                geo: ctx.geo,
++            };
++            catch_unwind(AssertUnwindSafe(|| match &native.body {
++                NativeBody::Resident(body) => {
++                    body(&values).map(|value| value.map(WorkspaceTerm::resident))
++                }
++                NativeBody::Admitted(body) => body(&values, workspace),
++                NativeBody::Metered(body) => body(&call),
++                NativeBody::Standard(function) => {
++                    crate::geo::functions::evaluate_standard(*function, &call)
++                }
++            }))
++        },
++    );
++    // The actual physical account's first failure outranks an observed governor.
++    // Never render a second diagnostic after admission has already stopped.
++    if let Some(error) = physical_failure {
++        drop(result);
++        return Err(error);
++    }
++    if workspace.has_failed() {
++        return match result {
++            Ok(Err(error)) => Err(error),
++            _ => Err(EvalError::WorkspaceStopped),
++        };
++    }
++    if let Some(stopped) = stopped {
++        drop(result);
++        ctx.expression_barrier.record(stopped);
++        return Ok(None);
++    }
++    match result {
+         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
+         Err(_) => Err(NativeDiagnostic::error(
+             NativeDiagnosticKind::FunctionOperational,
+diff --git crates/sparql-eval/src/workspace.rs crates/sparql-eval/src/workspace.rs
+index 7fd50b3c3..49de6a8dc 100644
+--- crates/sparql-eval/src/workspace.rs
++++ crates/sparql-eval/src/workspace.rs
+@@ -1545,6 +1545,22 @@ impl WorkspaceCapability {
+     }
+ }
+ 
++/// Admit and allocate one native concrete control. The private recipient moves
++/// both outputs directly into an ordered owner: Box before its original grant.
++pub(crate) fn box_native<T>(
++    value: T,
++    workspace: &WorkspaceCapability,
++    construct: &'static str,
++) -> Result<(Box<T>, WorkspaceAllocation), EvalError> {
++    let allocation = workspace.charge(
++        u64::try_from(std::alloc::Layout::new::<T>().size())
++            .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
++    )?;
++    let value = purrdf_core::small::try_boxed(value)
++        .map_err(|_| EvalError::AllocationFailed { construct })?;
++    Ok((value, allocation))
++}
++
+ impl<E> std::fmt::Debug for Account<E> {
+     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         formatter
+diff --git crates/text/src/relation.rs crates/text/src/relation.rs
+index 6fc6a2773..67413c496 100644
+--- crates/text/src/relation.rs
++++ crates/text/src/relation.rs
+@@ -42,10 +42,9 @@
+ use crate::query_workspace::{QueryString, admitted, query_error};
+ use crate::score::{distinct_terms_owned, score_located_owned, select_counted_owned};
+ use purrdf_sparql_eval::{
+-    AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceAllocation,
+-    WorkspaceCapability, WorkspaceTerm,
++    AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability,
++    WorkspaceCursor, WorkspaceTerm,
+ };
+-use std::mem::size_of;
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
+@@ -1228,7 +1227,7 @@ impl TextSearchRelation {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<WorkspaceCursor, EvalError> {
+         check_arity_owned(args, self.arity(), "text search", &workspace)?;
+         let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
+             format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
+@@ -1310,10 +1309,7 @@ impl TextSearchRelation {
+             }
+         }
+         let bound = bound_terms(args, &workspace)?;
+-        let control = workspace.charge(
+-            u64::try_from(size_of::<SearchCursor>())
+-                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+-        )?;
++        let owner_workspace = workspace.clone();
+         let cursor = SearchCursor {
+             index: Arc::clone(&self.index),
+             generation: Arc::clone(&self.generation),
+@@ -1322,13 +1318,8 @@ impl TextSearchRelation {
+             bound,
+             remaining: ceiling,
+             workspace,
+-            _control: control,
+         };
+-        let cursor =
+-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
+-                construct: "text search cursor",
+-            })?;
+-        Ok(cursor)
++        WorkspaceCursor::new(cursor, &owner_workspace, "text search cursor")
+     }
+ }
+ 
+@@ -1471,6 +1462,7 @@ impl PropertyFunction for TextSearchRelation {
+         ceiling: Option<u64>,
+     ) -> Result<Box<dyn PfCursor>, EvalError> {
+         self.open_owned(args, ceiling, WorkspaceCapability::default())
++            .and_then(WorkspaceCursor::into_resident)
+     }
+ 
+     fn open_admitted(
+@@ -1478,7 +1470,7 @@ impl PropertyFunction for TextSearchRelation {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<WorkspaceCursor, EvalError> {
+         self.open_owned(args, ceiling, workspace)
+     }
+ }
+@@ -1512,7 +1504,6 @@ struct SearchCursor {
+     bound: AdmittedVec<Option<WorkspaceTerm>>,
+     remaining: Option<u64>,
+     workspace: WorkspaceCapability,
+-    _control: WorkspaceAllocation,
+ }
+ 
+ impl SearchCursor {
+@@ -1786,7 +1777,7 @@ impl TermOccurrenceRelation {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<WorkspaceCursor, EvalError> {
+         check_arity_owned(args, self.arity(), "term occurrence", &workspace)?;
+         let needle = args.get(OCCURRENCE_TERM).ok_or_else(|| {
+             NativeDiagnostic::error(
+@@ -1839,10 +1830,7 @@ impl TermOccurrenceRelation {
+             }
+         }
+         let bound = bound_terms(args, &workspace)?;
+-        let control = workspace.charge(
+-            u64::try_from(size_of::<OccurrenceCursor>())
+-                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+-        )?;
++        let owner_workspace = workspace.clone();
+         let cursor = OccurrenceCursor {
+             index: Arc::clone(&self.index),
+             generation: Arc::clone(&self.generation),
+@@ -1854,13 +1842,8 @@ impl TermOccurrenceRelation {
+             bound,
+             remaining: ceiling,
+             workspace,
+-            _control: control,
+         };
+-        let cursor =
+-            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
+-                construct: "term occurrence cursor",
+-            })?;
+-        Ok(cursor)
++        WorkspaceCursor::new(cursor, &owner_workspace, "term occurrence cursor")
+     }
+ 
+     /// The index this relation answers from.
+@@ -1939,6 +1922,7 @@ impl PropertyFunction for TermOccurrenceRelation {
+         ceiling: Option<u64>,
+     ) -> Result<Box<dyn PfCursor>, EvalError> {
+         self.open_owned(args, ceiling, WorkspaceCapability::default())
++            .and_then(WorkspaceCursor::into_resident)
+     }
+ 
+     fn open_admitted(
+@@ -1946,7 +1930,7 @@ impl PropertyFunction for TermOccurrenceRelation {
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: WorkspaceCapability,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
++    ) -> Result<WorkspaceCursor, EvalError> {
+         self.open_owned(args, ceiling, workspace)
+     }
+ }
+@@ -1973,7 +1957,6 @@ struct OccurrenceCursor {
+     bound: AdmittedVec<Option<WorkspaceTerm>>,
+     remaining: Option<u64>,
+     workspace: WorkspaceCapability,
+-    _control: WorkspaceAllocation,
+ }
+ 
+ impl OccurrenceCursor {
+diff --git crates/xsd/src/value.rs crates/xsd/src/value.rs
+index 5db679d39..2a5a9b0c1 100644
+--- crates/xsd/src/value.rs
++++ crates/xsd/src/value.rs
+@@ -566,6 +566,7 @@ pub fn try_parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+     let storage_error = |error| match error {
+         crate::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
+         crate::bigint::LimbScratchError::AllocationFailed => StorageError::AllocationFailed,
++        crate::bigint::LimbScratchError::Storage(error) => error,
+         crate::bigint::LimbScratchError::Capacity { .. }
+         | crate::bigint::LimbScratchError::Exhausted { .. }
+         | crate::bigint::LimbScratchError::Retained { .. } => StorageError::AdmissionFailed,

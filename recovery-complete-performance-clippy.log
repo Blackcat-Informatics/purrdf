@@ -1,0 +1,82 @@
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+error[E0499]: cannot borrow `context` as mutable more than once at a time
+  --> crates/geo-kernel/benches/covers.rs:74:42
+   |
+69 |       for (name, metric) in [
+   |  ___________________________-
+70 | |         ("length", ellipsoidal::length as fn(_, _) -> _),
+71 | |         ("perimeter", ellipsoidal::perimeter),
+72 | |         ("area", ellipsoidal::area),
+73 | |     ] {
+   | |_____- first borrow used here, in later iteration of loop
+74 |           let expected = metric(&geometry, &mut context).unwrap();
+   |                                            ^^^^^^^^^^^^ `context` was mutably borrowed here in the previous iteration of the loop
+
+error[E0499]: cannot borrow `context` as mutable more than once at a time
+  --> crates/geo-kernel/benches/covers.rs:76:40
+   |
+74 |         let expected = metric(&geometry, &mut context).unwrap();
+   |                                          ------------ first mutable borrow occurs here
+75 |         let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+76 |         let output = metric(&geometry, &mut context).unwrap();
+   |                                        ^^^^^^^^^^^^ second mutable borrow occurs here
+...
+86 |             sample.iter(|| black_box(metric(black_box(&geometry), &mut context).unwrap()));
+   |                                      ------ first borrow later captured here by closure
+
+error[E0502]: cannot borrow `context` as immutable because it is also borrowed as mutable
+  --> crates/geo-kernel/benches/covers.rs:81:13
+   |
+74 |         let expected = metric(&geometry, &mut context).unwrap();
+   |                                          ------------ mutable borrow occurs here
+...
+81 |             context.work_items(),
+   |             ^^^^^^^ immutable borrow occurs here
+...
+86 |             sample.iter(|| black_box(metric(black_box(&geometry), &mut context).unwrap()));
+   |                                      ------ mutable borrow later captured here by closure
+
+error[E0502]: cannot borrow `context` as immutable because it is also borrowed as mutable
+  --> crates/geo-kernel/benches/covers.rs:82:13
+   |
+74 |         let expected = metric(&geometry, &mut context).unwrap();
+   |                                          ------------ mutable borrow occurs here
+...
+82 |             context.workspace_peak(),
+   |             ^^^^^^^ immutable borrow occurs here
+...
+86 |             sample.iter(|| black_box(metric(black_box(&geometry), &mut context).unwrap()));
+   |                                      ------ mutable borrow later captured here by closure
+
+error[E0499]: cannot borrow `context` as mutable more than once at a time
+  --> crates/geo-kernel/benches/covers.rs:85:69
+   |
+69 |       for (name, metric) in [
+   |  ___________________________-
+70 | |         ("length", ellipsoidal::length as fn(_, _) -> _),
+71 | |         ("perimeter", ellipsoidal::perimeter),
+72 | |         ("area", ellipsoidal::area),
+73 | |     ] {
+   | |_____- first borrow later used here
+74 |           let expected = metric(&geometry, &mut context).unwrap();
+   |                                            ------------ first mutable borrow occurs here
+...
+85 |           bench.bench_function(&format!("geographic_polygon/{name}"), |sample| {
+   |                                                                       ^^^^^^^^ second mutable borrow occurs here
+86 |               sample.iter(|| black_box(metric(black_box(&geometry), &mut context).unwrap()));
+   |                                                                          ------- second borrow occurs due to use of `context` in closure
+
+error[E0521]: borrowed data escapes outside of closure
+  --> crates/geo-kernel/benches/covers.rs:86:38
+   |
+69 |     for (name, metric) in [
+   |                ------ `metric` declared here, outside of the closure body
+...
+86 |             sample.iter(|| black_box(metric(black_box(&geometry), &mut context).unwrap()));
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a temporary borrow escapes the closure body here
+   |
+   = help: `metric` is declared outside the closure, so any data borrowed inside the closure cannot be stored into it
+
+Some errors have detailed explanations: E0499, E0502, E0521.
+For more information about an error, try `rustc --explain E0499`.
+error: could not compile `purrdf-geo-kernel` (bench "covers") due to 6 previous errors

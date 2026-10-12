@@ -1,0 +1,166 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/validate)
+    Finished `test` profile [optimized] target(s) in 5m 38s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-sparql-eval/36bbb5bd3d6db1d7/out/purrdf_sparql_eval-36bbb5bd3d6db1d7)
+
+running 95 tests
+test geo::error::tests::conversion_maps_config_to_its_namesake_and_a_literal_to_data ... ok
+test geo::error::tests::conversion_maps_arity_to_a_function_error ... ok
+test geo::error::tests::each_constructor_builds_its_own_variant ... ok
+test geo::error::tests::conversion_maps_unsupported_and_domain_to_function ... ok
+test geo::error::tests::source_read_failure_remains_fatal_and_preserves_its_detail ... ok
+test geo::error::tests::only_the_argument_level_kinds_are_per_solution_expression_errors ... ok
+test geo::error::tests::conversion_preserves_the_detail ... ok
+test geo::error::tests::display_carries_the_detail_and_its_own_prefix ... ok
+test geo::functions::standard_tests::a_parser_namespace_cannot_intercept_a_standard_function ... ok
+test geo::functions::standard_tests::carrier_term_moves_admitted_text_and_charges_its_remaining_owned_storage ... ok
+test geo::functions::standard_tests::a_governor_trip_inside_geodesy_withholds_the_filter_or_bind_answer ... ok
+test geo::functions::standard_tests::complete_unit_argument_refuses_before_iri_construction ... ok
+test geo::functions::standard_tests::every_overlay_kind_refuses_standard_shadow_before_parsing_a_body ... ok
+test geo::functions::standard_tests::explicit_epsg_registration_swaps_source_axes_and_preserves_crs84 ... ok
+test geo::functions::standard_tests::forged_closed_function_annotations_refuse_before_plan_admission ... ok
+test geo::functions::standard_tests::a_real_precision_exhaustion_remains_fatal_in_filter_and_bind ... ok
+test geo::functions::standard_tests::governor_cancellation_during_carrier_construction_preserves_incomplete_evidence ... ok
+test geo::functions::standard_tests::metric_literal_formatting_is_charged_before_allocation_and_keeps_live_output ... ok
+test geo::functions::standard_tests::actual_new_default_empty_and_prepared_use_the_ellipsoidal_kernel ... ok
+test geo::functions::standard_tests::complete_length_and_exact_declared_unit_reach_standard_dispatch ... ok
+test geo::functions::standard_tests::geojson_conversion_uses_actual_registered_continuous_chain ... ok
+test geo::functions::standard_tests::original_carrier_construction_refusal_is_fatal_in_filter_and_bind ... ok
+test geo::functions::standard_tests::nested_sparql_bodies_and_update_where_resolve_the_same_standard_set ... ok
+test geo::functions::standard_tests::prepared_cache_and_admission_bind_reference_and_policy_independently ... ok
+test geo::functions::standard_tests::sealed_identical_registration_coalesces_and_arbitrary_shadow_refuses_before_use ... ok
+test geo::functions::standard_tests::standard_relations_identify_geographic_poles_and_longitude_seams ... ok
+test geo::functions::standard_tests::standard_relations_use_completed_dimensions_for_constant_source_curves ... ok
+test geo::functions::tests::a_direct_call_with_the_wrong_argument_count_is_refused_rather_than_panicking ... ok
+test geo::functions::tests::a_mixed_crs_pair_is_refused_and_a_same_crs_pair_is_not ... ok
+test geo::functions::tests::a_non_literal_argument_is_refused_and_a_literal_one_is_not ... ok
+test geo::functions::tests::a_malformed_relate_pattern_is_refused_and_a_valid_one_is_not ... ok
+test geo::functions::standard_tests::standard_buffers_use_complete_native_materialization_and_governed_admission ... ok
+test geo::functions::tests::a_point_inside_a_polygon_is_within_it_and_does_not_contain_it ... ok
+test geo::functions::tests::an_undeclared_unit_is_refused_and_the_declared_one_is_not ... ok
+test geo::functions::tests::an_xsd_string_argument_is_refused_and_a_wkt_literal_is_not ... ok
+test geo::functions::tests::as_geojson_is_refused_outside_the_geojson_crs_and_answered_inside_it ... ok
+test geo::functions::tests::every_declared_function_is_registered_and_the_registry_holds_nothing_else ... ok
+test geo::functions::tests::every_local_name_is_distinct_and_round_trips_through_from_local_name ... ok
+test geo::functions::tests::every_registration_declares_the_stable_volatility_the_bodies_actually_have ... ok
+test geo::functions::tests::every_unimplemented_function_fails_by_name_rather_than_answering ... ok
+test geo::functions::tests::geometry_n_out_of_range_is_refused_and_an_in_range_index_is_not ... ok
+test geo::functions::tests::geometry_type_is_refused_without_the_simple_features_namespace_and_answered_with_it ... ok
+test geo::functions::tests::malformed_wkt_is_refused_and_well_formed_wkt_is_not ... ok
+test geo::functions::tests::metric_area_is_refused_in_degrees_and_answered_in_metres ... ok
+test geo::functions::tests::an_unimplemented_function_aborts_a_real_sparql_query ... ok
+test geo::functions::tests::min_x_is_refused_on_an_empty_geometry_and_answered_on_a_populated_one ... ok
+test geo::functions::tests::min_z_is_refused_on_a_planar_geometry_and_answered_on_a_three_dimensional_one ... ok
+test geo::functions::tests::no_relate_pattern_string_can_panic_the_seam ... ok
+test geo::functions::tests::sf_equals_holds_between_two_identical_points ... ok
+test geo::functions::tests::the_aggregates_are_listed_but_never_registered_as_scalar_functions ... ok
+test geo::functions::tests::the_accessors_report_the_geometrys_own_properties ... ok
+test geo::functions::tests::the_gml_kml_and_dggs_datatypes_are_refused_by_name_and_the_two_codecs_are_not ... ok
+test geo::functions::tests::the_measures_answer_in_the_declared_unit ... ok
+test geo::functions::tests::the_constructors_and_serializations_answer_with_the_geometry_they_name ... ok
+test geo::functions::tests::the_topological_family_is_exactly_the_twenty_four_relations ... ok
+test geo::functions::tests::the_registered_seam_answers_a_real_sparql_query ... ok
+test geo::functions::tests::the_same_call_twice_and_two_spellings_of_one_coordinate_agree_byte_for_byte ... ok
+test geo::relation::tests::a_cross_crs_pairing_does_not_refuse_a_row_a_same_crs_pairing_entails ... ok
+test geo::relation::tests::a_geojson_serialization_is_indexed_beside_a_wkt_one ... ok
+test geo::relation::tests::a_graph_the_dataset_has_not_interned_builds_an_empty_index ... ok
+test geo::relation::tests::a_gml_literal_under_a_configured_property_is_refused_by_name_and_wkt_is_not ... ok
+test geo::relation::tests::a_mixed_crs_pair_is_refused_and_a_same_crs_pair_from_that_index_is_not ... ok
+test geo::relation::tests::a_named_graph_selector_must_hold_an_iri_and_an_iri_selector_is_accepted ... ok
+test geo::relation::tests::a_non_iri_serialization_entry_is_refused_and_an_iri_is_not ... ok
+test geo::relation::tests::a_repeated_serialization_entry_is_refused_and_two_distinct_ones_are_not ... ok
+test geo::relation::tests::a_view_handing_back_a_foreign_id_refuses_the_build ... ok
+test geo::relation::tests::a_subject_with_two_satisfying_geometries_yields_exactly_one_row ... ok
+test geo::relation::tests::all_four_rewrite_branches_produce_rows_and_the_bag_is_exactly_complete ... ok
+test geo::relation::tests::an_asserted_pair_matches_even_when_neither_side_carries_a_geometry ... ok
+test geo::relation::tests::a_wrong_argument_count_is_refused_and_the_declared_one_is_not ... ok
+test geo::relation::tests::an_empty_index_is_an_honest_empty_relation ... ok
+test geo::relation::tests::an_empty_serialization_list_is_refused_and_a_one_element_list_is_not ... ok
+test geo::relation::tests::an_asserted_triple_matches_even_when_the_geometries_refute_it ... ok
+test geo::relation::tests::an_unreadable_serialization_object_is_refused_and_a_readable_one_is_not ... ok
+test geo::relation::tests::an_entry_carries_its_subject_and_its_geometries_in_subject_order ... ok
+test geo::relation::tests::duplicate_serializations_of_one_geometry_collapse_to_one ... ok
+test geo::relation::tests::bare_geometries_alone_still_produce_the_geometry_geometry_branch ... ok
+test geo::relation::tests::every_mode_returns_the_rows_the_all_free_answer_would_have_been_filtered_to ... ok
+test geo::relation::tests::geometries_that_render_alike_are_kept_apart_and_true_duplicates_are_still_merged ... ok
+test geo::relation::tests::geographic_property_calls_share_physical_rows_and_governed_refusals ... ok
+test geo::relation::tests::registering_no_families_is_refused_and_registering_one_is_not ... ok
+test geo::relation::tests::registering_overlapping_families_twice_panics - should panic ... ok
+test geo::relation::tests::opposite_ingestion_orders_produce_the_same_fingerprint_and_the_same_rows ... ok
+test geo::relation::tests::the_ceiling_counts_emitted_rows_not_skipped_ones ... ok
+test geo::relation::tests::the_declared_shape_is_the_documented_one ... ok
+test geo::relation::tests::the_legacy_default_geometry_alias_dereferences_exactly_as_the_current_one_does ... ok
+test geo::relation::tests::the_row_bound_table_is_the_documented_one ... ok
+test geo::relation::tests::the_same_configuration_builds_non_empty_once_the_data_lands_in_that_graph ... ok
+test geo::relation::tests::the_source_fingerprint_is_frozen ... ok
+test geo::relation::tests::two_empty_indexes_under_different_configurations_disagree_on_their_fingerprint ... ok
+test geo::relation::tests::verify_binding_catches_a_dataset_that_differs_only_below_the_integer ... ok
+test geo::relation::tests::verify_binding_refuses_the_wrong_dataset_and_accepts_the_right_one ... ok
+test geo::functions::standard_tests::standard_geographic_rows_match_in_sequential_and_parallel_workers ... ok
+test geo::relation::tests::a_ceiling_yields_exactly_the_prefix_of_the_unbounded_answer ... ok
+test geo::relation::tests::the_declared_bound_is_never_exceeded_by_the_actual_row_count ... ok
+
+test result: ok. 95 passed; 0 failed; 0 ignored; 0 measured; 1496 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-validate/e58bf8035dc5e236/out/purrdf_validate-e58bf8035dc5e236)
+
+running 47 tests
+test geo::invocation::tests::refused_output_uses_the_existing_phase_work_and_peak ... ok
+test geo::invocation::tests::unadmitted_large_error_operands_do_not_allocate_to_render ... ok
+test geo::invocation::tests::remaining_child_context_reports_its_original_prefix_and_transient_peak ... ok
+test geo::tests::batch_refusal_publishes_no_partial_results ... ok
+test geo::tests::cell_batches_borrow_exact_sources_and_refuse_complete_invocation_limits ... ok
+test geo::tests::closed_whole_surface_fixed_and_mixed_covers_share_canonical_ranges ... ok
+test geo::tests::both_threshold_laws_are_separate_and_negative_reported_is_false ... ok
+test geo::tests::completed_cell_record_replays_and_inconsistent_metadata_refuses ... ok
+test geo::tests::configuration_parser_keeps_cumulative_work_and_separate_invocation_limits ... ok
+test geo::tests::decimal_admission_respects_payload_roles_before_strict_decoding ... ok
+test geo::tests::borrowed_session_configuration_keeps_copy_and_compile_in_one_budget ... ok
+test geo::tests::exact_original_range_and_ieee_refusals_remain_typed ... ok
+test geo::tests::exact_unit_registrations_are_normalized_protected_and_identity_bound ... ok
+test geo::tests::explicit_continuous_image_records_use_original_projected_metric_sources ... ok
+test geo::tests::direct_declared_grids_preserve_native_certificates_and_complete_batches ... ok
+test geo::tests::explicit_prepared_empty_container_capacity_refuses_before_output_allocation ... ok
+test geo::tests::explicit_prepared_sources_admit_exact_copies_before_large_range_arithmetic ... ok
+test geo::tests::complete_json_output_storage_refuses_before_large_result_construction ... ok
+test geo::tests::floating_environment_refusals_preserve_the_exact_register_or_probe_evidence ... ok
+test geo::tests::identity_record_members_are_all_in_the_response_admission_schema ... ok
+test geo::tests::explicit_prepared_curve_laws_and_complete_region_covers_cross_the_boundary ... ok
+test geo::tests::immutable_profile_snapshots_keep_large_source_ownership_without_copying ... ok
+test geo::tests::integer_cell_encoding_and_physical_level_selection_cross_the_codec ... ok
+test geo::tests::immutable_identity_has_distinct_checked_configuration_admission ... ok
+test geo::tests::inverse_zero_retains_absent_azimuths_and_separate_completed_law ... ok
+test geo::tests::complete_carrier_metrics_include_polygon_boundaries_and_si_certificates ... ok
+test geo::tests::original_scientific_strings_are_admitted_before_integer_construction ... ok
+test geo::tests::physical_offset_membership_keeps_negative_zero_and_reference_laws ... ok
+test geo::tests::explicit_similarity_chain_compiles_roundtrips_and_applies_once ... ok
+test geo::tests::inverse_models_roundtrip_strict_profiles_without_reminting_bindings ... ok
+test geo::tests::profile_exports_share_complete_configuration_admission_and_preserve_bytes ... ok
+test geo::tests::profile_roundtrip_preserves_reference_and_policy_ids ... ok
+test geo::tests::prepared_relation_records_preserve_physical_aliases_original_paths_and_native_law ... ok
+test geo::tests::scalar_distance_carries_the_same_native_completed_certificate ... ok
+test geo::tests::scale_and_configuration_refusals_keep_machine_readable_original_parameters ... ok
+test geo::tests::scratch_policy_and_refusals_preserve_explicit_host_fields ... ok
+test geo::tests::strict_unknown_duplicate_nested_and_version_refusals ... ok
+test geo::tests::taylor_scratch_refusal_is_operational_and_preserves_its_cause ... ok
+test geo::tests::transform_batch_admits_original_input_and_output_slots_before_allocating ... ok
+test geo::tests::typed_dispatch_identifier_spare_capacity_is_retained_before_lookup ... ok
+test geo::tests::typed_geometry_term_spare_capacity_refuses_before_carrier_allocation ... ok
+test geo::tests::typed_invalid_datatype_text_is_admitted_before_error_encoding ... ok
+test geo::tests::typed_source_collection_capacity_refuses_before_any_call_allocation ... ok
+test geo::tests::typed_unknown_identifiers_refuse_before_lookup_error_copies ... ok
+test geo::tests::reusable_index_content_identity_and_both_comparison_laws_survive_codec ... ok
+test geo::tests::point_buffer_carrier_preserves_closure_grid_and_certificate ... ok
+test geo::tests::native_polygon_records_keep_selected_curved_sides_and_complete_union_complement ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 201 filtered out; finished in 0.56s
+

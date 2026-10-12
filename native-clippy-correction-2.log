@@ -1,0 +1,55 @@
+    Blocking waiting for file lock on package cache
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-algebra)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/datalog)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/mime)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/columnar)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/entail)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/shex)
+error[E0624]: method `promote_admitted_workspace` is private
+    --> crates/geo-kernel/src/geodesic/preparation.rs:124:17
+     |
+ 124 |         context.promote_admitted_workspace(payload_retained)?;
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ private method
+     |
+    ::: crates/geo-kernel/src/context.rs:2060:5
+     |
+2060 |     fn promote_admitted_workspace(&mut self, bytes: u64) -> Result<(), GeoError> {
+     |     ---------------------------------------------------------------------------- private method defined here
+
+error: variable does not need to be mutable
+   --> crates/geo-kernel/src/numerical.rs:774:41
+    |
+774 |         a.compare_admitted_by(b, |cost, mut evaluate| {
+    |                                         ----^^^^^^^^
+    |                                         |
+    |                                         help: remove this `mut`
+    |
+    = note: `-D unused-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_mut)]`
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `purrdf-geo-kernel` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: cannot find module or crate `geom` in this scope
+    --> crates/geo-kernel/src/geojson.rs:1498:5
+     |
+1498 |     geom::try_fold(
+     |     ^^^^ use of unresolved module or unlinked crate `geom`
+     |
+help: to make use of source file crates/geo-kernel/src/geom.rs, use `mod geom` in this file to declare the module
+    -->  crates/geo-kernel/src/lib.rs:11:1
+     |
+  11 + mod geom;
+     |
+
+Some errors have detailed explanations: E0433, E0624.
+For more information about an error, try `rustc --explain E0433`.
+error: could not compile `purrdf-geo-kernel` (lib test) due to 3 previous errors

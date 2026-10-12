@@ -1,0 +1,227 @@
+offline_transform/gcj/fresh_context time:   [345.4 µs 346.6 µs 374.4 µs]  mad: 1.375 µs  (10 samples × 29 iterations)
+                         thrpt:  [2.671 Kelem/s 2.885 Kelem/s 2.895 Kelem/s]
+                         outliers: 3 of 10 (0 low severe, 1 low mild, 0 high mild, 2 high severe)
+offline_transform/gcj/warmed_context time:   [222.4 µs 225.7 µs 227.6 µs]  mad: 2.362 µs  (10 samples × 45 iterations)
+                         thrpt:  [4.394 Kelem/s 4.431 Kelem/s 4.495 Kelem/s]
+transform receipt model=gcj count=1 work=4999 workspace_peak=486040 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/gcj/batch1 time:   [223.6 µs 226.5 µs 226.8 µs]  mad: 382.0 ns  (10 samples × 45 iterations)
+                         thrpt:  [4.409 Kelem/s 4.415 Kelem/s 4.473 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+transform receipt model=gcj count=4 work=19996 workspace_peak=487816 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/gcj/batch4 time:   [886.8 µs 901.6 µs 905.6 µs]  mad: 8.360 µs  (10 samples × 12 iterations)
+                         thrpt:  [4.417 Kelem/s 4.436 Kelem/s 4.510 Kelem/s]
+transform receipt model=gcj count=16 work=79984 workspace_peak=494920 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/gcj/batch16 time:   [3.538 ms 3.552 ms 3.603 ms]  mad: 14.73 µs  (10 samples × 3 iterations)
+                         thrpt:  [4.441 Kelem/s 4.504 Kelem/s 4.523 Kelem/s]
+transform receipt model=gcj count=256 work=1279744 workspace_peak=637000 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/gcj/batch256: 10 samples cannot finish in 0.1 s; they will take about 0.6 s
+offline_transform/gcj/batch256 time:   [57.14 ms 57.38 ms 57.67 ms]  mad: 168.8 µs  (10 samples × 1 iterations)
+                         thrpt:  [4.439 Kelem/s 4.462 Kelem/s 4.480 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+transform receipt model=gcj count=4096 work=20475904 workspace_peak=2910280 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/gcj/batch4096: 10 samples cannot finish in 0.1 s; they will take about 9.2 s
+offline_transform/gcj/batch4096 time:   [920.2 ms 922.2 ms 924.0 ms]  mad: 1.881 ms  (10 samples × 1 iterations)
+                         thrpt:  [4.433 Kelem/s 4.441 Kelem/s 4.451 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+offline_transform/bd09ll/fresh_context time:   [90.96 µs 91.43 µs 91.56 µs]  mad: 154.1 ns  (10 samples × 110 iterations)
+                         thrpt:  [10.92 Kelem/s 10.94 Kelem/s 10.99 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+offline_transform/bd09ll/warmed_context time:   [40.84 µs 40.87 µs 41.56 µs]  mad: 85.36 ns  (10 samples × 247 iterations)
+                         thrpt:  [24.06 Kelem/s 24.47 Kelem/s 24.48 Kelem/s]
+transform receipt model=bd09ll count=1 work=2795 workspace_peak=486040 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/bd09ll/batch1 time:   [41.05 µs 41.86 µs 41.97 µs]  mad: 160.3 ns  (10 samples × 240 iterations)
+                         thrpt:  [23.82 Kelem/s 23.89 Kelem/s 24.36 Kelem/s]
+transform receipt model=bd09ll count=4 work=11180 workspace_peak=487816 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/bd09ll/batch4 time:   [166.8 µs 166.9 µs 167.2 µs]  mad: 104.3 ns  (10 samples × 60 iterations)
+                         thrpt:  [23.92 Kelem/s 23.97 Kelem/s 23.97 Kelem/s]
+transform receipt model=bd09ll count=16 work=44720 workspace_peak=494920 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/bd09ll/batch16 time:   [667.8 µs 669.1 µs 670.5 µs]  mad: 1.236 µs  (10 samples × 15 iterations)
+                         thrpt:  [23.86 Kelem/s 23.91 Kelem/s 23.96 Kelem/s]
+transform receipt model=bd09ll count=256 work=715520 workspace_peak=637000 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/bd09ll/batch256 time:   [10.46 ms 10.50 ms 10.60 ms]  mad: 44.05 µs  (10 samples × 1 iterations)
+                         thrpt:  [24.16 Kelem/s 24.38 Kelem/s 24.48 Kelem/s]
+transform receipt model=bd09ll count=4096 work=11448320 workspace_peak=2910280 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/bd09ll/batch4096: 10 samples cannot finish in 0.1 s; they will take about 1.7 s
+offline_transform/bd09ll/batch4096 time:   [169.0 ms 170.1 ms 170.3 ms]  mad: 537.0 µs  (10 samples × 1 iterations)
+                         thrpt:  [24.05 Kelem/s 24.08 Kelem/s 24.24 Kelem/s]
+offline_transform/analytic_mercator/fresh_context time:   [221.6 µs 222.7 µs 223.0 µs]  mad: 369.8 ns  (10 samples × 46 iterations)
+                         thrpt:  [4.484 Kelem/s 4.490 Kelem/s 4.513 Kelem/s]
+                         outliers: 1 of 10 (1 low severe, 0 low mild, 0 high mild, 0 high severe)
+offline_transform/analytic_mercator/warmed_context time:   [168.9 µs 171.3 µs 171.8 µs]  mad: 510.9 ns  (10 samples × 59 iterations)
+                         thrpt:  [5.822 Kelem/s 5.838 Kelem/s 5.921 Kelem/s]
+transform receipt model=analytic_mercator count=1 work=6772 workspace_peak=486176 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/analytic_mercator/batch1 time:   [171.3 µs 172.0 µs 172.5 µs]  mad: 640.6 ns  (10 samples × 59 iterations)
+                         thrpt:  [5.796 Kelem/s 5.813 Kelem/s 5.839 Kelem/s]
+                         outliers: 1 of 10 (1 low severe, 0 low mild, 0 high mild, 0 high severe)
+transform receipt model=analytic_mercator count=4 work=27088 workspace_peak=487952 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/analytic_mercator/batch4 time:   [672.6 µs 681.0 µs 687.1 µs]  mad: 6.282 µs  (10 samples × 15 iterations)
+                         thrpt:  [5.822 Kelem/s 5.873 Kelem/s 5.947 Kelem/s]
+transform receipt model=analytic_mercator count=16 work=108352 workspace_peak=495056 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/analytic_mercator/batch16 time:   [2.697 ms 2.701 ms 2.705 ms]  mad: 3.410 µs  (10 samples × 4 iterations)
+                         thrpt:  [5.915 Kelem/s 5.924 Kelem/s 5.932 Kelem/s]
+transform receipt model=analytic_mercator count=256 work=1733632 workspace_peak=637136 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/analytic_mercator/batch256: 10 samples cannot finish in 0.1 s; they will take about 0.4 s
+offline_transform/analytic_mercator/batch256 time:   [43.13 ms 43.39 ms 43.98 ms]  mad: 297.1 µs  (10 samples × 1 iterations)
+                         thrpt:  [5.820 Kelem/s 5.900 Kelem/s 5.935 Kelem/s]
+transform receipt model=analytic_mercator count=4096 work=27738112 workspace_peak=2910416 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/analytic_mercator/batch4096: 10 samples cannot finish in 0.1 s; they will take about 7.0 s
+offline_transform/analytic_mercator/batch4096 time:   [696.9 ms 698.9 ms 700.0 ms]  mad: 1.138 ms  (10 samples × 1 iterations)
+                         thrpt:  [5.851 Kelem/s 5.861 Kelem/s 5.877 Kelem/s]
+offline_transform/cgcs2000_geocentric/fresh_context time:   [109.8 µs 111.7 µs 112.0 µs]  mad: 388.8 ns  (10 samples × 90 iterations)
+                         thrpt:  [8.931 Kelem/s 8.956 Kelem/s 9.111 Kelem/s]
+offline_transform/cgcs2000_geocentric/warmed_context time:   [82.25 µs 82.96 µs 84.08 µs]  mad: 764.0 ns  (10 samples × 122 iterations)
+                         thrpt:  [11.89 Kelem/s 12.05 Kelem/s 12.16 Kelem/s]
+transform receipt model=cgcs2000_geocentric count=1 work=2516 workspace_peak=498328 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_geocentric/batch1 time:   [83.97 µs 84.00 µs 84.23 µs]  mad: 47.61 ns  (10 samples × 119 iterations)
+                         thrpt:  [11.87 Kelem/s 11.90 Kelem/s 11.91 Kelem/s]
+transform receipt model=cgcs2000_geocentric count=4 work=10064 workspace_peak=500104 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_geocentric/batch4 time:   [331.8 µs 336.4 µs 336.7 µs]  mad: 437.9 ns  (10 samples × 31 iterations)
+                         thrpt:  [11.88 Kelem/s 11.89 Kelem/s 12.05 Kelem/s]
+transform receipt model=cgcs2000_geocentric count=16 work=40256 workspace_peak=507208 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_geocentric/batch16 time:   [1.335 ms 1.343 ms 1.345 ms]  mad: 2.517 µs  (10 samples × 8 iterations)
+                         thrpt:  [11.89 Kelem/s 11.91 Kelem/s 11.99 Kelem/s]
+                         outliers: 2 of 10 (2 low severe, 0 low mild, 0 high mild, 0 high severe)
+transform receipt model=cgcs2000_geocentric count=256 work=644096 workspace_peak=649288 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_geocentric/batch256: 10 samples cannot finish in 0.1 s; they will take about 0.2 s
+offline_transform/cgcs2000_geocentric/batch256 time:   [21.42 ms 21.47 ms 21.49 ms]  mad: 16.69 µs  (10 samples × 1 iterations)
+                         thrpt:  [11.91 Kelem/s 11.92 Kelem/s 11.95 Kelem/s]
+                         outliers: 3 of 10 (2 low severe, 0 low mild, 1 high mild, 0 high severe)
+transform receipt model=cgcs2000_geocentric count=4096 work=10305536 workspace_peak=2922568 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_geocentric/batch4096: 10 samples cannot finish in 0.1 s; they will take about 3.4 s
+offline_transform/cgcs2000_geocentric/batch4096 time:   [341.3 ms 342.0 ms 342.3 ms]  mad: 593.2 µs  (10 samples × 1 iterations)
+                         thrpt:  [11.97 Kelem/s 11.98 Kelem/s 12.00 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+offline_transform/similarity/fresh_context time:   [96.24 µs 97.69 µs 98.61 µs]  mad: 968.3 ns  (10 samples × 101 iterations)
+                         thrpt:  [10.14 Kelem/s 10.24 Kelem/s 10.39 Kelem/s]
+offline_transform/similarity/warmed_context time:   [48.26 µs 48.43 µs 48.79 µs]  mad: 243.3 ns  (10 samples × 208 iterations)
+                         thrpt:  [20.50 Kelem/s 20.65 Kelem/s 20.72 Kelem/s]
+transform receipt model=similarity count=1 work=1890 workspace_peak=486040 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/similarity/batch1 time:   [48.21 µs 48.47 µs 48.68 µs]  mad: 213.8 ns  (10 samples × 208 iterations)
+                         thrpt:  [20.54 Kelem/s 20.63 Kelem/s 20.74 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+transform receipt model=similarity count=4 work=7560 workspace_peak=487816 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/similarity/batch4 time:   [192.6 µs 193.2 µs 194.4 µs]  mad: 717.9 ns  (10 samples × 52 iterations)
+                         thrpt:  [20.57 Kelem/s 20.70 Kelem/s 20.76 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+transform receipt model=similarity count=16 work=30240 workspace_peak=494920 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/similarity/batch16 time:   [773.7 µs 776.2 µs 780.1 µs]  mad: 3.133 µs  (10 samples × 13 iterations)
+                         thrpt:  [20.51 Kelem/s 20.61 Kelem/s 20.68 Kelem/s]
+transform receipt model=similarity count=256 work=483840 workspace_peak=637000 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/similarity/batch256 time:   [12.43 ms 12.56 ms 12.60 ms]  mad: 51.47 µs  (10 samples × 1 iterations)
+                         thrpt:  [20.32 Kelem/s 20.38 Kelem/s 20.60 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+transform receipt model=similarity count=4096 work=7741440 workspace_peak=2910280 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/similarity/batch4096: 10 samples cannot finish in 0.1 s; they will take about 2.0 s
+offline_transform/similarity/batch4096 time:   [198.7 ms 199.4 ms 200.6 ms]  mad: 1.020 ms  (10 samples × 1 iterations)
+                         thrpt:  [20.42 Kelem/s 20.55 Kelem/s 20.61 Kelem/s]
+offline_transform/cgcs2000_gk3/fresh_context time:   [1.039 ms 1.041 ms 1.042 ms]  mad: 1.137 µs  (10 samples × 10 iterations)
+                         thrpt:  [959.7 elem/s 960.8 elem/s 962.4 elem/s]
+                         outliers: 2 of 10 (1 low severe, 0 low mild, 1 high mild, 0 high severe)
+offline_transform/cgcs2000_gk3/warmed_context time:   [911.1 µs 924.3 µs 930.4 µs]  mad: 7.392 µs  (10 samples × 11 iterations)
+                         thrpt:  [1.075 Kelem/s 1.082 Kelem/s 1.098 Kelem/s]
+transform receipt model=cgcs2000_gk3 count=1 work=12043 workspace_peak=581024 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_gk3/batch1 time:   [908.1 µs 913.0 µs 918.6 µs]  mad: 4.975 µs  (10 samples × 11 iterations)
+                         thrpt:  [1.089 Kelem/s 1.095 Kelem/s 1.101 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+transform receipt model=cgcs2000_gk3 count=4 work=48172 workspace_peak=582800 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_gk3/batch4 time:   [3.650 ms 3.654 ms 3.680 ms]  mad: 8.305 µs  (10 samples × 3 iterations)
+                         thrpt:  [1.087 Kelem/s 1.095 Kelem/s 1.096 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+transform receipt model=cgcs2000_gk3 count=16 work=192688 workspace_peak=589904 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_gk3/batch16 time:   [14.88 ms 14.89 ms 14.92 ms]  mad: 7.970 µs  (10 samples × 1 iterations)
+                         thrpt:  [1.073 Kelem/s 1.074 Kelem/s 1.075 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+transform receipt model=cgcs2000_gk3 count=256 work=3083008 workspace_peak=731984 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_gk3/batch256: 10 samples cannot finish in 0.1 s; they will take about 2.4 s
+offline_transform/cgcs2000_gk3/batch256 time:   [235.5 ms 235.8 ms 236.1 ms]  mad: 229.1 µs  (10 samples × 1 iterations)
+                         thrpt:  [1.084 Kelem/s 1.086 Kelem/s 1.087 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+transform receipt model=cgcs2000_gk3 count=4096 work=49328128 workspace_peak=3005264 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_gk3/batch4096: 10 samples cannot finish in 0.1 s; they will take about 37.9 s
+offline_transform/cgcs2000_gk3/batch4096 time:   [3.792 s 3.804 s 3.831 s]  mad: 10.83 ms  (10 samples × 1 iterations)
+                         thrpt:  [1.069 Kelem/s 1.077 Kelem/s 1.080 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+offline_transform/cgcs2000_gk3_inverse/fresh_context time:   [11.28 ms 11.41 ms 11.47 ms]  mad: 70.36 µs  (10 samples × 1 iterations)
+                         thrpt:  [87.19 elem/s 87.61 elem/s 88.69 elem/s]
+offline_transform/cgcs2000_gk3_inverse/warmed_context time:   [10.99 ms 11.00 ms 11.01 ms]  mad: 3.830 µs  (10 samples × 1 iterations)
+                         thrpt:  [90.81 elem/s 90.87 elem/s 90.95 elem/s]
+                         outliers: 4 of 10 (0 low severe, 2 low mild, 1 high mild, 1 high severe)
+transform receipt model=cgcs2000_gk3_inverse count=1 work=109588 workspace_peak=584112 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_gk3_inverse/batch1 time:   [11.04 ms 11.05 ms 11.08 ms]  mad: 13.70 µs  (10 samples × 1 iterations)
+                         thrpt:  [90.29 elem/s 90.48 elem/s 90.58 elem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+transform receipt model=cgcs2000_gk3_inverse count=4 work=438352 workspace_peak=585888 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_gk3_inverse/batch4: 10 samples cannot finish in 0.1 s; they will take about 0.5 s
+offline_transform/cgcs2000_gk3_inverse/batch4 time:   [44.22 ms 44.49 ms 44.73 ms]  mad: 248.3 µs  (10 samples × 1 iterations)
+                         thrpt:  [89.42 elem/s 89.91 elem/s 90.46 elem/s]
+transform receipt model=cgcs2000_gk3_inverse count=16 work=1753408 workspace_peak=592992 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_gk3_inverse/batch16: 10 samples cannot finish in 0.1 s; they will take about 1.8 s
+offline_transform/cgcs2000_gk3_inverse/batch16 time:   [179.4 ms 179.9 ms 180.4 ms]  mad: 507.2 µs  (10 samples × 1 iterations)
+                         thrpt:  [88.68 elem/s 88.96 elem/s 89.19 elem/s]
+transform receipt model=cgcs2000_gk3_inverse count=256 work=28054528 workspace_peak=735072 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_gk3_inverse/batch256: 10 samples cannot finish in 0.1 s; they will take about 29.2 s
+offline_transform/cgcs2000_gk3_inverse/batch256 time:   [2.926 s 4.384 s 5.467 s]  mad: 1.146 s  (10 samples × 1 iterations)
+                         thrpt:  [46.82 elem/s 58.39 elem/s 87.50 elem/s]
+transform receipt model=cgcs2000_gk3_inverse count=4096 work=448872448 workspace_peak=3008352 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_gk3_inverse/batch4096: 10 samples cannot finish in 0.1 s; they will take about 461.4 s
+offline_transform/cgcs2000_gk3_inverse/batch4096 time:   [46.23 s 46.48 s 53.12 s]  mad: 423.1 ms  (10 samples × 1 iterations)
+                         thrpt:  [77.11 elem/s 88.11 elem/s 88.60 elem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+offline_transform/cgcs2000_utm/fresh_context time:   [1.442 ms 1.458 ms 1.463 ms]  mad: 5.061 µs  (10 samples × 7 iterations)
+                         thrpt:  [683.5 elem/s 685.8 elem/s 693.5 elem/s]
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+offline_transform/cgcs2000_utm/warmed_context time:   [1.308 ms 1.310 ms 1.311 ms]  mad: 1.622 µs  (10 samples × 8 iterations)
+                         thrpt:  [762.6 elem/s 763.5 elem/s 764.7 elem/s]
+transform receipt model=cgcs2000_utm count=1 work=16007 workspace_peak=601856 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_utm/batch1 time:   [1.313 ms 1.315 ms 1.317 ms]  mad: 1.746 µs  (10 samples × 8 iterations)
+                         thrpt:  [759.6 elem/s 760.2 elem/s 761.8 elem/s]
+transform receipt model=cgcs2000_utm count=4 work=64028 workspace_peak=603632 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+offline_transform/cgcs2000_utm/batch4 time:   [5.245 ms 5.248 ms 5.260 ms]  mad: 4.990 µs  (10 samples × 2 iterations)
+                         thrpt:  [760.4 elem/s 762.2 elem/s 762.7 elem/s]
+transform receipt model=cgcs2000_utm count=16 work=256112 workspace_peak=610736 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm/batch16: 10 samples cannot finish in 0.1 s; they will take about 0.2 s
+offline_transform/cgcs2000_utm/batch16 time:   [21.01 ms 21.13 ms 21.51 ms]  mad: 134.8 µs  (10 samples × 1 iterations)
+                         thrpt:  [743.8 elem/s 757.1 elem/s 761.5 elem/s]
+transform receipt model=cgcs2000_utm count=256 work=4097792 workspace_peak=752816 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm/batch256: 10 samples cannot finish in 0.1 s; they will take about 3.4 s
+offline_transform/cgcs2000_utm/batch256 time:   [337.6 ms 337.9 ms 338.7 ms]  mad: 453.0 µs  (10 samples × 1 iterations)
+                         thrpt:  [755.8 elem/s 757.7 elem/s 758.3 elem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+transform receipt model=cgcs2000_utm count=4096 work=65564672 workspace_peak=3026096 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm/batch4096: 10 samples cannot finish in 0.1 s; they will take about 53.9 s
+offline_transform/cgcs2000_utm/batch4096 time:   [5.380 s 5.388 s 5.394 s]  mad: 6.784 ms  (10 samples × 1 iterations)
+                         thrpt:  [759.4 elem/s 760.2 elem/s 761.3 elem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+warning: offline_transform/cgcs2000_utm_inverse/fresh_context: 10 samples cannot finish in 0.1 s; they will take about 0.6 s
+offline_transform/cgcs2000_utm_inverse/fresh_context time:   [17.20 ms 17.37 ms 18.10 ms]  mad: 318.2 µs  (10 samples × 1 iterations)
+                         thrpt:  [55.26 elem/s 57.57 elem/s 58.14 elem/s]
+warning: offline_transform/cgcs2000_utm_inverse/warmed_context: 10 samples cannot finish in 0.1 s; they will take about 0.2 s
+offline_transform/cgcs2000_utm_inverse/warmed_context time:   [16.94 ms 17.07 ms 17.44 ms]  mad: 170.7 µs  (10 samples × 1 iterations)
+                         thrpt:  [57.35 elem/s 58.59 elem/s 59.03 elem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+transform receipt model=cgcs2000_utm_inverse count=1 work=159892 workspace_peak=605896 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm_inverse/batch1: 10 samples cannot finish in 0.1 s; they will take about 0.2 s
+offline_transform/cgcs2000_utm_inverse/batch1 time:   [16.99 ms 17.05 ms 18.77 ms]  mad: 94.38 µs  (10 samples × 1 iterations)
+                         thrpt:  [53.29 elem/s 58.66 elem/s 58.84 elem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+transform receipt model=cgcs2000_utm_inverse count=4 work=639568 workspace_peak=607672 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm_inverse/batch4: 10 samples cannot finish in 0.1 s; they will take about 0.7 s
+offline_transform/cgcs2000_utm_inverse/batch4 time:   [65.49 ms 65.54 ms 65.67 ms]  mad: 54.58 µs  (10 samples × 1 iterations)
+                         thrpt:  [60.91 elem/s 61.03 elem/s 61.08 elem/s]
+transform receipt model=cgcs2000_utm_inverse count=16 work=2558272 workspace_peak=614776 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm_inverse/batch16: 10 samples cannot finish in 0.1 s; they will take about 2.6 s
+offline_transform/cgcs2000_utm_inverse/batch16 time:   [261.5 ms 261.7 ms 263.0 ms]  mad: 197.3 µs  (10 samples × 1 iterations)
+                         thrpt:  [60.85 elem/s 61.15 elem/s 61.19 elem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+transform receipt model=cgcs2000_utm_inverse count=256 work=40932352 workspace_peak=756856 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm_inverse/batch256: 10 samples cannot finish in 0.1 s; they will take about 41.9 s
+offline_transform/cgcs2000_utm_inverse/batch256 time:   [4.188 s 4.205 s 4.337 s]  mad: 21.26 ms  (10 samples × 1 iterations)
+                         thrpt:  [59.03 elem/s 60.88 elem/s 61.13 elem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+transform receipt model=cgcs2000_utm_inverse count=4096 work=654917632 workspace_peak=3030136 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: offline_transform/cgcs2000_utm_inverse/batch4096: 10 samples cannot finish in 0.1 s; they will take about 685.0 s
+offline_transform/cgcs2000_utm_inverse/batch4096 time:   [68.52 s 68.71 s 71.69 s]  mad: 161.4 ms  (10 samples × 1 iterations)
+                         thrpt:  [57.14 elem/s 59.61 elem/s 59.78 elem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+
+63 benchmarks measured; 0 failed

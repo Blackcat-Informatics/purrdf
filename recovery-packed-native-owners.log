@@ -1,0 +1,29 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/lex)
+error: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+  --> crates/lex/src/allocation/shared.rs:20:10
+   |
+20 |         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+   |          ^^^^^^^^^^^^
+   |
+   = note: `-D deprecated` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(deprecated)]`
+help: replace the use of the deprecated method
+   |
+20 -         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+20 +         .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+   |
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/lex/src/allocation/shared/buffers.rs:196:1
+    |
+196 | / pub struct SharedBufferMut<'a, T: Copy> {
+197 | |     buffer: &'a mut SharedBuffer<T>,
+198 | | }
+    | |_^
+    |
+    = note: `-D missing-debug-implementations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: could not compile `purrdf-lex` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-lex` (lib test) due to 2 previous errors

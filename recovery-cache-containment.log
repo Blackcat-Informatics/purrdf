@@ -1,0 +1,9 @@
+Prior target symlink: /opt/.cargo/target/409-geo-deterministic-hierarchical-spatial-3f9ae54d
+External owned target moved into worktree: /home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/target
+target_containment_status=0
+Native target/build caches moved under tracked worktree target; old lexical aliases retained.
+Markers restored explicitly; not claimed to preexist or to be Cargo-created.
+Running private process executable inode and bytes unchanged.
+cache_relocation_status=0
+.gitignore:12:**/target	target/geo-artifacts/tmp/
+.gitignore:12:**/target	target/geo-build/tmp/

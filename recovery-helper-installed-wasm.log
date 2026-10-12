@@ -1,0 +1,57 @@
+803a43bdf0a2271ecf5609ee8799566c075670854c2ccba168cc2c1b7a64bd82  pkg/purrdf_wasm_bg.wasm
+ddbbe565facec0c3fc4e3eb885dfcef161eb6fd415e33f5cf73332ffb98d567b  pkg/purrdf_wasm.js
+99e2eff7288f4b46d10097c50d0ebca4d1816d7ceb5d445ce9f552d09b01ff86  index.mjs
+✔ native geographic response and strict semantic refusal cross the package root (32.99287ms)
+✔ an original work refusal throws instead of allocating a partial JSON response (6.65803ms)
+✔ point buckets and their profile outlive the creating session (9.613632ms)
+✔ explicit axes reach sync queries and an already started async profile snapshot (50.452396ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 241.103995
+✔ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (332.528011ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 462.975956
+✔ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (223.6198ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 375.993817
+✔ a trap that is not a panic, in a synchronous call, poisons every entry point (137.61213ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 286.473763
+
+> @blackcatinformatics/purrdf@3.0.1 typecheck
+> tsc -p tsconfig.types.json
+
+
+> @blackcatinformatics/purrdf@3.0.1 smoke:pack
+> node tests/pack-smoke.mjs
+
+npm tarball: 10917084 bytes
+npm unpacked: 32948475 bytes
+npm entries: 152
+
+added 1 package in 432ms
+OK: packed tarball smoke passed for blackcatinformatics-purrdf-3.0.1.tgz
+terminal_status=0

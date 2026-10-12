@@ -1,0 +1,24 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 16.04s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/build/debug/build/purrdf-xsd/0386de0c7b24ad92/out/purrdf_xsd-0386de0c7b24ad92)
+
+running 1 test
+bits=0 zero=true raw=0e0
+bits=8000000000000000 zero=true raw=-0e0
+bits=1 zero=false raw=5e-324
+
+thread 'numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush' (1918687) panicked at crates/xsd/src/numeric.rs:2796:13:
+assertion `left == right` failed
+  left: "0.0E0"
+ right: "5.0E-324"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush ... FAILED
+
+failures:
+
+failures:
+    numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 412 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-xsd --lib`

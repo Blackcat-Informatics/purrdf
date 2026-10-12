@@ -1,0 +1,4 @@
+model=GCJ rows=664 maximum_upper_metres=0.732856766 median_upper_metres=0.670709235 gate_metres=1
+model=BD09LL rows=664 maximum_upper_metres=0.011660802 median_upper_metres=0.00482018 gate_metres=0.02
+model=BaiduMercatorAnalytic rows=664 maximum_upper_metres=0.181866093 median_upper_metres=0.007238169 gate_metres=0.2
+rows=664 elapsed_ns=467960560

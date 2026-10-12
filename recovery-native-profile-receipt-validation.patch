@@ -1,0 +1,99 @@
+--- a/crates/rdf-capi/tests/support/profile.rs
++++ b/crates/rdf-capi/tests/support/profile.rs
+@@ -236,6 +236,18 @@
+     }
+ }
+ fn validate_request(request: &Request) -> IoResult<()> {
++    validate_request_fields(request)?;
++    if !Path::new(&request.directory).starts_with("/opt") {
++        return Err(invalid(
++            "arm execution requires a task-owned /opt disk path",
++        ));
++    }
++    Ok(())
++}
++
++// Receipt structure and identity do not grant permission to execute an arm.
++// The execution door above separately admits its fixed disk location before IO.
++fn validate_request_fields(request: &Request) -> IoResult<()> {
+     lane_command(&request.lane)?;
+     if request.jobs == 0 || request.test_threads == 0 || request.jobs > 8 {
+         return Err(invalid(
+@@ -263,13 +275,12 @@
+     }
+     let directory = Path::new(&request.directory);
+     if !directory.is_absolute()
+-        || !directory.starts_with("/opt")
+         || directory
+             .components()
+             .any(|part| matches!(part, std::path::Component::ParentDir))
+     {
+         return Err(invalid(
+-            "arm directory must be a task-owned absolute /opt disk path without parent components",
++            "arm directory must be an absolute path without parent components",
+         ));
+     }
+     if !Path::new(&request.root).is_absolute() || !Path::new(&request.cargo).is_absolute() {
+@@ -1107,7 +1118,7 @@
+     Ok(())
+ }
+ 
+-/// Admit both completed warmth receipts through the same request and proof homes.
++/// Validate completed receipt fields and proof against the caller's admitted case.
+ pub(crate) fn completed_pair(
+     cold: &Value,
+     warm: &Value,
+@@ -1119,7 +1130,7 @@
+             .pointer("/context/request")
+             .ok_or_else(|| invalid("completed request missing"))?;
+         let request = Request::from_json(value).map_err(|error| invalid(error.to_string()))?;
+-        validate_request(&request)?;
++        validate_request_fields(&request)?;
+         if Path::new(&request.directory) != directory
+             || request.lane != lane
+             || request.warmth != warmth
+@@ -2663,7 +2674,10 @@
+         request.directory = "/opt/task/../shared".to_owned();
+         assert!(validate_request(&request).is_err());
+         request.directory = "/tmp/arm".to_owned();
++        validate_request_fields(&request).unwrap();
+         assert!(validate_request(&request).is_err());
++        request.directory = holder.path().join("arm").display().to_string();
++        validate_request_fields(&request).unwrap();
+     }
+ 
+     #[test]
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -42,22 +42,15 @@
+ installs Node.js 24 explicitly. The oracle is mandatory and does not skip when
+ Node is absent.
+ 
+-The host-only native profiling safety and Cargo configuration tests require a writable, owned
+-`/opt/purrdf-native-profile-tests` parent, independently of Cargo's target
+-directory. Provision it once before `make check`, `make test`, workspace Cargo
+-tests, or the `native_profile` integration target:
+-
+-```bash
+-sudo mkdir -p /opt/purrdf-native-profile-tests
+-sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
+-```
+-
+-Tests create exclusive temporary children there and remove only their own
+-children. An unavailable parent fails the tests; they do not change permissions
+-or substitute another path. CI provisions it before the relevant native shard
+-and before profiling measurements. The configuration absence probe also requires
+-no ancestor Cargo configuration above that parent: clearing the environment and
+-selecting an isolated `CARGO_HOME` do not disable Cargo's ancestor discovery.
++The host-only native profiling safety and Cargo configuration tests use the
++workspace's owned temporary directories under Cargo's target directory. The
++configuration absence probe reads from the filesystem root with an isolated
++`CARGO_HOME` inside its fixture; it writes no files at the filesystem root.
++That root must have no Cargo configuration, since clearing the environment and
++selecting `CARGO_HOME` do not disable Cargo's ancestor discovery. Configured and
++malformed configuration probes run inside their owned fixtures. Measured
++profiling arms still require their task-owned `/opt` disk locations outside the
++source tree; the execution and hosted reclamation entry points enforce them.
+ 
+ ```bash
+ make doctor     # what this machine actually enforces (run when a gate prints SKIP)

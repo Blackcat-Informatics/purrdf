@@ -1,0 +1,20 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 49.78s
+     Running unittests src/lib.rs (target/geo-build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+
+thread 'topology::relate::tests::all_small_map_pairs_complete_in_one_default_work_budget' (1567365) panicked at crates/geo-kernel/src/topology/relate.rs:743:21:
+pair 3/2, cumulative work 262134: geometry work exhausted at 262144 items
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test topology::relate::tests::all_small_map_pairs_complete_in_one_default_work_budget ... FAILED
+
+failures:
+
+failures:
+    topology::relate::tests::all_small_map_pairs_complete_in_one_default_work_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 713 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-geo-kernel --lib`
+terminal_status=101

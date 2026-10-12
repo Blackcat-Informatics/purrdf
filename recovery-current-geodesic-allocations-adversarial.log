@@ -1,0 +1,12 @@
+    Finished `bench` profile [optimized] target(s) in 0.16s
+     Running `/home/paudley/Active/purrdf/.worktrees/purrdf-geo-qualification/target/release/examples/geodesic_allocations adversarial`
+integer_size=64 context_size=1264
+operation=ordinary112 count=1 elapsed_ns=5556579 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=ordinary112_published_proof count=1 elapsed_ns=5688515 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=ordinary112 precision_bits=112 retained_workspace=430208 arena_available=768
+operation=vertex224 count=1 elapsed_ns=16437244 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=vertex224_published_proof count=1 elapsed_ns=15845533 allocations=Measurement { allocations: 65, requested_bytes: 3096, retained_bytes: 0, peak_working_bytes: 3096 }
+operation=vertex224 precision_bits=224 retained_workspace=475384 arena_available=768
+operation=vertex448 count=1 elapsed_ns=86505149 allocations=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+operation=vertex448_published_proof count=1 elapsed_ns=86310145 allocations=Measurement { allocations: 65, requested_bytes: 3984, retained_bytes: 0, peak_working_bytes: 3984 }
+operation=vertex448 precision_bits=448 retained_workspace=557336 arena_available=768

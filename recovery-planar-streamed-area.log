@@ -1,0 +1,19 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 1m 03s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+
+thread 'context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction' (1313486) panicked at crates/geo-kernel/src/context/retained.rs:1654:14:
+called `Result::unwrap()` on an `Err` value: WorkExhausted { limit: 262144 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction ... FAILED
+
+failures:
+
+failures:
+    context::retained::tests::native_planar_matrix_prices_actual_arrays_and_limb_owners_until_destruction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 703 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-geo-kernel --lib`

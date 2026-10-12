@@ -1,0 +1,22 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/409-geo-deterministic-hierarchical-spatial/crates/geo-kernel)
+    Finished `test` profile [optimized] target(s) in 1m 06s
+     Running unittests src/lib.rs (/opt/purrdf-geo-qualification/build/debug/build/purrdf-geo-kernel/1f90cc890d578fa8/out/purrdf_geo_kernel-1f90cc890d578fa8)
+
+running 1 test
+test cells::cover::tests::reported_threshold_padding_preserves_original_cover_and_cumulative_receipt ... FAILED
+
+failures:
+
+---- cells::cover::tests::reported_threshold_padding_preserves_original_cover_and_cumulative_receipt stdout ----
+
+thread 'cells::cover::tests::reported_threshold_padding_preserves_original_cover_and_cumulative_receipt' (3951222) panicked at crates/geo-kernel/src/cells/cover/tests.rs:967:9:
+threshold 0x7fefffffffffffff: reported CoverReceipt { visited_nodes: 6, work_items: 31415, workspace_peak: 633808, level_histogram: [6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, original CoverReceipt { visited_nodes: 6, work_items: 11792, workspace_peak: 639744, level_histogram: [6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cells::cover::tests::reported_threshold_padding_preserves_original_cover_and_cumulative_receipt
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 700 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-geo-kernel --lib`

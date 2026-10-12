@@ -1,0 +1,26 @@
+allocation receipt count=1 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+native_grid/assignment_batch1 time:   [29.01 µs 29.03 µs 29.05 µs]  mad: 17.98 ns  (10 samples × 345 iterations)
+                         thrpt:  [34.42 Kelem/s 34.44 Kelem/s 34.48 Kelem/s]
+allocation receipt count=4 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+native_grid/assignment_batch4 time:   [115.9 µs 116.0 µs 116.1 µs]  mad: 72.35 ns  (10 samples × 87 iterations)
+                         thrpt:  [34.46 Kelem/s 34.49 Kelem/s 34.52 Kelem/s]
+allocation receipt count=16 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+native_grid/assignment_batch16 time:   [464.0 µs 464.2 µs 464.3 µs]  mad: 165.9 ns  (10 samples × 22 iterations)
+                         thrpt:  [34.46 Kelem/s 34.47 Kelem/s 34.48 Kelem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+allocation receipt count=256 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+native_grid/assignment_batch256 time:   [7.416 ms 7.420 ms 7.424 ms]  mad: 3.967 µs  (10 samples × 2 iterations)
+                         thrpt:  [34.48 Kelem/s 34.50 Kelem/s 34.52 Kelem/s]
+allocation receipt count=4096 Measurement { allocations: 0, requested_bytes: 0, retained_bytes: 0, peak_working_bytes: 0 }
+warning: native_grid/assignment_batch4096: 10 samples cannot finish in 0.1 s; they will take about 1.2 s
+native_grid/assignment_batch4096 time:   [118.8 ms 118.9 ms 119.0 ms]  mad: 43.11 µs  (10 samples × 1 iterations)
+                         thrpt:  [34.43 Kelem/s 34.46 Kelem/s 34.48 Kelem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+index receipt level=12 points=289 candidates=287 accepted=83 index_bytes=106032 result_bytes=1104 work_limit=20000000 allocations=Measurement { allocations: 430, requested_bytes: 967320, retained_bytes: 1104, peak_working_bytes: 451688 }
+warning: native_point_index/physical_level12: 10 samples cannot finish in 0.1 s; they will take about 0.2 s
+native_point_index/physical_level12 time:   [18.73 ms 18.75 ms 18.76 ms]  mad: 12.99 µs  (10 samples × 1 iterations)
+index receipt level=17 points=289 candidates=101 accepted=83 index_bytes=106032 result_bytes=1104 work_limit=20000000 allocations=Measurement { allocations: 66, requested_bytes: 895944, retained_bytes: 1104, peak_working_bytes: 452304 }
+native_point_index/physical_level17 time:   [14.79 ms 14.81 ms 14.82 ms]  mad: 7.569 µs  (10 samples × 1 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+7 benchmarks measured; 0 failed
