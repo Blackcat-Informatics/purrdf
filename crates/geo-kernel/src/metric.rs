@@ -836,7 +836,7 @@ mod tests {
                 let changed = control::mxcsr();
                 for value in [
                     purrdf_xsd::XsdValue::Integer {
-                        value: 9_007_199_254_740_993,
+                        value: 9_007_199_254_740_993_i128.into(),
                         datatype: purrdf_xsd::XsdDatatype::Integer,
                     },
                     purrdf_xsd::XsdValue::Float(f32::from_bits(1)),

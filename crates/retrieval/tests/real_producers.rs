@@ -2270,26 +2270,21 @@ impl PropertyFunction for CountingTextRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
         self.opened.fetch_add(1, Ordering::Relaxed);
         let cursor = self.inner.open_admitted(args, ceiling, workspace.clone())?;
         if self.refuse_suffix.is_none() && self.attachment.is_none() {
             return Ok(cursor);
         }
-        let admission = workspace.charge(
-            u64::try_from(size_of::<PrefixRefusalCursor>())
-                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-        )?;
-        let cursor = purrdf_core::small::try_boxed(PrefixRefusalCursor {
-            cursor,
-            calls: self.refuse_suffix.clone(),
-            attachment: self.attachment.clone(),
-            _admission: admission,
-        })
-        .map_err(|_| EvalError::AllocationFailed {
-            construct: "prefix refusal cursor",
-        })?;
-        Ok(cursor)
+        purrdf_sparql_eval::WorkspaceCursor::new(
+            PrefixRefusalCursor {
+                cursor,
+                calls: self.refuse_suffix.clone(),
+                attachment: self.attachment.clone(),
+            },
+            &workspace,
+            "prefix refusal cursor",
+        )
     }
     fn volatility(&self) -> Volatility {
         self.inner.volatility()
@@ -2317,14 +2312,14 @@ impl PropertyFunction for CountingTextRelation {
             ceiling,
             purrdf_sparql_eval::WorkspaceCapability::resident(),
         )
+        .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
     }
 }
 
 struct PrefixRefusalCursor {
-    cursor: Box<dyn PfCursor>,
+    cursor: purrdf_sparql_eval::WorkspaceCursor,
     calls: Option<Arc<AtomicU64>>,
     attachment: Option<NativeAttachment>,
-    _admission: purrdf_sparql_eval::WorkspaceAllocation,
 }
 
 impl PfCursor for PrefixRefusalCursor {
