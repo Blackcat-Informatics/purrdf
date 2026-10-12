@@ -49,9 +49,10 @@ pub const REQUIRE_SIMD_PATHS: &str = "PURRDF_REQUIRE_SIMD_PATHS";
 /// | `deflate` | DEFLATE match copy, compare and window hashing (`purrdf_deflate`) |
 /// | `distance` | the vector distance arithmetic (`purrdf_core::distance`) |
 /// | `hex` | base16 encoding (`purrdf_hash::hex`) |
+/// | `numeric` | directed binary64 endpoint products (`purrdf_xsd::math::FloatProductBackend`) |
 /// | `sha1` | the SHA-1 block function (`purrdf_hash::sha1`) |
-pub const FAMILIES: [&str; 7] = [
-    "blake3", "crc32", "csv", "deflate", "distance", "hex", "sha1",
+pub const FAMILIES: [&str; 8] = [
+    "blake3", "crc32", "csv", "deflate", "distance", "hex", "numeric", "sha1",
 ];
 
 /// A family of named execution paths of one function.
@@ -390,6 +391,25 @@ mod tests {
         );
         // The neighbour: the family spelt correctly is accepted.
         assert!(parse("deflate:neon", "csv", &KNOWN, only_portable).is_ok());
+    }
+
+    #[test]
+    fn numeric_endpoint_paths_are_registered_without_accepting_unknown_paths() {
+        let known = ["portable", "neon"];
+        assert_eq!(
+            parse(
+                "numeric:portable,numeric:neon",
+                "numeric",
+                &known,
+                only_portable
+            ),
+            Ok(known.to_vec())
+        );
+        let refusal = parse("numeric:bogus", "numeric", &known, only_portable).unwrap_err();
+        assert!(
+            refusal.contains("`bogus`, which is not a numeric path"),
+            "{refusal}"
+        );
     }
 
     #[test]
