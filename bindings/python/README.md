@@ -28,29 +28,33 @@ Requires Python 3.13+. Wheels bundle the native extension; no Rust toolchain nee
 
 ## Empty named graphs
 
-`Store` and `MutableDataset` accept the keyword-only `remember_empty_graphs`
-option, which defaults to `False` in 3.x. Select it to keep an empty named graph
-after its last row is removed or after `CLEAR`; `DROP` removes the slot.
+`Store` and `MutableDataset` remember empty named graphs by default: a named
+graph stays after its last row is removed or after `CLEAR`, and `DROP` removes
+the slot. The keyword-only `remember_empty_graphs=False` opts out to the
+implicit lifetime, in which a graph exists only while it holds a row and
+`CLEAR` removes it.
 
 ```python
 import purrdf
 
-store = purrdf.Store(remember_empty_graphs=True)
+store = purrdf.Store()
 graph = purrdf.NamedNode("https://example.org/empty")
 store.add_graph(graph)
 store.update("CLEAR GRAPH <https://example.org/empty>")
 print(store.named_graphs())
+
+implicit = purrdf.Store(remember_empty_graphs=False)
 ```
 
-In remembered mode, `add_graph` has native CREATE semantics: it registers a named
-or blank graph and raises `ValueError` for an existing slot unless `silent=True`.
+By default, `add_graph` has native CREATE semantics: it registers a named or
+blank graph and raises `ValueError` for an existing slot unless `silent=True`.
 In implicit mode it succeeds without registering a slot. Invalid graph
 names are refused even with `silent=True`. `named_graphs()` returns native
 `NamedNode`/`BlankNode` values, including declared empty graphs, and excludes the
 mandatory default graph. UPDATE, governed UPDATE, checkpoint and compaction keep
 the selected policy. Loading and dumping declared empty graphs in TriG, JSON-LD
 and TriX works with either policy; a refused governed request changes neither
-rows nor graph slots. Remembered empty graphs are expected to be the v4.0 default.
+rows nor graph slots.
 
 ## Parse RDF
 

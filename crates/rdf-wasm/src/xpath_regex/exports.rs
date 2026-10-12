@@ -54,7 +54,7 @@ const JSONLD_OPTIONS: &str =
     r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#;
 
 fn data() -> Dataset {
-    Dataset::parse(DATA, "ntriples", None).expect("the fixture parses")
+    Dataset::parse(DATA, "ntriples", None, None).expect("the fixture parses")
 }
 
 fn owned(law: Option<&str>) -> Option<String> {
@@ -836,7 +836,7 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         "<http://example.org/runs> <http://example.org/v> \"{runs}\" ."
     )
     .unwrap();
-    let dataset = Dataset::parse(&nt, "ntriples", None).expect("the fixture parses");
+    let dataset = Dataset::parse(&nt, "ntriples", None, None).expect("the fixture parses");
     // A count the compatibility regex refuses to build is compared through the pattern
     // with the same matches.
     let cases = [

@@ -24,6 +24,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Remembered empty named graphs are the default:** Rust `GraphExistenceMode`,
+  `MutableDataset::new` and `QueryOptions`, Python `Store`/`MutableDataset`, WASM
+  `Dataset` and `purrdf update` now retain named graphs after last-row removal or
+  `CLEAR`. `CREATE` registers an empty graph; `DROP` removes it. Missing remembered
+  graph targets or transfer sources fail before mutation unless `SILENT`.
+  To retain row-driven behavior, select Rust `GraphExistenceMode::Implicit`, Python
+  `remember_empty_graphs=False`, WASM `new Dataset(false)` or the fourth `false`
+  argument to `Dataset.parse`, or CLI `--graph-existence implicit`. Otherwise use
+  `DROP` where an old `CLEAR` was intended to remove the graph itself.
+  C ABI **0.11.0** adds a required `int32_t graph_existence` to
+  `purrdf_graph_from_dataset`, `purrdf_update_governed` and
+  `purrdf_update_governed_xpath_regex`: pass `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`
+  (0) or `PURRDF_GRAPH_EXISTENCE_IMPLICIT` (1); other values are invalid arguments.
+  Recompile C callers against the generated header. Dataset status and capability
+  layouts are unchanged; remembered empty graphs still set `named_graphs`.
+
 - **Developer-schema output for ontologies without anonymous expressions:**
   correctness fixes change what an IRI-only ontology emits. Each change:
   - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
@@ -283,8 +299,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   caller's formatter to those leaves exactly as `#[derive(Debug)]` does,
   including newline fill in the pretty form, and it fails only when the
   caller's writer does.
-- **Remembered empty named graphs (opt-in):** `GraphExistenceMode`
-  (`Implicit`, the default, and `RememberEmpty`),
+- **Remembered empty named graphs:** `GraphExistenceMode`
+  (`RememberEmpty`, the default, and `Implicit`, the opt-out),
   `MutableDataset::new_with_graph_existence`, `MutableDataset::graph_existence`,
   `MutableDataset::create_named_graph`, `MutableDataset::has_named_graph`,
   `MutableDataset::try_withdraw_named_graph_declarations` and
@@ -295,9 +311,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   their destination even from an empty source. A missing `CLEAR`/`DROP` target
   or transfer source is refused (`native-sparql-update-graph-missing`) before
   anything is touched. `SILENT` turns each refusal into a no-op. Python's `Store` and `MutableDataset` take a
-  keyword-only `remember_empty_graphs=True` and gain `add_graph` and
-  `named_graphs`. The 3.x default is unchanged; this mode is expected to become
-  the default in v4.0.
+  keyword-only `remember_empty_graphs` (default `True`) and gain `add_graph` and
+  `named_graphs`. UPDATE, governed UPDATE, checkpoint and compaction retain the
+  selected policy. WASM snapshots, matches and synchronous/asynchronous UPDATEs
+  also retain their source dataset policy.
 - **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
   freezing its result and before publishing it, and before each declaration a
   bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.

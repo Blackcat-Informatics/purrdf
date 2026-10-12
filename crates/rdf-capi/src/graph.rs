@@ -4,7 +4,7 @@
 //! `purrdf_graph_*`: a copy-on-write mutable graph branched off a frozen
 //! dataset, then re-frozen.
 
-use purrdf_core::{DatasetMut, MutableDataset, QuadValues};
+use purrdf_core::{DatasetMut, GraphExistenceMode, MutableDataset, QuadValues};
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
@@ -17,6 +17,38 @@ use crate::term::{PurrdfTermView, view_to_value};
 /// threads. Release with `purrdf_graph_free`.
 #[derive(Debug)]
 pub struct PurrdfGraph(pub(crate) MutableDataset);
+
+/// Named graphs retain their empty slot until DROP or explicit withdrawal.
+/// Pass this selector explicitly to graph construction and governed UPDATE.
+pub const PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY: i32 = 0;
+
+/// Explicit opt-out: a graph is withdrawn when its last physical row is removed.
+pub const PURRDF_GRAPH_EXISTENCE_IMPLICIT: i32 = 1;
+
+/// Decode a raw C selector without ever constructing an invalid Rust enum.
+pub(crate) const fn graph_existence(raw: i32) -> Option<GraphExistenceMode> {
+    match raw {
+        PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY => Some(GraphExistenceMode::RememberEmpty),
+        PURRDF_GRAPH_EXISTENCE_IMPLICIT => Some(GraphExistenceMode::Implicit),
+        _ => None,
+    }
+}
+
+pub(crate) fn decode_graph_existence(
+    raw: i32,
+    entry: &str,
+) -> Result<GraphExistenceMode, PurrdfError> {
+    graph_existence(raw).ok_or_else(|| {
+        PurrdfError::new(
+            PurrdfStatus::InvalidArgument,
+            format!(
+                "invalid graph existence {raw} in {entry}: pass \
+                 PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY (0) or \
+                 PURRDF_GRAPH_EXISTENCE_IMPLICIT (1)"
+            ),
+        )
+    })
+}
 
 /// Build an owned value-quad from the three required term views and the optional
 /// graph view.
@@ -41,13 +73,18 @@ unsafe fn quad_from_views(
 
 /// Branch a single-threaded mutable COW graph off a frozen dataset. `*out_graph`
 /// is a caller-owned handle (free with `purrdf_graph_free`); the source dataset
-/// is unaffected and may be freed independently.
+/// is unaffected and may be freed independently. `graph_existence` is an explicit
+/// choice: [`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`] retains an empty named slot;
+/// [`PURRDF_GRAPH_EXISTENCE_IMPLICIT`] withdraws it when its last row is removed.
+/// Any other selector returns `PURRDF_STATUS_INVALID_ARGUMENT` without writing
+/// `*out_graph`.
 ///
 /// # Safety
 /// `dataset` must be a live handle; `out_graph` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_from_dataset(
     dataset: *const PurrdfDataset,
+    graph_existence: i32,
     out_graph: *mut *mut PurrdfGraph,
 ) -> i32 {
     unsafe {
@@ -55,8 +92,13 @@ pub unsafe extern "C" fn purrdf_graph_from_dataset(
             if dataset.is_null() || out_graph.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
+            let Some(mode) = self::graph_existence(graph_existence) else {
+                return PurrdfStatus::InvalidArgument as i32;
+            };
             let base = PurrdfDataset::arc(dataset).clone();
-            *out_graph = into_handle(PurrdfGraph(MutableDataset::new(base)));
+            *out_graph = into_handle(PurrdfGraph(MutableDataset::new_with_graph_existence(
+                base, mode,
+            )));
             PurrdfStatus::Ok as i32
         })
     }

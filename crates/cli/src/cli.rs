@@ -677,6 +677,10 @@ pub(crate) enum Command {
         /// eighteen digits truncated toward zero.
         #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
         division: Option<purrdf_sparql_eval::DivisionPolicy>,
+        /// Named-graph lifetime: remember-empty retains empty slots until DROP;
+        /// implicit withdraws a graph when its last physical row is removed.
+        #[arg(long, value_name = "MODE", default_value = "remember-empty", value_parser = crate::update::parse_graph_existence)]
+        graph_existence: purrdf_core::GraphExistenceMode,
         /// The SPARQL UPDATE text.
         update: String,
     },

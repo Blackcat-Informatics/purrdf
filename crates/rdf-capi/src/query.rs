@@ -1263,7 +1263,14 @@ unsafe fn query_entailment_governed_entry(
     }
 }
 
-/// Apply one SPARQL UPDATE request under caller-supplied governors.
+/// Apply one SPARQL UPDATE request under caller-supplied governors and an explicit
+/// named-graph lifetime. `graph_existence` is
+/// [`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`](crate::graph::PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY)
+/// or [`PURRDF_GRAPH_EXISTENCE_IMPLICIT`](crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT).
+/// The former preserves empty slots through CLEAR and last-row deletion until DROP;
+/// the latter opts out and ties graph lifetime to physical rows. Any other value
+/// is `PURRDF_STATUS_INVALID_ARGUMENT` before reading the request or publishing
+/// a dataset, outcome or evidence.
 ///
 /// `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
 /// owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
@@ -1286,6 +1293,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
     request: *const c_char,
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1300,6 +1308,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
                 base_iri,
                 aggregate_namespace,
                 std::ptr::null(),
+                graph_existence,
                 governors,
                 out_outcome,
                 out_evidence,
@@ -1328,6 +1337,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1342,6 +1352,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
                 base_iri,
                 aggregate_namespace,
                 regex_profile,
+                graph_existence,
                 governors,
                 out_outcome,
                 out_evidence,
@@ -1362,6 +1373,7 @@ unsafe fn update_governed_entry(
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1378,6 +1390,7 @@ unsafe fn update_governed_entry(
                 format!("null required pointer argument to {entry}"),
             ));
         }
+        let graph_existence = crate::graph::decode_graph_existence(graph_existence, entry)?;
         let governors = decode_update_governors(governors)?;
         let request = cstr_to_str(request)?;
         let base_iri = opt_cstr_to_str(base_iri)?;
@@ -1394,7 +1407,10 @@ unsafe fn update_governed_entry(
                     substitutions: &[],
                 },
                 query_options(
-                    QueryOptions::new().with_env(&env).with_division(division),
+                    QueryOptions::new()
+                        .with_env(&env)
+                        .with_division(division)
+                        .with_graph_existence(graph_existence),
                     regex,
                 ),
                 &governors,
@@ -2030,6 +2046,7 @@ mod tests {
                 request.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
+                crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
@@ -2263,6 +2280,7 @@ mod tests {
                 update.as_ptr(),
                 std::ptr::null(),
                 namespace.as_ptr(),
+                crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),

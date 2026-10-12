@@ -302,6 +302,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             xpath_regex,
             division,
             update,
+            graph_existence,
         } => update::run(
             &update::UpdateOptions {
                 data,
@@ -310,6 +311,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 to: *to,
                 base: base.as_deref(),
                 update,
+                graph_existence: *graph_existence,
                 governors: GovernorFlags {
                     fuel: *fuel,
                     deadline: *deadline,

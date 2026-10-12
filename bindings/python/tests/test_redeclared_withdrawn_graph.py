@@ -40,7 +40,7 @@ def _graphs(store: purrdf.Store | purrdf.MutableDataset) -> int:
 
 
 def test_a_redeclared_withdrawn_graph_is_listed_once() -> None:
-    for store in (purrdf.Store(), purrdf.MutableDataset()):
+    for store in (purrdf.Store(remember_empty_graphs=False), purrdf.MutableDataset(remember_empty_graphs=False)):
         store.load(f"{_GRAPH} {{ <{EX}old> <{EX}p> <{EX}o> . }}\n".encode(), format=purrdf.RdfFormat.TRIG)
         _compact(store)
         store.remove(_quad("old"))

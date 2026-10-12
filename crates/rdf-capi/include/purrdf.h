@@ -26,6 +26,17 @@
 #define PURRDF_EXPRESSION_ERROR_CODE_COUNT 8
 
 /**
+ * Named graphs retain their empty slot until DROP or explicit withdrawal.
+ * Pass this selector explicitly to graph construction and governed UPDATE.
+ */
+#define PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY 0
+
+/**
+ * Explicit opt-out: a graph is withdrawn when its last physical row is removed.
+ */
+#define PURRDF_GRAPH_EXISTENCE_IMPLICIT 1
+
+/**
  * ABI major version. `0` signals the surface is still **beta** — the freeze
  * discipline (append-only status enum, drift-gated header) is in place, but the
  * version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
@@ -256,8 +267,17 @@
  * `governors` on the governed ones), NULL meaning the unchanged entry point; and it
  * APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
  * signature and its behaviour, so this is additive and rides the same bump.
+ *
+ * # `0.10.0` → `0.11.0`: explicit named-graph lifetime
+ *
+ * Three prototypes gain a mandatory `int32_t graph_existence` selector:
+ * `purrdf_graph_from_dataset` before `out_graph`, and `purrdf_update_governed`
+ * plus `purrdf_update_governed_xpath_regex` before `governors`. Recompile callers
+ * with `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` to retain empty named slots or
+ * `PURRDF_GRAPH_EXISTENCE_IMPLICIT` for row-driven lifetime. Invalid values are
+ * refused before publication. No existing status value or struct layout changes.
  */
-#define PURRDF_ABI_MINOR 10
+#define PURRDF_ABI_MINOR 11
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -2314,12 +2334,18 @@ void purrdf_cancellation_free(PurrdfCancellation *cancellation);
 /**
  * Branch a single-threaded mutable COW graph off a frozen dataset. `*out_graph`
  * is a caller-owned handle (free with `purrdf_graph_free`); the source dataset
- * is unaffected and may be freed independently.
+ * is unaffected and may be freed independently. `graph_existence` is an explicit
+ * choice: [`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`] retains an empty named slot;
+ * [`PURRDF_GRAPH_EXISTENCE_IMPLICIT`] withdraws it when its last row is removed.
+ * Any other selector returns `PURRDF_STATUS_INVALID_ARGUMENT` without writing
+ * `*out_graph`.
  *
  * # Safety
  * `dataset` must be a live handle; `out_graph` must be writable.
  */
-int32_t purrdf_graph_from_dataset(const PurrdfDataset *dataset, PurrdfGraph **out_graph);
+int32_t purrdf_graph_from_dataset(const PurrdfDataset *dataset,
+                                  int32_t graph_existence,
+                                  PurrdfGraph **out_graph);
 
 /**
  * Insert a value-quad into the effective set. `s`/`p`/`o` are required input
@@ -2877,7 +2903,14 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
                                                      PurrdfError **out_error);
 
 /**
- * Apply one SPARQL UPDATE request under caller-supplied governors.
+ * Apply one SPARQL UPDATE request under caller-supplied governors and an explicit
+ * named-graph lifetime. `graph_existence` is
+ * [`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`](crate::graph::PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY)
+ * or [`PURRDF_GRAPH_EXISTENCE_IMPLICIT`](crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT).
+ * The former preserves empty slots through CLEAR and last-row deletion until DROP;
+ * the latter opts out and ties graph lifetime to physical rows. Any other value
+ * is `PURRDF_STATUS_INVALID_ARGUMENT` before reading the request or publishing
+ * a dataset, outcome or evidence.
  *
  * `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
  * owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
@@ -2899,6 +2932,7 @@ int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *request,
                                const char *base_iri,
                                const char *aggregate_namespace,
+                               int32_t graph_existence,
                                const PurrdfQueryGovernors *governors,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,
@@ -2924,6 +2958,7 @@ int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset,
                                            const char *base_iri,
                                            const char *aggregate_namespace,
                                            const char *regex_profile,
+                                           int32_t graph_existence,
                                            const PurrdfQueryGovernors *governors,
                                            int32_t *out_outcome,
                                            PurrdfGovernorEvidence *out_evidence,

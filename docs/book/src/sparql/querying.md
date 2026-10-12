@@ -76,22 +76,32 @@ Anything outside this surface — and every malformed query — is a typed
 
 ## Named graph lifetime
 
-The 3.x default preserves the implicit graph-operation model: `CREATE` registers
-no slot, and `CLEAR` and `DROP` both remove the named graph. Select
-`GraphExistenceMode::RememberEmpty` with `MutableDataset::new_with_graph_existence`
-or `QueryOptions::with_graph_existence` to retain empty slots. In this mode,
-`CREATE` registers a slot and refuses duplicates unless `SILENT`; `CLEAR` retains
-the slot, and `DROP` removes it. Both constant and variable `GRAPH` queries see
-declared empty graphs. The default graph always exists. Remembered empty graphs
-are expected to become the default in v4.0; they remain opt-in in 3.x.
+The default, `GraphExistenceMode::RememberEmpty`, remembers a named graph from
+its creation until it is dropped, whether or not it holds a row. `CREATE`
+registers an empty slot and refuses a duplicate unless `SILENT`; `CLEAR` and
+the removal of a graph's last row keep the slot, and `DROP` removes it. A
+missing `CLEAR` or `DROP` target, or `ADD`, `COPY` or `MOVE` source, is refused
+before anything changes, unless `SILENT`. Both constant and variable `GRAPH`
+queries see declared empty graphs. The default graph always exists.
 
-Python selects the same policy with `Store(remember_empty_graphs=True)` or
-`MutableDataset(remember_empty_graphs=True)`. Their shared `add_graph` and
-`named_graphs` methods use native named or blank graph terms. UPDATE, governed
-UPDATE, `Store.checkpoint` and `MutableDataset.compact` preserve the selection.
-Loading and dumping declared empty graphs through TriG, JSON-LD and TriX works in
-both modes; mode is mutation policy rather than serialized data. A stopped UPDATE
-publishes nothing, including declarations made by earlier operations.
+`GraphExistenceMode::Implicit` is the opt-out, and keeps the 3.x row-based
+lifetime: `CREATE` registers no slot, and `CLEAR` and `DROP` both remove the
+named graph. Select it with `MutableDataset::new_with_graph_existence` or
+`QueryOptions::with_graph_existence`.
+
+Python selects the same policy with `Store(remember_empty_graphs=False)` or
+`MutableDataset(remember_empty_graphs=False)`; the keyword defaults to `True`.
+Their shared `add_graph` and `named_graphs` methods use native named or blank
+graph terms. UPDATE, governed UPDATE, `Store.checkpoint` and
+`MutableDataset.compact` preserve the selection. WebAssembly selects it with
+`new Dataset(false)` or `Dataset.parse(input, format, base, false)`; the C ABI
+with `PURRDF_GRAPH_EXISTENCE_IMPLICIT` as the `graph_existence` argument of
+`purrdf_graph_from_dataset`, `purrdf_update_governed` or
+`purrdf_update_governed_xpath_regex`; and the command line with
+`purrdf update --graph-existence implicit`. Loading and dumping declared empty
+graphs through TriG, JSON-LD and TriX works in both modes; mode is mutation
+policy rather than serialized data. A stopped UPDATE publishes nothing,
+including declarations made by earlier operations.
 
 ## How the evaluator works
 
