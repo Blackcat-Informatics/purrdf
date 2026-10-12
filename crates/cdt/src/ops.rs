@@ -415,7 +415,9 @@ fn xsd_relation(
         }
         let answer = answer.map_err(|error| match error {
             purrdf_xsd::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
+            purrdf_xsd::bigint::LimbScratchError::Storage(error) => error,
             purrdf_xsd::bigint::LimbScratchError::AllocationFailed
+            | purrdf_xsd::bigint::LimbScratchError::Destinations { .. }
             | purrdf_xsd::bigint::LimbScratchError::Capacity { .. }
             | purrdf_xsd::bigint::LimbScratchError::Exhausted { .. }
             | purrdf_xsd::bigint::LimbScratchError::Retained { .. } => {

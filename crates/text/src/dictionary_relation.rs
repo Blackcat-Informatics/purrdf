@@ -14,7 +14,8 @@ use purrdf_sparql_eval::property_fn::{
     PfArity, PfCursor, PfRow, PropertyFunction,
 };
 use purrdf_sparql_eval::{
-    AdmittedVec, EvalError, Volatility, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm,
+    AdmittedVec, EvalError, Volatility, WorkspaceAllocation, WorkspaceCapability, WorkspaceCursor,
+    WorkspaceTerm,
 };
 use std::sync::Arc;
 
@@ -67,7 +68,7 @@ impl PhraseOccurrenceRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: &WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         let needle = phrase(args, workspace)?;
         let entries = [DictionaryEntry {
             identity: args.get(1).expect("required phrase"),
@@ -113,13 +114,14 @@ impl PropertyFunction for PhraseOccurrenceRelation {
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         self.owned_cursor(args, ceiling, &WorkspaceCapability::resident())
+            .and_then(WorkspaceCursor::into_resident)
     }
     fn open_admitted(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         self.owned_cursor(args, ceiling, &workspace)
     }
     fn dictionary_shape(&self) -> Option<DictionaryShape> {
@@ -248,7 +250,7 @@ impl DictionaryBatch for PhraseBatch {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: &WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         cursor(
             self.results.clone(),
             ordinal,
@@ -269,7 +271,6 @@ struct PhraseCursor {
     generation: Arc<str>,
     work: u64,
     workspace: WorkspaceCapability,
-    _allocation: WorkspaceAllocation,
 }
 fn cursor(
     results: Shared<Results>,
@@ -279,7 +280,7 @@ fn cursor(
     generation: Arc<str>,
     count_work: bool,
     workspace: &WorkspaceCapability,
-) -> Result<Box<dyn PfCursor>, EvalError> {
+) -> Result<WorkspaceCursor, EvalError> {
     phrase(args, workspace)?;
     let rows = results.matches.rows();
     let begin = rows.partition_point(|row| row.entry < ordinal);
@@ -298,24 +299,20 @@ fn cursor(
     } else {
         0
     };
-    let allocation = workspace.charge(
-        u64::try_from(size_of::<PhraseCursor>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-    )?;
-    purrdf_core::small::try_boxed(PhraseCursor {
-        results,
-        at: begin,
-        end,
-        bound,
-        remaining: ceiling,
-        generation,
-        work,
-        workspace: workspace.clone(),
-        _allocation: allocation,
-    })
-    .map(|cursor| cursor as Box<dyn PfCursor>)
-    .map_err(|_| EvalError::AllocationFailed {
-        construct: "phrase occurrence cursor",
-    })
+    WorkspaceCursor::new(
+        PhraseCursor {
+            results,
+            at: begin,
+            end,
+            bound,
+            remaining: ceiling,
+            generation,
+            work,
+            workspace: workspace.clone(),
+        },
+        workspace,
+        "phrase occurrence cursor",
+    )
 }
 impl PhraseCursor {
     fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {

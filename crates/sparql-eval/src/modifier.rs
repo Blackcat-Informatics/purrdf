@@ -5508,7 +5508,6 @@ mod tests {
             rows: crate::AdmittedVecIntoIter<AdmittedPfRow>,
             query: QueryEvidence,
             first: Option<crate::RowEvidence>,
-            _allocation: crate::WorkspaceAllocation,
         }
         impl PfCursor for Cursor {
             fn carries_row_evidence(&self) -> bool {
@@ -5549,14 +5548,15 @@ mod tests {
                 args: &PfArgs<'_>,
                 ceiling: Option<u64>,
             ) -> Result<Box<dyn PfCursor>, EvalError> {
-                self.open_admitted(args, ceiling, crate::WorkspaceCapability::default())
+                self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
+                    .and_then(crate::WorkspaceCursor::into_resident)
             }
             fn open_admitted(
                 &self,
                 _args: &PfArgs<'_>,
                 ceiling: Option<u64>,
                 workspace: crate::WorkspaceCapability,
-            ) -> Result<Box<dyn PfCursor>, EvalError> {
+            ) -> Result<crate::WorkspaceCursor, EvalError> {
                 let mut rows = AdmittedVec::new(&workspace);
                 let count = ceiling.map_or(usize::MAX, |limit| {
                     usize::try_from(limit).unwrap_or(usize::MAX)
@@ -5573,20 +5573,15 @@ mod tests {
                 }
                 let query = QueryEvidence::new(&workspace)?;
                 let first = query.retain_undecided(&self.1)?;
-                let allocation = workspace.charge(
-                    u64::try_from(size_of::<Cursor>())
-                        .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-                )?;
-                purrdf_core::small::try_boxed(Cursor {
-                    rows: rows.into_iter(),
-                    query,
-                    first: Some(first),
-                    _allocation: allocation,
-                })
-                .map(|cursor| cursor as Box<dyn PfCursor>)
-                .map_err(|_| EvalError::AllocationFailed {
-                    construct: "native alternatives cursor",
-                })
+                crate::WorkspaceCursor::new(
+                    Cursor {
+                        rows: rows.into_iter(),
+                        query,
+                        first: Some(first),
+                    },
+                    &workspace,
+                    "native alternatives cursor",
+                )
             }
         }
         let dataset = RdfDatasetBuilder::new().freeze().unwrap();

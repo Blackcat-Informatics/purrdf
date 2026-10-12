@@ -555,22 +555,46 @@ impl<A: Array> SmallVec<A> {
                 .checked_add(1)
                 .and_then(usize::checked_next_power_of_two)
                 .ok_or(StorageError::SizeOverflow)?;
-            let old = if self.spilled() { self.capacity() } else { 0 };
-            let bytes = capacity
-                .checked_mul(size_of::<A::Item>())
-                .ok_or(StorageError::SizeOverflow)?;
-            memory.add_bytes(bytes)?;
-            if self.try_reserve_exact(capacity - self.len()).is_err() {
-                let _ = memory.release_bytes(bytes);
-                return Err(StorageError::AllocationFailed);
-            }
-            memory.release_bytes(
-                old.checked_mul(size_of::<A::Item>())
-                    .ok_or(StorageError::SizeOverflow)?,
-            )?;
+            self.reserve_exact_with_memory(capacity - self.len(), memory)?;
         }
         self.push(value);
         Ok(())
+    }
+
+    /// Admit the actual replacement capacity before native fallible growth.
+    /// The original buffer stays covered until the allocator has replaced it.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn reserve_exact_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        additional: usize,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        let required = self
+            .len()
+            .checked_add(additional)
+            .ok_or(StorageError::SizeOverflow)?;
+        if required <= self.capacity() {
+            return Ok(());
+        }
+        let bytes = core::alloc::Layout::array::<A::Item>(required)
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let old = if self.spilled() {
+            core::alloc::Layout::array::<A::Item>(self.capacity())
+                .map_err(|_| StorageError::SizeOverflow)?
+                .size()
+        } else {
+            0
+        };
+        memory.add_bytes(bytes)?;
+        if self.try_reserve_exact(additional).is_err() {
+            let _ = memory.release_bytes(bytes);
+            return Err(StorageError::AllocationFailed);
+        }
+        memory.release_bytes(old)
     }
 
     /// Destroy a native vector before returning its original buffer admission.

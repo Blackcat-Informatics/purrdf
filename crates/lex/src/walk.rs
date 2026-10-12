@@ -61,8 +61,13 @@
 use core::fmt::{self, Write as _};
 
 mod scalar;
+mod sort;
 
 pub use scalar::{DebugScalar, write_debug_scalars};
+pub use sort::{
+    try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by, try_partition_unique_by,
+    try_sort_unstable_by,
+};
 
 /// A buffer owner that reserves storage before publishing vector elements.
 ///
@@ -240,6 +245,34 @@ impl<T, const N: usize> WorkList<T, N> {
         memory.reserve(&mut self.spill, capacity)
     }
 
+    /// Exact new and previous spill layouts for the next push.
+    ///
+    /// `None` means the next entry fits in the original inline or heap slots.
+    /// The calculation uses the same capacity law as native [`Self::try_push_admitted`].
+    /// # Errors
+    /// Returns checked length, capacity or layout overflow before allocation.
+    pub fn insertion_layout(
+        &self,
+    ) -> Result<Option<(usize, usize)>, crate::allocation::StorageError> {
+        use crate::allocation::{StorageError, growth_capacity};
+        if self.held < N || self.spill.len() < self.spill.capacity() {
+            return Ok(None);
+        }
+        let required = self
+            .spill
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        let capacity = growth_capacity::<T>(self.spill.capacity(), required)?;
+        let next = core::alloc::Layout::array::<T>(capacity)
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let previous = core::alloc::Layout::array::<T>(self.spill.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        Ok(Some((next, previous)))
+    }
+
     /// Read entries from the bottom, without copying or allocating.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.inline[..self.held]
@@ -393,6 +426,76 @@ pub fn dismantle_owned<T: DismantleOwned>(mut node: T) {
         parent = resumed.take_parent();
         node = resumed;
     }
+}
+
+/// Destroy a tree whose child storage is an existing vector, using that
+/// vector's evacuated last slot for each ancestor continuation. `take_children`
+/// leaves the node with no owned child vector; `from_children` constructs only
+/// the inline node around that original vector. Neither callback allocates.
+/// Empty constructed child vectors are continuation sentinels, while every
+/// saved ancestor contains its own continuation slot.
+pub fn dismantle_vec_tree<T, C, F>(children: Vec<T>, take_children: C, from_children: F)
+where
+    C: FnMut(&mut T) -> Option<Vec<T>>,
+    F: Fn(Vec<T>) -> T,
+{
+    struct Hooks<C, F> {
+        take: core::cell::RefCell<C>,
+        make: F,
+    }
+    struct Node<'a, T, C, F> {
+        value: T,
+        hooks: &'a Hooks<C, F>,
+    }
+    impl<T, C, F> DismantleOwned for Node<'_, T, C, F>
+    where
+        C: FnMut(&mut T) -> Option<Vec<T>>,
+        F: Fn(Vec<T>) -> T,
+    {
+        fn take_child(&mut self) -> Option<Self> {
+            let mut children = (self.hooks.take.borrow_mut())(&mut self.value)?;
+            let child = children.pop();
+            self.value = (self.hooks.make)(children);
+            child.map(|value| Self {
+                value,
+                hooks: self.hooks,
+            })
+        }
+        fn store_parent(&mut self, parent: Option<Self>) {
+            let mut children = (self.hooks.take.borrow_mut())(&mut self.value)
+                .expect("a vector child was removed from this node");
+            let value = parent.map_or_else(|| (self.hooks.make)(Vec::new()), |parent| parent.value);
+            // take_child vacated one original slot before entering this method.
+            assert!(children.len() < children.capacity());
+            children.push(value);
+            self.value = (self.hooks.make)(children);
+        }
+        fn take_parent(&mut self) -> Option<Self> {
+            let mut children = (self.hooks.take.borrow_mut())(&mut self.value)
+                .expect("a resumed vector node owns its continuation");
+            let mut value = children.pop().expect("the original continuation slot");
+            self.value = (self.hooks.make)(children);
+            let continuation = (self.hooks.take.borrow_mut())(&mut value)
+                .expect("an ancestor or empty sentinel is a vector node");
+            if continuation.is_empty() {
+                None
+            } else {
+                Some(Self {
+                    value: (self.hooks.make)(continuation),
+                    hooks: self.hooks,
+                })
+            }
+        }
+    }
+    let hooks = Hooks {
+        take: core::cell::RefCell::new(take_children),
+        make: from_children,
+    };
+    let value = (hooks.make)(children);
+    dismantle_owned(Node {
+        value,
+        hooks: &hooks,
+    });
 }
 
 struct DismantlingBox<T: DismantleTree>(Box<T>);

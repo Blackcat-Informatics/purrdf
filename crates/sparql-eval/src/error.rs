@@ -91,6 +91,8 @@ pub enum NativeDiagnosticKind {
     FunctionOperational,
     /// The requested data violated the native producer's input contract.
     Data,
+    /// An original source-read refusal, retaining its native message and grant.
+    SourceRead,
     /// The supplied native configuration was invalid.
     Config,
     /// A native evaluator invariant failed.
@@ -101,6 +103,8 @@ pub enum NativeDiagnosticKind {
     UnclassifiedUnsupported,
     /// A SEP-0009 semantic construction bound, with its original diagnostic code.
     CompositeBound,
+    /// Caller declarations intercept an immutable standard scalar function.
+    StandardFunctionConflict,
 }
 
 #[derive(Debug)]
@@ -148,6 +152,58 @@ impl NativeDiagnostic {
         let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload {
             text,
             _allocation: allocation,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "native diagnostic owner",
+        })?;
+        Ok(Self { kind, payload })
+    }
+
+    /// Publish the original native diagnostic buffer without a text copy.
+    /// The buffer's birth must already be covered by `frame`; construction
+    /// scratch has died, leaving exactly this String capacity. Every fallible
+    /// control admission precedes moving either original owner.
+    pub(crate) fn from_original_text(
+        kind: NativeDiagnosticKind,
+        text: &mut Option<String>,
+        frame: &mut crate::workspace::LexicalFrame,
+    ) -> Result<Self, EvalError> {
+        if let Some(error) = frame.take_failure() {
+            return Err(error);
+        }
+        let Some(capacity) = text.as_ref().map(String::capacity) else {
+            return Err(Self::error(
+                NativeDiagnosticKind::Internal,
+                "native diagnostic publication has no original text",
+                frame.workspace(),
+            ));
+        };
+        if capacity != frame.admitted_bytes() {
+            return Err(Self::error(
+                NativeDiagnosticKind::Internal,
+                "native diagnostic publication retains unmatched construction storage",
+                frame.workspace(),
+            ));
+        }
+        let bytes = capacity
+            .checked_add(
+                purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size(),
+            )
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        frame.resize_live(bytes)?;
+        let payload = purrdf_core::small::Shared::try_new_with(|| {
+            let empty = crate::workspace::LexicalFrame::new(frame.workspace());
+            let original = core::mem::replace(frame, empty);
+            let allocation = original
+                .into_allocation()
+                .expect("positive native diagnostic control keeps its original grant");
+            let text = text
+                .take()
+                .expect("native diagnostic text checked before transfer");
+            NativeDiagnosticPayload {
+                text,
+                _allocation: allocation,
+            }
         })
         .map_err(|_| EvalError::AllocationFailed {
             construct: "native diagnostic owner",
@@ -205,10 +261,12 @@ impl core::fmt::Display for NativeDiagnostic {
                 "host function error"
             }
             NativeDiagnosticKind::Data => "malformed RDF input",
+            NativeDiagnosticKind::SourceRead => "dataset read failed",
             NativeDiagnosticKind::Config => "invalid evaluation configuration",
             NativeDiagnosticKind::Internal => "internal evaluator error",
             NativeDiagnosticKind::Unsupported(_)
             | NativeDiagnosticKind::UnclassifiedUnsupported => "unsupported",
+            NativeDiagnosticKind::StandardFunctionConflict => "standard scalar function conflict",
             NativeDiagnosticKind::CompositeBound => {
                 "the composite value this query asked for exceeds a SEP-0009 resource bound"
             }
@@ -672,10 +730,14 @@ impl EvalError {
                 }
             }
             Self::NativeDiagnostic(message) => match message.kind() {
+                NativeDiagnosticKind::SourceRead => Some("native-sparql-source-read"),
                 NativeDiagnosticKind::Internal => Some(Self::INTERNAL_CODE),
                 NativeDiagnosticKind::FunctionOperational => Some(Self::FUNCTION_OPERATIONAL_CODE),
                 NativeDiagnosticKind::Unsupported(kind) => Some(kind.code()),
                 NativeDiagnosticKind::CompositeBound => Some(Self::COMPOSITE_BOUND_CODE),
+                NativeDiagnosticKind::StandardFunctionConflict => {
+                    Some("native-sparql-standard-function-conflict")
+                }
                 NativeDiagnosticKind::Function
                 | NativeDiagnosticKind::Data
                 | NativeDiagnosticKind::Config

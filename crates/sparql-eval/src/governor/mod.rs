@@ -1826,7 +1826,13 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// also retains algebra nodes whose normalization could discard declarations.
 /// An unused relation registry does not select this execution path. Consumers
 /// must remeasure fuel ceilings and stop cut points for evidence-bearing queries.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 15;
+///
+/// # v16
+///
+/// Appends native-function-work. Native kernels price their own documented
+/// internal chunks, share physical admission, and stop between chunks. Existing
+/// seventeen point labels and prices retain their order and values.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 16;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1863,7 +1869,7 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 15;
 /// define that unit for host code, so it prices it at one and lets the relation say how
 /// many; what makes the number comparable across relations is that each one documents its
 /// unit, not that the engine imposed one.
-pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
+pub const CHARGE_SCHEDULE: [(&str, u64); 18] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1881,6 +1887,7 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
     ("exists-definition-answered", 1),
     ("exists-inner-solutions-consumed", 1),
     ("property-function-work", 1),
+    ("native-function-work", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -2015,6 +2022,9 @@ pub enum ChargePoint {
     /// searches eagerly in `open` are charged the same total. A relation that does not
     /// override `take_work` reports zero and charges nothing.
     PropertyFunctionWork,
+    /// Documented internal native work, charged before each bounded chunk.
+    /// The kernel releases floating control guards before any host stop poll.
+    NativeFunctionWork,
 }
 
 impl ChargePoint {
@@ -2037,6 +2047,7 @@ impl ChargePoint {
         Self::ExistsDefinitionAnswered,
         Self::ExistsInnerSolutionsConsumed,
         Self::PropertyFunctionWork,
+        Self::NativeFunctionWork,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -2065,6 +2076,7 @@ impl ChargePoint {
             Self::ExistsDefinitionAnswered => 14,
             Self::ExistsInnerSolutionsConsumed => 15,
             Self::PropertyFunctionWork => 16,
+            Self::NativeFunctionWork => 17,
         }
     }
 
@@ -2209,7 +2221,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb";
+    "e41edb5340fc26e81e6de6d22ee644ee4e3e2bf580a2feced9585ad108449421";
 
 #[cfg(test)]
 mod tests {
@@ -2860,21 +2872,28 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 15);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 16);
+        assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
+        let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 13, historical),
             "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
             "the historical v13 identity pins the unchanged charge table"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 13, historical),
             pinned,
             "binary-limb charging cannot reuse the v13 receipt identity"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 14, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 14, historical),
             pinned,
-            "evidence-preserving EXISTS cannot reuse the v14 receipt identity"
+            "binary-limb charging cannot reuse the v14 receipt identity"
+        );
+        assert_eq!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 15, historical),
+            "34f3ed243e70e82eb473de8a264af5a712ccab053c48bc4be286f1c7293071a1",
+            "the evidence-preserving EXISTS profile keeps its published v15 identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

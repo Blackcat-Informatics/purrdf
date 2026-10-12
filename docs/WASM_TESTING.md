@@ -40,8 +40,19 @@ target executes the same sixteen production reasoning and refusal cases on the
 portable build, including recursive and inverse chains, blocking, proof replay,
 query services, fixed roles, resource exhaustion and cancellation.
 Runner preflight additionally exercises panic handling, refused flags
-and sealed host reads. Every other numeric expectation, general digest vectors,
-geometry, index determinism and the remaining codec corpora run in native Rust.
+and sealed host reads. Other numeric expectations, general digest vectors and
+the remaining codec corpora run in native Rust.
+
+`make geo-determinism` separately executes four complete replay targets on native,
+portable WASM and SIMD WASM: `purrdf-geo/determinism`,
+`purrdf-geo-kernel/cells_determinism`, `purrdf-geo-kernel/geo_determinism` and
+`purrdf-xsd/certified_numerical`. Its twelve executions compare the frozen
+completed-output digests and require every registered case to run. The records
+cover certified numerical endpoints, cell hierarchy, geographic operations,
+metrics, buffers, covers and indexes. The `geo-determinism` CI job runs this
+comparison; the Arm64, i686 and i586 jobs execute the same replay targets on
+their native architectures. These executions are separate from the named
+`make wasm-test` selections and counts above.
 
 After preflight, the lane sets `PURRDF_TEST_REQUIRE_EXACT=1` in the shared Rust
 harness. Each invocation must execute one case for every exact filter; missing,

@@ -938,6 +938,55 @@ impl TermValue {
             .pop()
             .expect("the root's copy is the last one assembled"))
     }
+
+    /// Destroy a term produced under this Memory before refunding its original
+    /// string and child-box layouts. This is a destruction adapter, never an
+    /// admission certificate for a resident term. Intrinsic separate owners
+    /// must instead be destroyed with their own ownership-carrying carrier.
+    ///
+    /// # Errors
+    /// Preserves checked layout, traversal or original refund refusal. Failed
+    /// traversal destroys this value while its enclosing original grant is live.
+    pub fn release_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        let bytes = try_fold_nested_with_memory(
+            &self,
+            &mut (),
+            |(), value, _| {
+                let bytes = match value {
+                    Self::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+                    Self::Iri(text) => text.capacity(),
+                    Self::Blank { label, .. } => label.capacity(),
+                    Self::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        ..
+                    } => lexical_form
+                        .capacity()
+                        .checked_add(datatype.capacity())
+                        .and_then(|bytes| {
+                            bytes.checked_add(language.as_ref().map_or(0, String::capacity))
+                        })
+                        .ok_or(StorageError::SizeOverflow)?,
+                };
+                Ok(Nested::Leaf(bytes))
+            },
+            |(), _, s: usize, p, o, _| {
+                s.checked_add(p)
+                    .and_then(|bytes| bytes.checked_add(o))
+                    .and_then(|bytes| bytes.checked_add(size_of::<Self>().checked_mul(3)?))
+                    .ok_or(StorageError::SizeOverflow)
+            },
+            |error, _| error,
+            memory,
+        )?;
+        drop(self);
+        memory.release_bytes(bytes)
+    }
 }
 
 /// A copy of a term that is not a triple term.
@@ -979,6 +1028,18 @@ fn try_compare_pairs(
     b: &TermValue,
     shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
 ) -> Result<Ordering, std::collections::TryReserveError> {
+    compare_pairs_with(a, b, shallow, WorkList::try_push)
+}
+
+fn compare_pairs_with<'a, E>(
+    a: &'a TermValue,
+    b: &'a TermValue,
+    shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
+    mut push: impl FnMut(
+        &mut WorkList<(&'a TermValue, &'a TermValue), 16>,
+        (&'a TermValue, &'a TermValue),
+    ) -> Result<(), E>,
+) -> Result<Ordering, E> {
     if !matches!(a, TermValue::Triple { .. }) || !matches!(b, TermValue::Triple { .. }) {
         return Ok(shallow(a, b));
     }
@@ -1002,7 +1063,7 @@ fn try_compare_pairs(
         ) = (a, b)
         {
             for pair in [(&**oa, &**ob), (&**pa, &**pb), (&**sa, &**sb)] {
-                pending.try_push(pair)?;
+                push(&mut pending, pair)?;
             }
         }
     }
@@ -1105,45 +1166,66 @@ impl TermValue {
     /// # Errors
     /// Returns an actual traversal allocation refusal.
     pub fn try_cmp(&self, other: &Self) -> Result<Ordering, std::collections::TryReserveError> {
-        try_compare_pairs(self, other, |a, b| {
-            a.canonical_tag()
-                .cmp(&b.canonical_tag())
-                .then_with(|| match (a, b) {
-                    (Self::Iri(a), Self::Iri(b)) => a.cmp(b),
-                    (
-                        Self::Literal {
-                            lexical_form: la,
-                            datatype: da,
-                            language: ga,
-                            direction: dira,
-                        },
-                        Self::Literal {
-                            lexical_form: lb,
-                            datatype: db,
-                            language: gb,
-                            direction: dirb,
-                        },
-                    ) => da
-                        .cmp(db)
-                        .then_with(|| ga.cmp(gb))
-                        .then_with(|| la.cmp(lb))
-                        .then_with(|| dira.cmp(dirb)),
-                    (
-                        Self::Blank {
-                            label: la,
-                            scope: sa,
-                        },
-                        Self::Blank {
-                            label: lb,
-                            scope: sb,
-                        },
-                    ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
-                    // Equal tags guarantee the same variant; two triple terms are
-                    // ordered by their components, which the walk compares next.
-                    _ => Ordering::Equal,
-                })
+        try_compare_pairs(self, other, compare_shallow)
+    }
+
+    /// Compare total RDF order through the same native walk, admitting each
+    /// actual work-list replacement before it is allocated.
+    ///
+    /// # Errors
+    /// Preserves the first layout, admission or allocator refusal. Temporary
+    /// traversal storage is destroyed before its original account is released.
+    pub fn try_cmp_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        other: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Ordering, purrdf_lex::allocation::StorageError> {
+        memory.scope(|memory| {
+            compare_pairs_with(self, other, compare_shallow, |pending, pair| {
+                pending.try_push_admitted(pair, memory)
+            })
         })
     }
+}
+
+fn compare_shallow(a: &TermValue, b: &TermValue) -> Ordering {
+    use TermValue as Value;
+    a.canonical_tag()
+        .cmp(&b.canonical_tag())
+        .then_with(|| match (a, b) {
+            (Value::Iri(a), Value::Iri(b)) => a.cmp(b),
+            (
+                Value::Literal {
+                    lexical_form: la,
+                    datatype: da,
+                    language: ga,
+                    direction: dira,
+                },
+                Value::Literal {
+                    lexical_form: lb,
+                    datatype: db,
+                    language: gb,
+                    direction: dirb,
+                },
+            ) => da
+                .cmp(db)
+                .then_with(|| ga.cmp(gb))
+                .then_with(|| la.cmp(lb))
+                .then_with(|| dira.cmp(dirb)),
+            (
+                Value::Blank {
+                    label: la,
+                    scope: sa,
+                },
+                Value::Blank {
+                    label: lb,
+                    scope: sb,
+                },
+            ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
+            // Equal tags guarantee the same variant; two triple terms are
+            // ordered by their components, which the walk compares next.
+            _ => Ordering::Equal,
+        })
 }
 
 impl PartialOrd for TermValue {

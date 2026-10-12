@@ -58,6 +58,7 @@ macro_rules! copy_pyclass_from_py_object {
 
 mod attestation;
 mod py_entail;
+mod py_geo;
 mod py_gts;
 mod py_gts_dataset;
 mod py_gts_view;
@@ -87,6 +88,10 @@ fn purrdf_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let entail_module = PyModule::new(py, "entail")?;
     py_entail::register(&entail_module)?;
     m.add_submodule(&entail_module)?;
+
+    let geo_module = PyModule::new(py, "geo")?;
+    py_geo::register(&geo_module)?;
+    m.add_submodule(&geo_module)?;
 
     let shex_module = PyModule::new(py, "shex")?;
     py_shex::register(&shex_module)?;

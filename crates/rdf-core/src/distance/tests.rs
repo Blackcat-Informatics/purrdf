@@ -1282,3 +1282,35 @@ fn every_refusal_renders_a_distinct_sentence() {
         messages[4]
     );
 }
+
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
+#[test]
+fn resolving_distances_uses_the_shared_trap_refusal_before_probing() {
+    let saved = control::mxcsr();
+    let changed = saved & !0x1fbf;
+    let refusal = {
+        // Clear accrued exceptions and unmask traps. A private duplicate probe
+        // would execute in this environment; the shared admission refuses it.
+        let _guard = control::Mxcsr::load(changed);
+        let exact = Exact::resolve().expect_err("unmasked exceptions are unsafe");
+        assert_eq!(
+            Reassociated::resolve().expect_err("the same environment is unsafe"),
+            exact
+        );
+        exact
+    };
+    assert_eq!(control::mxcsr(), saved);
+    assert_eq!(
+        refusal,
+        FloatEnvironmentError::TrapsEnabled {
+            evidence: FloatEnvironmentEvidence::Register {
+                name: "MXCSR",
+                bits: u64::from(changed),
+            },
+        }
+    );
+    assert!(Exact::resolve().is_ok());
+}

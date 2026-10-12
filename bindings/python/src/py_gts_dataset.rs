@@ -32,14 +32,14 @@ pub struct PyRdfDataset {
     inner: DatasetHandle,
 }
 
-impl PyRdfDataset {
-    /// Wrap an already-validated native dataset without reparsing bytes.
-    pub(crate) fn from_frozen(inner: impl Into<DatasetHandle>) -> Self {
-        Self {
-            inner: inner.into(),
-        }
+purrdf_lex::constructors! {
+    impl PyRdfDataset {
+        /// Wrap an already-validated native dataset without reparsing bytes.
+        pub(crate) fn from_frozen(inner: impl Into<DatasetHandle>) -> Self { .. };
     }
+}
 
+impl PyRdfDataset {
     /// An owned handle on the frozen dataset.
     ///
     /// A storage-owner clone rather than a borrow so callers (the entailment surface in

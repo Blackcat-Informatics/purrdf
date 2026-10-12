@@ -23,7 +23,7 @@ pub(crate) use storage::Mag;
 /// Number of decimal digits processed per limb-sized chunk.
 ///
 /// 10<sup>19</sup> is the largest power of ten that fits in a `u64`.
-const DECIMAL_CHUNK: usize = 19;
+pub(crate) const DECIMAL_CHUNK: usize = 19;
 
 /// Powers of ten that fit in a `u64`, indexed by exponent.
 const POW10_U64: [u64; DECIMAL_CHUNK + 1] = [
@@ -608,6 +608,14 @@ pub struct PreparedDecimalDigits {
     digits: usize,
 }
 
+impl fmt::Display for PreparedDecimalDigits {
+    /// The original groups are already prepared; presentation grows no native
+    /// integer buffer and borrows them for the complete write.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write_fmt(formatter)
+    }
+}
+
 impl PreparedDecimalDigits {
     /// Exact unsigned coefficient length, available before output allocation.
     #[must_use]
@@ -747,12 +755,20 @@ impl BigInt {
         }
     }
 
-    /// Copy an operand through the selected native destination seam.
+    /// Copy immutable magnitude limbs through the selected native destination.
     pub(crate) fn copy_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
         Ok(Self::from_parts(
             self.negative,
             storage.copy(&self.magnitude)?,
         ))
+    }
+
+    /// Copy the absolute value into an already admitted native destination.
+    ///
+    /// # Errors
+    /// Refuses capacity or destination exhaustion without an allocation fallback.
+    pub fn abs_in(&self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.abs_using(scratch)
     }
 
     pub(crate) fn abs_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
@@ -763,10 +779,14 @@ impl BigInt {
         Ok(self.copy_using(storage)?.with_sign(!self.negative))
     }
 
-    /// Change only the sign of an owned magnitude; no clone or allocation.
+    /// Move an original magnitude while changing only its sign.
     pub(crate) fn with_sign(mut self, negative: bool) -> Self {
         self.negative = negative && !self.magnitude.is_empty();
         self
+    }
+
+    pub(crate) fn has_unbounded_limb_storage(&self) -> bool {
+        matches!(self.magnitude, Mag::Heap(_))
     }
 
     /// Returns the absolute value.
@@ -1376,6 +1396,16 @@ impl BigInt {
         self.magnitude.allocated_bytes()
     }
 
+    /// Extra storage beside an arithmetic worker's already admitted arena.
+    /// A pooled destination keeps that whole original owner alive, but does
+    /// not create another arena allocation when an interval retains it.
+    pub(crate) fn additional_workspace_bytes(&self) -> usize {
+        match self.magnitude {
+            Mag::Pooled(_) => 0,
+            _ => self.allocated_bytes(),
+        }
+    }
+
     /// The exact unsigned magnitude, when it fits in `u128`.
     #[must_use]
     pub fn unsigned_abs_u128(&self) -> Option<u128> {
@@ -1387,7 +1417,7 @@ impl BigInt {
     /// # Errors
     /// Refuses scratch capacity or destination exhaustion without allocating.
     pub fn copy_in(&self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
-        if matches!(self.magnitude, Mag::Pooled(_)) {
+        if matches!(self.magnitude, Mag::Pooled(_) | Mag::Owned(_)) {
             return Ok(self.clone());
         }
         Ok(Self::from_parts(
@@ -1400,7 +1430,73 @@ impl BigInt {
     /// storage. Numerical preparations admit this copy before calling it.
     #[must_use]
     pub fn detached(&self) -> Self {
-        Self::from_parts(self.negative, Mag::from_slice(&self.magnitude))
+        let mut resident = purrdf_lex::allocation::Resident;
+        self.detached_buffer_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+            .expect("resident integer copy allocation")
+    }
+
+    fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        if matches!(self.magnitude, Mag::Owned(_)) {
+            return Ok(self.clone());
+        }
+        let magnitude = if self.magnitude.len() <= 3 {
+            Mag::from_slice(&self.magnitude)
+        } else {
+            let mut words = Vec::new();
+            memory.reserve(&mut words, self.magnitude.len())?;
+            words.extend_from_slice(&self.magnitude);
+            Mag::Heap(words)
+        };
+        Ok(Self::from_parts(self.negative, magnitude))
+    }
+
+    /// Prepare an immutable detached copy under the original retained account.
+    /// The actual limb buffer and its eventual shared control are admitted
+    /// before birth. Publish it with [`Self::publish_detached`] before escape.
+    ///
+    /// # Errors
+    /// Preserves original physical layout, allocator or admission refusal.
+    pub fn detached_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        if self.detached_required_bytes()? != 0 {
+            memory.add_bytes(
+                purrdf_lex::allocation::SharedOwned::<Vec<u64>>::allocation_layout::<
+                    purrdf_lex::allocation::SharedOwned<()>,
+                >()
+                .size(),
+            )?;
+        }
+        self.detached_buffer_with_memory(memory)
+    }
+
+    /// Seal the prepared detached buffer with its original immutable lease.
+    /// This is the trusted publication continuation of `detached_with_memory`;
+    /// the supplied lease must still cover that buffer and its quoted control.
+    /// Header refusal leaves the original buffer unchanged and admitted.
+    ///
+    /// # Errors
+    /// Reports fallible shared-control allocation refusal without copying limbs.
+    pub fn publish_detached(
+        &mut self,
+        original: &purrdf_lex::allocation::SharedOwned<()>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        if !matches!(self.magnitude, Mag::Heap(_)) {
+            return Ok(());
+        }
+        let owner = purrdf_lex::allocation::SharedOwned::try_from_admitted_with(|| {
+            let Mag::Heap(words) = core::mem::take(&mut self.magnitude) else {
+                unreachable!("the prepared buffer remains owned until publication")
+            };
+            (words, original.clone())
+        })
+        .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+        self.magnitude = Mag::Owned(owner);
+        Ok(())
     }
 
     /// Retain canonical immutable limbs in shared owned storage. Inline values
@@ -1411,7 +1507,10 @@ impl BigInt {
     pub fn into_shared(mut self) -> Self {
         self.magnitude = match self.magnitude {
             Mag::Heap(words) => Mag::Shared(std::sync::Arc::new(words)),
-            Mag::Pooled(words) => Mag::Shared(std::sync::Arc::new(words.words().to_vec())),
+            // Native pooled limbs are already immutable shared values.
+            // Their strong arena reference preserves the original physical
+            // owner; detaching here would allocate an unpriced second buffer.
+            magnitude @ Mag::Pooled(_) => magnitude,
             magnitude => magnitude,
         };
         self
@@ -1427,9 +1526,8 @@ impl BigInt {
                 words.capacity() * size_of::<u64>() + size_of::<Vec<u64>>() + 2 * size_of::<usize>()
             }
             Mag::Shared(_) => self.allocated_bytes(),
-            Mag::Pooled(words) => {
-                size_of_val(words.words()) + size_of::<Vec<u64>>() + 2 * size_of::<usize>()
-            }
+            Mag::Owned(_) => self.allocated_bytes(),
+            Mag::Pooled(_) => self.allocated_bytes(),
         }
     }
 
@@ -1441,6 +1539,38 @@ impl BigInt {
         } else {
             self.magnitude.len().saturating_mul(size_of::<u64>())
         }
+    }
+
+    /// Exact requested limb and control layouts for native detached publication.
+    /// Inline coefficients allocate neither a limb buffer nor a control.
+    ///
+    /// # Errors
+    /// Refuses address-space layout overflow before any detached allocation.
+    pub fn detached_required_bytes(&self) -> Result<usize, purrdf_lex::allocation::StorageError> {
+        if matches!(self.magnitude, Mag::Owned(_)) {
+            return Ok(0);
+        }
+        Self::detached_layout_for_limbs(self.magnitude.len())
+    }
+
+    /// Exact detached-buffer/control layout for a certified limb upper bound.
+    /// At most three limbs stay inline. Larger values use the same original
+    /// typed buffer and immutable-control layouts as detached publication.
+    ///
+    /// # Errors
+    /// Refuses a nonaddressable array or control-size overflow.
+    pub fn detached_layout_for_limbs(
+        limbs: usize,
+    ) -> Result<usize, purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::{SharedOwned, StorageError};
+        if limbs <= 3 {
+            return Ok(0);
+        }
+        core::alloc::Layout::array::<u64>(limbs)
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size()
+            .checked_add(SharedOwned::<Vec<u64>>::allocation_layout::<SharedOwned<()>>().size())
+            .ok_or(StorageError::SizeOverflow)
     }
 
     /// Checked native temporary/destination layout for decimal rendering.
@@ -1464,6 +1594,19 @@ impl BigInt {
     /// Returns checked layout or physical native destination refusal.
     pub fn prepare_decimal_digits(&self) -> Result<PreparedDecimalDigits, LimbScratchError> {
         self.prepare_decimal_digits_using(&scratch::Fallible)
+    }
+
+    /// Convert through the same decimal division body using an already admitted
+    /// reusable limb arena. The returned groups retain its original physical
+    /// owner until the prepared spelling is dropped.
+    ///
+    /// # Errors
+    /// Refuses missing destinations or capacity without allocating a fallback.
+    pub fn prepare_decimal_digits_in(
+        &self,
+        scratch: &LimbScratch,
+    ) -> Result<PreparedDecimalDigits, LimbScratchError> {
+        self.prepare_decimal_digits_using(scratch)
     }
 
     pub(crate) fn prepare_decimal_digits_using(

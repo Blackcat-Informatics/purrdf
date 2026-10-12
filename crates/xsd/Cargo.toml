@@ -54,6 +54,10 @@ purrdf-alloc-probe = { workspace = true }
 name = "exact_wasm_determinism"
 harness = false
 
+[[test]]
+name = "certified_numerical"
+harness = false
+
 [[bench]]
 name = "lexical"
 harness = false

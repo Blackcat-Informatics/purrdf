@@ -194,6 +194,8 @@ struct QueryOp<'a> {
 /// is read, exactly as it was before this flag existed.
 #[derive(Clone, Copy)]
 struct RelationSpecs<'a> {
+    /// The same geographic profile used for initial admission and execution.
+    geo: &'a purrdf_validate::geo::GeoProfile,
     /// The parsed specs, empty when `--path-relation` was not given.
     specs: &'a [PathRelationSpec],
     /// The query text, re-prepared against the registry when there is one.
@@ -223,7 +225,9 @@ impl<'a> RelationSpecs<'a> {
         let prepared = engine.prepare_query_with_options(
             self.query,
             self.base,
-            EngineQueryOptions::new().with_env(&engine_env(aggregates, Some(&registry))?),
+            EngineQueryOptions::new()
+                .with_geo(self.geo)
+                .with_env(&engine_env(aggregates, Some(&registry))?),
         )?;
         Ok((Some(registry), Some(prepared)))
     }
@@ -250,8 +254,13 @@ fn engine_env(
 }
 
 /// The evaluation options a lane runs under, over an environment the caller holds.
-fn engine_options(env: &ExtensionEnv, division: DivisionPolicy) -> EngineQueryOptions<'_> {
+fn engine_options<'a>(
+    env: &'a ExtensionEnv,
+    geo: &'a purrdf_validate::geo::GeoProfile,
+    division: DivisionPolicy,
+) -> EngineQueryOptions<'a> {
     EngineQueryOptions::new()
+        .with_geo(geo)
         .with_env(env)
         .with_division(division)
 }
@@ -267,7 +276,7 @@ impl ViewOp for QueryOp<'_> {
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division);
         Ok(self.engine.query_prepared_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -336,7 +345,7 @@ impl ViewOp for GovernedQueryOp<'_> {
         // `property_functions` from the re-prepare `prepare_against` just did over this
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division);
         Ok(self.engine.query_prepared_governed_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -385,7 +394,7 @@ impl ViewOp for ExplainOp<'_> {
         // registered.
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division);
         Ok(self
             .engine
             .explain_query_with_options_view(view, self.query, self.base, options)?)
@@ -739,6 +748,7 @@ impl ViewOp for EntailedQueryOp<'_> {
             self.governors,
             engine_options(
                 &engine_env(self.aggregates, admitted.as_ref())?,
+                self.relations.geo,
                 self.division,
             ),
             &relations,
@@ -754,6 +764,8 @@ impl ViewOp for EntailedQueryOp<'_> {
 /// dispatcher hands over one borrow rather than a dozen positional arguments whose order
 /// is the only thing keeping them apart.
 pub(crate) struct QueryOptions<'a> {
+    /// The immutable geographic profile selected by `--geo-profile`.
+    pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     /// `--data`: the data-source path.
     pub(crate) data: &'a str,
     /// `--base`: the parse and query base IRI.
@@ -851,6 +863,7 @@ pub(crate) fn run(
     // an abort.
     path_relation::refuse_duplicate_iris(options.path_relations)?;
     let relations = RelationSpecs {
+        geo: options.geo,
         specs: options.path_relations,
         query: options.query,
         base: options.base,
@@ -896,7 +909,9 @@ pub(crate) fn run(
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
-        EngineQueryOptions::new().with_env(&engine_env(aggregates.as_ref(), None)?),
+        EngineQueryOptions::new()
+            .with_geo(options.geo)
+            .with_env(&engine_env(aggregates.as_ref(), None)?),
     )?;
 
     if let Some(regime) = options.entailment {

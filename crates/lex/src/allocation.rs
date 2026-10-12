@@ -27,7 +27,7 @@ use std::string::String;
 use std::vec::Vec;
 
 /// A physical failure, separate from any native lexical language.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StorageError {
     /// A concrete allocation layout or live-byte sum cannot be represented.
     SizeOverflow,
@@ -119,6 +119,31 @@ pub fn growth_capacity<T>(capacity: usize, required: usize) -> Result<usize, Sto
         .ok_or(StorageError::SizeOverflow)
 }
 
+/// Exact replacement and previous array layouts for a native heap insertion.
+/// The existing backing array remains live while the replacement is born.
+///
+/// # Errors
+/// Returns count, capacity or layout overflow before allocation.
+pub fn heap_insertion_layout<T: Ord>(
+    heap: &std::collections::BinaryHeap<T>,
+) -> Result<Option<(usize, usize)>, StorageError> {
+    let required = heap
+        .len()
+        .checked_add(1)
+        .ok_or(StorageError::SizeOverflow)?;
+    if required <= heap.capacity() {
+        return Ok(None);
+    }
+    let capacity = growth_capacity::<T>(heap.capacity(), required)?;
+    let replacement = Layout::array::<T>(capacity)
+        .map_err(|_| StorageError::SizeOverflow)?
+        .size();
+    let previous = Layout::array::<T>(heap.capacity())
+        .map_err(|_| StorageError::SizeOverflow)?
+        .size();
+    Ok(Some((replacement, previous)))
+}
+
 /// Exact live-buffer accounting shared by native scanners, compilers and walks.
 /// The borrowed callback itself is stack storage, never a retained payload owner.
 /// After a native result leaves, its caller retains the original admission grant
@@ -129,6 +154,15 @@ pub struct Memory<'a, S: Admission + ?Sized> {
 }
 
 impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+    /// Lend the original account to a native carrier that owns a resumed Memory
+    /// view. The returned total is that view's exact admitted layout counter,
+    /// never a measurement of an already constructed payload. The carrier
+    /// completes or destroys its scratch before returning the same counter.
+    pub fn with_account<T>(&mut self, body: impl FnOnce(&mut S, usize) -> (T, usize)) -> T {
+        let (value, admitted) = body(self.storage, self.live);
+        self.live = admitted;
+        value
+    }
     /// Start one native computation with no owned heap capacity.
     /// All nonempty buffers passed to this memory must have been allocated through
     /// it, or explicitly included with `add_bytes` under the same original grant.
@@ -176,6 +210,8 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
     ///
     /// # Errors
     /// Returns the first domain failure; a refund refusal never replaces it.
+    /// Any returned error payload retains its own original owner independently
+    /// of the released child buffers, just as a successful retained payload does.
     pub fn try_scope<T, E>(
         &mut self,
         body: impl FnOnce(&mut Self) -> Result<T, E>,
@@ -356,6 +392,47 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         Ok(())
     }
 
+    /// Grow a native binary heap through the same admitted vector home.
+    /// Admission and allocation refusal leave the original entries untouched.
+    /// Successful replacement destroys the old buffer before refunding it.
+    ///
+    /// # Errors
+    /// Returns checked layout, admission, allocator or refund refusal.
+    pub fn push_heap<T: Ord>(
+        &mut self,
+        heap: &mut std::collections::BinaryHeap<T>,
+        value: T,
+    ) -> Result<(), StorageError> {
+        if let Some((_, previous)) = heap_insertion_layout(heap)? {
+            let required = heap
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?;
+            let capacity = growth_capacity::<T>(heap.capacity(), required)?;
+            let mut replacement = Vec::new();
+            self.reserve(&mut replacement, capacity)?;
+            let mut original = core::mem::take(heap).into_vec();
+            replacement.append(&mut original);
+            drop(original);
+            self.release_bytes(previous)?;
+            *heap = std::collections::BinaryHeap::from(replacement);
+        }
+        heap.push(value);
+        Ok(())
+    }
+
+    /// Destroy the heap entries and backing buffer before refunding its layout.
+    /// Element payloads keep their independent original ownership.
+    ///
+    /// # Errors
+    /// Returns checked layout, unbalanced accounting or refund refusal.
+    pub fn release_heap<T: Ord>(
+        &mut self,
+        heap: std::collections::BinaryHeap<T>,
+    ) -> Result<(), StorageError> {
+        self.release_vec(heap.into_vec())
+    }
+
     /// Admit amortized vector growth before constructing the value to append.
     ///
     /// # Errors
@@ -416,16 +493,31 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         &mut self,
         values: impl IntoIterator<Item = T>,
     ) -> Result<Vec<T>, StorageError> {
-        let values = values.into_iter();
-        let mut output = Vec::new();
-        // Preserve the producer's known extent before its first payload birth.
-        // Exact-size sources need one admitted buffer, rather than repeatedly
-        // growing through every smaller capacity.
-        self.reserve(&mut output, values.size_hint().0)?;
-        for value in values {
-            self.push(&mut output, value)?;
-        }
-        Ok(output)
+        self.try_map(values, |value, _| Ok(value))
+    }
+
+    /// Map a source through one fallible admitted array and element factory.
+    /// Its known extent is reserved before the first payload birth; uncertain
+    /// extents use the same native amortized growth. Partial values die before
+    /// failure cleanup. Retained element and error payloads keep their own owners.
+    ///
+    /// # Errors
+    /// Returns the first element error, layout, admission or allocator refusal.
+    pub fn try_map<T, U, E: From<StorageError>>(
+        &mut self,
+        values: impl IntoIterator<Item = T>,
+        mut make: impl FnMut(T, &mut Self) -> Result<U, E>,
+    ) -> Result<Vec<U>, E> {
+        self.try_scope(|memory| {
+            let values = values.into_iter();
+            let mut output = Vec::new();
+            memory.reserve(&mut output, values.size_hint().0)?;
+            for value in values {
+                memory.reserve_for_push(&mut output)?;
+                output.push(make(value, memory)?);
+            }
+            Ok(output)
+        })
     }
 
     /// Append native values without an infallible capacity-growth path.

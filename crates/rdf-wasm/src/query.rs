@@ -1292,6 +1292,8 @@ pub struct QueryEngine {
     /// The precision of every `xsd:integer`/`xsd:decimal` quotient this engine forms
     /// (`divisionPolicy`). An asynchronous job takes the policy in force when it begins.
     division: Cell<DivisionPolicy>,
+    /// An operation retains the immutable profile selected when it starts.
+    geo: std::cell::RefCell<purrdf_validate::geo::GeoProfileSnapshot>,
 }
 
 impl Default for QueryEngine {
@@ -1300,6 +1302,9 @@ impl Default for QueryEngine {
             inner: Rc::default(),
             blank_scope: Cell::default(),
             division: Cell::new(DivisionPolicy::xsd_default()),
+            geo: std::cell::RefCell::new(
+                purrdf_validate::geo::GeoSession::default().profile_snapshot(),
+            ),
         }
     }
 }
@@ -1312,6 +1317,24 @@ impl std::fmt::Debug for QueryEngine {
 
 #[wasm_bindgen]
 impl QueryEngine {
+    /// Select the immutable native geographic profile for subsequent operations.
+    /// An already started asynchronous operation retains its original selection.
+    #[wasm_bindgen(js_name = setGeoSession)]
+    pub fn set_geo_session(&self, session: &crate::geo::GeoSession) {
+        *self.geo.borrow_mut() = session.native().profile_snapshot();
+    }
+
+    /// Select the same strict version-one profile used by every native host.
+    ///
+    /// # Errors
+    /// Malformed records or invalid configuration leave the current selection intact.
+    #[wasm_bindgen(js_name = setGeoProfile)]
+    pub fn set_geo_profile(&self, profile: &str) -> Result<(), JsValue> {
+        let session = purrdf_validate::geo::GeoSession::from_profile_str(profile)
+            .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))?;
+        *self.geo.borrow_mut() = session.profile_snapshot();
+        Ok(())
+    }
     /// How a blank node's scope crosses to JS in the typed results this engine returns:
     /// `"keep"` (the default) or `"merge"`.
     ///
@@ -1875,6 +1898,11 @@ impl QueryEngine {
         self.division.get()
     }
 
+    /// Retain the immutable geographic selection for one complete operation.
+    pub(crate) fn geo_profile(&self) -> purrdf_validate::geo::GeoProfileSnapshot {
+        self.geo.borrow().clone()
+    }
+
     /// Set the division policy from its text form, through [`DivisionPolicy`]'s own
     /// reader; a refusal leaves the policy in force as it was.
     ///
@@ -1912,6 +1940,7 @@ impl QueryEngine {
         let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
         input.xpath_regex = xpath_regex;
         input.division = self.division();
+        input.geo = self.geo_profile();
         Ok(input)
     }
 

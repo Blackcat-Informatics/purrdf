@@ -31,6 +31,10 @@
 //! assert_eq!(language_datatype_iri(true), rdf::DIR_LANG_STRING);
 //! ```
 
+/// Official OGC GeoSPARQL 1.1 vocabularies and declared carrier references.
+/// Application vocabulary and nonstandard references remain caller supplied.
+pub mod ogc;
+
 /// The datatype RDF 1.2 gives a language-tagged string: `rdf:dirLangString`
 /// when it carries a base direction, otherwise `rdf:langString`.
 ///

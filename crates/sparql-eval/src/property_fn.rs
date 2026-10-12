@@ -1953,6 +1953,68 @@ fn write_canonical_option(
 // The relation trait
 // ---------------------------------------------------------------------------
 
+/// One native cursor and its original concrete control admission. The Box is
+/// destroyed before the outside grant, including on failure or an early stop.
+pub struct WorkspaceCursor {
+    cursor: Box<dyn PfCursor>,
+    allocation: crate::WorkspaceAllocation,
+}
+purrdf_hash::debug_non_exhaustive!(WorkspaceCursor { allocation });
+
+impl WorkspaceCursor {
+    /// Box the actual concrete cursor after admitting its exact control layout.
+    /// Its fields must already retain their own original payload grants.
+    ///
+    /// # Errors
+    /// Returns checked physical overflow, admission or allocator refusal before
+    /// the cursor Box is born. Pending fields die before their original owners.
+    pub fn new<C: PfCursor + 'static>(
+        cursor: C,
+        workspace: &crate::WorkspaceCapability,
+        construct: &'static str,
+    ) -> Result<Self, EvalError> {
+        let (cursor, allocation) = crate::workspace::box_native(cursor, workspace, construct)?;
+        Ok(Self { cursor, allocation })
+    }
+
+    fn resident(cursor: Box<dyn PfCursor>) -> Self {
+        Self {
+            cursor,
+            allocation: crate::WorkspaceCapability::resident()
+                .charge(0)
+                .expect("resident zero admission"),
+        }
+    }
+
+    /// Recover a caller-owned resident cursor. A bounded native owner refuses
+    /// raw extraction and destroys its cursor before releasing its grant.
+    ///
+    /// # Errors
+    /// Refuses extraction of an operational control whose original lease is live.
+    pub fn into_resident(self) -> Result<Box<dyn PfCursor>, EvalError> {
+        if self.allocation.is_bounded() {
+            drop(self);
+            Err(EvalError::WorkspaceUnpriced(
+                "raw extraction of a bounded native cursor",
+            ))
+        } else {
+            Ok(self.cursor)
+        }
+    }
+}
+
+impl core::ops::Deref for WorkspaceCursor {
+    type Target = dyn PfCursor;
+    fn deref(&self) -> &Self::Target {
+        self.cursor.as_ref()
+    }
+}
+impl core::ops::DerefMut for WorkspaceCursor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.cursor.as_mut()
+    }
+}
+
 /// One authored VALUES row in an expanded positional dictionary. The complete
 /// payload and each original single-token argument retain their native owners.
 #[derive(Debug)]
@@ -2039,7 +2101,7 @@ pub trait DictionaryBatch: Send + Sync {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: &crate::WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError>;
+    ) -> Result<WorkspaceCursor, EvalError>;
 }
 
 /// A host-injected relation invoked from predicate position.
@@ -2087,6 +2149,25 @@ pub trait DictionaryBatch: Send + Sync {
 /// the engine's side: it withholds the ceiling entirely for such a call rather than ask
 /// a relation to account for something it was never told.
 pub trait PropertyFunction: Send + Sync {
+    /// Open with the invoking query's physical, work and cancellation owners.
+    /// Native producers poll between bounded work chunks; ordinary producers
+    /// keep the existing admitted or caller-owned opening contract.
+    ///
+    /// # Errors
+    /// Preserves the producer's original operational or physical refusal.
+    fn open_metered(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        context: &crate::NativeFnContext<'_>,
+        _geo: &purrdf_geo_kernel::GeoProfile,
+    ) -> Result<WorkspaceCursor, EvalError> {
+        if context.workspace().is_bounded() {
+            self.open_admitted(args, ceiling, context.workspace().clone())
+        } else {
+            self.open(args, ceiling).map(WorkspaceCursor::resident)
+        }
+    }
     /// Whether this producer evaluates an explicit scope inside original
     /// candidate generation before ranking depth. The default refuses scoped
     /// admission; filtering a producer's already limited rows is insufficient.
@@ -2146,26 +2227,25 @@ pub trait PropertyFunction: Send + Sync {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: crate::WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<WorkspaceCursor, EvalError> {
         let certificate =
             self.workspace_certificate(args, ceiling)
                 .ok_or(EvalError::WorkspaceUnpriced(
                     "an opaque property function without a physical workspace certificate",
                 ))?;
-        let wrapper = u64::try_from(size_of::<CertifiedCursor>())
-            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
-        let bytes = certificate
-            .working_bytes
-            .checked_add(wrapper)
-            .ok_or(EvalError::WorkspaceBoundOverflow)?;
-        let admission = workspace.charge(bytes)?;
+        let admission = workspace.charge(certificate.working_bytes)?;
         let cursor = self.open(args, ceiling)?;
-        Ok(Box::new(CertifiedCursor {
-            cursor,
-            workspace,
-            row_bytes: certificate.row_bytes,
-            _admission: admission,
-        }))
+        let owner_workspace = workspace.clone();
+        WorkspaceCursor::new(
+            CertifiedCursor {
+                cursor,
+                workspace,
+                row_bytes: certificate.row_bytes,
+                _admission: admission,
+            },
+            &owner_workspace,
+            "certified property-function control",
+        )
     }
     /// The relation's determinism class. Read by the fork-join parallel gate exactly
     /// as [`crate::user_fn::NativeFunction`]'s is: only
@@ -2440,7 +2520,10 @@ pub fn open_contained(
         args,
         ceiling,
         &crate::WorkspaceCapability::default(),
+        None,
+        &purrdf_geo_kernel::binding::STANDARD_PROFILE,
     )
+    .and_then(WorkspaceCursor::into_resident)
     .map_err(|error| match error {
         // This public resident boundary retains its documented legacy variants.
         // Bounded execution calls the admitted checker directly and keeps its lease.
@@ -2464,7 +2547,9 @@ pub(crate) fn open_with_workspace_contained(
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
     workspace: &crate::WorkspaceCapability,
-) -> Result<Box<dyn PfCursor>, EvalError> {
+    context: Option<&crate::NativeFnContext<'_>>,
+    geo: &purrdf_geo_kernel::GeoProfile,
+) -> Result<WorkspaceCursor, EvalError> {
     let declared = declaration_contained_admitted(iri, "arity", || relation.arity(), workspace)?;
     let supplied = args.arity();
     if declared != supplied {
@@ -2497,10 +2582,12 @@ pub(crate) fn open_with_workspace_contained(
         iri,
         "opening an invocation",
         || {
-            if workspace.is_bounded() {
+            if let Some(context) = context {
+                relation.open_metered(args, ceiling, context, geo)
+            } else if workspace.is_bounded() {
                 relation.open_admitted(args, ceiling, workspace.clone())
             } else {
-                relation.open(args, ceiling)
+                relation.open(args, ceiling).map(WorkspaceCursor::resident)
             }
         },
         workspace,

@@ -161,9 +161,9 @@ mod build_identity;
 /// assembly wrapper each, for the float-environment tests of this crate and its
 /// dependants; not a stable interface.
 #[doc(hidden)]
-pub mod control;
+pub use purrdf_xsd::ieee::control;
 mod dispatch;
-mod env;
+use purrdf_xsd::ieee::environment as env;
 mod exact;
 mod reassociated;
 mod shape;

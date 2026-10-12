@@ -4400,6 +4400,7 @@ fn begin_job(
         accept: options.accept.clone(),
         xpath_regex: options.xpath_regex,
         division: engine.division(),
+        geo: engine.geo_profile(),
     };
     register_operation(
         kind,

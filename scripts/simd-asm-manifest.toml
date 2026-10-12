@@ -38,7 +38,7 @@ packages = [
   "purrdf-core", "purrdf-iri", "purrdf-xsd", "purrdf-json", "purrdf-rdf", "purrdf-sparql-algebra",
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
-  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
+  "purrdf-columnar", "purrdf-geo", "purrdf-geo-kernel", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
   "purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-ed25519",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
@@ -3672,9 +3672,20 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   # push per stop); the entry records its counts.
   [[site.measure]]
   label = "call site"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_lex"
   symbol = "purrdf_lex::json_escape::escape_body::<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # WASM inlines the infallible adapter; its same TextSink closure survives in
+  # try_escape_body, which calls the original measured scanner.
+  [[site.measure]]
+  label = "call site"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::try_escape_body::<!, purrdf_lex::json_escape::escape_body<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>::{closure#0}>::{closure#0}>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5643,14 +5654,72 @@ summary = "the RLE / bit-packed hybrid definition-level decode (`decode_definiti
   forbid_relaxed = true
 
 [[site]]
+id = "xsd.endpoint-products"
+summary = "Four independent outward binary64 endpoint products, using the scalar split-product equation in every explicit available ISA path"
+
+  [[site.measure]]
+  label = "interval"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "<purrdf_xsd::math::floating::FloatInterval>::mul"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::sse2"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::avx2"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::avx512"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::neon::products"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::wasm::products"
+  min_vector_ops = 1
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
 id = "geo.exact-limbs"
-summary = "`Int::gcd`, over the arbitrary-precision tower whose limb carry chains are `xsd.exact-arith`"
+summary = "The geographic `Int` alias uses the sole `bigint::BigInt::gcd` home; its limb carry chains are `xsd.exact-arith`"
 
   [[site.measure]]
   label = "gcd"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "<purrdf_geo::exact::Int>::gcd"
+  crate = "purrdf_xsd"
+  symbol = "<purrdf_xsd::bigint::BigInt>::gcd"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5662,8 +5731,8 @@ summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
   [[site.measure]]
   label = "relate"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::topology::relate::relate"
+  crate = "purrdf_geo_kernel"
+  symbol = "purrdf_geo_kernel::topology::relate::relate"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5671,8 +5740,8 @@ summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
   [[site.measure]]
   label = "intersect"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::topology::segment::intersect"
+  crate = "purrdf_geo_kernel"
+  symbol = "purrdf_geo_kernel::topology::segment::intersect"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6049,9 +6118,20 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   # scalar by nature (a scan call and a push per run).
   [[site.measure]]
   label = "call site"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_slice"
   symbol = "purrdf_slice::prefix_emit::json_string"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # WASM inlines json_string into its production caller, retaining all three
+  # calls to the same push_string escape law.
+  [[site.measure]]
+  label = "call site"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_slice"
+  symbol = "purrdf_slice::prefix_emit::emit_jsonld_context"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

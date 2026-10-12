@@ -241,6 +241,7 @@ unsafe fn run_query(
     query: *const c_char,
     base_iri: *const c_char,
     regex: Option<Profile>,
+    geo: &purrdf_validate::geo::GeoProfile,
 ) -> Result<SparqlResult, PurrdfError> {
     unsafe {
         let query = cstr_to_str(query)?;
@@ -251,7 +252,9 @@ unsafe fn run_query(
         // state), with the handle's division policy and the caller's dated XPath law in
         // force.
         let options = query_options(
-            QueryOptions::new().with_division(PurrdfDataset::division(dataset)),
+            QueryOptions::new()
+                .with_geo(geo)
+                .with_division(PurrdfDataset::division(dataset)),
             regex,
         );
         let engine = sparql_engine(regex);
@@ -424,6 +427,7 @@ pub unsafe extern "C" fn purrdf_query(
     unsafe {
         ffi_try!(out_error, {
             query_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query",
                 dataset,
                 query,
@@ -471,6 +475,7 @@ pub unsafe extern "C" fn purrdf_query_xpath_regex(
     unsafe {
         ffi_try!(out_error, {
             query_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_xpath_regex",
                 dataset,
                 query,
@@ -492,6 +497,7 @@ pub unsafe extern "C" fn purrdf_query_xpath_regex(
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
 unsafe fn query_entry(
+    geo: &purrdf_validate::geo::GeoProfile,
     entry: &str,
     dataset: *const PurrdfDataset,
     query: *const c_char,
@@ -510,7 +516,7 @@ unsafe fn query_entry(
             ));
         }
         let regex = decode_regex_profile(regex_profile)?;
-        match run_query(dataset, query, base_iri, regex)? {
+        match run_query(dataset, query, base_iri, regex, geo)? {
             SparqlResult::Solutions {
                 variables, rows, ..
             } => {
@@ -643,6 +649,7 @@ pub unsafe extern "C" fn purrdf_query_json(
     unsafe {
         ffi_try!(out_error, {
             query_json_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_json",
                 dataset,
                 query,
@@ -680,6 +687,7 @@ pub unsafe extern "C" fn purrdf_query_json_xpath_regex(
     unsafe {
         ffi_try!(out_error, {
             query_json_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_json_xpath_regex",
                 dataset,
                 query,
@@ -699,6 +707,7 @@ pub unsafe extern "C" fn purrdf_query_json_xpath_regex(
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
 unsafe fn query_json_entry(
+    geo: &purrdf_validate::geo::GeoProfile,
     entry: &str,
     dataset: *const PurrdfDataset,
     query: *const c_char,
@@ -718,7 +727,7 @@ unsafe fn query_json_entry(
         let query_text = cstr_to_str(query)?;
         let namespace = decode_provenance_namespace(provenance_prefix, provenance_iri)?;
         let regex = decode_regex_profile(regex_profile)?;
-        let result = run_query(dataset, query, base_iri, regex)?;
+        let result = run_query(dataset, query, base_iri, regex, geo)?;
         // Delegate to the canonical SPARQL-Results serializer. An
         // empty `ResultProvenance` (no namespace supplied) yields byte-identical
         // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
@@ -782,6 +791,7 @@ pub unsafe extern "C" fn purrdf_query_governed(
     unsafe {
         ffi_try!(out_error, {
             query_governed_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_governed",
                 dataset,
                 query,
@@ -834,6 +844,7 @@ pub unsafe extern "C" fn purrdf_query_governed_xpath_regex(
     unsafe {
         ffi_try!(out_error, {
             query_governed_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_governed_xpath_regex",
                 dataset,
                 query,
@@ -859,6 +870,7 @@ pub unsafe extern "C" fn purrdf_query_governed_xpath_regex(
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
 unsafe fn query_governed_entry(
+    geo: &purrdf_validate::geo::GeoProfile,
     entry: &str,
     dataset: *const PurrdfDataset,
     query: *const c_char,
@@ -907,6 +919,7 @@ unsafe fn query_governed_entry(
                 },
                 query_options(
                     QueryOptions::new()
+                        .with_geo(geo)
                         .with_env(&env)
                         .with_division(PurrdfDataset::division(dataset)),
                     regex,
@@ -1001,6 +1014,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
     unsafe {
         ffi_try!(out_error, {
             query_entailment_governed_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_entailment_governed",
                 dataset,
                 query,
@@ -1071,6 +1085,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_xpath_regex(
     unsafe {
         ffi_try!(out_error, {
             query_entailment_governed_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_query_entailment_governed_xpath_regex",
                 dataset,
                 query,
@@ -1107,6 +1122,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_xpath_regex(
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
 unsafe fn query_entailment_governed_entry(
+    geo: &purrdf_validate::geo::GeoProfile,
     entry: &str,
     dataset: *const PurrdfDataset,
     query: *const c_char,
@@ -1195,6 +1211,7 @@ unsafe fn query_entailment_governed_entry(
             &EntailmentClosure::new(plan.entailment(), &imports).with_limits(limits.eval_options()),
             query_options(
                 QueryOptions::new()
+                    .with_geo(geo)
                     .with_env(&env)
                     .with_division(PurrdfDataset::division(dataset)),
                 regex,
@@ -1299,6 +1316,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
     unsafe {
         ffi_try!(out_error, {
             update_governed_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_update_governed",
                 dataset,
                 request,
@@ -1341,6 +1359,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
     unsafe {
         ffi_try!(out_error, {
             update_governed_entry(
+                &purrdf_validate::geo::STANDARD_PROFILE,
                 "purrdf_update_governed_xpath_regex",
                 dataset,
                 request,
@@ -1361,6 +1380,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
 unsafe fn update_governed_entry(
+    geo: &purrdf_validate::geo::GeoProfile,
     entry: &str,
     dataset: *mut PurrdfDataset,
     request: *const c_char,
@@ -1399,7 +1419,10 @@ unsafe fn update_governed_entry(
                     substitutions: &[],
                 },
                 query_options(
-                    QueryOptions::new().with_env(&env).with_division(division),
+                    QueryOptions::new()
+                        .with_geo(geo)
+                        .with_env(&env)
+                        .with_division(division),
                     regex,
                 ),
                 &governors,
@@ -1442,6 +1465,234 @@ fn aggregate_env(
             format!("extension environment: {e}"),
         )
     })
+}
+
+/// [`purrdf_query_xpath_regex`] with an explicit immutable geographic session.
+/// A null session selects standard CRS84; `regex_profile` retains the original
+/// dated-law selector, so both selections reach the same native query path.
+///
+/// # Safety
+/// As [`purrdf_query_xpath_regex`]. A nonnull `geo` must remain live and immutable
+/// for the entire call, including result preparation and execution.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regex_profile: *const c_char,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_entry(
+                crate::geo::profile(geo),
+                "purrdf_query_with_geo",
+                dataset,
+                query,
+                base_iri,
+                regex_profile,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+            )
+        })
+    }
+}
+
+/// [`purrdf_query_json_xpath_regex`] with an explicit immutable geographic session.
+/// A null session selects standard CRS84; `regex_profile` retains the original
+/// dated-law selector, so both selections reach the same native query path.
+///
+/// # Safety
+/// As [`purrdf_query_json_xpath_regex`]. A nonnull `geo` must remain live and immutable
+/// for the entire call, including result preparation and execution.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_json_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    provenance_prefix: *const c_char,
+    provenance_iri: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_json_entry(
+                crate::geo::profile(geo),
+                "purrdf_query_json_with_geo",
+                dataset,
+                query,
+                base_iri,
+                provenance_prefix,
+                provenance_iri,
+                regex_profile,
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// [`purrdf_query_governed_xpath_regex`] with an explicit immutable geographic session.
+/// A null session selects standard CRS84; `regex_profile` retains the original
+/// dated-law selector, so both selections reach the same native query path.
+///
+/// # Safety
+/// As [`purrdf_query_governed_xpath_regex`]. A nonnull `geo` must remain live and immutable
+/// for the entire call, including result preparation and execution.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_governed_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_governed_entry(
+                crate::geo::profile(geo),
+                "purrdf_query_governed_with_geo",
+                dataset,
+                query,
+                base_iri,
+                aggregate_namespace,
+                regex_profile,
+                governors,
+                out_outcome,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+                out_evidence,
+                out_partial,
+            )
+        })
+    }
+}
+
+/// [`purrdf_query_entailment_governed_xpath_regex`] with an explicit immutable geographic session.
+/// A null session selects standard CRS84; `regex_profile` retains the original
+/// dated-law selector, so both selections reach the same native query path.
+///
+/// # Safety
+/// As [`purrdf_query_entailment_governed_xpath_regex`]. A nonnull `geo` must remain live and immutable
+/// for the entire call, including result preparation and execution.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_entailment_governed_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regime: *const c_char,
+    program: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernedEntailmentEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_report: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_entailment_governed_entry(
+                crate::geo::profile(geo),
+                "purrdf_query_entailment_governed_with_geo",
+                dataset,
+                query,
+                base_iri,
+                regime,
+                program,
+                import_iris,
+                import_documents,
+                import_count,
+                premise_iris,
+                premise_iri_count,
+                max_stored_facts,
+                max_join_steps,
+                aggregate_namespace,
+                regex_profile,
+                governors,
+                out_outcome,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+                out_evidence,
+                out_partial,
+                out_report,
+            )
+        })
+    }
+}
+
+/// [`purrdf_update_governed_xpath_regex`] with an explicit immutable geographic session.
+/// A null session selects standard CRS84; `regex_profile` retains the original
+/// dated-law selector, so both selections reach the same native query path.
+///
+/// # Safety
+/// As [`purrdf_update_governed_xpath_regex`]. A nonnull `geo` must remain live and immutable
+/// for the entire call, including result preparation and execution.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_update_governed_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *mut PurrdfDataset,
+    request: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            update_governed_entry(
+                crate::geo::profile(geo),
+                "purrdf_update_governed_with_geo",
+                dataset,
+                request,
+                base_iri,
+                aggregate_namespace,
+                regex_profile,
+                governors,
+                out_outcome,
+                out_evidence,
+            )
+        })
+    }
 }
 
 #[cfg(test)]

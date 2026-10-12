@@ -2302,7 +2302,6 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         search: Option<purrdf_sparql_eval::RowEvidence>,
         fail_search: bool,
         visibility: SearchVisibility,
-        _allocation: purrdf_sparql_eval::WorkspaceAllocation,
     }
     impl PfCursor for DeclaredCursor {
         fn carries_row_evidence(&self) -> bool {
@@ -2355,14 +2354,15 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             args: &PfArgs<'_>,
             ceiling: Option<u64>,
         ) -> Result<Box<dyn PfCursor>, EvalError> {
-            self.open_admitted(args, ceiling, WorkspaceCapability::default())
+            self.open_admitted(args, ceiling, WorkspaceCapability::resident())
+                .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
         }
         fn open_admitted(
             &self,
             args: &PfArgs<'_>,
             _ceiling: Option<u64>,
             workspace: WorkspaceCapability,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
             let query = {
                 let mut retained = self
                     .query
@@ -2403,30 +2403,25 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                 .as_ref()
                 .map(|record| make_row(query.retain(record)?))
                 .transpose()?;
-            let allocation = workspace.charge(
-                u64::try_from(size_of::<DeclaredCursor>())
-                    .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-            )?;
-            let cursor = purrdf_core::small::try_boxed(DeclaredCursor {
-                row: (!self.inner.rows().is_empty()).then_some(row),
-                alternative,
-                search: self
-                    .search
-                    .as_ref()
-                    .map(|record| {
-                        query
-                            .retain(record)
-                            .map(|search| search.with_unclosed_search(self.unclosed_search))
-                    })
-                    .transpose()?,
-                fail_search: self.fail_search,
-                visibility: self.visibility,
-                _allocation: allocation,
-            })
-            .map_err(|_| EvalError::AllocationFailed {
-                construct: "declared producer cursor",
-            })?;
-            Ok(cursor)
+            purrdf_sparql_eval::WorkspaceCursor::new(
+                DeclaredCursor {
+                    row: (!self.inner.rows().is_empty()).then_some(row),
+                    alternative,
+                    search: self
+                        .search
+                        .as_ref()
+                        .map(|record| {
+                            query
+                                .retain(record)
+                                .map(|search| search.with_unclosed_search(self.unclosed_search))
+                        })
+                        .transpose()?,
+                    fail_search: self.fail_search,
+                    visibility: self.visibility,
+                },
+                &workspace,
+                "declared producer cursor",
+            )
         }
     }
     // One admitted owner per actual query, shared by its repeated invocations.

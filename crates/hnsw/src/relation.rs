@@ -871,6 +871,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
             ceiling,
             purrdf_sparql_eval::WorkspaceCapability::resident(),
         )
+        .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
     }
 
     fn open_admitted(
@@ -878,7 +879,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
         let invocation = KnnInvocation::open_owned(
             "the HNSW relation",
             args,

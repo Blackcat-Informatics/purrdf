@@ -98,8 +98,8 @@ use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::property_fn::{
-    PfArgs, PfArity, PfAttestation, PfCursor, PropertyFunction, ServiceLevel,
-    next_with_workspace_contained, open_with_workspace_contained,
+    PfArgs, PfArity, PfAttestation, PropertyFunction, ServiceLevel, next_with_workspace_contained,
+    open_with_workspace_contained,
 };
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{SolutionSeq, VarSchema};
@@ -1102,22 +1102,42 @@ fn eval_call_over<D: DatasetView + Sync>(
                 };
                 u64::try_from(ceiling.saturating_sub(selected)).unwrap_or(u64::MAX)
             });
-        let mut cursor = match &dictionary {
-            Some(dictionary) => crate::contain::call_contained_admitted(
-                "property function",
-                &call.iri,
-                "open dictionary invocation",
-                || dictionary.open(input_ordinal, &pf_args, invocation_ceiling, &ctx.growth),
-                &ctx.growth,
-            )?,
-            None => open_with_workspace_contained(
-                relation.as_ref(),
-                &call.iri,
-                &pf_args,
-                invocation_ceiling,
-                &ctx.growth,
-            )?,
-        };
+        let (opened, stopped, physical_failure) = crate::user_fn::metered_native_call(
+            ctx,
+            ChargePoint::PropertyFunctionWork,
+            |context| match &dictionary {
+                Some(dictionary) => crate::contain::call_contained_admitted(
+                    "property function",
+                    &call.iri,
+                    "open dictionary invocation",
+                    || dictionary.open(input_ordinal, &pf_args, invocation_ceiling, &ctx.growth),
+                    &ctx.growth,
+                ),
+                None => open_with_workspace_contained(
+                    relation.as_ref(),
+                    &call.iri,
+                    &pf_args,
+                    invocation_ceiling,
+                    &ctx.growth,
+                    Some(context),
+                    ctx.geo,
+                ),
+            },
+        );
+        if let Some(error) = physical_failure {
+            drop(opened);
+            return Err(error);
+        }
+        if ctx.growth.has_failed() {
+            drop(opened);
+            return Err(EvalError::WorkspaceStopped);
+        }
+        if let Some(governor) = stopped {
+            drop(opened);
+            tripped = Some(governor);
+            break 'input;
+        }
+        let mut cursor = opened?;
         let mut invocation_search = None;
         let native_evidence = crate::property_fn::retain_search_evidence_contained_admitted(
             &*cursor,
@@ -1659,7 +1679,7 @@ pub struct CallCursor {
     /// The actual invocation's physical bound, including scoped unknown rows.
     physical_row_bound: u64,
     /// The open invocation.
-    cursor: Box<dyn PfCursor>,
+    cursor: crate::WorkspaceCursor,
     /// What the invocation attested the instant it opened.
     opened: PfAttestation,
     /// Original whole-search declaration, independent of candidate membership.
@@ -3643,6 +3663,7 @@ pub(crate) fn open_call_cursor(
     filtering: FilterContext,
     candidate_scope: Option<&dyn crate::CandidateScope>,
     workspace: &crate::WorkspaceCapability,
+    geo: &purrdf_geo_kernel::GeoProfile,
 ) -> Result<CallCursor, EvalError> {
     let read = shape
         .read
@@ -3813,8 +3834,15 @@ pub(crate) fn open_call_cursor(
     let ceiling = ceiling
         .filter(|_| plan.ceiling_is_offerable)
         .map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
-    let cursor =
-        open_with_workspace_contained(relation.as_ref(), &call.iri, &pf_args, ceiling, workspace)?;
+    let cursor = open_with_workspace_contained(
+        relation.as_ref(),
+        &call.iri,
+        &pf_args,
+        ceiling,
+        workspace,
+        None,
+        geo,
+    )?;
     // Both facts read the instant the cursor opens: the generation because that is the
     // instant it is true of every row to come, and the service level because the
     // consumer is told it before its first row. `settle` reads both again at the stop.

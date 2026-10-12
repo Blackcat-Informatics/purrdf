@@ -1360,6 +1360,13 @@ fn anchor_controls(rows: &[Row], count: &mut usize) -> Result<(), String> {
                         ("consistency-shaped".to_owned(), false),
                         ("consistency中".to_owned(), false),
                     ],
+                    r"(?<!whole )surface" => vec![
+                        ("the API surface".to_owned(), true),
+                        ("Rust surface".to_owned(), true),
+                        ("the whole surface of the ellipsoid".to_owned(), false),
+                        ("WHOLE SURFACE".to_owned(), false),
+                        ("Xsurface".to_owned(), false),
+                    ],
                     _ => {
                         return Err(format!(
                             "{}: regex anchor {anchor:?} needs explicit positive/negative compatibility specimens",

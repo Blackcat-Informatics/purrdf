@@ -405,6 +405,47 @@ purrdf_lex::constructors! {
 }
 
 impl TermValue {
+    /// Heap capacities owned directly by this node, excluding descendants.
+    /// Triple nodes include their three concrete child-box layouts; leaves
+    /// include each original string's capacity. This observes caller-owned
+    /// storage and does not certify a fresh clone or allocate a work list.
+    #[must_use]
+    pub fn owned_heap_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Iri(text) | Self::Blank { label: text, .. } => Some(text.capacity()),
+            Self::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => lexical_form
+                .capacity()
+                .checked_add(datatype.capacity())?
+                .checked_add(language.as_ref().map_or(0, String::capacity)),
+            Self::Triple { .. } => core::alloc::Layout::new::<Self>().size().checked_mul(3),
+        }
+    }
+
+    /// Authored UTF-8 bytes held directly by this node, excluding descendants.
+    /// This is a source-work measure; allocation capacity is reported separately
+    /// by [`Self::owned_heap_bytes`]. Neither accessor walks or allocates.
+    #[must_use]
+    pub fn text_payload_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Iri(text) | Self::Blank { label: text, .. } => Some(text.len()),
+            Self::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => lexical_form
+                .len()
+                .checked_add(datatype.len())?
+                .checked_add(language.as_ref().map_or(0, String::len)),
+            Self::Triple { .. } => Some(0),
+        }
+    }
+
     /// A blank node in the default scope, from its bare label.
     #[inline]
     pub fn blank(label: impl Into<String>) -> Self {
@@ -529,6 +570,31 @@ impl TermValue {
 
     /// The value of an owned [`RdfTerm`], its blank nodes decoded at the default scope.
     ///
+    /// Copy one original RDF literal through the shared native string and
+    /// language-identity homes. The returned term retains the caller's account;
+    /// no intermediate RDF term or independent heap work list is constructed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first original layout, allocation or admission refusal.
+    pub fn from_literal_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        literal: &RdfLiteral,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        memory.scope(|memory| {
+            Ok(Self::Literal {
+                lexical_form: memory.string(&literal.lexical_form)?,
+                datatype: memory.string(literal.datatype_iri())?,
+                language: literal
+                    .language
+                    .as_deref()
+                    .map(|tag| purrdf_iri::langtag::identity_fold_with_memory(tag, memory))
+                    .transpose()?,
+                direction: literal.direction,
+            })
+        })
+    }
+
     /// Exactly [`from_rdf_term_in_scope`](Self::from_rdf_term_in_scope) with
     /// [`BlankScope::DEFAULT`]; see there for the conversion.
     #[must_use]
@@ -569,15 +635,13 @@ impl TermValue {
                         label: label.clone(),
                         scope,
                     },
-                    RdfTerm::Literal(literal) => Self::Literal {
-                        lexical_form: literal.lexical_form.clone(),
-                        datatype: literal.datatype_iri().to_owned(),
-                        language: literal
-                            .language
-                            .as_deref()
-                            .map(purrdf_iri::langtag::identity_fold),
-                        direction: literal.direction,
-                    },
+                    RdfTerm::Literal(literal) => Self::from_literal_with_memory(
+                        literal,
+                        &mut purrdf_lex::allocation::Memory::new(
+                            &mut purrdf_lex::allocation::Resident,
+                        ),
+                    )
+                    .expect("resident literal term allocation"),
                     RdfTerm::Triple(_) => unreachable!("a triple term is folded from its parts"),
                 })
             },

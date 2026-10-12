@@ -3,8 +3,8 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, sixteen subcommands ([`Command`]), and two global flags
-//! (`--loss-ledger`, `--jsonld-options`). The format / regime / results-format
+//! One pipeline, seventeen subcommands ([`Command`]), and three global flags
+//! (`--loss-ledger`, `--jsonld-options`, `--geo-profile`). The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -225,6 +225,10 @@ pub(crate) struct Cli {
     /// rejected instead of ignored.
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) jsonld_options: Option<PathBuf>,
+    /// Strict version-one geographic profile for geo, query, and update.
+    /// Omitting it selects the declared standard CRS84 profile.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) geo_profile: Option<PathBuf>,
 }
 
 /// Where (if anywhere) the loss ledger should be surfaced — the decoded form of
@@ -318,9 +322,18 @@ impl Cli {
     }
 }
 
-/// The sixteen pipeline subcommands.
+/// The seventeen pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Execute a strict geographic scalar, batch, conversion, cover or index request.
+    Geo {
+        /// Request JSON source; `-` reads standard input.
+        #[arg(default_value = "-")]
+        input: String,
+        /// Canonical response; `-` writes stdout. Operational failures use stderr.
+        #[arg(default_value = "-")]
+        output: String,
+    },
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert {
         /// Input format override; inferred from each input's extension when omitted.

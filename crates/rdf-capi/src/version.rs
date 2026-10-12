@@ -235,6 +235,13 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `governors` on the governed ones), NULL meaning the unchanged entry point; and it
 /// APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
 /// signature and its behaviour, so this is additive and rides the same bump.
+///
+/// The same additive surface includes the native geographic session and point-index
+/// create/call/free families and the five `*_with_geo` query/update entry points.
+/// These use opaque owned handles and an explicit selected geographic profile;
+/// every existing prototype is unchanged. `PurrdfStatus::GeoError = 14` is appended
+/// for their typed geographic refusals, without renumbering any existing status.
+/// The wildcard-free status test pins that deliberate addition.
 pub const PURRDF_ABI_MINOR: u32 = 10;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;

@@ -807,7 +807,6 @@ pub fn prepare_numeric_text(
 #[must_use]
 pub fn canonical_double_text(value: f64) -> CanonicalFloatText {
     canonical_ieee(
-        value,
         value.is_nan(),
         value.is_infinite(),
         value.is_sign_negative(),
@@ -819,7 +818,6 @@ pub fn canonical_double_text(value: f64) -> CanonicalFloatText {
 #[must_use]
 pub fn canonical_float_text(value: f32) -> CanonicalFloatText {
     canonical_ieee(
-        f64::from(value),
         value.is_nan(),
         value.is_infinite(),
         value.is_sign_negative(),
@@ -837,8 +835,6 @@ fn xpath_ieee_text(
         Some("NaN")
     } else if value.is_infinite() {
         Some(if value > 0.0 { "INF" } else { "-INF" })
-    } else if value == 0.0 {
-        Some(if value.is_sign_negative() { "-0" } else { "0" })
     } else {
         None
     };
@@ -857,7 +853,15 @@ fn xpath_ieee_text(
         plain(&mut output).expect("XPath plain IEEE text fits inline");
         output
     } else {
-        canonical()
+        let mut output = canonical();
+        // Classify the formatted bytes: LLVM can turn even an original-bit
+        // zero test back into a floating comparison that DAZ changes.
+        match output.as_str() {
+            "0.0E0" => output.length = 1,
+            "-0.0E0" => output.length = 2,
+            _ => {}
+        }
+        output
     }
 }
 
@@ -918,7 +922,6 @@ pub fn canonical_float(value: f32) -> String {
 }
 
 fn canonical_ieee(
-    value: f64,
     is_nan: bool,
     is_inf: bool,
     is_neg: bool,
@@ -930,8 +933,6 @@ fn canonical_ieee(
         Some("NaN")
     } else if is_inf {
         Some(if is_neg { "-INF" } else { "INF" })
-    } else if value == 0.0 {
-        Some(if is_neg { "-0.0E0" } else { "0.0E0" })
     } else {
         None
     };
@@ -941,7 +942,8 @@ fn canonical_ieee(
             .expect("special IEEE lexical fits inline");
         return output;
     }
-    // One semantic formatter; the Rust scientific temporary is now inline.
+    // The formatter handles signed zero from its original bits too, without
+    // a floating zero comparison that could flush a subnormal operand.
     let mut raw = CanonicalFloatText::empty();
     scientific(&mut raw).expect("shortest IEEE scientific lexical fits inline");
     let (mantissa, exponent) = raw.as_str().split_once('e').unwrap_or((raw.as_str(), "0"));
@@ -2695,6 +2697,124 @@ fn numeric_round_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bounded_ieee_canonical_writers_preserve_frozen_extremes() {
+        for (value, expected) in [
+            (0.0, "0.0E0"),
+            (-0.0, "-0.0E0"),
+            (f64::from_bits(1), "5.0E-324"),
+            (-f64::from_bits(1), "-5.0E-324"),
+            (f64::from_bits((1u64 << 52) - 1), "2.225073858507201E-308"),
+            (f64::MIN_POSITIVE, "2.2250738585072014E-308"),
+            (-f64::MIN_POSITIVE, "-2.2250738585072014E-308"),
+            (f64::MAX, "1.7976931348623157E308"),
+            (-f64::MAX, "-1.7976931348623157E308"),
+            (f64::INFINITY, "INF"),
+            (f64::NEG_INFINITY, "-INF"),
+            (f64::NAN, "NaN"),
+        ] {
+            let out = canonical_double_text(value);
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_double(value), expected);
+        }
+        for (value, expected) in [
+            (0.0, "0.0E0"),
+            (-0.0, "-0.0E0"),
+            (0.1, "1.0E-1"),
+            (f32::from_bits(1), "1.0E-45"),
+            (f32::MIN_POSITIVE, "1.1754944E-38"),
+            (-f32::MIN_POSITIVE, "-1.1754944E-38"),
+            (f32::MAX, "3.4028235E38"),
+            (-f32::MAX, "-3.4028235E38"),
+            (f32::INFINITY, "INF"),
+            (f32::NEG_INFINITY, "-INF"),
+            (f32::NAN, "NaN"),
+        ] {
+            let out = canonical_float_text(value);
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_float(value), expected);
+        }
+        assert!("-2.2250738585072014E-308".len() <= CanonicalFloatText::empty().bytes.len());
+    }
+
+    #[test]
+    fn bounded_double_writer_round_trips_every_binade_and_refuses_full_sinks() {
+        let fraction_mask = (1u64 << 52) - 1;
+        for exponent in 0..2047u64 {
+            for fraction in [0, 1, fraction_mask / 2, fraction_mask - 1, fraction_mask] {
+                for sign in [0, 1u64 << 63] {
+                    let value = f64::from_bits(sign | (exponent << 52) | fraction);
+                    let out = canonical_double_text(value);
+                    assert_eq!(
+                        out.as_str().parse::<f64>().unwrap().to_bits(),
+                        value.to_bits()
+                    );
+                    assert!(out.len() <= out.bytes.len());
+                    assert_eq!(canonical_double(value), out.as_str());
+                }
+            }
+        }
+        let mut full = CanonicalFloatText::empty();
+        full.length = full.bytes.len();
+        let before = full.bytes;
+        assert_eq!(
+            std::fmt::Write::write_str(&mut full, "1"),
+            Err(std::fmt::Error)
+        );
+        assert_eq!(full.bytes, before);
+        assert_eq!(full.length, full.bytes.len());
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"))]
+    #[test]
+    fn canonical_ieee_original_zero_bits_survive_input_flush() {
+        use ieee::control;
+
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        let _guard = {
+            if !control::mxcsr_available() {
+                return;
+            }
+            // DAZ may make a floating comparison read a subnormal as zero;
+            // FTZ also exercises a changed environment with input bits intact.
+            control::Mxcsr::load(control::mxcsr() | (1 << 6) | control::MXCSR_FTZ)
+        };
+        #[cfg(target_arch = "aarch64")]
+        let _guard = control::Fpcr::load(control::fpcr() | (1 << 24) | 1);
+
+        for (bits, expected) in [
+            (0, "0.0E0"),
+            (1u64 << 63, "-0.0E0"),
+            (1, "5.0E-324"),
+            ((1u64 << 63) | 1, "-5.0E-324"),
+            ((1u64 << 52) - 1, "2.225073858507201E-308"),
+        ] {
+            let value = f64::from_bits(std::hint::black_box(bits));
+            let out = canonical_double_text(value);
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_double(value), expected);
+            assert_eq!(
+                xpath_double_text(value).as_str(),
+                expected.strip_suffix(".0E0").unwrap_or(expected)
+            );
+        }
+        for (bits, expected) in [
+            (0, "0.0E0"),
+            (1u32 << 31, "-0.0E0"),
+            (1, "1.0E-45"),
+            ((1u32 << 31) | 1, "-1.0E-45"),
+            ((1u32 << 23) - 1, "1.1754942E-38"),
+        ] {
+            let value = f32::from_bits(std::hint::black_box(bits));
+            let out = canonical_float_text(value);
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_float(value), expected);
+            assert_eq!(
+                xpath_float_text(value).as_str(),
+                expected.strip_suffix(".0E0").unwrap_or(expected)
+            );
+        }
+    }
     use super::*;
     use crate::XsdDatatype as D;
 
