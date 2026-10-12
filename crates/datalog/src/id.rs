@@ -342,11 +342,7 @@ mod tests {
             );
             assert_eq!(
                 Id::<C>::from_index(u64::MAX).unwrap_err(),
-                CapacityError {
-                    space: C::SPACE,
-                    attempted: u128::from(u64::MAX) + 1,
-                    limit: u128::from(u64::MAX)
-                }
+                CapacityError::new(C::SPACE, u128::from(u64::MAX) + 1, u128::from(u64::MAX))
             );
             assert_eq!(
                 Id::<C>::from_index(u64::MAX - 1).unwrap().index(),

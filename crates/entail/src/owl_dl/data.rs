@@ -481,6 +481,7 @@ mod tests {
                 &mut self.builder,
                 &TermValue::typed_literal(lexical, datatype),
             )
+            .unwrap()
         }
 
         fn lang_literal(&mut self, lexical: &str, language: &str) -> TermId {
@@ -488,6 +489,7 @@ mod tests {
                 &mut self.builder,
                 &TermValue::lang_literal(lexical, language),
             )
+            .unwrap()
         }
 
         fn quad(&mut self, s: TermId, p: TermId, o: TermId) {

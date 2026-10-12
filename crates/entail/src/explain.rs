@@ -1476,12 +1476,12 @@ mod tests {
             .arena
             .premises(honest.root)
             .iter()
-            .map(|&premise| arena.axiom(honest.arena.goal(premise).clone()))
+            .map(|&premise| arena.axiom(honest.arena.goal(premise).clone()).unwrap())
             .collect();
         let rule = honest.arena.rule(honest.root).expect("a derived root");
         let mut lie = honest.arena.goal(honest.root).clone();
         lie.object = surface_of(&TermValue::iri(FISH));
-        let root = arena.by_rule(lie, rule, &premises);
+        let root = arena.by_rule(lie, rule, &premises).unwrap();
         let forged = ChaseProof {
             arena,
             root,
@@ -1498,7 +1498,7 @@ mod tests {
 
         // The circular forgery: claim the DERIVED conclusion as a given.
         let mut arena = ProofArena::default();
-        let root = arena.axiom(honest.arena.goal(honest.root).clone());
+        let root = arena.axiom(honest.arena.goal(honest.root).clone()).unwrap();
         let circular = ChaseProof {
             arena,
             root,

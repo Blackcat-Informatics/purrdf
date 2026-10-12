@@ -833,27 +833,23 @@ mod tests {
                 (
                     provenance
                         .register_unit("third", OriginKind::Generated)
-                        .map(|id| id.index()),
+                        .map(UnitId::index),
                     CapacitySpace::ProvenanceUnits,
                 ),
                 (
-                    provenance.register_artifact("third").map(|id| id.index()),
+                    provenance.register_artifact("third").map(ArtifactId::index),
                     CapacitySpace::Artifacts,
                 ),
                 (
                     provenance
                         .intern_origin_set(vec![(u0, a0), (u1, a1)])
-                        .map(|id| id.index()),
+                        .map(OriginSetId::index),
                     CapacitySpace::OriginSets,
                 ),
             ] {
                 assert_eq!(
                     result,
-                    Err(StorageError::Capacity(CapacityError {
-                        space,
-                        attempted: 3,
-                        limit: 2,
-                    }))
+                    Err(StorageError::Capacity(CapacityError::new(space, 3, 2)))
                 );
             }
             assert_eq!(
@@ -918,11 +914,11 @@ mod tests {
             if let Ok(next) = usize::try_from(u64::from(u32::MAX) + 1) {
                 assert_eq!(
                     OriginCapacity::Native.slot(next, space),
-                    Err(StorageError::Capacity(CapacityError {
+                    Err(StorageError::Capacity(CapacityError::new(
                         space,
-                        attempted: u128::from(u32::MAX) + 2,
-                        limit: u128::from(u32::MAX) + 1,
-                    }))
+                        u128::from(u32::MAX) + 2,
+                        u128::from(u32::MAX) + 1
+                    )))
                 );
             }
         }

@@ -27,6 +27,7 @@ pub fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
         .validate()
         .expect("validation runs")
         .to_ntriples()
+        .expect("report serializes")
 }
 
 /// Every result's focus node, rendered, sorted (duplicates kept).

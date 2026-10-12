@@ -264,14 +264,22 @@ fn blank_empty_and_absent_graphs_are_selected_without_leaking_the_source() {
 fn explicit_materialization_contains_exactly_the_projected_selected_graph() {
     let (source, graphs) = graph_fixture();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
-    let oracle = ShaclDatasetView::project(Arc::new(source.project_named_graph(GRAPH)));
+    let oracle = ShaclDatasetView::project(Arc::new(
+        source.project_named_graph(GRAPH).expect("graph projects"),
+    ));
     let owned_rows = |dataset: &RdfDataset| dataset.owned_quads().collect::<FastSet<_>>();
     assert_eq!(
-        owned_rows(view.materialized()),
-        owned_rows(oracle.materialized())
+        owned_rows(view.materialized().expect("view materializes")),
+        owned_rows(oracle.materialized().expect("view materializes"))
     );
-    assert!(!Arc::ptr_eq(view.materialized(), &source));
-    assert!(Arc::ptr_eq(view.materialized(), view.materialized()));
+    assert!(!Arc::ptr_eq(
+        view.materialized().expect("view materializes"),
+        &source
+    ));
+    assert!(Arc::ptr_eq(
+        view.materialized().expect("view materializes"),
+        view.materialized().expect("view materializes")
+    ));
     assert_eq!(view.stats().materializations, 1);
 }
 
@@ -325,14 +333,17 @@ fn core_classes_paths_and_sparql_return_the_same_complete_report_as_an_owned_gra
     "#), None).expect("shapes"));
     let prepared = PreparedShapes::new(shapes);
     let expected = prepared
-        .bind_dataset(&source.project_named_graph(GRAPH))
+        .bind_dataset(&source.project_named_graph(GRAPH).expect("graph projects"))
         .expect("owned bind")
         .validate()
         .expect("owned report");
     let validator = prepared.bind_view(Arc::clone(&view)).expect("view bind");
     let report = validator.validate().expect("view report");
     assert_eq!(report.results.len(), 3);
-    assert_eq!(report.to_ntriples(), expected.to_ntriples());
+    assert_eq!(
+        report.to_ntriples().expect("report serializes"),
+        expected.to_ntriples().expect("report serializes")
+    );
     assert!(
         validator
             .view_stats()
@@ -358,7 +369,7 @@ fn shape_only_class_terms_preserve_the_selection_after_dictionary_supplementatio
     );
     let prepared = PreparedShapes::new(Arc::new(shapes));
     let expected = prepared
-        .bind_dataset(&source.project_named_graph(GRAPH))
+        .bind_dataset(&source.project_named_graph(GRAPH).expect("graph projects"))
         .expect("owned bind")
         .validate()
         .expect("owned report");
@@ -367,7 +378,10 @@ fn shape_only_class_terms_preserve_the_selection_after_dictionary_supplementatio
         .expect("selected bind");
     let report = validator.validate().expect("view report");
     assert_eq!(report.results.len(), 2);
-    assert_eq!(report.to_ntriples(), expected.to_ntriples());
+    assert_eq!(
+        report.to_ntriples().expect("report serializes"),
+        expected.to_ntriples().expect("report serializes")
+    );
     assert!(
         validator
             .view_stats()

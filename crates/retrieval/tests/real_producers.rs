@@ -728,18 +728,22 @@ fn independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion() {
 fn field_membership_precedes_each_real_stratum_depth_in_both_schedules() {
     const FROM: &str = "https://example.org/from";
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
-    let from = builder.intern_iri(FROM);
-    let a = builder.intern_iri(&ex("a"));
-    let b = builder.intern_iri(&ex("b"));
-    let high = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
-    let low = builder.intern_literal(RdfLiteral::simple("alpha"));
-    let padding = builder.intern_literal(RdfLiteral::simple(
-        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
-    ));
-    builder.push_quad(a, note, high, None);
-    builder.push_quad(b, note, padding, None);
-    builder.push_quad(b, from, low, None);
+    let note = builder.intern_iri(NOTE).unwrap();
+    let from = builder.intern_iri(FROM).unwrap();
+    let a = builder.intern_iri(&ex("a")).unwrap();
+    let b = builder.intern_iri(&ex("b")).unwrap();
+    let high = builder
+        .intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"))
+        .unwrap();
+    let low = builder.intern_literal(RdfLiteral::simple("alpha")).unwrap();
+    let padding = builder
+        .intern_literal(RdfLiteral::simple(
+            "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        ))
+        .unwrap();
+    builder.push_quad(a, note, high, None).unwrap();
+    builder.push_quad(b, note, padding, None).unwrap();
+    builder.push_quad(b, from, low, None).unwrap();
     let data = builder.freeze().unwrap();
     let index = Arc::new(
         TextIndex::from_dataset(
@@ -2272,26 +2276,21 @@ impl PropertyFunction for CountingTextRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
         self.opened.fetch_add(1, Ordering::Relaxed);
         let cursor = self.inner.open_admitted(args, ceiling, workspace.clone())?;
         if self.refuse_suffix.is_none() && self.attachment.is_none() {
             return Ok(cursor);
         }
-        let admission = workspace.charge(
-            u64::try_from(size_of::<PrefixRefusalCursor>())
-                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-        )?;
-        let cursor = purrdf_core::small::try_boxed(PrefixRefusalCursor {
-            cursor,
-            calls: self.refuse_suffix.clone(),
-            attachment: self.attachment.clone(),
-            _admission: admission,
-        })
-        .map_err(|_| EvalError::AllocationFailed {
-            construct: "prefix refusal cursor",
-        })?;
-        Ok(cursor)
+        purrdf_sparql_eval::WorkspaceCursor::new(
+            PrefixRefusalCursor {
+                cursor,
+                calls: self.refuse_suffix.clone(),
+                attachment: self.attachment.clone(),
+            },
+            &workspace,
+            "prefix refusal cursor",
+        )
     }
     fn volatility(&self) -> Volatility {
         self.inner.volatility()
@@ -2319,14 +2318,14 @@ impl PropertyFunction for CountingTextRelation {
             ceiling,
             purrdf_sparql_eval::WorkspaceCapability::resident(),
         )
+        .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
     }
 }
 
 struct PrefixRefusalCursor {
-    cursor: Box<dyn PfCursor>,
+    cursor: purrdf_sparql_eval::WorkspaceCursor,
     calls: Option<Arc<AtomicU64>>,
     attachment: Option<NativeAttachment>,
-    _admission: purrdf_sparql_eval::WorkspaceAllocation,
 }
 
 impl PfCursor for PrefixRefusalCursor {

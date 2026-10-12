@@ -79,7 +79,10 @@ fn bench(c: &mut Bench) {
                         panic!("graph")
                     };
                     let mut target = RdfDatasetBuilder::new();
-                    DatasetImporter::new(&mut target, graph.as_ref()).append();
+                    DatasetImporter::new(&mut target, graph.as_ref())
+                        .unwrap()
+                        .append()
+                        .unwrap();
                     std::hint::black_box(target.freeze().expect("publication"));
                 });
             },

@@ -8,6 +8,10 @@ use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator};
 use purrdf_datalog::seminaive::{EvalOptions, evaluate_guarded};
 use purrdf_datalog::seminaive::{compile, evaluate};
 use purrdf_datalog::store::RelationStore;
+use purrdf_datalog::{dictionary, seminaive};
+
+#[path = "../src/test_support/host_dictionary.rs"]
+mod host_dictionary;
 
 struct Distinct;
 
@@ -49,12 +53,14 @@ fn later_partial_delta_keeps_both_productive_anchors() {
         ("d", "a", "b"),
         ("b", "b", "e"),
     ] {
-        input.insert(
-            &format!("<https://example.org/{s}>"),
-            &format!("<https://example.org/{p}>"),
-            &format!("<https://example.org/{o}>"),
-            RelationStore::DEFAULT_GRAPH,
-        );
+        input
+            .insert(
+                &format!("<https://example.org/{s}>"),
+                &format!("<https://example.org/{p}>"),
+                &format!("<https://example.org/{o}>"),
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
     }
     let evaluation = evaluate(&program, input).expect("later productive anchors complete");
     let proofs: Vec<_> = evaluation
@@ -123,26 +129,32 @@ fn original_guarded_pair_has_exact_connected_work_and_authored_proofs() {
         let mut input = RelationStore::new();
         for i in 0..100 {
             let v = format!("<{NS}v{i}>");
-            input.insert(
-                &v,
-                &format!("<{kind}>"),
-                &format!("<{NS}Vault>"),
-                RelationStore::DEFAULT_GRAPH,
-            );
+            input
+                .insert(
+                    &v,
+                    &format!("<{kind}>"),
+                    &format!("<{NS}Vault>"),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
             for suffix in ['a', 'b', 'c'] {
                 let s = format!("<{NS}v{i}{suffix}>");
-                input.insert(&v, &format!("<{target}>"), &s, RelationStore::DEFAULT_GRAPH);
+                input
+                    .insert(&v, &format!("<{target}>"), &s, RelationStore::DEFAULT_GRAPH)
+                    .unwrap();
                 let class = if suffix == 'c' || (two && suffix == 'b') {
                     "Spool"
                 } else {
                     "Store"
                 };
-                input.insert(
-                    &s,
-                    &format!("<{kind}>"),
-                    &format!("<{NS}{class}>"),
-                    RelationStore::DEFAULT_GRAPH,
-                );
+                input
+                    .insert(
+                        &s,
+                        &format!("<{kind}>"),
+                        &format!("<{NS}{class}>"),
+                        RelationStore::DEFAULT_GRAPH,
+                    )
+                    .unwrap();
             }
         }
         let evaluation =
@@ -216,19 +228,25 @@ fn connected_rule_restores_all_authored_premises() {
     for i in 0..100 {
         let x = format!("<https://example.org/x{i}>");
         let y = format!("<https://example.org/y{i}>");
-        input.insert(
-            &x,
-            &format!("<{a}>"),
-            "<https://example.org/yes>",
-            RelationStore::DEFAULT_GRAPH,
-        );
-        input.insert(&x, &format!("<{edge}>"), &y, RelationStore::DEFAULT_GRAPH);
-        input.insert(
-            &y,
-            &format!("<{b}>"),
-            "<https://example.org/yes>",
-            RelationStore::DEFAULT_GRAPH,
-        );
+        input
+            .insert(
+                &x,
+                &format!("<{a}>"),
+                "<https://example.org/yes>",
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
+        input
+            .insert(&x, &format!("<{edge}>"), &y, RelationStore::DEFAULT_GRAPH)
+            .unwrap();
+        input
+            .insert(
+                &y,
+                &format!("<{b}>"),
+                "<https://example.org/yes>",
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
     }
     let evaluation =
         evaluate(&program, input).expect("unchanged target defaults admit linear connected work");
@@ -269,12 +287,14 @@ fn independent_head_projects_without_cartesian_work() {
     let mut input = RelationStore::new();
     for i in 0..100 {
         for p in ["a", "b"] {
-            input.insert(
-                &format!("<https://example.org/x{i:03}>"),
-                &format!("<https://example.org/{p}>"),
-                "<https://example.org/yes>",
-                RelationStore::DEFAULT_GRAPH,
-            );
+            input
+                .insert(
+                    &format!("<https://example.org/x{i:03}>"),
+                    &format!("<https://example.org/{p}>"),
+                    "<https://example.org/yes>",
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
         }
     }
     let evaluation =
@@ -312,26 +332,35 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
     )])
     .expect("recursive factor compiles");
     let mut input = RelationStore::new();
-    input.insert(
-        "<https://example.org/enabled>",
-        &format!("<{condition}>"),
-        "<https://example.org/value>",
-        RelationStore::DEFAULT_GRAPH,
-    );
+    input
+        .insert(
+            "<https://example.org/enabled>",
+            &format!("<{condition}>"),
+            "<https://example.org/value>",
+            RelationStore::DEFAULT_GRAPH,
+        )
+        .unwrap();
     const N: usize = 16;
     for index in 0..N - 1 {
         for predicate in [reach, edge] {
-            input.insert(
-                &node(index),
-                &format!("<{predicate}>"),
-                &node(index + 1),
-                RelationStore::DEFAULT_GRAPH,
-            );
+            input
+                .insert(
+                    &node(index),
+                    &format!("<{predicate}>"),
+                    &node(index + 1),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
         }
     }
-    let run =
-        |options: &EvalOptions| evaluate_guarded(&program, input.clone(), &NoGuards, options, None);
-    let reference = run(&EvalOptions::default()).expect("default limits admit recursion");
+    let reference = evaluate_guarded(
+        &program,
+        input.clone(),
+        &NoGuards,
+        &EvalOptions::default(),
+        None,
+    )
+    .expect("default limits admit recursion");
     assert_eq!(reference.derivations().len(), (N - 1) * (N - 2) / 2);
     assert_eq!(
         reference.facts().row_count(),
@@ -369,8 +398,14 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
         }
     }
     let expected = reference.budget().join_steps();
-    let exact = run(&EvalOptions::default().with_max_join_steps(expected))
-        .expect("exact credits admit partial factor rounds");
+    let exact = evaluate_guarded(
+        &program,
+        input.clone(),
+        &NoGuards,
+        &EvalOptions::default().with_max_join_steps(expected),
+        None,
+    )
+    .expect("exact credits admit partial factor rounds");
     assert_eq!(
         exact.facts().facts_sorted(),
         reference.facts().facts_sorted()
@@ -382,8 +417,14 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
         reference.budget().stored_facts()
     );
     for ceiling in [0, expected - 1] {
-        let error = run(&EvalOptions::default().with_max_join_steps(ceiling))
-            .expect_err("insufficient credits refuse without a partial result");
+        let error = evaluate_guarded(
+            &program,
+            input.clone(),
+            &NoGuards,
+            &EvalOptions::default().with_max_join_steps(ceiling),
+            None,
+        )
+        .expect_err("insufficient credits refuse without a partial result");
         let EvalError::BudgetExhausted { resource, report } = error else {
             panic!("{error:?}");
         };
@@ -392,7 +433,147 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
     }
 }
 
+fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
+    use host_dictionary::{HostDictionary, SourceLost, evidence_scope};
+    use purrdf_core::evidence::{
+        EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
+    };
+    use purrdf_datalog::guard::CallbackError;
+    use purrdf_datalog::id::RowId;
+    use purrdf_datalog::seminaive::{EvalError, evaluate_evidenced};
+    use purrdf_lex::allocation::Resident;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    const P: &str = "https://example.org/p";
+    const Q: &str = "https://example.org/q";
+    const R: &str = "https://example.org/r";
+    let atom =
+        |s: &str, p: &str, o: &str| ClauseAtom::positive(ClauseTerm::var(s), p, ClauseTerm::var(o));
+    const TRIPLE: u64 = 0xa000_0000_1234_5678;
+    struct Producer {
+        fail: bool,
+        calls: AtomicUsize,
+    }
+    impl GuardEvaluator<HostDictionary> for Producer {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_, HostDictionary>,
+        ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(call.inputs, ["triple", "value"]);
+            assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
+            if self.fail {
+                call.model.interner().lost.store(true, Ordering::Relaxed);
+                return Err(CallbackError::Source(SourceLost(17)));
+            }
+            Ok(vec![vec!["output".into()]])
+        }
+    }
+    let exe = compile(vec![
+        DlClause::datalog(atom("?s", Q, "?out"), vec![atom("?s", P, "?o")]).with_guards(vec![
+            Guard::assign("produce", vec!["?s".into(), "?o".into()], "?out"),
+        ]),
+        DlClause::datalog(atom("?s", R, "?o"), vec![atom("?s", Q, "?o")]),
+    ])
+    .unwrap();
+    for (information, fail) in [
+        (Information::Supported, false),
+        (Information::Opposed, false),
+        (Information::Opposed, true),
+    ] {
+        let mut store = RelationStore::with_dictionary(HostDictionary {
+            surfaces: [
+                (TRIPLE, "triple".into()),
+                (u64::MAX, "value".into()),
+                (7, format!("<{P}>")),
+                (9, format!("<{Q}>")),
+                (11, format!("<{R}>")),
+                (12, "output".into()),
+                (1, String::new()),
+            ]
+            .into_iter()
+            .collect(),
+            resolves: AtomicUsize::new(0),
+            lookups: AtomicUsize::new(0),
+            lost: AtomicBool::new(false),
+            lose_after_lookup: AtomicBool::new(false),
+            pins: AtomicUsize::new(0),
+            extra_terms: 0,
+        });
+        store.insert_ids([TRIPLE, 7, u64::MAX, 1]).unwrap().unwrap();
+        let mut rows = purrdf_datalog::evidence::DerivationEvidence::with_admission(1, Resident);
+        if information != Information::Supported {
+            rows.seed(RowId::from_index(0).unwrap(), |memory| {
+                EvidenceRecord::from_parts(
+                    &InformationMap::uniform(information),
+                    SearchCompleteness::Complete,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    memory,
+                )
+            })
+            .unwrap();
+        }
+        let producer = Producer {
+            fail,
+            calls: AtomicUsize::new(0),
+        };
+        let result = evaluate_evidenced(
+            &exe,
+            store,
+            &EvalOptions::default(),
+            &producer,
+            None,
+            rows,
+            evidence_scope(),
+        );
+        if fail {
+            let Err(error) = result else {
+                panic!("original source failure must refuse the model")
+            };
+            assert_eq!(error, EvalError::Source(SourceLost(17)));
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<SourceLost>(),
+                Some(&SourceLost(17))
+            );
+        } else {
+            let result = result.unwrap();
+            assert_eq!(result.evaluation.facts().row_count(), 3);
+            assert_eq!(result.evaluation.derivations().len(), 2);
+            assert_eq!(result.evidence.row_count(), 3);
+            for (row, ids) in result.evaluation.facts().rows_from(1) {
+                assert_eq!(ids[0], TRIPLE);
+                assert!(matches!(ids[1], 9 | 11));
+                assert_eq!([ids[2], ids[3]], [12, 1]);
+                assert_eq!(
+                    result
+                        .evidence
+                        .record(row)
+                        .unwrap()
+                        .information()
+                        .fallback(),
+                    information
+                );
+            }
+            assert_eq!(
+                result
+                    .evaluation
+                    .facts()
+                    .interner()
+                    .pins
+                    .load(Ordering::Relaxed),
+                0
+            );
+            assert_eq!(result.evaluation.budget().generated_terms(), 0);
+        }
+        assert_eq!(producer.calls.load(Ordering::Relaxed), 1);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error,
     later_partial_delta_keeps_both_productive_anchors,
     original_guarded_pair_has_exact_connected_work_and_authored_proofs,
     connected_rule_restores_all_authored_premises,

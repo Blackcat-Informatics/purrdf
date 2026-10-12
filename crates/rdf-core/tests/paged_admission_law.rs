@@ -238,7 +238,9 @@ mod fuzz {
 
         // Guaranteed declared-empty graph: this page knows `gEmpty` exists but owns
         // no row in it.
-        builders[empty_graph_page].declare_named_graph(g_empty_ids[empty_graph_page]);
+        builders[empty_graph_page]
+            .declare_named_graph(g_empty_ids[empty_graph_page])
+            .unwrap();
 
         // Guaranteed side-table-only graph: a reifier row in `gSide`, with NO base
         // quad ever naming that graph.
@@ -763,7 +765,7 @@ mod fuzz {
 
         // Variant 2: after compact() (renumbers GlobalTermIds; page SLOTS are
         // untouched, so the identity map still applies).
-        let compacted = paged.compact();
+        let compacted = paged.compact().unwrap();
         assert_pattern_matches_reference(
             &compacted,
             &raw_pages,
@@ -1144,7 +1146,7 @@ fn compaction_preserves_the_named_graphs_value_set_in_canonical_order() {
         .map(|id| to_value(&paged, id))
         .collect();
 
-    let compacted = paged.compact();
+    let compacted = paged.compact().unwrap();
     let post_order: Vec<TermValue> = compacted
         .named_graphs()
         .map(|id| to_value(&compacted, id))

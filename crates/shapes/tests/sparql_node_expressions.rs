@@ -721,10 +721,10 @@ fn validate_graphs(
     shapes_ttl: &str,
     data_ttl: &str,
 ) -> Result<purrdf_shapes::report::ValidationReport, String> {
-    let shapes = parse_shapes(shapes_ttl, None)?;
+    let shapes = parse_shapes(shapes_ttl, None).map_err(|error| error.to_string())?;
     let data = parse_turtle_to_dataset(data_ttl, None).expect("data parse");
     purrdf_shapes::engine::validate_dataset_with_shapes_graph(&data, &shapes, None)
-        .map_err(Into::into)
+        .map_err(|error| error.to_string())
 }
 
 /// The built-in's declaration loads, and `sh:sparqlExpr` still evaluates
@@ -745,8 +745,8 @@ fn the_builtin_sparql_expr_declaration_loads_and_evaluates_natively() {
     );
     let control = validate_graphs(LONG_IRI_SHAPE, TWO_INSTANCES).expect("control validates");
     assert_eq!(
-        treatment.to_ntriples(),
-        control.to_ntriples(),
+        treatment.to_ntriples().expect("report serializes"),
+        control.to_ntriples().expect("report serializes"),
         "the declaration must not change the report by a single byte"
     );
 }

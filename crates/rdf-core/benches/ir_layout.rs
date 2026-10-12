@@ -525,7 +525,7 @@ fn bench_segmented_dictionary(c: &mut Bench) {
         .unwrap()
         .with_first_term_index(1_u64 << 33)
         .unwrap();
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids = Vec::with_capacity(values.len());
     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
     for &object in &ids {

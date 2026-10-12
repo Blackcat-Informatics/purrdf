@@ -420,15 +420,15 @@ mod tests {
             )
             .unwrap();
         let term = query.term_value(id).unwrap();
-        let base = Arc::downgrade(term._storage.reservation.base_owner());
-        let payload_bytes = term._storage.reservation.bytes();
-        let base_bytes = term._storage.reservation.base_owner().bytes();
+        let SegmentedStackTerm {
+            _storage: storage, ..
+        } = &term;
+        let base = Arc::downgrade(storage.reservation.base_owner());
+        let payload_bytes = storage.reservation.bytes();
+        let base_bytes = storage.reservation.base_owner().bytes();
         assert!(payload_bytes > 0);
         drop(query);
-        assert_eq!(
-            term._storage.reservation.live_bytes(),
-            base_bytes + payload_bytes
-        );
+        assert_eq!(storage.reservation.live_bytes(), base_bytes + payload_bytes);
         assert_eq!(term.value().as_iri(), Some("urn:retained-value"));
         drop(term);
         assert!(base.upgrade().is_none());

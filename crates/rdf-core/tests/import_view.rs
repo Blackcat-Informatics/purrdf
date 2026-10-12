@@ -19,8 +19,8 @@ fn separate_imports_do_not_alias_source_local_ids_or_scoped_blanks() {
             .unwrap();
         source.push_quad(subject, predicate, object, None).unwrap();
         let source = source.freeze().unwrap();
-        let mut importer = DatasetImporter::new(&mut destination, &source);
-        importer.append();
+        let mut importer = DatasetImporter::new(&mut destination, &source).unwrap();
+        importer.append().unwrap();
         assert_eq!(importer.stats().quads, 1);
     }
     let dataset = destination.freeze().unwrap();

@@ -2873,6 +2873,7 @@ fn the_status_enum_is_append_only() {
             PurrdfStatus::ShapesImportError => 12,
             PurrdfStatus::RegexResourceError => 13,
             PurrdfStatus::GeoError => 14,
+            PurrdfStatus::StorageError => 15,
             PurrdfStatus::Panic => 100,
         }
     }
@@ -2895,6 +2896,7 @@ fn the_status_enum_is_append_only() {
         (PurrdfStatus::ShapesImportError, 12),
         (PurrdfStatus::RegexResourceError, 13),
         (PurrdfStatus::GeoError, 14),
+        (PurrdfStatus::StorageError, 15),
         (PurrdfStatus::Panic, 100),
     ] {
         assert_eq!(status as i32, expected, "a status discriminant moved");

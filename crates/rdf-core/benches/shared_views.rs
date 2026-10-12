@@ -460,7 +460,7 @@ fn run_flat(shape: &CarrierShape) -> Observation {
         copies = copies.saturating_add(carrier.dataset().rdf_row_count());
         freezes += 1;
     }
-    black_box(carrier.pipeline_root());
+    black_box(carrier.pipeline_root().unwrap());
     for _ in 0..shape.consumers {
         let reader = PipelineBundle::<Stage>::new(
             Arc::clone(&shape.base),
@@ -469,7 +469,7 @@ fn run_flat(shape: &CarrierShape) -> Observation {
             DatasetProvenance::new(),
         );
         for graph in [CARRIER_G1, CARRIER_G2] {
-            black_box(reader.graph_digest(graph));
+            black_box(reader.graph_digest(graph).unwrap());
         }
     }
     let retained = carrier.dataset().rdf_payload_bytes();

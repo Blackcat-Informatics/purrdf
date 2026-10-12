@@ -871,8 +871,7 @@ fn declaration_only(base: &Arc<RdfDataset>, count: usize) -> MutableDataset {
         assert_eq!(
             mutable.declare_named_graph(iri(&format!("declared/{n}"))),
             Ok(true)
-        )
-        .unwrap();
+        );
     }
     mutable
 }
@@ -1197,7 +1196,10 @@ fn suppression_counts_every_native_table_occurrence_and_reclassification_dedupli
 fn deleting_one_declaration_keeps_unrelated_annotation_only_records_in_their_table() {
     let source = complete_source();
     let mut b = RdfDatasetBuilder::new();
-    purrdf_core::ir::import::DatasetImporter::new(&mut b, &source).append();
+    purrdf_core::ir::import::DatasetImporter::new(&mut b, &source)
+        .unwrap()
+        .append()
+        .unwrap();
     let orphan = b.intern_iri("http://example.org/annotation-only").unwrap();
     let p = b.intern_iri(P).unwrap();
     let o = b.intern_iri("http://example.org/o").unwrap();
@@ -1451,7 +1453,10 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
 
     // A negative that is not about counts: same shape, one different ground IRI.
     let mut altered = RdfDatasetBuilder::new();
-    purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat).append();
+    purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat)
+        .unwrap()
+        .append()
+        .unwrap();
     let s = altered.intern_iri("http://example.org/s").unwrap();
     let p = altered.intern_iri(P).unwrap();
     altered.push_quad(s, p, s, None).unwrap();
@@ -1468,7 +1473,7 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     for graph in [GRAPH, OTHER_GRAPH] {
         // The reference: materialize the named-graph projection and canonicalize it,
         // exactly as the flat per-graph digest does today.
-        let projected = canonicalize(&flat.project_named_graph(graph)).nquads;
+        let projected = canonicalize(&flat.project_named_graph(graph).unwrap()).nquads;
         assert!(
             !projected.is_empty(),
             "{graph} must actually hold content, or parity proves nothing"
@@ -1529,7 +1534,10 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     // A graph this view never names selects nothing — an empty subgraph, not an
     // error, and byte-identical to projecting an absent graph flat.
     let absent = "http://example.org/no-such-graph";
-    assert_eq!(canonicalize(&flat.project_named_graph(absent)).nquads, "");
+    assert_eq!(
+        canonicalize(&flat.project_named_graph(absent).unwrap()).nquads,
+        ""
+    );
     for empty in [
         canonicalize_graph_view(&*flat, absent, CanonHash::Sha256).nquads,
         canonicalize_graph_view(&independent, absent, CanonHash::Sha256).nquads,
@@ -2633,25 +2641,35 @@ fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
     assert_eq!(graphs, view.named_graph_iris());
     for graph in &graphs {
         assert_eq!(
-            flat.graph_digest(graph),
+            flat.graph_digest(graph).unwrap(),
             view.graph_digest(graph).unwrap(),
             "per-graph digest of <{graph}>"
         );
     }
     // Absence is an empty subgraph on both carriers, never an error.
     assert_eq!(
-        flat.graph_digest(CABSENT),
+        flat.graph_digest(CABSENT).unwrap(),
         view.graph_digest(CABSENT).unwrap()
     );
 
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap(), "root");
+    assert_eq!(
+        flat.pipeline_root().unwrap(),
+        view.pipeline_root().unwrap(),
+        "root"
+    );
 
     // Non-vacuity: the fixture's graphs are genuinely different from each other, the
     // declaration-only graph is genuinely empty, and the root is a DIFFERENT identity
     // from the digest rather than the same bytes under another name.
-    assert_ne!(flat.graph_digest(CG1), flat.graph_digest(CG2));
-    assert_eq!(flat.graph_digest(CDECLARED), flat.graph_digest(CABSENT));
-    assert_ne!(flat.digest(), flat.pipeline_root());
+    assert_ne!(
+        flat.graph_digest(CG1).unwrap(),
+        flat.graph_digest(CG2).unwrap()
+    );
+    assert_eq!(
+        flat.graph_digest(CDECLARED).unwrap(),
+        flat.graph_digest(CABSENT).unwrap()
+    );
+    assert_ne!(flat.digest(), flat.pipeline_root().unwrap());
     assert!(
         canonicalize_graph_view(&*base, CG1, CanonHash::Sha256)
             .nquads
@@ -2673,7 +2691,7 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
 
     // <g1> is the graph with the scoped blanks, the triple term and the statement
     // layer. Pin it on both carriers.
-    let pinned = flat.graph_digest(CG1);
+    let pinned = flat.graph_digest(CG1).unwrap();
     assert_eq!(pinned, view.graph_digest(CG1).unwrap());
     flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
     view.pin_handle(CG1, Note("g1"), pinned).unwrap();
@@ -2687,7 +2705,7 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(
-        flat.graph_digest(CG1),
+        flat.graph_digest(CG1).unwrap(),
         pinned,
         "the pin still verifies (flat)"
     );
@@ -2698,10 +2716,16 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
     );
 
     // The contribution genuinely landed, identically, on both carriers.
-    assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
-    assert_ne!(flat.graph_digest(CG3), flat.graph_digest(CABSENT));
+    assert_eq!(
+        flat.graph_digest(CG3).unwrap(),
+        view.graph_digest(CG3).unwrap()
+    );
+    assert_ne!(
+        flat.graph_digest(CG3).unwrap(),
+        flat.graph_digest(CABSENT).unwrap()
+    );
     assert_eq!(flat.digest(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
 }
 
 /// Reseating the per-graph memo rather than clearing a SHARED one: a clone taken
@@ -2715,7 +2739,7 @@ fn a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers() {
     let mut flat = flat_carrier(&base);
     let mut view = view_carrier(&base, &ledger);
 
-    let before = flat.graph_digest(CG2);
+    let before = flat.graph_digest(CG2).unwrap();
     assert_eq!(before, view.graph_digest(CG2).unwrap());
     let flat_snapshot = flat.clone();
     let view_snapshot = view.clone();
@@ -2728,14 +2752,17 @@ fn a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers() {
         .unwrap();
 
     assert_ne!(
-        flat.graph_digest(CG2),
+        flat.graph_digest(CG2).unwrap(),
         before,
         "the fixture must actually move <g2>, or the test proves nothing"
     );
-    assert_eq!(flat.graph_digest(CG2), view.graph_digest(CG2).unwrap());
+    assert_eq!(
+        flat.graph_digest(CG2).unwrap(),
+        view.graph_digest(CG2).unwrap()
+    );
 
     assert_eq!(
-        flat_snapshot.graph_digest(CG2),
+        flat_snapshot.graph_digest(CG2).unwrap(),
         before,
         "the pre-accumulate flat clone answers for its own content"
     );
@@ -2808,7 +2835,7 @@ fn a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers() {
     view.accumulate_named_graph(CG3, &contained, Note("ok"))
         .expect("the contained twin must still be admitted (view)");
     assert_eq!(flat.digest(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
 }
 
 /// Exact invalidation: an accumulation re-canonicalizes exactly the graph it
@@ -2881,7 +2908,7 @@ fn the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise() {
     let mut flat = flat_carrier(&base);
 
     let root_before = view.pipeline_root().unwrap();
-    assert_eq!(root_before, flat.pipeline_root());
+    assert_eq!(root_before, flat.pipeline_root().unwrap());
     // Reading it twice does not move it.
     assert_eq!(view.pipeline_root().unwrap(), root_before);
 
@@ -2897,7 +2924,11 @@ fn the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise() {
 
     let root_after = view.pipeline_root().unwrap();
     assert_ne!(root_after, root_before, "a new leaf must move the root");
-    assert_eq!(root_after, flat.pipeline_root(), "on both carriers alike");
+    assert_eq!(
+        root_after,
+        flat.pipeline_root().unwrap(),
+        "on both carriers alike"
+    );
     assert_eq!(view.graph_digest(CG1).unwrap(), g1, "untouched leaf");
     assert_eq!(view.graph_digest(CG2).unwrap(), g2, "untouched leaf");
     assert_eq!(
@@ -3022,12 +3053,12 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
     let base = carrier_fixture();
     let ledger = RetentionLedger::new();
     let mut flat = flat_carrier(&base);
-    let d1 = flat.graph_digest(CG1);
-    let d2 = flat.graph_digest(CG2);
+    let d1 = flat.graph_digest(CG1).unwrap();
+    let d2 = flat.graph_digest(CG2).unwrap();
     flat.pin_handle(CG1, Note("g1"), d1).unwrap();
     flat.pin_handle(CG2, Note("g2"), d2).unwrap();
     let flat_digest = flat.digest();
-    let flat_root = flat.pipeline_root();
+    let flat_root = flat.pipeline_root().unwrap();
 
     let assert_loadout = |lookaside: &RdfLookaside,
                           blobs: &ContentStore,
@@ -3129,9 +3160,12 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
     );
     assert_eq!(back.handles(), grown.handles());
     assert_eq!(back.digest(), grown.digest().unwrap());
-    assert_eq!(back.pipeline_root(), grown.pipeline_root().unwrap());
+    assert_eq!(
+        back.pipeline_root().unwrap(),
+        grown.pipeline_root().unwrap()
+    );
     for (graph, entry) in back.handles() {
-        assert_eq!(back.graph_digest(graph), entry.content_digest);
+        assert_eq!(back.graph_digest(graph).unwrap(), entry.content_digest);
     }
     // A round trip that ends where it started.
     let round = back
@@ -3166,7 +3200,10 @@ fn a_delta_rides_the_view_carrier_without_compaction() {
     // flat carrier's.
     let flat = flat_carrier(&base);
     assert_eq!(carrier.digest().unwrap(), flat.digest());
-    assert_eq!(carrier.pipeline_root().unwrap(), flat.pipeline_root());
+    assert_eq!(
+        carrier.pipeline_root().unwrap(),
+        flat.pipeline_root().unwrap()
+    );
     assert_eq!(carrier.named_graph_iris(), flat.named_graph_iris());
 
     // Both owners are on the ledger, and the base is charged once even though a
@@ -3412,16 +3449,19 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
 
     // Pin <g1> on both carriers — the graph with the scoped blanks, the triple term
     // and the statement layer.
-    let pinned = flat.graph_digest(CG1);
+    let pinned = flat.graph_digest(CG1).unwrap();
     assert_eq!(pinned, view.graph_digest(CG1).unwrap());
     flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
     view.pin_handle(CG1, Note("g1"), pinned).unwrap();
 
     // Everything the refusal must leave exactly where it found it.
     let leaves = flat.named_graph_iris();
-    let leaf_digests: Vec<ContentDigest> = leaves.iter().map(|g| flat.graph_digest(g)).collect();
+    let leaf_digests: Vec<ContentDigest> = leaves
+        .iter()
+        .map(|g| flat.graph_digest(g).unwrap())
+        .collect();
     let flat_digest = flat.digest();
-    let flat_root = flat.pipeline_root();
+    let flat_root = flat.pipeline_root().unwrap();
     let view_digest = view.digest().unwrap();
     let view_root = view.pipeline_root().unwrap();
     let ledger_before = ledger.snapshot();
@@ -3449,7 +3489,11 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     }
 
     assert_eq!(flat.digest(), flat_digest, "flat bundle digest");
-    assert_eq!(flat.pipeline_root(), flat_root, "flat pipeline root");
+    assert_eq!(
+        flat.pipeline_root().unwrap(),
+        flat_root,
+        "flat pipeline root"
+    );
     assert_eq!(view.digest().unwrap(), view_digest, "view bundle digest");
     assert_eq!(
         view.pipeline_root().unwrap(),
@@ -3459,7 +3503,7 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     assert_eq!(flat.named_graph_iris(), leaves, "flat leaf set");
     assert_eq!(view.named_graph_iris(), leaves, "view leaf set");
     for (graph, before) in leaves.iter().zip(&leaf_digests) {
-        assert_eq!(flat.graph_digest(graph), *before, "flat <{graph}>");
+        assert_eq!(flat.graph_digest(graph).unwrap(), *before, "flat <{graph}>");
         assert_eq!(view.graph_digest(graph).unwrap(), *before, "view <{graph}>");
     }
     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
@@ -3481,7 +3525,7 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     view.accumulate_named_graph(CG3, &elsewhere, Note("g3"))
         .expect("the undisturbing twin must still be admitted (view)");
     assert_eq!(
-        flat.graph_digest(CG1),
+        flat.graph_digest(CG1).unwrap(),
         pinned,
         "the pin still verifies (flat)"
     );
@@ -3490,10 +3534,16 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
         pinned,
         "the pin still verifies (view)"
     );
-    assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
-    assert_ne!(flat.graph_digest(CG3), flat.graph_digest(CABSENT));
+    assert_eq!(
+        flat.graph_digest(CG3).unwrap(),
+        view.graph_digest(CG3).unwrap()
+    );
+    assert_ne!(
+        flat.graph_digest(CG3).unwrap(),
+        flat.graph_digest(CABSENT).unwrap()
+    );
     assert_eq!(flat.digest(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
     assert_eq!(
         ledger.snapshot().distinct_owners,
         2,

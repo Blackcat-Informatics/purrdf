@@ -177,7 +177,6 @@ fn statement_image(rows: [&[purrdf_core::QuadValues]; 3]) -> purrdf_core::Segmen
     builder.seal().unwrap()
 }
 
-#[test]
 fn generated_chronological_publications_match_eager_typed_seals() {
     use purrdf_core::{
         BlankScope, InMemoryPageProvider, PackBuilder, PagedDataset, PagedQueryLimits, PagedStack,
@@ -284,7 +283,6 @@ fn generated_chronological_publications_match_eager_typed_seals() {
     }
 }
 
-#[test]
 fn empty_certified_streams_do_not_probe_dictionary_for_bound_head_row() {
     use purrdf_core::{
         DatasetView, FallibleDatasetView, GraphMatch, SegmentedResidentHead, ViewOperationStatus,
@@ -327,7 +325,6 @@ fn empty_certified_streams_do_not_probe_dictionary_for_bound_head_row() {
     assert_eq!(headers.load(Ordering::Relaxed), 2);
 }
 
-#[test]
 fn persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last() {
     use purrdf_core::{DatasetView, FallibleDatasetView, ViewOperationStatus};
     let secret = "purged-private-lexical-marker-495";
@@ -457,7 +454,6 @@ fn persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last() {
     }
 }
 
-#[test]
 fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
     use purrdf_core::{DatasetView, GraphMatch};
     let a = statement("urn:s", "urn:a", Some("urn:implicit"));
@@ -472,7 +468,7 @@ fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
     let erased = statement_layer(
         [&[], &[], &[]],
         SegmentedLayerMetadata::new(
-            Some(removal_carrier(&[a.clone(), b.clone()])),
+            Some(removal_carrier(&[a, b.clone()])),
             Some(declarations.freeze().unwrap()),
         )
         .unwrap(),
@@ -516,7 +512,6 @@ fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
     );
 }
 
-#[test]
 fn effective_annotation_classification_uses_original_chronology_and_first_occurrence() {
     use purrdf_core::DatasetView;
     let annotation = statement("urn:r", "urn:value", Some("urn:g"));
@@ -578,7 +573,6 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
     }
 }
 
-#[test]
 fn removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view() {
     use purrdf_core::{BlankScope, DatasetView, SegmentedStackSource, TermGuard};
     let value = TermValue::Triple {
@@ -629,7 +623,6 @@ fn removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view() {
     query.check_ready().unwrap();
 }
 
-#[test]
 fn fallible_evidence_pins_complete_publication_and_immutable_request_prefix() {
     use purrdf_core::{
         DatasetView, FallibleDatasetView, SegmentedResidentHead, ViewOperationStatus,
@@ -709,7 +702,6 @@ fn fallible_evidence_pins_complete_publication_and_immutable_request_prefix() {
     assert!(declared_weak.upgrade().is_none());
 }
 
-#[test]
 fn thousand_distinct_sources_open_only_headers_under_one_request_budget() {
     let headers = Arc::new(AtomicUsize::new(0));
     let layers = (0..1000).map(|index| layer(index, 1, &headers)).collect();
@@ -736,7 +728,6 @@ fn thousand_distinct_sources_open_only_headers_under_one_request_budget() {
     ));
 }
 
-#[test]
 fn tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation() {
     let mut measurements = Vec::new();
     for terms in [10, 100] {
@@ -789,7 +780,6 @@ fn value_layer(values: &[TermValue]) -> (Arc<SegmentedLayer>, Vec<u64>) {
     )
 }
 
-#[test]
 fn query_ids_touch_only_values_and_preserve_source_scopes() {
     use purrdf_core::{BlankScope, SegmentedStackSource, TermBox};
     let blank = TermValue::Blank {
@@ -883,7 +873,6 @@ fn query_ids_touch_only_values_and_preserve_source_scopes() {
     assert!(measured.peak_working_bytes <= i64::try_from(limits().live_bytes()).unwrap());
 }
 
-#[test]
 fn memoized_term_hits_allocate_nothing_and_failed_import_latches() {
     use purrdf_core::SegmentedStackSource;
     let (layer, ids) = value_layer(&[TermValue::iri("urn:known")]);
@@ -916,7 +905,6 @@ fn memoized_term_hits_allocate_nothing_and_failed_import_latches() {
     );
 }
 
-#[test]
 fn admitted_identity_walk_releases_spill_and_preserves_hash_law() {
     use purrdf_core::TermBox;
     use purrdf_lex::allocation::{Admission, Memory, StorageError};
@@ -980,7 +968,6 @@ fn admitted_identity_walk_releases_spill_and_preserves_hash_law() {
     assert_eq!(memory.admitted_bytes(), 0);
 }
 
-#[test]
 fn final_query_readiness_checks_untouched_evicted_descriptors() {
     use purrdf_core::SegmentedStackSource;
     let mut builder =
@@ -1021,7 +1008,6 @@ fn final_query_readiness_checks_untouched_evicted_descriptors() {
     );
 }
 
-#[test]
 fn resident_head_copy_refuses_under_the_shared_operation_grant() {
     use purrdf_core::{SegmentedResidentHead, SegmentedStackSource};
     let mut head = RdfDatasetBuilder::new();
@@ -1068,3 +1054,20 @@ fn resident_head_copy_refuses_under_the_shared_operation_grant() {
         &TermValue::simple_literal("x".repeat(80_000))
     );
 }
+
+purrdf_testkit::harness_main!(
+    generated_chronological_publications_match_eager_typed_seals,
+    empty_certified_streams_do_not_probe_dictionary_for_bound_head_row,
+    persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last,
+    chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs,
+    effective_annotation_classification_uses_original_chronology_and_first_occurrence,
+    removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view,
+    fallible_evidence_pins_complete_publication_and_immutable_request_prefix,
+    thousand_distinct_sources_open_only_headers_under_one_request_budget,
+    tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation,
+    query_ids_touch_only_values_and_preserve_source_scopes,
+    memoized_term_hits_allocate_nothing_and_failed_import_latches,
+    admitted_identity_walk_releases_spill_and_preserves_hash_law,
+    final_query_readiness_checks_untouched_evicted_descriptors,
+    resident_head_copy_refuses_under_the_shared_operation_grant,
+);

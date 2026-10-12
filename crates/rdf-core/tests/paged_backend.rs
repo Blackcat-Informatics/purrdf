@@ -738,7 +738,7 @@ fn compact_reclaims_dead_ids_deterministically() {
     }
 
     // Compact: the three dead ids are reclaimed, so len shrinks by EXACTLY three.
-    let compacted = dropped.compact();
+    let compacted = dropped.compact().unwrap();
     assert_eq!(
         compacted.dictionary().len(),
         full_len - 3,
@@ -777,7 +777,7 @@ fn compact_reclaims_dead_ids_deterministically() {
     // Determinism: compacting the SAME live set twice assigns IDENTICAL GlobalTermIds
     // to every survivor (a pure function of the live term-value set). Compare the id
     // of every live value under two independent compactions.
-    let compacted_again = dropped.compact();
+    let compacted_again = dropped.compact().unwrap();
     assert_eq!(
         compacted.dictionary().len(),
         compacted_again.dictionary().len()
@@ -835,7 +835,7 @@ fn compacted_paged_serializes_byte_identical_to_single() {
     let pages = split_pages(&corpus, 3);
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
-    let compacted = paged.compact();
+    let compacted = paged.compact().unwrap();
     let materialized = materialize_to_dataset(&compacted);
     let paged_ttl = render_canonical_turtle(&materialized, &[]);
 
@@ -1400,7 +1400,7 @@ fn snapshot_and_byte_metadata_survive_selection_and_compaction() {
         vec![303, 101]
     );
 
-    let compacted = selected.compact();
+    let compacted = selected.compact().unwrap();
     let (_, compacted_generation, compacted_parts) = compacted.to_parts();
     assert_eq!(compacted_generation, generation);
     assert_eq!(

@@ -1013,7 +1013,8 @@ mod tests {
         let object_property = b.intern_iri(OWL_OBJECTPROPERTY).unwrap();
         b.push_quad(p, ty, object_property, None).unwrap();
         let min_cardinality = b.intern_iri(OWL_MINCARDINALITY).unwrap();
-        let one = crate::interner::intern_into(&mut b, &TermValue::typed_literal("1", XSD_INT));
+        let one =
+            crate::interner::intern_into(&mut b, &TermValue::typed_literal("1", XSD_INT)).unwrap();
         b.push_quad(node, min_cardinality, one, None).unwrap();
         b.freeze().expect("freeze")
     }

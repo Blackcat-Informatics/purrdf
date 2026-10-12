@@ -79,6 +79,7 @@ impl WorkspaceReservation for HostReservation {
             .and_then(|live| live.checked_add(bytes))
             .filter(|new| *new <= LIVE_LIMIT)
             .ok_or(Deleted(B))?;
+        drop(live);
         self.bytes = bytes;
         Ok(())
     }
@@ -308,7 +309,7 @@ impl DatasetView for Host {
 
     fn quads_for_pattern_with_plan(
         &self,
-        _: &(),
+        (): &(),
         s: Option<HostId>,
         p: Option<HostId>,
         o: Option<HostId>,
@@ -345,7 +346,6 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-#[test]
 fn original_host_ids_join_and_expand_triples_without_native_interning() {
     let host = Host::fixture();
     let result = NativeSparqlEngine::new().query_fallible_view(
@@ -370,12 +370,12 @@ fn original_host_ids_join_and_expand_triples_without_native_interning() {
             .flatten()
             .all(|id| [A, B, P, Q, TRIPLE].contains(id))
     );
+    drop(probes);
     assert_eq!(host.pins.load(Ordering::Relaxed), 0);
     assert_ne!(HostId::encode_computed(0), B.encode());
     assert_ne!(HostId::encode_computed(u32::MAX), A.encode());
 }
 
-#[test]
 fn host_deletion_discards_partial_output_and_preserves_first_typed_cause() {
     let mut host = Host::fixture();
     host.delete_at_resolve = Some(TRIPLE);
@@ -408,7 +408,6 @@ fn host_deletion_discards_partial_output_and_preserves_first_typed_cause() {
     ));
 }
 
-#[test]
 fn certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure() {
     let engine = NativeSparqlEngine::new();
     for (low, high) in [(NUMBER_LOW, NUMBER_HIGH), (TIME_LOW, TIME_HIGH)] {
@@ -475,3 +474,9 @@ fn certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failur
         }
     }
 }
+
+purrdf_testkit::harness_main!(
+    original_host_ids_join_and_expand_triples_without_native_interning,
+    host_deletion_discards_partial_output_and_preserves_first_typed_cause,
+    certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure,
+);

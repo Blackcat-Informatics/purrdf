@@ -386,8 +386,7 @@ fn declared_graph_with_rows(
         cow.declare_named_graph(graph.clone())
             .expect("the bench graph name is an absolute IRI"),
         "the bench graph is declared once"
-    )
-    .unwrap();
+    );
     let quads: Vec<QuadValues> = (0..rows)
         .map(|n| {
             QuadValues::quad(

@@ -110,6 +110,10 @@ purrdf-testkit = { workspace = true }
 # Complete native semantic expectations on the shared harness.
 # Actual WASM behaviors are selected separately in `make wasm-test`.
 [[test]]
+name = "host_identity"
+harness = false
+
+[[test]]
 # Complete native binding and EXPLAIN regressions.
 name = "boundary_join_scaling"
 harness = false

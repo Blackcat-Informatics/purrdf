@@ -82,7 +82,7 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
     )
     .map_err(|error| {
         let mut diagnostic = RdfDiagnostic::from(StorageError::Capacity(error));
-        diagnostic.code = "gts-scope-limit".to_owned();
+        "gts-scope-limit".clone_into(&mut diagnostic.code);
         diagnostic.with_location(RdfLocation::logical("gts:sink").with_gts_segment(segment_index))
     })?;
     let scope = u32::try_from(index + 1).map_err(|_| StorageError::SizeOverflow)?;
@@ -562,11 +562,11 @@ mod tests {
             assert_eq!(error.code, "gts-scope-limit");
             assert_eq!(
                 error.storage_error(),
-                Some(StorageError::Capacity(CapacityError {
-                    space: CapacitySpace::ImportBlankScopes,
-                    attempted: u128::from(index) + 1,
-                    limit: u128::from(u32::MAX)
-                }))
+                Some(StorageError::Capacity(CapacityError::new(
+                    CapacitySpace::ImportBlankScopes,
+                    u128::from(index) + 1,
+                    u128::from(u32::MAX)
+                )))
             );
             assert_eq!(error.location.unwrap().gts_segment_index, Some(index));
             assert_eq!(

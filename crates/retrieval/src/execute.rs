@@ -3593,7 +3593,7 @@ mod tests {
             .unwrap()
             .with_first_term_index((1_u64 << 53) + 7)
             .unwrap();
-        let mut builder = purrdf_core::SegmentedBuilder::new(limits);
+        let mut builder = purrdf_core::SegmentedBuilder::new(limits).unwrap();
         builder
             .intern_batch(std::slice::from_ref(&value), |_, _| {})
             .unwrap();

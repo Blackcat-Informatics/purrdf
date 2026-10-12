@@ -321,11 +321,11 @@ mod tests {
             let refused = source_scope(next).unwrap_err();
             assert_eq!(
                 refused,
-                StorageError::Capacity(CapacityError {
-                    space: CapacitySpace::ImportBlankScopes,
-                    attempted: u128::from(u32::MAX) + 2,
-                    limit: u128::from(u32::MAX) + 1
-                })
+                StorageError::Capacity(CapacityError::new(
+                    CapacitySpace::ImportBlankScopes,
+                    u128::from(u32::MAX) + 2,
+                    u128::from(u32::MAX) + 1
+                ))
             );
             let diagnostic = RdfDiagnostic::from(refused);
             assert_eq!(diagnostic.storage_error(), Some(refused));

@@ -1712,7 +1712,7 @@ mod operation_tests {
                 requests
                     .iter()
                     .all(|r| r.snapshot() == first.receipt().snapshot())
-            )
+            );
         });
         assert!(Arc::ptr_eq(&a.state, &b.state));
         assert!(Arc::ptr_eq(&a.budget, &b.budget));

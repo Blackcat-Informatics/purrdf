@@ -1842,7 +1842,9 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
                 let _ = writeln!(
                     out,
                     "storage-refusal capacity {} {} {}",
-                    error.space, error.attempted, error.limit
+                    error.space,
+                    error.attempted(),
+                    error.limit()
                 );
                 ""
             }
@@ -4408,11 +4410,7 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
                     if fields.next().is_some() || attempted <= limit {
                         return Err("invalid DL capacity refusal".to_owned());
                     }
-                    StorageError::Capacity(CapacityError {
-                        space,
-                        attempted,
-                        limit,
-                    })
+                    StorageError::Capacity(CapacityError::new(space, attempted, limit))
                 }
                 other => return Err(format!("unknown DL storage refusal \"{other}\"")),
             };
@@ -5120,9 +5118,19 @@ mod tests {
 
     #[test]
     fn physical_dl_refusals_round_trip_without_a_decided_certificate() {
-        use purrdf_lex::allocation::StorageError;
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
         let healthy = DlCertificate::stated(false, false, Vec::new(), 0, 0, 0, 0, 0, 0, 0, 0);
         for error in [
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogTerms,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX),
+            )),
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                u128::MAX,
+                u128::MAX - 1,
+            )),
             StorageError::SizeOverflow,
             StorageError::AllocationFailed,
             StorageError::AdmissionFailed,

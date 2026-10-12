@@ -2490,11 +2490,7 @@ mod tests {
             text: u32::MAX,
             rows: 2,
         };
-        let expected = StorageError::Capacity(CapacityError {
-            space: CapacitySpace::Permutation,
-            attempted: 3,
-            limit: 2,
-        });
+        let expected = StorageError::Capacity(CapacityError::new(CapacitySpace::Permutation, 3, 2));
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
         for _ in 0..3 {

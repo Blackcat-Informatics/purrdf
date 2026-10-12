@@ -1976,11 +1976,7 @@ mod tests {
             };
             assert_eq!(
                 *capacity,
-                CapacityError {
-                    space: CapacitySpace::DeltaTerms,
-                    attempted: 4,
-                    limit: 3,
-                }
+                CapacityError::new(CapacitySpace::DeltaTerms, 4, 3)
             );
             assert_eq!(mutable.delta.values.len(), 2);
             assert_eq!(mutable.delta.index.len(), entries);

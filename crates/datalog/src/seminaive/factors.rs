@@ -207,7 +207,7 @@ fn factor_matches<D: TermDictionary>(
                 JoinGroup::Binary(atom) => binary(atom.positive_position(), &partial, governor)
                     .map_err(EvalError::Source)?,
                 JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    LeapfrogRun {
+                    &LeapfrogRun {
                         plan: entry.plan,
                         cycle,
                         scan,
@@ -317,13 +317,16 @@ fn new_matches<D: TermDictionary>(
     Ok(matches)
 }
 
+/// Matching solutions for each independent positive factor.
+type FactorRelations<I> = Vec<Vec<SlotSolution<I>>>;
+
 /// Discover productive anchors before building the old/full context they actually need.
 fn partial_relations<D: TermDictionary>(
     entry: RuleEntry<'_>,
     snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<Vec<Vec<SlotSolution<D::Id>>>, EvalError<D::Error>> {
+) -> Result<FactorRelations<D::Id>, EvalError<D::Error>> {
     let mut relations = Vec::with_capacity(entry.runtime.factors.len());
     for factor in &entry.runtime.factors {
         relations.push(new_matches(factor, entry, snapshot, governor, evidence)?);
@@ -400,7 +403,7 @@ impl<'a, I: TermIdentity> Frontier<'a, I> {
             });
             let lexical = |left: Witness<'_, I>, right: Witness<'_, I>| {
                 source_preference(&left.solution.sources, 0, &right.solution.sources, 0, rel)
-                    .map(|order| order.is_lt())
+                    .map(core::cmp::Ordering::is_lt)
             };
             if witness.sum < next.summed.sum
                 || (witness.sum == next.summed.sum && lexical(witness, next.summed)?)
@@ -449,15 +452,18 @@ impl<'a, I: TermIdentity> Frontier<'a, I> {
     }
 }
 
+/// Projected head identities and their source witness frontiers.
+type FrontierTable<'a, I> = BTreeMap<Vec<I>, Frontier<'a, I>>;
+
 /// Mode frontiers borrowing one frozen factor relation containing its needed modes.
 #[derive(Debug)]
 struct Projection<'a, I: TermIdentity = TermId> {
     /// Any matching source tuple.
-    full: BTreeMap<Vec<I>, Frontier<'a, I>>,
+    full: FrontierTable<'a, I>,
     /// Tuples having no source in the current delta.
-    old: BTreeMap<Vec<I>, Frontier<'a, I>>,
+    old: FrontierTable<'a, I>,
     /// Tuples having at least one source in the current delta.
-    new: BTreeMap<Vec<I>, Frontier<'a, I>>,
+    new: FrontierTable<'a, I>,
 }
 
 /// Project one head's factor relation; callers consume only its required modes.
@@ -537,7 +543,7 @@ fn saturated_sum(sums: impl IntoIterator<Item = u64>) -> bool {
 /// Immutable state for streamed projected products.
 struct Product<'a, 'r, D: TermDictionary> {
     /// One mode table per certified factor.
-    tables: Vec<&'a BTreeMap<Vec<D::Id>, Frontier<'a, D::Id>>>,
+    tables: Vec<&'a FrontierTable<'a, D::Id>>,
     /// The authored head currently emitted.
     head: &'r [ArgShape; ATOM_ARITY],
     /// Rule identity and variable-frame width.

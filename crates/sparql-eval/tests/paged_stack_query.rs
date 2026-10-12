@@ -368,7 +368,10 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
     let ordinary_page = eager(ordinary.clone(), &[]);
     let mut expected = RdfDatasetBuilder::new();
     for page in [&typed, &ordinary_page] {
-        purrdf_core::ir::import::DatasetImporter::new(&mut expected, page.as_ref()).append();
+        purrdf_core::ir::import::DatasetImporter::new(&mut expected, page.as_ref())
+            .unwrap()
+            .append()
+            .unwrap();
     }
     let expected = expected.freeze().unwrap();
     let mut stack = PagedStack::new(vec![seal(typed), seal(ordinary_page)]).unwrap();
@@ -416,7 +419,9 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         &mut promoted_builder,
         ordinary_expected.as_ref(),
     )
-    .append();
+    .unwrap()
+    .append()
+    .unwrap();
     let r = promoted_builder.intern_value(&new_declaration.s).unwrap();
     let triple = promoted_builder.intern_value(&new_declaration.o).unwrap();
     let graph = promoted_builder

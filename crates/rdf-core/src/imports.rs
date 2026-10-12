@@ -1295,11 +1295,11 @@ mod tests {
                     let error = closure.merge(&original).unwrap_err();
                     assert_eq!(
                         error.storage_error(),
-                        Some(StorageError::Capacity(CapacityError {
-                            space: CapacitySpace::ImportBlankScopes,
-                            attempted: u128::from(u32::MAX) + 1,
-                            limit: u128::from(u32::MAX),
-                        }))
+                        Some(StorageError::Capacity(CapacityError::new(
+                            CapacitySpace::ImportBlankScopes,
+                            u128::from(u32::MAX) + 1,
+                            u128::from(u32::MAX)
+                        )))
                     );
                 } else {
                     let merged = closure.merge(&original).unwrap().unwrap();
@@ -1354,11 +1354,11 @@ mod tests {
             assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
             assert_eq!(
                 scopes.map(BlankScope(5)),
-                Err(StorageError::Capacity(CapacityError {
-                    space: CapacitySpace::ImportBlankScopes,
-                    attempted: u128::from(u32::MAX) + 1,
-                    limit: u128::from(u32::MAX)
-                }))
+                Err(StorageError::Capacity(CapacityError::new(
+                    CapacitySpace::ImportBlankScopes,
+                    u128::from(u32::MAX) + 1,
+                    u128::from(u32::MAX)
+                )))
             );
         }
         let super::ScopeMap::Fresh { assigned, next } = scopes else {

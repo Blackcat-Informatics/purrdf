@@ -398,11 +398,11 @@ impl GlobalDictionary {
         let attempted = u128::from(index) + 1;
         CapacityError::check(CapacitySpace::GlobalTerms, attempted, u128::from(u64::MAX))?;
         let id = GlobalTermId::checked_from_index(index).ok_or_else(|| {
-            StorageError::Capacity(CapacityError {
-                space: CapacitySpace::GlobalTerms,
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTerms,
                 attempted,
-                limit: u128::from(u64::MAX),
-            })
+                u128::from(u64::MAX),
+            ))
         })?;
         self.arena
             .try_reserve(bytes)
@@ -1443,11 +1443,11 @@ mod tests {
     fn global_term_id_from_index_rejects_u64_max() {
         assert_eq!(
             GlobalTermId::from_index(u64::MAX),
-            Err(CapacityError {
-                space: CapacitySpace::GlobalTerms,
-                attempted: u128::from(u64::MAX) + 1,
-                limit: u128::from(u64::MAX)
-            })
+            Err(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            ))
         );
     }
 

@@ -285,7 +285,11 @@ fn named_graph_bench(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_named_graph");
     for rows in [100, 10_000] {
         let source = named_graph_data(rows);
-        let native = Arc::new(source.project_named_graph(SELECTED_GRAPH));
+        let native = Arc::new(
+            source
+                .project_named_graph(SELECTED_GRAPH)
+                .expect("graph projects"),
+        );
         let views = [
             ("native_owned", Arc::new(ShaclDatasetView::native(native))),
             (
@@ -382,7 +386,13 @@ fn named_graph_bench(c: &mut Bench) {
             BenchmarkId::new("owned_projection/construct", rows),
             &source,
             |b, source| {
-                b.iter(|| std::hint::black_box(source.project_named_graph(SELECTED_GRAPH)));
+                b.iter(|| {
+                    std::hint::black_box(
+                        source
+                            .project_named_graph(SELECTED_GRAPH)
+                            .expect("graph projects"),
+                    )
+                });
             },
         );
         group.bench_with_input(

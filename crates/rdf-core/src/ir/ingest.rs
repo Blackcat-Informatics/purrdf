@@ -43,8 +43,8 @@ fn event_storage_error(error: StorageError) -> EventError {
     match error {
         StorageError::Capacity(error) => EventError::Capacity {
             space: error.space.as_str(),
-            attempted: error.attempted,
-            limit: error.limit,
+            attempted: error.attempted(),
+            limit: error.limit(),
         },
         StorageError::SizeOverflow => EventError::StorageSizeOverflow,
         StorageError::AllocationFailed => EventError::StorageAllocationFailed,

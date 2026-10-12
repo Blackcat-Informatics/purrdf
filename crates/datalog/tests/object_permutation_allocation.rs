@@ -79,12 +79,13 @@ fn object_probe_allocates_one_address_per_row_once() {
     let object = store.term_id("o").unwrap();
     for first in [true, false] {
         let window = CurrentThreadWindow::open();
-        let mut cursor = store.select("p", "", Bound::Object(object));
         let mut observed = 0;
-        while cursor.next().is_some() {
-            observed += 1;
+        {
+            let mut cursor = store.select("p", "", Bound::Object(object));
+            while cursor.next().is_some() {
+                observed += 1;
+            }
         }
-        drop(cursor);
         let allocation = window.close();
         assert_eq!(observed, count);
         let expected = if first { count * size_of::<usize>() } else { 0 };

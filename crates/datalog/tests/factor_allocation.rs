@@ -34,12 +34,14 @@ fn independent_existential_factor_work_and_allocation_grow_additively() {
         let mut input = RelationStore::new();
         for i in 0..n {
             for predicate in ["a", "b"] {
-                input.insert(
-                    &format!("<https://example.org/s{i:05}>"),
-                    &format!("<https://example.org/{predicate}>"),
-                    "<https://example.org/value>",
-                    RelationStore::DEFAULT_GRAPH,
-                );
+                input
+                    .insert(
+                        &format!("<https://example.org/s{i:05}>"),
+                        &format!("<https://example.org/{predicate}>"),
+                        "<https://example.org/value>",
+                        RelationStore::DEFAULT_GRAPH,
+                    )
+                    .unwrap();
             }
         }
         let window = WholeProcessWindow::open();

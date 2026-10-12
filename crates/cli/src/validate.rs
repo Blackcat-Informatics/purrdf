@@ -532,7 +532,7 @@ fn validate(
     if !options.governors.is_engaged() {
         return engine::validate_dataset_with_shapes_graph(data, shapes, shapes_graph)
             .map(Some)
-            .map_err(|error| CliError::Runtime(error.into()));
+            .map_err(CliError::from);
     }
 
     let governed = engine::validate_dataset_with_governors(
@@ -540,8 +540,7 @@ fn validate(
         shapes,
         shapes_graph,
         &options.governors.to_governors()?,
-    )
-    .map_err(|error| CliError::Runtime(error.into()))?;
+    )?;
     Ok(governed_report(governed))
 }
 
@@ -717,10 +716,11 @@ fn validate_change(
     options: &ValidateOptions<'_>,
     shapes_graph: Option<&str>,
 ) -> Result<Option<ValidationReport>, CliError> {
-    let validator = source
-        .prepared()
-        .bind_delta_with_shapes_graph(Arc::clone(snapshot), shapes_graph, ViewLimits::default())
-        .map_err(|error| CliError::Runtime(error.into()))?;
+    let validator = source.prepared().bind_delta_with_shapes_graph(
+        Arc::clone(snapshot),
+        shapes_graph,
+        ViewLimits::default(),
+    )?;
 
     if !options.governors.is_engaged() {
         let validation =
@@ -858,7 +858,7 @@ fn emit(
         return sink::write_out(options.output, sarif.as_bytes());
     };
 
-    let graph = report.to_dataset();
+    let graph = report.to_dataset()?;
     let ledger = sink::write_rdf(
         &graph,
         options.output,

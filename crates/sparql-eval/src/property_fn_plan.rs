@@ -136,11 +136,11 @@ mod diagnostic_code_tests {
     #[test]
     fn preparation_seam_roundtrip_preserves_exact_capacity_and_dataset_causes() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
-        let capacity = CapacityError {
-            space: CapacitySpace::GlobalTerms,
-            attempted: u128::from(u64::MAX) + 1,
-            limit: u128::from(u64::MAX),
-        };
+        let capacity = CapacityError::new(
+            CapacitySpace::GlobalTerms,
+            u128::from(u64::MAX) + 1,
+            u128::from(u64::MAX),
+        );
         let workspace = WorkspaceCapability::resident();
         let mut frame = LexicalFrame::new(&workspace);
         let mut memory = Memory::new(&mut frame);

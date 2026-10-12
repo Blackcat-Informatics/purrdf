@@ -68,7 +68,7 @@ purrdf_lex::variant_from!(SliceError {
 });
 
 impl SliceError {
-    pub(crate) fn rdf(error: purrdf_rdf::RdfDiagnostic, context: &str) -> Self {
+    pub(crate) fn rdf(error: &purrdf_rdf::RdfDiagnostic, context: &str) -> Self {
         error
             .storage_error()
             .map_or_else(|| Self::Parse(format!("{context}: {error}")), Self::Storage)

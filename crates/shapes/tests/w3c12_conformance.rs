@@ -271,7 +271,8 @@ fn eval_in_scope(
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
     match bindings.split_first() {
-        None => eval_node_expr_in_scope(data, focus, expr, guard, scope),
+        None => eval_node_expr_in_scope(data, focus, expr, guard, scope)
+            .map_err(|error| error.to_string()),
         Some(((name, value), rest)) => {
             let frame = Binding::new(name, value, scope);
             eval_in_scope(data, focus, expr, guard, rest, Scope::bound(&frame))
@@ -298,7 +299,8 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
         .pop()
         .ok_or("the parser returned no expression for the one root it was given")?;
 
-    let projected = engine::project_dataset(tc.dataset.as_ref())?;
+    let projected =
+        engine::project_dataset(tc.dataset.as_ref()).map_err(|error| error.to_string())?;
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
     let focus = match &tc.focus {
         Some(focus) => focus.clone(),
@@ -367,7 +369,8 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
     } else {
         parse_turtle_file(&tc.data_path).map_err(|e| format!("data graph parse error: {e}"))?
     };
-    let projected = engine::project_dataset(data_dataset.as_ref())?;
+    let projected =
+        engine::project_dataset(data_dataset.as_ref()).map_err(|error| error.to_string())?;
     let holder = ShaclData::new(Arc::clone(&projected), Arc::clone(&projected), None);
     let inferred = apply_rules(&holder, &shapes).map_err(|e| format!("apply_rules failed: {e}"))?;
     Ok((inferred, projected))

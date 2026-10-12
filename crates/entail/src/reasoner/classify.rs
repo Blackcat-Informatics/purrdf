@@ -456,6 +456,7 @@ mod tests {
                 &mut self.builder,
                 &TermValue::typed_literal(lexical, XSD_NONNEGATIVEINTEGER),
             )
+            .unwrap()
         }
 
         fn push(&mut self, s: TermId, p: TermId, o: TermId) {

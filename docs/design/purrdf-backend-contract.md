@@ -54,6 +54,14 @@ sibling `purrdf` adapters (the canonical Turtle serializer in particular) can
 address terms by position, is only meaningful against the single dataset whose
 table holds that index.
 
+Logical exhaustion returns `StorageError::Capacity(CapacityError)` before the
+producer publishes a new identity. `CapacityError::new(space, attempted, limit)`
+retains the named `space` and full `u128` counts; `attempted()` and `limit()`
+return those counts, including requests beyond `u64::MAX`. The counts are stored
+inline without heap allocation or a wide-alignment requirement on enclosing
+operational errors. Numeric Debug, Display and Hash semantics are preserved.
+Physical admission and allocation refusals remain separate storage errors.
+
 #### The `Option<TermId>` niche (load-bearing P3a invariant)
 
 `TermId` wraps a `NonZeroU32` holding `dense_index + 1`, so the all-zero bit

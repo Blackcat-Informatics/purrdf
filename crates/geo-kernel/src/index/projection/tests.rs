@@ -42,9 +42,9 @@ impl Receipt {
 
 fn dataset(reverse: bool, datatype: &str) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let property = builder.intern_iri(ogc::geo::AS_WKT);
-    let default_geometry = builder.intern_iri(ogc::geo::HAS_DEFAULT_GEOMETRY);
-    let equals = builder.intern_iri(ogc::geo::SF_EQUALS);
+    let property = builder.intern_iri(ogc::geo::AS_WKT).unwrap();
+    let default_geometry = builder.intern_iri(ogc::geo::HAS_DEFAULT_GEOMETRY).unwrap();
+    let equals = builder.intern_iri(ogc::geo::SF_EQUALS).unwrap();
     let mut rows = [
         ("http://example.org/a", "POINT ZM(1.23456789 2 3 4)"),
         ("http://example.org/b", "POINT ZM(1.234567891 2 3 4)"),
@@ -54,22 +54,28 @@ fn dataset(reverse: bool, datatype: &str) -> Arc<RdfDataset> {
         rows.reverse();
     }
     for (subject, text) in rows {
-        let subject = builder.intern_iri(subject);
-        let object = builder.intern_literal(RdfLiteral::typed(text, datatype));
-        builder.push_quad(subject, property, object, None);
+        let subject = builder.intern_iri(subject).unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::typed(text, datatype))
+            .unwrap();
+        builder.push_quad(subject, property, object, None).unwrap();
     }
-    let feature = builder.intern_iri("http://example.org/feature");
-    let geometry = builder.intern_iri("http://example.org/a");
-    builder.push_quad(feature, default_geometry, geometry, None);
-    let nested = builder.intern_value(&TermValue::Triple {
-        s: TermBox::new(TermValue::iri("http://example.org/s")),
-        p: TermBox::new(TermValue::iri("http://example.org/p")),
-        o: TermBox::new(TermValue::typed_literal(
-            "quoted",
-            purrdf_xsd::datatype::XSD_STRING,
-        )),
-    });
-    builder.push_quad(feature, equals, nested, None);
+    let feature = builder.intern_iri("http://example.org/feature").unwrap();
+    let geometry = builder.intern_iri("http://example.org/a").unwrap();
+    builder
+        .push_quad(feature, default_geometry, geometry, None)
+        .unwrap();
+    let nested = builder
+        .intern_value(&TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::typed_literal(
+                "quoted",
+                purrdf_xsd::datatype::XSD_STRING,
+            )),
+        })
+        .unwrap();
+    builder.push_quad(feature, equals, nested, None).unwrap();
     builder.freeze().unwrap()
 }
 

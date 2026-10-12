@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use std::fmt;
+use std::hash::Hash;
 
 pub use purrdf_lex::diagnostic::{
     DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
@@ -253,7 +254,7 @@ impl fmt::Display for RdfLocation {
 ///     message: "failure".to_owned(), detail: None, location: None,
 /// };
 /// ```
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RdfDiagnostic {
     /// The diagnostic severity level.
@@ -266,8 +267,48 @@ pub struct RdfDiagnostic {
     pub detail: Option<String>,
     /// Where the diagnostic applies, when known.
     pub location: Option<Box<RdfLocation>>,
-    presentation: Option<Box<DiagnosticPresentation>>,
-    storage: Option<Box<purrdf_lex::allocation::StorageError>>,
+    attachments: Option<Box<DiagnosticAttachments>>,
+}
+
+/// Cold reporting payloads share one owner so ordinary diagnostics retain the
+/// original single optional pointer. Native ingress carries StorageError inline
+/// until this reporting boundary; no attachment is allocated on successful work.
+#[derive(PartialEq, Eq)]
+struct DiagnosticAttachments {
+    presentation: Option<DiagnosticPresentation>,
+    storage: Option<purrdf_lex::allocation::StorageError>,
+}
+
+// These fields were exposed by the original derives. Keep their names, order
+// and value semantics independent of the private attachment allocation layout.
+impl fmt::Debug for RdfDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let attachments = self.attachments.as_deref();
+        f.debug_struct("RdfDiagnostic")
+            .field("severity", &self.severity)
+            .field("code", &self.code)
+            .field("message", &self.message)
+            .field("detail", &self.detail)
+            .field("location", &self.location)
+            .field(
+                "presentation",
+                &attachments.and_then(|payload| payload.presentation.as_ref()),
+            )
+            .field("storage", &attachments.and_then(|payload| payload.storage))
+            .finish()
+    }
+}
+
+impl Hash for RdfDiagnostic {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.severity.hash(state);
+        self.code.hash(state);
+        self.message.hash(state);
+        self.detail.hash(state);
+        self.location.hash(state);
+        self.presentation().hash(state);
+        self.storage_error().hash(state);
+    }
 }
 
 purrdf_lex::resident_clone!(RdfDiagnostic);
@@ -299,24 +340,26 @@ impl RdfDiagnostic {
                     memory.boxed(location)
                 })
                 .transpose()?,
-            presentation: self
-                .presentation
+            attachments: self
+                .attachments
                 .as_deref()
-                .map(|presentation| {
-                    let presentation = presentation.clone_with_memory(memory)?;
-                    memory.boxed(presentation)
+                .map(|attachments| {
+                    let presentation = attachments
+                        .presentation
+                        .as_ref()
+                        .map(|presentation| presentation.clone_with_memory(memory))
+                        .transpose()?;
+                    memory.boxed(DiagnosticAttachments {
+                        presentation,
+                        storage: attachments.storage,
+                    })
                 })
-                .transpose()?,
-            storage: self
-                .storage
-                .as_deref()
-                .map(|error| memory.boxed(*error))
                 .transpose()?,
         })
     }
 
     /// Exact concrete heap capacity, excluding the outer diagnostic value.
-    /// Location and presentation boxes, spare arrays and all owned text count.
+    /// Location and attachment boxes, spare arrays and all owned text count.
     #[must_use]
     pub fn retained_bytes(&self) -> Option<usize> {
         let mut bytes = self
@@ -333,13 +376,11 @@ impl RdfDiagnostic {
                 bytes = bytes.checked_add(text.capacity())?;
             }
         }
-        if let Some(presentation) = &self.presentation {
-            bytes = bytes
-                .checked_add(size_of::<DiagnosticPresentation>())?
-                .checked_add(presentation.retained_bytes()?)?;
-        }
-        if self.storage.is_some() {
-            bytes = bytes.checked_add(size_of::<purrdf_lex::allocation::StorageError>())?;
+        if let Some(attachments) = &self.attachments {
+            bytes = bytes.checked_add(size_of::<DiagnosticAttachments>())?;
+            if let Some(presentation) = &attachments.presentation {
+                bytes = bytes.checked_add(presentation.retained_bytes()?)?;
+            }
         }
         Some(bytes)
     }
@@ -371,8 +412,7 @@ impl RdfDiagnostic {
             message: message.into(),
             detail: None,
             location: None,
-            presentation: None,
-            storage: None,
+            attachments: None,
         }
     }
 
@@ -391,8 +431,8 @@ impl RdfDiagnostic {
     /// transports a native storage failure through a codec's reporting API.
     #[must_use]
     pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
-        match &self.storage {
-            Some(error) => Some(**error),
+        match &self.attachments {
+            Some(attachments) => attachments.storage,
             None => None,
         }
     }
@@ -404,13 +444,21 @@ impl RdfDiagnostic {
         self.detail = presentation
             .detail()
             .map(|detail| detail.english().to_owned());
-        self.presentation = Some(Box::new(presentation));
+        match &mut self.attachments {
+            Some(attachments) => attachments.presentation = Some(presentation),
+            None => {
+                self.attachments = Some(Box::new(DiagnosticAttachments {
+                    presentation: Some(presentation),
+                    storage: None,
+                }));
+            }
+        }
         self
     }
 
     /// The stable presentation identity and typed arguments, when supplied.
     pub fn presentation(&self) -> Option<&DiagnosticPresentation> {
-        self.presentation.as_deref()
+        self.attachments.as_ref()?.presentation.as_ref()
     }
 
     /// A machine record preserving codes, presentation and exact logical anchors.
@@ -427,9 +475,9 @@ impl RdfDiagnostic {
             capacity.insert("space".to_owned(), Value::from(error.space.as_str()));
             capacity.insert(
                 "attempted".to_owned(),
-                Value::from(error.attempted.to_string()),
+                Value::from(error.attempted().to_string()),
             );
-            capacity.insert("limit".to_owned(), Value::from(error.limit.to_string()));
+            capacity.insert("limit".to_owned(), Value::from(error.limit().to_string()));
             object.insert("capacity".to_owned(), Value::Object(capacity));
         }
         if let Some(detail) = &self.detail {
@@ -506,7 +554,10 @@ impl From<purrdf_lex::allocation::StorageError> for RdfDiagnostic {
             _ => "rdf-storage-refused",
         };
         let mut diagnostic = Self::error(code, error.to_string());
-        diagnostic.storage = Some(Box::new(error));
+        diagnostic.attachments = Some(Box::new(DiagnosticAttachments {
+            presentation: None,
+            storage: Some(error),
+        }));
         diagnostic
     }
 }
@@ -520,8 +571,9 @@ impl From<purrdf_iri::IriReadError> for RdfDiagnostic {
 }
 impl std::error::Error for RdfDiagnostic {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.storage
-            .as_deref()
+        self.attachments
+            .as_ref()
+            .and_then(|attachments| attachments.storage.as_ref())
             .map(|error| error as &dyn std::error::Error)
     }
 }
@@ -649,6 +701,88 @@ mod tests {
         );
         assert_eq!(memory.admitted_bytes(), 0);
         assert_eq!(source.storage_error(), Some(cause));
+    }
+
+    #[test]
+    fn shared_attachments_preserve_original_reporting_and_admitted_ownership() {
+        use std::hash::Hasher;
+
+        #[derive(Debug, Hash)]
+        struct OriginalDiagnostic<'a> {
+            severity: RdfSeverity,
+            code: &'a String,
+            message: &'a String,
+            detail: &'a Option<String>,
+            location: &'a Option<Box<RdfLocation>>,
+            presentation: Option<&'a DiagnosticPresentation>,
+            storage: Option<StorageError>,
+        }
+
+        let cause = StorageError::AdmissionFailed;
+        let source = RdfDiagnostic::from(cause).with_presentation(
+            DiagnosticPresentation::new("original-refusal", "original refusal", vec![]).unwrap(),
+        );
+        let original = OriginalDiagnostic {
+            severity: source.severity,
+            code: &source.code,
+            message: &source.message,
+            detail: &source.detail,
+            location: &source.location,
+            presentation: source.presentation(),
+            storage: Some(cause),
+        };
+        for alternate in [false, true] {
+            let (expected, actual) = if alternate {
+                (format!("{original:#?}"), format!("{source:#?}"))
+            } else {
+                (format!("{original:?}"), format!("{source:?}"))
+            };
+            assert_eq!(
+                actual,
+                expected.replacen("OriginalDiagnostic", "RdfDiagnostic", 1)
+            );
+        }
+        let mut expected_hash = purrdf_hash::fixed::FixedHasher::default();
+        let mut actual_hash = purrdf_hash::fixed::FixedHasher::default();
+        original.hash(&mut expected_hash);
+        source.hash(&mut actual_hash);
+        assert_eq!(actual_hash.finish(), expected_hash.finish());
+        assert_eq!(source.storage_error(), Some(cause));
+        assert_eq!(
+            std::error::Error::source(&source)
+                .unwrap()
+                .downcast_ref::<StorageError>(),
+            Some(&cause)
+        );
+
+        let mut grant = Grant {
+            live: 0,
+            limit: usize::MAX,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let copy = source.clone_with_memory(&mut memory).unwrap();
+        let bytes = copy.retained_bytes().unwrap();
+        assert_eq!(memory.admitted_bytes(), bytes);
+        assert_eq!(copy, source);
+        assert_eq!(copy.to_json(), source.to_json());
+        assert_eq!(copy.to_string(), source.to_string());
+        drop(copy);
+        memory.release_bytes(bytes).unwrap();
+        memory.admission_mut().limit = bytes - 1;
+        assert_eq!(
+            memory.scope(|memory| source.clone_with_memory(memory)),
+            Err(StorageError::AdmissionFailed)
+        );
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(source.storage_error(), Some(cause));
+
+        // The no-attachment constructor and its empty-text copy need no box.
+        let ordinary = RdfDiagnostic::error("", "");
+        memory.admission_mut().limit = 0;
+        let copy = ordinary.clone_with_memory(&mut memory).unwrap();
+        assert!(copy.attachments.is_none());
+        assert_eq!(copy.retained_bytes(), Some(0));
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

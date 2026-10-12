@@ -1284,11 +1284,11 @@ mod tests {
         assert_eq!(arena.by_rule(derived.clone(), 0, &[axiom]), Ok(rule));
         assert_eq!(
             arena.by_rule(derived.clone(), 1, &[axiom]),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::DatalogProofs,
-                attempted: 3,
-                limit: 2
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogProofs,
+                3,
+                2
+            )))
         );
         assert_eq!(arena.len(), 2);
         assert_eq!(arena.digest(rule), digest);

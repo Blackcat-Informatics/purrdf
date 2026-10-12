@@ -30,7 +30,8 @@ const FOCUS: &str = "http://example.org/focus-count";
 
 fn fixture(wide: bool) -> (SegmentedImage, Arc<RdfDataset>, Arc<TextIndex>) {
     let mut persistent =
-        SegmentedBuilder::new(SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap());
+        SegmentedBuilder::new(SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap())
+            .unwrap();
     let mut resident = RdfDatasetBuilder::new();
     for (name, lexical) in [
         ("a", "quick quick brown fox"),

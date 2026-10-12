@@ -51,17 +51,29 @@ fn equal_queries_retain_distinct_actual_source_constraints() {
     sources.sort();
     assert_eq!(sources, ["<http://example.org/First>", "_:second"]);
     assert_eq!(
-        property_count(&complete.to_dataset(), sh::SOURCE_CONSTRAINT),
+        property_count(
+            &complete.to_dataset().expect("report serializes"),
+            sh::SOURCE_CONSTRAINT
+        ),
         2
     );
     assert_eq!(
-        property_count(&legacy.to_dataset(), sh::SOURCE_CONSTRAINT),
+        property_count(
+            &legacy.to_dataset().expect("report serializes"),
+            sh::SOURCE_CONSTRAINT
+        ),
         0
     );
-    assert_eq!(legacy.to_ntriples(), complete.legacy().to_ntriples());
     assert_eq!(
-        legacy.to_ntriples(),
-        validate_dataset(&data, &shapes).unwrap().to_ntriples()
+        legacy.to_ntriples().expect("report serializes"),
+        complete.legacy().to_ntriples().expect("report serializes")
+    );
+    assert_eq!(
+        legacy.to_ntriples().expect("report serializes"),
+        validate_dataset(&data, &shapes)
+            .unwrap()
+            .to_ntriples()
+            .expect("report serializes")
     );
 }
 
@@ -93,7 +105,7 @@ fn independent_equal_blank_labels_have_distinct_source_acquisitions() {
     assert_eq!(focus.source(), context.data());
     assert_eq!(shape.source(), context.shapes());
     assert!(!context.sources_share_identity());
-    let graph = report.to_graph();
+    let graph = report.to_graph().expect("report serializes");
     let identities: Vec<_> = graph
         .dataset()
         .owned_quads()
@@ -266,9 +278,15 @@ fn result_multiplicity_survives_complete_collection_and_emission() {
     );
     let report = validate_complete_dataset(turtle::data(PREFIXES, ""), shapes).unwrap();
     assert_eq!(report.results().len(), 2);
-    assert_eq!(property_count(&report.to_dataset(), sh::RESULT), 2);
     assert_eq!(
-        property_count(&report.to_dataset(), sh::SOURCE_CONSTRAINT),
+        property_count(&report.to_dataset().expect("report serializes"), sh::RESULT),
+        2
+    );
+    assert_eq!(
+        property_count(
+            &report.to_dataset().expect("report serializes"),
+            sh::SOURCE_CONSTRAINT
+        ),
         2
     );
 }
@@ -312,7 +330,7 @@ fn recursive_details_keep_their_own_source_constraints() {
             "<http://example.org/C>"
         );
     }
-    let graph = report.to_dataset();
+    let graph = report.to_dataset().expect("report serializes");
     assert_eq!(property_count(&graph, sh::DETAIL), 2);
     assert_eq!(property_count(&graph, sh::SOURCE_CONSTRAINT), 2);
 }
@@ -333,8 +351,11 @@ fn prepared_binding_and_egress_retain_sources_after_input_drop() {
     drop(shapes);
     let first = binding.validate().unwrap();
     let second = binding.validate_with_focus_filter(|_, _| true).unwrap();
-    assert_eq!(first.legacy().to_ntriples(), second.legacy().to_ntriples());
-    let graph = first.to_graph();
+    assert_eq!(
+        first.legacy().to_ntriples().expect("report serializes"),
+        second.legacy().to_ntriples().expect("report serializes")
+    );
+    let graph = first.to_graph().expect("report serializes");
     drop(binding);
     drop(first);
     assert_eq!(graph.source_context().data().dataset().quad_count(), 1);
@@ -420,8 +441,15 @@ fn bounded_complete_routes_use_the_same_source_evidence_and_refuse_foreign_ids()
     let ids = binding.validate_focus_node_ids(&[id, id]).unwrap();
     assert_eq!(terms.results().len(), 1);
     assert_eq!(
-        terms.to_dataset().owned_quads().collect::<Vec<_>>(),
-        ids.to_dataset().owned_quads().collect::<Vec<_>>()
+        terms
+            .to_dataset()
+            .expect("report serializes")
+            .owned_quads()
+            .collect::<Vec<_>>(),
+        ids.to_dataset()
+            .expect("report serializes")
+            .owned_quads()
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         terms.results().next().unwrap().source_constraint(),
@@ -460,7 +488,7 @@ fn query_minted_blanks_cannot_impersonate_retained_shape_blanks() {
     };
     assert_ne!(label, "bnode1");
     assert_eq!(report.source_context().source_blank(label), None);
-    let graph = report.to_graph();
+    let graph = report.to_graph().expect("report serializes");
     let sources: Vec<_> = graph
         .dataset()
         .owned_quads()
@@ -539,7 +567,7 @@ fn nested_rdf12_blanks_keep_independent_original_scopes() {
         scopes.push(source.scope().ordinal());
     }
     assert_eq!(scopes, [4, 5]);
-    let graph = report.to_graph();
+    let graph = report.to_graph().expect("report serializes");
     let values: Vec<_> = graph
         .dataset()
         .owned_quads()
@@ -582,7 +610,7 @@ fn sequence_inverse_path_nodes_are_minted_without_source_correspondence() {
             .to_string(),
         "<http://example.org/other>"
     );
-    let graph = report.to_graph();
+    let graph = report.to_graph().expect("report serializes");
     assert_eq!(property_count(graph.dataset(), sh::INVERSE_PATH), 1);
     assert_eq!(
         property_count(graph.dataset(), purrdf_iri::vocab::rdf::FIRST),
@@ -628,8 +656,16 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
     for _ in 0..2 {
         let report = binding.validate().unwrap();
         assert_eq!(
-            report.to_dataset().owned_quads().collect::<Vec<_>>(),
-            original.to_dataset().owned_quads().collect::<Vec<_>>()
+            report
+                .to_dataset()
+                .expect("report serializes")
+                .owned_quads()
+                .collect::<Vec<_>>(),
+            original
+                .to_dataset()
+                .expect("report serializes")
+                .owned_quads()
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             report.results().next().unwrap().source_constraint(),
@@ -677,7 +713,7 @@ fn identical_fresh_blank_spellings_from_four_query_acquisitions_remain_distinct(
             };
             assert!(report.source_context().source_blank(label).is_none());
         }
-        let graph = report.to_graph();
+        let graph = report.to_graph().expect("report serializes");
         let values: std::collections::BTreeSet<_> = graph
             .dataset()
             .owned_quads()
@@ -735,6 +771,7 @@ fn fresh_query_identity_is_stable_across_focus_execution() {
         .validate()
         .unwrap()
         .to_dataset()
+        .expect("report serializes")
         .owned_quads()
         .collect::<Vec<_>>();
     for _ in 0..5 {
@@ -747,7 +784,14 @@ fn fresh_query_identity_is_stable_across_focus_execution() {
             .map(|r| r.value.as_ref().unwrap())
             .collect();
         assert_eq!(values.len(), 129);
-        assert_eq!(report.to_dataset().owned_quads().collect::<Vec<_>>(), first);
+        assert_eq!(
+            report
+                .to_dataset()
+                .expect("report serializes")
+                .owned_quads()
+                .collect::<Vec<_>>(),
+            first
+        );
     }
 }
 

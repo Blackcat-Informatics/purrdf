@@ -143,8 +143,8 @@ fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String>
 fn report(input: &Input, shapes: &Shapes) -> Result<String, String> {
     let data = input.data.as_ref().map_err(Clone::clone)?;
     validate_dataset_with_shapes_graph(data, shapes, None)
-        .map(|report| report.to_ntriples())
-        .map_err(Into::into)
+        .and_then(|report| report.to_ntriples())
+        .map_err(|error| error.to_string())
 }
 
 /// Every case of the three corpora.

@@ -1597,7 +1597,7 @@ fn unique_members_and_member_shape_report_their_details() {
         "\"b\"",
         "the detail is the member's own result against the member shape"
     );
-    let report_text = member.to_ntriples();
+    let report_text = member.to_ntriples().expect("report serializes");
     assert!(
         report_text.contains("<http://www.w3.org/ns/shacl#detail>"),
         "{report_text}"
@@ -1946,7 +1946,10 @@ fn a_shape_with_every_non_validating_property_loads_and_validates_unchanged() {
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal .",
         "",
     );
-    assert_eq!(annotated.to_ntriples(), bare.to_ntriples());
+    assert_eq!(
+        annotated.to_ntriples().expect("report serializes"),
+        bare.to_ntriples().expect("report serializes")
+    );
     assert!(
         !bare.conforms,
         "the shape checks something, so equality is not vacuous"

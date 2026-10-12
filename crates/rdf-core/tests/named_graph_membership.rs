@@ -183,7 +183,7 @@ fn pack_membership_agrees() {
 fn segmented(graphs: usize) -> SegmentedImage {
     let limits = SegmentedBuildLimits::new(65_536, 4_000_000, 65_536, 512, 16)
         .expect("valid segmented limits");
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut push = |s: &str, o: &str, g: Option<&str>| {
         let mut terms = vec![iri(s), iri("p"), iri(o)];
         terms.extend(g.map(iri));

@@ -1022,11 +1022,11 @@ mod tests {
         assert_eq!(wide.offset + wide.len, u64::from(u32::MAX) + 7);
         assert_eq!(
             StrRange::<u32>::checked(offset, 9),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::LocalTermBytes,
-                attempted: u128::from(u32::MAX) + 7,
-                limit: u128::from(u32::MAX)
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::LocalTermBytes,
+                u128::from(u32::MAX) + 7,
+                u128::from(u32::MAX)
+            )))
         );
         assert_eq!(
             StrRange::<u64>::checked(u64::MAX, 0).unwrap().offset,
@@ -1034,11 +1034,11 @@ mod tests {
         );
         assert_eq!(
             StrRange::<u64>::checked(u64::MAX, 1),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::GlobalTermBytes,
-                attempted: u128::from(u64::MAX) + 1,
-                limit: u128::from(u64::MAX)
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTermBytes,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            )))
         );
     }
 
@@ -1093,11 +1093,11 @@ mod tests {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace};
         assert_eq!(
             TermId::from_index(u32::MAX),
-            Err(CapacityError {
-                space: CapacitySpace::LocalTerms,
-                attempted: u128::from(u32::MAX) + 1,
-                limit: u128::from(u32::MAX)
-            })
+            Err(CapacityError::new(
+                CapacitySpace::LocalTerms,
+                u128::from(u32::MAX) + 1,
+                u128::from(u32::MAX)
+            ))
         );
     }
 

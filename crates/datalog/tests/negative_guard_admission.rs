@@ -70,12 +70,14 @@ fn nested_refusal_stops_owned_local_expansion_and_preserves_exact_boundaries() {
     )]);
     let program = compile(vec![rule]).expect("stratified fixture");
     let mut input = RelationStore::new();
-    input.insert(
-        "<https://example.org/s>",
-        "<https://example.org/source>",
-        "<https://example.org/o>",
-        RelationStore::DEFAULT_GRAPH,
-    );
+    input
+        .insert(
+            "<https://example.org/s>",
+            "<https://example.org/source>",
+            "<https://example.org/o>",
+            RelationStore::DEFAULT_GRAPH,
+        )
+        .unwrap();
     let surface = format!("<https://example.org/{}>", "x".repeat(SURFACE_BYTES));
     // One positive row, a negative frame, the first callback, and all its rows.
     // The nested callback's first reservation is then the refusal sentinel.

@@ -58,28 +58,46 @@ impl std::error::Error for StorageError {}
 /// Exhaustion of one named logical space, distinct from physical allocation.
 /// Counts use u128 so even an attempted count beyond a u64 space is reported
 /// exactly, without wrapping or replacing the first failure with a layout error.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CapacityError {
     /// The table or address space whose limit was reached.
     pub space: CapacitySpace,
-    /// The requested total count, including the attempted addition.
-    pub attempted: u128,
-    /// The largest representable count in that space.
-    pub limit: u128,
+    // Inline bytes preserve the full counts without imposing u128 alignment on
+    // every enclosing operational error. No allocation is needed on refusal.
+    attempted: [u8; 16],
+    limit: [u8; 16],
 }
 
 impl CapacityError {
+    /// Retain the exact requested count and limit of one logical address space.
+    #[must_use]
+    pub const fn new(space: CapacitySpace, attempted: u128, limit: u128) -> Self {
+        Self {
+            space,
+            attempted: attempted.to_le_bytes(),
+            limit: limit.to_le_bytes(),
+        }
+    }
+
+    /// The requested total count, including the attempted addition.
+    #[must_use]
+    pub const fn attempted(self) -> u128 {
+        u128::from_le_bytes(self.attempted)
+    }
+
+    /// The largest representable count in that space.
+    #[must_use]
+    pub const fn limit(self) -> u128 {
+        u128::from_le_bytes(self.limit)
+    }
+
     /// Check the original producer's next count before it mutates storage.
     ///
     /// # Errors
     /// Returns the named space, exact attempted count and actual address limit.
     pub fn check(space: CapacitySpace, attempted: u128, limit: u128) -> Result<(), Self> {
         if attempted > limit {
-            Err(Self {
-                space,
-                attempted,
-                limit,
-            })
+            Err(Self::new(space, attempted, limit))
         } else {
             Ok(())
         }
@@ -93,6 +111,24 @@ impl CapacityError {
     pub fn slot(space: CapacitySpace, index: u64, limit: u64) -> Result<u64, Self> {
         Self::check(space, u128::from(index) + 1, u128::from(limit))?;
         Ok(index)
+    }
+}
+
+impl fmt::Debug for CapacityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CapacityError")
+            .field("space", &self.space)
+            .field("attempted", &self.attempted())
+            .field("limit", &self.limit())
+            .finish()
+    }
+}
+
+impl core::hash::Hash for CapacityError {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.space.hash(state);
+        self.attempted().hash(state);
+        self.limit().hash(state);
     }
 }
 
@@ -198,7 +234,9 @@ impl fmt::Display for CapacityError {
         write!(
             f,
             "{} capacity exhausted: attempted {}, limit {}",
-            self.space, self.attempted, self.limit
+            self.space,
+            self.attempted(),
+            self.limit()
         )
     }
 }
@@ -882,6 +920,55 @@ impl<S: Admission + ?Sized> crate::text_out::TextOut for FormatSink<'_, '_, S> {
 #[cfg(test)]
 mod resumed_memory_regressions {
     use super::{Admission, Memory, StorageError};
+
+    #[test]
+    fn capacity_counts_preserve_full_width_numeric_identity_without_wide_alignment() {
+        use super::{CapacityError, CapacitySpace};
+        use core::hash::{Hash, Hasher};
+        use purrdf_hash::fixed::FixedHasher;
+
+        const MAXIMUM: CapacityError =
+            CapacityError::new(CapacitySpace::GlobalTerms, u128::MAX, u128::MAX);
+        const COUNT: u128 = MAXIMUM.attempted();
+        const LIMIT: u128 = MAXIMUM.limit();
+        assert_eq!((COUNT, LIMIT), (u128::MAX, u128::MAX));
+        assert!(align_of::<CapacityError>() <= align_of::<u64>());
+        for attempted in [0, u128::from(u64::MAX) + 1, u128::MAX] {
+            for limit in [0, u128::from(u64::MAX), u128::MAX] {
+                let error = CapacityError::new(CapacitySpace::GlobalTerms, attempted, limit);
+                assert_eq!(error.attempted(), attempted);
+                assert_eq!(error.limit(), limit);
+                assert_eq!(
+                    format!("{error:?}"),
+                    format!(
+                        "CapacityError {{ space: GlobalTerms, attempted: {attempted}, limit: {limit} }}"
+                    )
+                );
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "{} capacity exhausted: attempted {attempted}, limit {limit}",
+                        error.space
+                    )
+                );
+                let mut observed = FixedHasher::default();
+                error.hash(&mut observed);
+                let mut original = FixedHasher::default();
+                error.space.hash(&mut original);
+                attempted.hash(&mut original);
+                limit.hash(&mut original);
+                assert_eq!(observed.finish(), original.finish());
+                assert_eq!(
+                    CapacityError::check(error.space, attempted, limit),
+                    if attempted > limit {
+                        Err(error)
+                    } else {
+                        Ok(())
+                    }
+                );
+            }
+        }
+    }
 
     #[derive(Default)]
     struct OriginalGrant {

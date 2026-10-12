@@ -130,7 +130,7 @@ fn validate_with(
     relations: Arc<PropertyFunctionRegistry>,
 ) -> Result<ValidationReport, String> {
     let _relations = enter_property_function_scope(relations);
-    validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    validate_dataset(&data(), &shapes(predicate)).map_err(|error| error.to_string())
 }
 
 /// The focus nodes a report names, in report order.
@@ -251,7 +251,7 @@ fn validate_under_declared_namespace(
         property_fn_namespaces: vec![REL_NS.to_owned()],
         ..ParserOptions::default()
     }));
-    validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    validate_dataset(&data(), &shapes(predicate)).map_err(|error| error.to_string())
 }
 
 /// A host-DECLARED namespace makes an unregistered IRI under it a hard error, not a
@@ -642,7 +642,8 @@ fn validate_constraint_under_declared_namespace(
         property_fn_namespaces: vec![REL_NS.to_owned()],
         ..ParserOptions::default()
     }));
-    validate_dataset(&data(), &sparql_constraint_shapes(predicate)).map_err(Into::into)
+    validate_dataset(&data(), &sparql_constraint_shapes(predicate))
+        .map_err(|error| error.to_string())
 }
 
 /// A declared namespace reaches a `sh:sparql` body, not only a `sh:SPARQLFunction`
@@ -892,7 +893,7 @@ fn validate_ttl_under_declared_namespace(shapes_ttl: &str) -> Result<ValidationR
         ..ParserOptions::default()
     }));
     let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
-    validate_dataset(&data(), &shapes).map_err(Into::into)
+    validate_dataset(&data(), &shapes).map_err(|error| error.to_string())
 }
 
 /// The same shapes graph with the registry installed but NOTHING declared.
@@ -900,7 +901,7 @@ fn validate_ttl_undeclared(shapes_ttl: &str) -> Result<ValidationReport, String>
     let (relations, _) = registry();
     let _relations = enter_property_function_scope(relations);
     let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
-    validate_dataset(&data(), &shapes).map_err(Into::into)
+    validate_dataset(&data(), &shapes).map_err(|error| error.to_string())
 }
 
 /// A `sh:SPARQLTarget` naming `predicate`.
@@ -1028,7 +1029,7 @@ ex:RuleShape
         panic!("a declared-but-unregistered relation IRI must be refused in a rule body");
     };
     assert!(
-        refused.contains(REL_MISSING),
+        refused.to_string().contains(REL_MISSING),
         "the refusal must name the offending IRI: {refused}"
     );
 

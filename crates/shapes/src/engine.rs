@@ -3662,11 +3662,7 @@ where
             .map_err(crate::report::CompleteValidationError::into_shapes);
     }
     check_links(data, shapes)?;
-    Ok(validate_linked_with_focus_filter(
-        data,
-        shapes,
-        include_focus,
-    )?)
+    validate_linked_with_focus_filter(data, shapes, include_focus)
 }
 
 /// Whether `delta` changes the data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4),
@@ -4748,7 +4744,7 @@ pub fn entail_graphs_with_shapes_graph(
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
     let shapes = parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, imports)?;
-    Ok(crate::rules::entail_dataset(data.as_ref(), &shapes)?)
+    crate::rules::entail_dataset(data.as_ref(), &shapes)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -703,7 +703,7 @@ mod tests {
 
         fn literal(&mut self, lexical: &str, datatype: &str) -> TermId {
             let value = TermValue::typed_literal(lexical, datatype);
-            crate::interner::intern_into(&mut self.builder, &value)
+            crate::interner::intern_into(&mut self.builder, &value).unwrap()
         }
 
         fn quad(&mut self, s: TermId, p: TermId, o: TermId) {

@@ -308,7 +308,7 @@ fn differential_blank_label_collision_across_scopes() {
     }
     let a = one_labeled("p1");
     let b_ds = one_labeled("p2");
-    let unioned = RdfDataset::union(&[&a, &b_ds]);
+    let unioned = RdfDataset::union(&[&a, &b_ds]).unwrap();
     assert_flat_differential(&unioned, "blank label collision across scopes");
 }
 
@@ -625,7 +625,7 @@ fn flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs() 
     let via_scope = try_canonicalize_flat_graph_view(&*ds, &g, CanonHash::Sha256)
         .expect("g is admissible")
         .nquads;
-    let projected = ds.project_named_graph(&g);
+    let projected = ds.project_named_graph(&g).unwrap();
     let via_projection = try_canonicalize_flat_view(&projected, CanonHash::Sha256)
         .expect("g's projection is admissible")
         .nquads;

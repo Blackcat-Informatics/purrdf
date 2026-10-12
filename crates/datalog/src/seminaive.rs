@@ -1695,6 +1695,9 @@ impl<I: TermIdentity> PositionValue<I> {
     }
 }
 
+/// Per-position constant bindings resolved once for an atom invocation.
+type ConstantPositions<I> = [Option<PositionValue<I>>; ATOM_ARITY];
+
 /// Resolve the constant positions of `shape` ONCE per operator invocation.
 ///
 /// A constant's surface does not depend on the partial solution, so its dictionary probe
@@ -1703,7 +1706,7 @@ impl<I: TermIdentity> PositionValue<I> {
 fn constant_positions<D: TermDictionary>(
     shape: &AtomShape,
     rel: &RelationStore<D>,
-) -> Result<[Option<PositionValue<D::Id>>; ATOM_ARITY], D::Error> {
+) -> Result<ConstantPositions<D::Id>, D::Error> {
     rel.interner().check_read()?;
     let mut constants = [None; ATOM_ARITY];
     for (position, value) in constants.iter_mut().enumerate() {
@@ -2252,7 +2255,7 @@ impl<D: TermDictionary> LeapfrogRun<'_, D> {
 /// Extend every partial solution through one certified cyclic component, materialising no
 /// binary intermediate relation.
 fn extend_solutions_leapfrog<D: TermDictionary>(
-    run: LeapfrogRun<'_, D>,
+    run: &LeapfrogRun<'_, D>,
     solutions: &[SlotSolution<D::Id>],
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
@@ -2453,7 +2456,7 @@ fn join_positive_leapfrog<D: TermDictionary>(
                     )?
                 }
                 JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    LeapfrogRun {
+                    &LeapfrogRun {
                         plan,
                         cycle,
                         scan: JoinScan::DeltaPosition(delta_position),
@@ -2670,9 +2673,9 @@ impl NegatedAtom {
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(owner) = evidence.as_deref_mut() else {
-            return Ok(self
+            return self
                 .satisfied(solution, rel, governor)
-                .map_err(EvalError::Source)?);
+                .map_err(EvalError::Source);
         };
         let mut witnesses = None;
         self.visit_matches(
@@ -4047,7 +4050,7 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary>(
         // This indexed form is the ONLY parallelism this crate uses — see the module docs for
         // the unordered rayon adaptors it must never reach for. No rule here is guarded, so the
         // evaluator every task receives is the one that refuses every call.
-        let buffers: Vec<Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>>> = entries
+        let buffers: Vec<_> = entries
             .par_iter()
             .map(|&entry| evaluate_rule(entry, snapshot, strategy, pool.task(), &NoGuards))
             .collect();
@@ -4590,11 +4593,11 @@ fn commit_round<D: TermDictionary>(
     round: RoundBuffer<'_, D::Id>,
     state: &mut FixpointState<D>,
 ) -> Result<(), EvalError<D::Error>> {
-    let mut winners: Vec<(Fact, HeadKey<'_, D::Id>, Candidate<D::Id>)> = round
+    let mut winners = round
         .entries
         .into_iter()
         .map(|(key, candidate)| Ok::<_, D::Error>((key.fact(&state.rel)?, key, candidate)))
-        .collect::<Result<_, _>>()
+        .collect::<Result<Vec<_>, _>>()
         .map_err(EvalError::Source)?;
     // Head facts are unique in a round buffer, so the lexical order is total.
     winners.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
@@ -4637,7 +4640,22 @@ mod tests {
     use super::*;
     use crate::clause::{ClauseAtom, HeadDisjunct};
     use crate::synth_corpus::{self, SynthWorkload};
+    use crate::test_support::evidence_scope;
     use crate::test_support::permute;
+
+    #[test]
+    fn capacity_cause_stays_inline_without_inflating_the_operational_error() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let cause = CapacityError::new(CapacitySpace::DatalogTerms, u128::MAX, u128::MAX - 1);
+        let error: EvalError = EvalError::Storage(StorageError::Capacity(cause));
+        let EvalError::Storage(StorageError::Capacity(retained)) = error else {
+            panic!("the original capacity cause must survive unchanged");
+        };
+        assert_eq!(retained, cause);
+        assert_eq!(retained.attempted(), u128::MAX);
+        assert_eq!(retained.limit(), u128::MAX - 1);
+        assert!(size_of::<EvalError>() < 128);
+    }
 
     #[test]
     fn host_candidate_publication_uses_original_ids_and_lexical_witness_order() {
@@ -4751,7 +4769,7 @@ mod tests {
             store.interner().lost.store(true, Ordering::Relaxed);
             let empty = Candidate {
                 sources: Vec::new(),
-                ..expected.clone()
+                ..expected
             };
             assert_eq!(empty.source_facts(&store), Err(SourceLost(99)));
             let mut better = expected.clone();
@@ -4988,139 +5006,6 @@ mod tests {
     }
 
     #[test]
-    fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
-        use crate::guard::CallbackError;
-        use crate::test_support::{HostDictionary, SourceLost};
-        use purrdf_core::evidence::{
-            EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
-        };
-        use purrdf_lex::allocation::Resident;
-        use std::sync::atomic::{AtomicBool, AtomicUsize};
-        const TRIPLE: u64 = 0xa000_0000_1234_5678;
-        struct Producer {
-            fail: bool,
-            calls: AtomicUsize,
-        }
-        impl GuardEvaluator<HostDictionary> for Producer {
-            fn evaluate(
-                &self,
-                call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
-                self.calls.fetch_add(1, Ordering::Relaxed);
-                assert_eq!(call.inputs, ["triple", "value"]);
-                assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
-                if self.fail {
-                    call.model.interner().lost.store(true, Ordering::Relaxed);
-                    return Err(CallbackError::Source(SourceLost(17)));
-                }
-                Ok(vec![vec!["output".into()]])
-            }
-        }
-        let exe = compile(vec![
-            DlClause::datalog(atom("?s", Q, "?out"), vec![atom("?s", P, "?o")]).with_guards(vec![
-                Guard::assign("produce", vec!["?s".into(), "?o".into()], "?out"),
-            ]),
-            DlClause::datalog(atom("?s", R, "?o"), vec![atom("?s", Q, "?o")]),
-        ])
-        .unwrap();
-        for (information, fail) in [
-            (Information::Supported, false),
-            (Information::Opposed, false),
-            (Information::Opposed, true),
-        ] {
-            let mut store = RelationStore::with_dictionary(HostDictionary {
-                surfaces: [
-                    (TRIPLE, "triple".into()),
-                    (u64::MAX, "value".into()),
-                    (7, surface(P)),
-                    (9, surface(Q)),
-                    (11, surface(R)),
-                    (12, "output".into()),
-                    (1, String::new()),
-                ]
-                .into_iter()
-                .collect(),
-                resolves: AtomicUsize::new(0),
-                lookups: AtomicUsize::new(0),
-                lost: AtomicBool::new(false),
-                lose_after_lookup: AtomicBool::new(false),
-                pins: AtomicUsize::new(0),
-                extra_terms: 0,
-            });
-            store.insert_ids([TRIPLE, 7, u64::MAX, 1]).unwrap().unwrap();
-            let mut rows = crate::evidence::DerivationEvidence::with_admission(1, Resident);
-            if information != Information::Supported {
-                rows.seed(RowId::from_index(0).unwrap(), |memory| {
-                    EvidenceRecord::from_parts(
-                        &InformationMap::uniform(information),
-                        SearchCompleteness::Complete,
-                        &Frame::actual(),
-                        &[],
-                        &[],
-                        memory,
-                    )
-                })
-                .unwrap();
-            }
-            let producer = Producer {
-                fail,
-                calls: AtomicUsize::new(0),
-            };
-            let result = evaluate_evidenced(
-                &exe,
-                store,
-                &EvalOptions::default(),
-                &producer,
-                None,
-                rows,
-                evidence_scope(),
-            );
-            if fail {
-                let Err(error) = result else {
-                    panic!("original source failure must refuse the model")
-                };
-                assert_eq!(error, EvalError::Source(SourceLost(17)));
-                assert_eq!(
-                    std::error::Error::source(&error)
-                        .unwrap()
-                        .downcast_ref::<SourceLost>(),
-                    Some(&SourceLost(17))
-                );
-            } else {
-                let result = result.unwrap();
-                assert_eq!(result.evaluation.facts().row_count(), 3);
-                assert_eq!(result.evaluation.derivations().len(), 2);
-                assert_eq!(result.evidence.row_count(), 3);
-                for (row, ids) in result.evaluation.facts().rows_from(1) {
-                    assert_eq!(ids[0], TRIPLE);
-                    assert!(matches!(ids[1], 9 | 11));
-                    assert_eq!([ids[2], ids[3]], [12, 1]);
-                    assert_eq!(
-                        result
-                            .evidence
-                            .record(row)
-                            .unwrap()
-                            .information()
-                            .fallback(),
-                        information
-                    );
-                }
-                assert_eq!(
-                    result
-                        .evaluation
-                        .facts()
-                        .interner()
-                        .pins
-                        .load(Ordering::Relaxed),
-                    0
-                );
-                assert_eq!(result.evaluation.budget().generated_terms(), 0);
-            }
-            assert_eq!(producer.calls.load(Ordering::Relaxed), 1);
-        }
-    }
-
-    #[test]
     fn host_guard_retains_typed_source_failure_and_checks_empty_callback() {
         use crate::guard::CallbackError;
         use crate::test_support::{HostDictionary, SourceLost};
@@ -5146,7 +5031,7 @@ mod tests {
             }
         }
         let store = RelationStore::with_dictionary(HostDictionary {
-            surfaces: [(u64::MAX, "original".into())].into_iter().collect(),
+            surfaces: std::iter::once((u64::MAX, "original".into())).collect(),
             resolves: AtomicUsize::new(0),
             lookups: AtomicUsize::new(0),
             lost: AtomicBool::new(false),
@@ -5416,7 +5301,7 @@ mod tests {
             })
             .unwrap();
         let error = extend_solutions_leapfrog(
-            LeapfrogRun {
+            &LeapfrogRun {
                 plan,
                 cycle,
                 scan: JoinScan::Uniform(Scan::Full),
@@ -5604,34 +5489,6 @@ mod tests {
     fn run(rules: Vec<DlClause>, edb: RelationStore) -> Evaluation {
         let exe = compile(rules).expect("the fixture program compiles");
         evaluate(&exe, edb).expect("the fixture program stays inside every ceiling")
-    }
-
-    fn evidence_scope() -> NegationScope {
-        use purrdf_core::{TermBox, TermValue, evidence::ReasonDescription};
-        use purrdf_lex::allocation::{Memory, Resident};
-        let cause = TermValue::iri("https://example.org/missing-scope");
-        let concern = TermValue::Triple {
-            s: TermBox::new(TermValue::iri("https://example.org/input")),
-            p: TermBox::new(TermValue::iri("https://example.org/closed")),
-            o: TermBox::new(TermValue::simple_literal("required")),
-        };
-        let mut admission = Resident;
-        let mut memory = Memory::new(&mut admission);
-        let missing_scope_reason = ReasonDescription {
-            cause: &cause,
-            concern: &concern,
-            constraint: None,
-            vault: None,
-            watermark: None,
-        }
-        .identity(&mut memory)
-        .unwrap();
-        assert_eq!(memory.admitted_bytes(), 0);
-        NegationScope {
-            completeness: purrdf_core::evidence::SearchCompleteness::Complete,
-            closure_declared: true,
-            missing_scope_reason,
-        }
     }
 
     #[test]

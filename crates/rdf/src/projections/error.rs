@@ -158,11 +158,11 @@ mod tests {
     fn storage_causes_survive_projection_and_rdf_diagnostic_boundaries() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
         for cause in [
-            StorageError::Capacity(CapacityError {
-                space: CapacitySpace::LocalTerms,
-                attempted: u128::from(u32::MAX) + 1,
-                limit: u128::from(u32::MAX),
-            }),
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::LocalTerms,
+                u128::from(u32::MAX) + 1,
+                u128::from(u32::MAX),
+            )),
             StorageError::AllocationFailed,
         ] {
             let direct = ProjectionError::from(cause).at_path("rows.csv");

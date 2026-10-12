@@ -700,6 +700,9 @@ fn may_unify(dag: &TermDag, head: NodeId, call: NodeId) -> bool {
     true
 }
 
+/// A renamed clause and the declared sorts of its fresh metavariables.
+type FreshenedClause = (NodeId, Vec<FolLit>, Vec<(MetaId, NodeId)>);
+
 /// Freshen `clause`: mint a brand-new metavariable for every distinct
 /// metavariable its head and body mention, and return the renamed head and body,
 /// plus the fresh metavariables' declared sorts.
@@ -715,7 +718,7 @@ fn freshen_clause(
     dag: &mut TermDag,
     clause: &FolClause,
     meta_sorts: &BTreeMap<MetaId, NodeId>,
-) -> Result<(NodeId, Vec<FolLit>, Vec<(MetaId, NodeId)>), StorageError> {
+) -> Result<FreshenedClause, StorageError> {
     let mut nodes: Vec<NodeId> = vec![clause.head];
     nodes.extend(clause.body.iter().copied().map(FolLit::atom));
     let metas = distinct_metas(dag, &nodes);

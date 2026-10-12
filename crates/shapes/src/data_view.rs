@@ -548,7 +548,6 @@ impl ShaclDatasetView {
     /// Return an immutable owned dataset at an explicit compatibility boundary.
     /// Repeated requests share one materialization; ordinary validation never
     /// calls this method. Native unprojected views return their original `Arc`.
-    #[must_use]
     pub fn materialized(&self) -> Result<&Arc<RdfDataset>, crate::error::ShapesError> {
         if let Source::Native(source) = &self.source
             && !self.projected

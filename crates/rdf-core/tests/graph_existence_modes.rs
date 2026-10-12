@@ -304,8 +304,7 @@ fn graph_ingress_refusals_do_not_create_a_slot_and_valid_neighbors_succeed() {
             assert_eq!(
                 mutable.declare_named_graph(graph).unwrap_err().code,
                 "rdf-ir-graph-name-invalid"
-            )
-            .unwrap();
+            );
         }
         assert!(
             mutable

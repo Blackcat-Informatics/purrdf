@@ -3269,7 +3269,7 @@ mod tests {
                 "unexpected match for {iri}"
             );
         }
-        assert!(b.interner.content_ids.is_empty());
+        assert_eq!(b.interner.content_ids.len(), 0);
     }
 
     /// An ordinary IRI with no content-id prefix at all gets no entry.
@@ -3291,7 +3291,7 @@ mod tests {
         let label = format!("{SCHEME}{}", "ef".repeat(32));
         let id = b.intern_blank(&label, BlankScope::DEFAULT).unwrap();
         assert_eq!(b.interner.content_id(id), None);
-        assert!(b.interner.content_ids.is_empty());
+        assert_eq!(b.interner.content_ids.len(), 0);
     }
 
     /// With recognition inactive (plain `new()`), a `blake3:<64hex>` IRI is
@@ -3303,7 +3303,7 @@ mod tests {
             .intern_iri(&format!("{SCHEME}{}", "12".repeat(32)))
             .unwrap();
         assert_eq!(b.interner.content_id(id), None);
-        assert!(b.interner.content_ids.is_empty());
+        assert_eq!(b.interner.content_ids.len(), 0);
     }
 
     #[test]
@@ -3840,11 +3840,11 @@ mod native_graph_birth_tests {
             let last = usize::try_from(u32::MAX).unwrap();
             assert_eq!(
                 LocalCapacity::Native.required(space, last, 1),
-                Err(StorageError::Capacity(CapacityError {
+                Err(StorageError::Capacity(CapacityError::new(
                     space,
-                    attempted: u128::from(u32::MAX) + 1,
-                    limit: u128::from(u32::MAX),
-                }))
+                    u128::from(u32::MAX) + 1,
+                    u128::from(u32::MAX)
+                )))
             );
             assert_eq!(LocalCapacity::Native.hint(space, last, 1), last);
             assert_eq!(LocalCapacity::Native.required(space, last - 1, 1), Ok(last));
@@ -3881,24 +3881,25 @@ mod native_graph_birth_tests {
             limit: bytes,
             peak: bytes,
         };
-        let mut memory = Memory::resume(&mut grant, bytes);
-        builder
-            .push_quad_with_memory(s, p, o, None, &mut memory)
-            .unwrap();
-        builder
-            .push_reifier_in_graph_with_memory(s, t, None, &mut memory)
-            .unwrap();
-        builder
-            .push_annotation_in_graph_with_memory(s, p, o, None, &mut memory)
-            .unwrap();
-        assert_eq!(
+        {
+            let mut memory = Memory::resume(&mut grant, bytes);
             builder
-                .intern_iri_with_memory("urn:s", &mut memory)
-                .unwrap(),
-            s
-        );
-        assert_eq!(memory.admitted_bytes(), bytes);
-        drop(memory);
+                .push_quad_with_memory(s, p, o, None, &mut memory)
+                .unwrap();
+            builder
+                .push_reifier_in_graph_with_memory(s, t, None, &mut memory)
+                .unwrap();
+            builder
+                .push_annotation_in_graph_with_memory(s, p, o, None, &mut memory)
+                .unwrap();
+            assert_eq!(
+                builder
+                    .intern_iri_with_memory("urn:s", &mut memory)
+                    .unwrap(),
+                s
+            );
+            assert_eq!(memory.admitted_bytes(), bytes);
+        }
         assert_eq!(grant.peak, bytes);
         // Each source count would overflow the full destination if treated as a
         // number of new entries. Replay must discover the existing identities.
@@ -3907,6 +3908,32 @@ mod native_graph_birth_tests {
             .append()
             .unwrap();
         assert_eq!(builder.native_buffer_bytes().unwrap(), bytes);
+        let mut new_source = RdfDatasetBuilder::new();
+        let source_s = new_source.intern_iri("urn:s").unwrap();
+        let source_p = new_source.intern_iri("urn:p").unwrap();
+        let source_o = new_source.intern_iri("urn:new").unwrap();
+        new_source
+            .push_quad(source_s, source_p, source_o, None)
+            .unwrap();
+        let new_source = new_source.freeze().unwrap();
+        for _ in 0..3 {
+            let result = DatasetImporter::new(&mut builder, new_source.as_ref())
+                .unwrap()
+                .append();
+            let Err(crate::ir::import::DatasetImportError::Capacity(error)) = result else {
+                panic!("public replay must preserve its actual term-capacity cause")
+            };
+            assert_eq!(
+                error,
+                CapacityError::new(
+                    CapacitySpace::LocalTerms,
+                    u128::from(terms) + 1,
+                    u128::from(terms)
+                )
+            );
+            assert_eq!(builder.term_count(), terms as usize);
+            assert_eq!(builder.native_buffer_bytes().unwrap(), bytes);
+        }
         for (space, result) in [
             (CapacitySpace::Quads, builder.push_quad(o, p, s, None)),
             (CapacitySpace::Reifiers, builder.push_reifier(o, t)),
@@ -3914,20 +3941,16 @@ mod native_graph_birth_tests {
         ] {
             assert_eq!(
                 result,
-                Err(StorageError::Capacity(CapacityError {
-                    space,
-                    attempted: 2,
-                    limit: 1
-                }))
+                Err(StorageError::Capacity(CapacityError::new(space, 2, 1)))
             );
         }
         assert_eq!(
             builder.intern_iri("urn:new"),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::LocalTerms,
-                attempted: u128::from(terms) + 1,
-                limit: u128::from(terms),
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::LocalTerms,
+                u128::from(terms) + 1,
+                u128::from(terms)
+            )))
         );
         assert_eq!(
             (
@@ -3972,11 +3995,11 @@ mod native_graph_birth_tests {
         assert_eq!(builder.intern_iri("urn:a").unwrap(), first);
         assert_eq!(
             builder.intern_iri("urn:b"),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::LocalTermBytes,
-                attempted: 10,
-                limit: 5,
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::LocalTermBytes,
+                10,
+                5
+            )))
         );
         assert_eq!(builder.term_count(), 1);
         assert_eq!(builder.interner.arena, b"urn:a");
@@ -4072,7 +4095,7 @@ mod native_graph_birth_tests {
                 assert_eq!(builder.next_merge_scope, next_scope);
                 assert_eq!(builder.reifies_predicate, None);
                 assert_eq!(builder.interner.invalid_literal, None);
-                assert!(builder.scope_journal.is_empty());
+                assert_eq!(builder.scope_journal.len(), 0);
                 assert_eq!(builder.transaction_depth, 0);
                 assert_eq!(
                     memory.admitted_bytes(),
@@ -4187,11 +4210,11 @@ mod native_graph_birth_tests {
                 assert_eq!(builder.term_count(), 1, "growth boundary {allowed}");
                 assert_eq!(builder.interner.arena, arena);
                 assert_eq!(builder.interner.index.len(), 1);
-                assert!(builder.quads.is_empty());
-                assert!(builder.quad_index.is_empty());
-                assert!(builder.locations.is_empty());
+                assert_eq!(builder.quads.len(), 0);
+                assert_eq!(builder.quad_index.len(), 0);
+                assert_eq!(builder.locations.len(), 0);
                 assert_eq!(builder.used_scopes, [BlankScope(2)]);
-                assert!(builder.scope_journal.is_empty());
+                assert_eq!(builder.scope_journal.len(), 0);
                 assert_eq!(builder.transaction_depth, 0);
                 assert_eq!(
                     memory.admitted_bytes(),
@@ -4265,7 +4288,7 @@ mod native_graph_birth_tests {
             );
             assert_eq!(builder.term_count(), 1);
             assert_eq!(builder.used_scopes, [BlankScope(2)]);
-            assert!(builder.scope_journal.is_empty());
+            assert_eq!(builder.scope_journal.len(), 0);
             let bytes = error.owned_bytes().unwrap();
             assert!(bytes > 0);
             assert_eq!(
@@ -4331,7 +4354,7 @@ mod native_graph_birth_tests {
                 failures += 1;
                 assert_eq!(builder.term_count(), 1, "growth boundary {allowed}");
                 assert_eq!(builder.used_scopes, [BlankScope(2)]);
-                assert!(builder.scope_journal.is_empty());
+                assert_eq!(builder.scope_journal.len(), 0);
                 assert_eq!(
                     memory.admitted_bytes(),
                     builder.native_buffer_bytes().unwrap()
@@ -4406,18 +4429,18 @@ mod native_graph_birth_tests {
             assert_eq!(destination.term_count(), terms);
             assert_eq!(destination.quads.len(), 1);
             assert_eq!(destination.next_merge_scope, exhausted);
-            assert!(destination.used_scopes.is_empty());
-            let expected = StorageError::Capacity(purrdf_lex::allocation::CapacityError {
-                space: CapacitySpace::BlankScopes,
-                attempted: u128::from(exhausted),
-                limit: u128::from(u32::MAX),
-            });
+            assert_eq!(destination.used_scopes.len(), 0);
+            let expected = StorageError::Capacity(purrdf_lex::allocation::CapacityError::new(
+                CapacitySpace::BlankScopes,
+                u128::from(exhausted),
+                u128::from(u32::MAX),
+            ));
             for _ in 0..3 {
                 assert_eq!(destination.push_dataset(&source), Err(expected));
                 assert_eq!(destination.term_count(), terms);
                 assert_eq!(destination.quads.len(), 1);
-                assert!(destination.used_scopes.is_empty());
-                assert!(destination.scope_journal.is_empty());
+                assert_eq!(destination.used_scopes.len(), 0);
+                assert_eq!(destination.scope_journal.len(), 0);
                 assert_eq!(destination.next_merge_scope, exhausted);
             }
             destination.next_merge_scope = u64::from(u32::MAX);
@@ -4485,14 +4508,14 @@ mod native_graph_birth_tests {
                 failures += 1;
                 assert_eq!(destination.term_count(), 1, "growth boundary {allowed}");
                 assert_eq!(destination.interner.arena, arena);
-                assert!(destination.quads.is_empty());
-                assert!(destination.reifiers.is_empty());
-                assert!(destination.annotations.is_empty());
-                assert!(destination.locations.is_empty());
-                assert!(destination.declared_graphs.is_empty());
+                assert_eq!(destination.quads.len(), 0);
+                assert_eq!(destination.reifiers.len(), 0);
+                assert_eq!(destination.annotations.len(), 0);
+                assert_eq!(destination.locations.len(), 0);
+                assert_eq!(destination.declared_graphs.len(), 0);
                 assert_eq!(destination.used_scopes, [BlankScope(2)]);
                 assert_eq!(destination.next_merge_scope, 1);
-                assert!(destination.scope_journal.is_empty());
+                assert_eq!(destination.scope_journal.len(), 0);
                 assert_eq!(
                     memory.admitted_bytes(),
                     destination.native_buffer_bytes().unwrap()
@@ -4614,8 +4637,8 @@ mod native_graph_birth_tests {
                     }]
                 );
                 assert_eq!(destination.used_scopes, [BlankScope(2)]);
-                assert!(destination.locations.is_empty());
-                assert!(destination.declared_graphs.is_empty());
+                assert_eq!(destination.locations.len(), 0);
+                assert_eq!(destination.declared_graphs.len(), 0);
                 assert_eq!(
                     memory.admitted_bytes(),
                     destination.native_buffer_bytes().unwrap()
@@ -4789,13 +4812,13 @@ mod native_graph_birth_tests {
                     assert_eq!(builder.term_count(), 1, "growth boundary {allowed}");
                     assert_eq!(builder.interner.arena, arena);
                     assert_eq!(builder.interner.index.len(), 1);
-                    assert!(builder.reifiers.is_empty());
-                    assert!(builder.reifier_index.is_empty());
-                    assert!(builder.annotations.is_empty());
-                    assert!(builder.annotation_index.is_empty());
+                    assert_eq!(builder.reifiers.len(), 0);
+                    assert_eq!(builder.reifier_index.len(), 0);
+                    assert_eq!(builder.annotations.len(), 0);
+                    assert_eq!(builder.annotation_index.len(), 0);
                     assert_eq!(builder.reifies_predicate, None);
                     assert_eq!(builder.used_scopes, [BlankScope(2)]);
-                    assert!(builder.scope_journal.is_empty());
+                    assert_eq!(builder.scope_journal.len(), 0);
                     assert_eq!(builder.transaction_depth, 0);
                     assert_eq!(
                         memory.admitted_bytes(),
@@ -5068,7 +5091,7 @@ mod native_graph_birth_tests {
             assert_eq!(builder.term_count(), count);
             assert_eq!(builder.interner.arena, text);
             assert_eq!(builder.interner.index.len(), count);
-            assert!(builder.interner.content_ids.is_empty());
+            assert_eq!(builder.interner.content_ids.len(), 0);
             assert_eq!(memory.admitted_bytes(), bytes);
             assert_eq!(
                 builder
@@ -5114,8 +5137,8 @@ mod native_graph_birth_tests {
             assert_eq!(builder.term_count(), count);
             assert_eq!(builder.interner.arena, text);
             assert!(builder.reifies_predicate.is_none());
-            assert!(builder.reifiers.is_empty());
-            assert!(builder.reifier_index.is_empty());
+            assert_eq!(builder.reifiers.len(), 0);
+            assert_eq!(builder.reifier_index.len(), 0);
             assert_eq!(memory.admitted_bytes(), bytes);
         }
         // The same original owner remains usable after the refusal.

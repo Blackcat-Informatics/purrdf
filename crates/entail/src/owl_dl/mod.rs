@@ -1112,7 +1112,7 @@ mod tests {
         let mut ids: BTreeMap<&'static str, u32> = BTreeMap::new();
         let mut id = |kb: &mut Kb, name: &'static str| -> u32 {
             *ids.entry(name)
-                .or_insert_with(|| kb.interner.intern_iri(&format!("{NS}{name}")).unwrap())
+                .or_insert_with(|| kb.interner.intern_iri(&format!("{NS}{name}")))
         };
         let male = id(&mut kb, "Male");
         let female = id(&mut kb, "Female");
@@ -1372,7 +1372,7 @@ mod absorption_tests {
             let a_class = b.intern_iri(EX_A).unwrap();
             let subject = b.intern_iri(EX_SUBJECT).unwrap();
             let object = if literal_object {
-                crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat"))
+                crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat")).unwrap()
             } else {
                 b.intern_iri(EX_OBJECT).unwrap()
             };
@@ -1541,7 +1541,8 @@ mod boundary_tests {
             let one: TermId = crate::interner::intern_into(
                 &mut b,
                 &TermValue::typed_literal("1", XSD_NONNEGATIVEINTEGER),
-            );
+            )
+            .unwrap();
             b.push_quad(c, sub_class, node, None).unwrap();
             b.push_quad(node, ty, restriction, None).unwrap();
             b.push_quad(node, on_property, r, None).unwrap();
@@ -1604,7 +1605,8 @@ mod boundary_tests {
         let mut b = RdfDatasetBuilder::new();
         let a = b.intern_iri(EX_A).unwrap();
         let r = b.intern_iri(EX_R).unwrap();
-        let value = crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat"));
+        let value =
+            crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat")).unwrap();
         b.push_quad(a, r, value, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let kb = Kb::from_dataset(&ds).expect("parse");

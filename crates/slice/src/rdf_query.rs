@@ -372,7 +372,7 @@ impl Dataset {
         context: &str,
     ) -> Result<Self, SliceError> {
         let ds = parse_dataset(bytes, media_type, base)
-            .map_err(|error| SliceError::rdf(error, &format!("syntax error in {context}")))?;
+            .map_err(|error| SliceError::rdf(&error, &format!("syntax error in {context}")))?;
         // `parse_dataset` returns an `Arc<RdfDataset>`; unwrap the fresh, uniquely-owned
         // allocation into an owned dataset (no clone — it is the sole reference).
         let ds = std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?;
@@ -542,7 +542,7 @@ impl Dataset {
         }
         let frozen = builder
             .freeze()
-            .map_err(|error| SliceError::rdf(error, "flatten for canonicalization"))?;
+            .map_err(|error| SliceError::rdf(&error, "flatten for canonicalization"))?;
         Ok(purrdf_rdf::canonicalize(&frozen).nquads)
     }
 
@@ -556,7 +556,7 @@ impl Dataset {
         }
         let frozen = builder
             .freeze()
-            .map_err(|error| SliceError::rdf(error, "dataset freeze failed"))?;
+            .map_err(|error| SliceError::rdf(&error, "dataset freeze failed"))?;
         Self::from_frozen(frozen)
     }
 }
@@ -838,7 +838,7 @@ fn owned_clone_of(ds: &RdfDataset) -> Result<RdfDataset, SliceError> {
     builder.push_dataset(ds)?;
     let frozen = builder
         .freeze()
-        .map_err(|error| SliceError::rdf(error, "re-freeze owned dataset"))?;
+        .map_err(|error| SliceError::rdf(&error, "re-freeze owned dataset"))?;
     std::sync::Arc::try_unwrap(frozen).map_or_else(|arc| owned_clone_of(&arc), Ok)
 }
 
@@ -873,7 +873,7 @@ impl DatasetAccumulator {
         context: &str,
     ) -> Result<(), SliceError> {
         let parsed = parse_dataset(bytes, media_type, base)
-            .map_err(|error| SliceError::rdf(error, &format!("syntax error in {context}")))?;
+            .map_err(|error| SliceError::rdf(&error, &format!("syntax error in {context}")))?;
         self.builder.push_dataset(&parsed)?;
         Ok(())
     }
@@ -911,7 +911,7 @@ impl DatasetAccumulator {
         let ds = self
             .builder
             .freeze()
-            .map_err(|error| SliceError::rdf(error, "dataset freeze failed"))?;
+            .map_err(|error| SliceError::rdf(&error, "dataset freeze failed"))?;
         let ds = std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?;
         Ok(Dataset::from_dataset(ds))
     }

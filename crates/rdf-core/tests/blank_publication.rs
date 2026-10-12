@@ -256,8 +256,7 @@ fn declarations_add_only_their_blank_names_to_the_base_and_delta_visit() {
     assert_eq!(
         mutable.declare_named_graph(TermValue::iri(format!("{EX}empty"))),
         Ok(true)
-    )
-    .unwrap();
+    );
     assert_eq!(visit(&mutable), before);
 
     // A blank-named declaration adds exactly its own name, after the delta, in its

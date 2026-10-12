@@ -1878,8 +1878,8 @@ mod tests {
                 capacity.space,
                 purrdf_lex::allocation::CapacitySpace::DatalogTerms
             );
-            assert_eq!(capacity.attempted, u128::from(u64::MAX) + 1);
-            assert_eq!(capacity.limit, u128::from(u64::MAX));
+            assert_eq!(capacity.attempted(), u128::from(u64::MAX) + 1);
+            assert_eq!(capacity.limit(), u128::from(u64::MAX));
         }
     }
 
@@ -1948,8 +1948,8 @@ mod tests {
                     capacity.space,
                     purrdf_lex::allocation::CapacitySpace::DatalogTerms
                 );
-                assert_eq!(capacity.attempted, u128::from(u64::MAX) + 1);
-                assert_eq!(capacity.limit, u128::from(u64::MAX));
+                assert_eq!(capacity.attempted(), u128::from(u64::MAX) + 1);
+                assert_eq!(capacity.limit(), u128::from(u64::MAX));
             } else if malformed {
                 assert!(
                     message.contains("first") && message.contains('1'),

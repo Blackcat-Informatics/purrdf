@@ -1124,6 +1124,9 @@ struct RowAdmission<I: TermIdentity> {
     new_relation: Relation<I>,
 }
 
+/// Original subject/object identities and the newly published row, if not a duplicate.
+pub type InsertedRow<I> = Option<(I, I, RowId)>;
+
 impl<D: TermDictionary> RelationStore<D> {
     /// Construct an empty store using the original dictionary and identity space.
     /// No term is read, copied or remapped by construction.
@@ -1154,7 +1157,7 @@ impl<D: TermDictionary> RelationStore<D> {
     pub fn insert_ids(
         &mut self,
         ids: [D::Id; 4],
-    ) -> Result<Option<(D::Id, D::Id, RowId)>, DictionaryError<D::Error>> {
+    ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
         self.insert_terms(ids.map(DictionaryTerm::Id))
     }
 
@@ -1166,7 +1169,7 @@ impl<D: TermDictionary> RelationStore<D> {
     pub fn insert_terms(
         &mut self,
         terms: [DictionaryTerm<'_, D::Id>; 4],
-    ) -> Result<Option<(D::Id, D::Id, RowId)>, DictionaryError<D::Error>> {
+    ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -1764,11 +1767,11 @@ mod tests {
         let original_terms = store.interner.len();
         assert_eq!(
             store.insert("s", "new-p", "o", ""),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::DatalogPartitions,
-                attempted: 2,
-                limit: 1
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogPartitions,
+                2,
+                1
+            )))
         );
         assert_eq!(store.interner.len(), original_terms);
         assert_eq!(store.row_count(), 2);
@@ -1793,11 +1796,11 @@ mod tests {
         store.interner.term_limit = Some(original_terms as u64 + 2);
         assert_eq!(
             store.insert("new-s", "new-p", "new-o", "new-g"),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::DatalogTerms,
-                attempted: original_terms as u128 + 3,
-                limit: original_terms as u128 + 2
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogTerms,
+                original_terms as u128 + 3,
+                original_terms as u128 + 2
+            )))
         );
         assert_eq!(store.row_log, original_rows);
         assert_eq!(store.interner.len(), original_terms);
@@ -1902,11 +1905,11 @@ mod tests {
         assert_eq!(store.insert("s", "p", "o", ""), Ok(None));
         assert_eq!(
             store.insert("fresh-s", "fresh-p", "fresh-o", "fresh-g"),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::DatalogRows,
-                attempted: u128::from(u64::MAX) + 1,
-                limit: u128::from(u64::MAX)
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogRows,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            )))
         );
         assert_eq!(store.row_count, usize::MAX);
         assert_eq!(store.row_log, original_rows);

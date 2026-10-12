@@ -2392,7 +2392,7 @@ fn render_golden() -> String {
 /// change path stopped producing still fails here.
 fn carried_report_text(report: &ValidationReport) -> String {
     let (_, labels) = report.with_report_blank_labels();
-    let text = report.to_ntriples();
+    let text = report.to_ntriples().expect("report serializes");
     let mut out = String::with_capacity(text.len());
     let mut rest = text.as_str();
     while let Some(at) = rest.find("_:") {

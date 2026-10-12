@@ -610,8 +610,14 @@ fn canonical_fold_matches_independent_eager_typed_surface_and_dictionary_for_two
         std::slice::from_ref(&annotation),
     );
     let mut oracle = RdfDatasetBuilder::new();
-    purrdf_core::ir::import::DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
-    purrdf_core::ir::import::DatasetImporter::new(&mut oracle, typed.as_ref()).append();
+    purrdf_core::ir::import::DatasetImporter::new(&mut oracle, ordinary.as_ref())
+        .unwrap()
+        .append()
+        .unwrap();
+    purrdf_core::ir::import::DatasetImporter::new(&mut oracle, typed.as_ref())
+        .unwrap()
+        .append()
+        .unwrap();
     let graph = oracle.intern_value(&iri("empty")).unwrap();
     oracle.declare_named_graph(graph).unwrap();
     let oracle = oracle.freeze().unwrap();
@@ -740,12 +746,16 @@ fn newer_typed_occurrence_wins_before_partition_and_native_primary_typing_is_ret
         &mut builder,
         page(std::slice::from_ref(&q)).as_ref(),
     )
-    .append();
+    .unwrap()
+    .append()
+    .unwrap();
     purrdf_core::ir::import::DatasetImporter::new(
         &mut builder,
         typed_page(std::slice::from_ref(&declaration), &[]).as_ref(),
     )
-    .append();
+    .unwrap()
+    .append()
+    .unwrap();
     let native = builder.freeze().unwrap();
     let snapshot = PagedStack::new(vec![sealed(vec![Arc::clone(&native)])])
         .unwrap()
@@ -772,7 +782,10 @@ fn native_equal_primary_and_virtual_reifier_rows_retain_both_streams() {
         page(std::slice::from_ref(&declaration)),
         typed_page(std::slice::from_ref(&declaration), &[]),
     ] {
-        purrdf_core::ir::import::DatasetImporter::new(&mut builder, source.as_ref()).append();
+        purrdf_core::ir::import::DatasetImporter::new(&mut builder, source.as_ref())
+            .unwrap()
+            .append()
+            .unwrap();
     }
     let native = builder.freeze().unwrap();
     let snapshot = PagedStack::new(vec![sealed(vec![Arc::clone(&native)])])
@@ -1094,7 +1107,10 @@ fn cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open
     for change_count in [false, true] {
         let ordinary = page(&[row("a", "x"), row("b", "y")]);
         let mut builder = RdfDatasetBuilder::new();
-        purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref()).append();
+        purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref())
+            .unwrap()
+            .append()
+            .unwrap();
         let triple = builder
             .intern_value(&purrdf_core::term_fixture::triple_chain(1))
             .unwrap();

@@ -866,9 +866,7 @@ pub fn run_rules(
     };
     Configuration::detached(profile, pattern_limits, owner)
         .run(|| crate::rules::run_rules(source, data, limits, knobs))
-        .map_err(|error| {
-            error.into_public(|message| XPathValidationError::Shapes(ShapesError::from(message)))
-        })
+        .map_err(|error| error.into_public(XPathValidationError::Shapes))
 }
 
 /// Evaluate one node expression under an explicit dated XPath law and finite limits.

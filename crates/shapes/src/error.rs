@@ -226,7 +226,7 @@ impl From<purrdf_iri::IriReadError> for ShapesError {
     fn from(error: purrdf_iri::IriReadError) -> Self {
         match error {
             purrdf_iri::IriReadError::Storage(error) => Self::Storage(error),
-            error => Self::Invalid(error.to_string()),
+            error @ purrdf_iri::IriReadError::Lexical(_) => Self::Invalid(error.to_string()),
         }
     }
 }

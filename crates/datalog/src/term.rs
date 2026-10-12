@@ -371,16 +371,13 @@ mod tests {
         let mut dag = TermDag::default();
         let kept = dag.intern_leaf("kept").unwrap();
         dag.node_limit = Some(1);
-        let expected = Err(StorageError::Capacity(CapacityError {
-            space: CapacitySpace::DatalogNodes,
-            attempted: 2,
-            limit: 1,
-        }));
+        let expected =
+            StorageError::Capacity(CapacityError::new(CapacitySpace::DatalogNodes, 2, 1));
         assert_eq!(dag.intern_leaf("kept"), Ok(kept));
-        assert_eq!(dag.intern_leaf("new-leaf"), expected);
-        assert_eq!(dag.intern_free("new-free"), expected);
-        assert_eq!(dag.intern_free("kept"), expected);
-        assert_eq!(dag.fresh_meta().unwrap_err(), expected.unwrap_err());
+        assert_eq!(dag.intern_leaf("new-leaf"), Err(expected));
+        assert_eq!(dag.intern_free("new-free"), Err(expected));
+        assert_eq!(dag.intern_free("kept"), Err(expected));
+        assert_eq!(dag.fresh_meta().unwrap_err(), expected);
         assert_eq!(dag.next_meta, 0);
         assert_eq!(dag.len(), 1);
         assert_eq!(dag.free_meta.len(), 1);
@@ -402,11 +399,11 @@ mod tests {
         assert_eq!(dag.intern_leaf("kept"), Ok(kept));
         assert_eq!(
             dag.intern_free("new"),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::DatalogSymbols,
-                attempted: 2,
-                limit: 1
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogSymbols,
+                2,
+                1
+            )))
         );
         assert_eq!(dag.len(), 1);
         assert_eq!(dag.symbols, ["kept"]);
@@ -426,11 +423,11 @@ mod tests {
         assert_eq!(dag.free_meta(node), [meta]);
         assert_eq!(
             dag.fresh_meta(),
-            Err(StorageError::Capacity(CapacityError {
-                space: CapacitySpace::DatalogMetas,
-                attempted: u128::from(u64::MAX) + 1,
-                limit: u128::from(u64::MAX)
-            }))
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogMetas,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            )))
         );
         assert_eq!(dag.len(), 1);
         assert_eq!(dag.next_meta, u64::MAX);
