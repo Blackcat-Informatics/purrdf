@@ -1,0 +1,21 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 3c92cbeebad8d52bac064f1d4f9a714e7d9b7fb6
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 534
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/534
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 29661e74bdfa5e760fca5595e72b572176d7dd0e
+GhpRsq-Head-Ref: paudley/409-geo-deterministic-hierarchical-spatial
+GhpRsq-Head-OID: 3c92cbeebad8d52bac064f1d4f9a714e7d9b7fb6
+GhpRsq-Result-Tree: 8a27a41e1fda3e79d3f894d7143085fa034c44d3
+GhpRsq-Result-Commit: dd79ef77e94212314adc9db5af42fdd72ec18222
+GhpRsq-Parent-Hashes: 3c92cbeebad8d52bac064f1d4f9a714e7d9b7fb6
+GhpRsq-Squash-Notes-SHA256: bb0ebb2edf13f9f6c3b9b6df0a49491b179036b3f5d4a6b26023167a975eba19
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Tree: 3de759cd8c2984ca1d50faa2b26165828e1ef0ed
+GhpRsq-Stage-Ref: refs/ghprsq/pr/534/stage
+GhpRsq-Stage-Files: 334
