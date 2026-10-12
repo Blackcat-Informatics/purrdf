@@ -100,8 +100,8 @@ fn bench_small(c: &mut Bench) {
     let bounded_integers: Vec<(XsdValue, XsdValue)> = integers
         .iter()
         .map(|&(a, b)| {
-            let value = |value| XsdValue::Integer {
-                value,
+            let value = |value: i128| XsdValue::Integer {
+                value: value.into(),
                 datatype: XsdDatatype::Integer,
             };
             (value(a), value(b))

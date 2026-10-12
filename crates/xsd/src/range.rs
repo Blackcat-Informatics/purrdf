@@ -120,9 +120,9 @@ use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
 use crate::exact;
-use crate::numeric::Decimal;
+use crate::exact::Decimal;
 use crate::ops::{value_cmp, value_eq};
-use crate::temporal::Time;
+use crate::temporal::days_from_civil;
 use crate::value::XsdValue;
 
 mod storage;
@@ -523,6 +523,21 @@ pub fn same_value(a: &XsdValue, b: &XsdValue) -> bool {
     resident(0, |memory| same_value_with(a, b, memory))
 }
 
+/// Decide OWL value identity under caller-supplied work and storage admission.
+///
+/// Exact temporal seconds may require scale-alignment scratch. This entry
+/// preserves that native refusal instead of treating an allocation failure as
+/// an identity answer.
+/// # Errors
+/// Returns the caller's work/storage refusal or a native allocation failure.
+pub fn try_same_value(
+    a: &XsdValue,
+    b: &XsdValue,
+    storage: &mut dyn Storage,
+) -> Result<bool, StorageError> {
+    same_value_with(a, b, &mut Memory::new(storage))
+}
+
 fn same_value_with(
     left: &XsdValue,
     right: &XsdValue,
@@ -539,14 +554,47 @@ fn same_value_with(
             Ok(memory.decimal_cmp(&left, &right)? == Ordering::Equal)
         });
     }
+    match (left, right) {
+        (XsdValue::DateTime(left), XsdValue::DateTime(right)) => {
+            let base = |value: &crate::temporal::DateTime| {
+                days_from_civil(value.year(), value.month(), value.day()) * 86_400
+                    + i128::from(value.hour()) * 3600
+                    + i128::from(value.minute()) * 60
+            };
+            return same_temporal_seconds(
+                (left.timezone_minutes(), base(left), left.second_ref()),
+                (right.timezone_minutes(), base(right), right.second_ref()),
+                memory,
+            );
+        }
+        (XsdValue::Time(left), XsdValue::Time(right)) => {
+            let base = |value: &crate::temporal::Time| {
+                i128::from(value.hour()) * 3600 + i128::from(value.minute()) * 60
+            };
+            return same_temporal_seconds(
+                (left.timezone_minutes(), base(left), left.second_ref()),
+                (right.timezone_minutes(), base(right), right.second_ref()),
+                memory,
+            );
+        }
+        (XsdValue::Duration(left), XsdValue::Duration(right)) => {
+            return if left.months() == right.months() {
+                memory
+                    .decimal_cmp(left.seconds_ref(), right.seconds_ref())
+                    .map(Ordering::is_eq)
+            } else {
+                Ok(false)
+            };
+        }
+        _ => {}
+    }
     Ok(match (left, right) {
         (XsdValue::Float(left), XsdValue::Float(right)) => {
             same_float(f64::from(*left), f64::from(*right))
         }
         (XsdValue::Double(left), XsdValue::Double(right)) => same_float(*left, *right),
-        (XsdValue::Time(left), XsdValue::Time(right)) => same_time(left, right),
-        // Every nondecimal carrier here is an inline temporal/Boolean value or
-        // borrowed lexical/byte sequence; its native equality allocates nothing.
+        // The exact-seconds temporal carriers were handled through `Memory`.
+        // Remaining values carry bounded fields or borrowed lexical/byte data.
         _ => value_eq(left, right),
     })
 }
@@ -561,26 +609,26 @@ fn same_float(x: f64, y: f64) -> bool {
     }
 }
 
-/// `xsd:time` identity.
-///
-/// Two times are the same value when both carry a timezone and denote the same instant,
-/// or neither does and they agree on the time of day — a timezone is part of the value,
-/// and the XSD order never resolves a mixed pair to `Equal`. The end-of-day `24:00:00`
-/// lexical is read as `00:00:00`, which XSD maps to the same value.
-fn same_time(a: &Time, b: &Time) -> bool {
-    let (a_zoned, a_secs, a_frac) = time_instant(a);
-    let (b_zoned, b_secs, b_frac) = time_instant(b);
-    a_zoned == b_zoned && a_secs == b_secs && a_frac.cmp_exact(&b_frac) == Ordering::Equal
-}
-
-/// A time as `(carries a timezone, whole seconds from the day's start in UTC, fractional
-/// seconds)`, with hour 24 read as hour 0.
-fn time_instant(t: &Time) -> (bool, i128, Decimal) {
-    let hour = if t.hour() == 24 { 0 } else { t.hour() };
-    let offset = t.timezone_minutes();
-    let seconds = i128::from(hour) * 3600 + i128::from(t.minute()) * 60 + t.second().whole_part()
-        - i128::from(offset.unwrap_or(0)) * 60;
-    (offset.is_some(), seconds, t.second().frac_part())
+/// Exact temporal identity after reducing each minute base to UTC. All bases
+/// differ by whole minutes and validated second fields are in `[0, 60)`, so
+/// unequal bases cannot denote the same instant; equal bases compare borrowed
+/// seconds through the range operation's existing native admission owner.
+fn same_temporal_seconds(
+    a: (Option<i64>, i128, &Decimal),
+    b: (Option<i64>, i128, &Decimal),
+    memory: &mut Memory<'_>,
+) -> Result<bool, StorageError> {
+    let (a_timezone, a_base, a_second) = a;
+    let (b_timezone, b_base, b_second) = b;
+    if a_timezone.is_some() != b_timezone.is_some() {
+        return Ok(false);
+    }
+    let a_utc = a_base - i128::from(a_timezone.unwrap_or(0)) * 60;
+    let b_utc = b_base - i128::from(b_timezone.unwrap_or(0)) * 60;
+    if a_utc != b_utc {
+        return Ok(false);
+    }
+    memory.decimal_cmp(a_second, b_second).map(Ordering::is_eq)
 }
 
 // ── Kleene and counting lattices ─────────────────────────────────────────────────
@@ -831,9 +879,9 @@ fn covers_whole_space(dt: XsdDatatype) -> bool {
 /// answering "more values" — so the impossible case could never invent an `Empty`.
 #[derive(Clone)]
 enum Point {
-    /// A decimal endpoint of any size, held exactly ([`exact::Decimal`]) and ordered
+    /// A decimal endpoint of any size, held exactly ([`Decimal`]) and ordered
     /// exactly — total, and never `NaN`.
-    Dec(exact::Decimal),
+    Dec(Decimal),
     /// A float endpoint at either width, held as `f64` (every `f32` converts exactly).
     ///
     /// [`Point::float`] normalizes the two zeros onto one point, which is the order these
@@ -862,7 +910,7 @@ impl Point {
     }
 
     /// The decimal this endpoint carries, or `None` for another stratum's endpoint.
-    fn as_dec(&self) -> Option<&exact::Decimal> {
+    fn as_dec(&self) -> Option<&Decimal> {
         match self {
             Self::Dec(d) => Some(d),
             Self::Float(_) | Self::Len(_) => None,
@@ -1353,7 +1401,7 @@ fn gap_with(
 // ── Decimal endpoint arithmetic ──────────────────────────────────────────────────
 
 /// Whether a decimal is one of the integers.
-const fn is_integral(d: &exact::Decimal) -> bool {
+const fn is_integral(d: &Decimal) -> bool {
     d.is_integer()
 }
 
@@ -1440,7 +1488,7 @@ impl DecimalSet {
             fractional: IntervalSet::full_with(memory)?,
         })
     }
-    fn point_with(value: exact::Decimal, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+    fn point_with(value: Decimal, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
         let integral = is_integral(&value);
         let set = IntervalSet::point_with(Point::Dec(value), memory)?;
         Ok(if integral {
@@ -1462,12 +1510,12 @@ impl DecimalSet {
         let lo = if lo == i128::MIN {
             Lo::Unbounded
         } else {
-            Lo::Incl(Point::Dec(exact::Decimal::from(lo)))
+            Lo::Incl(Point::Dec(Decimal::from(lo)))
         };
         let hi = if hi == i128::MAX {
             Hi::Unbounded
         } else {
-            Hi::Incl(Point::Dec(exact::Decimal::from(hi)))
+            Hi::Incl(Point::Dec(Decimal::from(hi)))
         };
         let intervals = memory.one(Interval { lo, hi })?;
         Ok(Self {
@@ -3276,7 +3324,7 @@ mod tests {
 
     /// A decimal endpoint from an integer.
     fn dec(n: i128) -> Point {
-        Point::Dec(exact::Decimal::from(n))
+        Point::Dec(Decimal::from(n))
     }
 
     // ── The interval algebra ──────────────────────────────────────────────────────

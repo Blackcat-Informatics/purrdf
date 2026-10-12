@@ -82,8 +82,8 @@ impl OwnedBytes for XsdValue {
         match self {
             Self::String(text) => text.capacity(),
             Self::Binary { bytes, .. } => bytes.capacity(),
-            Self::BigInteger { value, .. } => value.owned_bytes(),
-            Self::BigDecimal(value) => value.owned_bytes(),
+            Self::Integer { value, .. } => value.owned_bytes(),
+            Self::Decimal(value) => value.owned_bytes(),
             _ => 0,
         }
     }
@@ -291,12 +291,10 @@ impl<'a> Memory<'a> {
         value: &XsdValue,
     ) -> Result<Option<exact::Decimal>, StorageError> {
         match value {
-            XsdValue::Integer { value, .. } => Ok(Some(exact::Decimal::from(*value))),
-            XsdValue::Decimal(value) => Ok(Some(exact::Decimal::from_bounded(value))),
-            XsdValue::BigInteger { value, .. } => {
+            XsdValue::Integer { value, .. } => {
                 Ok(Some(exact::Decimal::from_integer(value.clone_owned(self)?)))
             }
-            XsdValue::BigDecimal(value) => Ok(Some(value.clone_owned(self)?)),
+            XsdValue::Decimal(value) => Ok(Some(value.clone_owned(self)?)),
             _ => Ok(None),
         }
     }
@@ -405,11 +403,11 @@ impl CloneOwned for XsdValue {
                 bytes: memory.copy(bytes)?,
                 datatype: *datatype,
             },
-            Self::BigInteger { value, datatype } => Self::BigInteger {
+            Self::Integer { value, datatype } => Self::Integer {
                 value: value.clone_owned(memory)?,
                 datatype: *datatype,
             },
-            Self::BigDecimal(value) => Self::BigDecimal(value.clone_owned(memory)?),
+            Self::Decimal(value) => Self::Decimal(value.clone_owned(memory)?),
             value => value.clone(),
         })
     }

@@ -81,15 +81,11 @@
 //!
 //! # Exact integers and decimals of any size
 //!
-//! `xsd:integer` and `xsd:decimal` are exact at every size. A value that fits the
-//! machine-word representations — an `i128` integer ([`XsdValue::Integer`]), or a
-//! decimal with an `i128` coefficient and at most eighteen fractional digits
-//! ([`XsdValue::Decimal`]) — is held in them and computed on with machine
-//! arithmetic; any other is held on the arbitrary-precision tower [`exact`]
-//! ([`XsdValue::BigInteger`], [`XsdValue::BigDecimal`]). [`parse`] and every
-//! operator choose between the two by the value alone, so an operation over two
-//! machine-word values that overflows them returns the exact result in the
-//! big variants rather than failing. Addition, subtraction and multiplication are
+//! `xsd:integer` and `xsd:decimal` are exact at every size. [`XsdValue::Integer`]
+//! and [`XsdValue::Decimal`] hold the exact tower values, which use inline words
+//! where they fit and arbitrary-precision storage otherwise. [`parse`] and every
+//! operator preserve those value spaces across machine-word boundaries.
+//! Addition, subtraction and multiplication are
 //! exact; division follows a caller-chosen [`exact::DivisionPolicy`]
 //! ([`numeric::numeric_div_with_policy`]): by default a terminating quotient is
 //! exact, and a repeating quotient is rounded to eighteen fractional digits,
@@ -221,7 +217,6 @@ pub mod math;
 pub mod numeric;
 pub mod ops;
 pub mod range;
-pub mod rational;
 pub mod rfc3339;
 pub mod simple;
 pub mod temporal;
@@ -232,8 +227,8 @@ pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
 pub use datatype::{XSD_NS, XsdDatatype};
 pub use numeric::{
-    Decimal, bigint_avg_decimal, bigint_avg_decimal_lexical, numeric_abs, numeric_add,
-    numeric_ceil, numeric_cmp, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
+    bigint_avg_decimal, bigint_avg_decimal_lexical, numeric_abs, numeric_add, numeric_ceil,
+    numeric_cmp, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
     numeric_total_cmp, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
     parse_float_xsd10,
 };

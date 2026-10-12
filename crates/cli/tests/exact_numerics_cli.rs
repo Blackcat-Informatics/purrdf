@@ -112,6 +112,32 @@ fn division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbo
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("0.6667"), "{}", stdout(&out));
+    let out = query(
+        dir.path(),
+        &["--division", "2:half-even"],
+        "SELECT (3 / 8 AS ?q) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("0.38"), "{}", stdout(&out));
+    let out = query(
+        dir.path(),
+        &["--division", "2"],
+        "SELECT (2 / 3 AS ?q) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("0.66"), "{}", stdout(&out));
+    let out = query(
+        dir.path(),
+        &[],
+        "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> \
+         SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^xsd:dateTime) AS ?s) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("5.123456789012345678901"),
+        "{}",
+        stdout(&out)
+    );
     // A malformed policy is a usage error; its neighbour parses.
     let out = query(
         dir.path(),

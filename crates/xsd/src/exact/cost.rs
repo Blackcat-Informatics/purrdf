@@ -558,6 +558,24 @@ fn magnitude_parse_layout(
     })
 }
 
+/// Significant coefficient digits after XSD decimal normalization. Integral
+/// trailing zeros remain coefficient digits; only fractional trailing zeros
+/// lower the scale.
+pub(crate) fn decimal_coefficient_digits(
+    lexical: &str,
+) -> Result<usize, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+    let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
+    let whole = whole.trim_start_matches('0');
+    let fraction = fraction.trim_end_matches('0');
+    if whole.is_empty() {
+        Ok(fraction.trim_start_matches('0').len())
+    } else {
+        whole.len().checked_add(fraction.len()).ok_or(SizeOverflow)
+    }
+}
+
 /// Physical storage for the fallible native numeric reader
 /// [`crate::value::try_parse_numeric`]. Invalid classification is part of this
 /// plan; the caller must not invoke an owned-error parser for an invalid plan.
@@ -570,13 +588,12 @@ pub fn numeric_parse_layout(
     datatype: crate::XsdDatatype,
     xsd10: bool,
 ) -> Result<Option<NumericParseLayout>, crate::bigint::LimbScratchError> {
-    use crate::bigint::LimbScratchError::SizeOverflow;
     use crate::numeric::NumericReadError;
     use crate::{ErrorCode, XsdDatatype as D};
     if datatype.is_integer_family() {
         match crate::numeric::read_integer_typed(lexical, datatype) {
             Ok(_) => return Ok(Some(inline_parse_layout())),
-            Err(NumericReadError::Invalid(_)) => {
+            Err(NumericReadError::Invalid) => {
                 return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
             }
             Err(NumericReadError::OutOfRange(reason)) => {
@@ -611,26 +628,17 @@ pub fn numeric_parse_layout(
         D::Decimal => {
             match crate::numeric::read_decimal(lexical) {
                 Ok(_) => return Ok(Some(inline_parse_layout())),
-                Err(NumericReadError::Invalid(_)) => {
+                Err(NumericReadError::Invalid) => {
                     return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
                 }
                 Err(NumericReadError::OutOfRange(_)) => {}
             }
             let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-            let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
+            let (_, fraction) = body.split_once('.').unwrap_or((body, ""));
             if u32::try_from(fraction.len()).is_err() {
                 return Ok(Some(invalid_parse_layout(Some(ErrorCode::Foar0002))));
             }
-            let whole = whole.trim_start_matches('0');
-            let fraction = fraction.trim_end_matches('0');
-            let digits = if whole.is_empty() {
-                fraction.trim_start_matches('0').len()
-            } else {
-                whole
-                    .len()
-                    .checked_add(fraction.len())
-                    .ok_or(SizeOverflow)?
-            };
+            let digits = decimal_coefficient_digits(lexical)?;
             magnitude_parse_layout(digits).map(Some)
         }
         D::Float | D::Double => {

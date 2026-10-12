@@ -4,9 +4,8 @@
 //! The arbitrary-precision numeric tower: exact `xsd:integer`, `xsd:decimal` and
 //! `owl:rational` values of any size, beside the machine-word representations.
 //!
-//! [`crate::XsdValue`] holds an integer or decimal that fits machine words in
-//! its bounded variants and every other one on this tower
-//! ([`crate::XsdValue::BigInteger`], [`crate::XsdValue::BigDecimal`]); the
+//! [`crate::XsdValue`] holds exact integer and decimal values on this tower;
+//! each uses inline words where possible and arbitrary-precision storage otherwise. The
 //! types here are also usable on their own for exact reasoned mathematics
 //! (combinatorics, partition functions, exact quotients).
 //!
@@ -54,10 +53,10 @@
 //!   alone — no floating-point operation, so the bits are identical on every
 //!   target, wasm32 and the x87 included. Every conversion from `f64`/`f32` is
 //!   exact.
-//! * **Never wraps.** Narrowing to a bounded type ([`Integer::to_i128`],
-//!   [`Decimal::to_bounded`], [`Rational::to_bounded`]) returns the value or a
-//!   typed [`ExactError::OutOfRange`] carrying the F&O error code; it never
-//!   wraps, saturates or rounds.
+//! * **Never wraps.** Explicit integer narrowing through [`Integer::to_i128`]
+//!   or [`Integer::to_i64`] returns the value or a typed
+//!   [`ExactError::OutOfRange`] carrying the F&O error code; it never wraps,
+//!   saturates or rounds. Decimal and rational values have no bounded public form.
 //! * **Governable.** Every operation has a cost method returning a [`Cost`]
 //!   computed in constant time from operand sizes, so a governor can refuse a
 //!   hostile operation before it allocates; see [`cost`].

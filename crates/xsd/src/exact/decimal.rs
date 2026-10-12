@@ -10,7 +10,7 @@ use std::ops::{Add, Neg, Sub};
 
 use super::binary::{BINARY32, BINARY64, decompose_f32, decompose_f64};
 use super::cost::{self, Cost};
-use super::error::{BoundedTarget, ExactError, ExactKind};
+use super::error::{ExactError, ExactKind};
 use super::integer::{Integer, forward_by_value};
 use super::rounding::{DivisionPolicy, Rounding};
 use crate::bigint::BigInt;
@@ -88,6 +88,12 @@ impl PreparedDecimalText {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
+    }
+    /// Decimal digits before the point, counting the canonical zero before a
+    /// purely fractional coefficient.
+    #[must_use]
+    pub fn integer_digits(&self) -> usize {
+        self.digits.digits_len().saturating_sub(self.scale).max(1)
     }
     /// Actual surviving decimal-group temporary capacity.
     #[must_use]
@@ -293,6 +299,11 @@ impl Decimal {
             unscaled: value,
             scale: 0,
         }
+    }
+
+    /// Construct exact seconds from the temporal reader's inline components.
+    pub(crate) fn from_parts(mantissa: i128, scale: u8) -> Self {
+        Self::new(Integer::from_i128(mantissa), u32::from(scale))
     }
 
     /// The canonical coefficient: the value is `unscaled × 10^-scale`.
@@ -739,34 +750,21 @@ impl Decimal {
 
     /// The exact value of a bounded [`crate::numeric::Decimal`].
     #[must_use]
-    pub fn from_bounded(value: &BoundedDecimal) -> Self {
+    pub(crate) fn from_bounded(value: &BoundedDecimal) -> Self {
         Self::new(
             Integer::from_i128(value.mantissa()),
             u32::from(value.scale()),
         )
     }
 
-    /// The value as a bounded [`crate::numeric::Decimal`], exactly.
-    ///
-    /// # Errors
-    ///
-    /// [`ExactError::OutOfRange`] (`err:FOCA0001`) when the value needs more than
-    /// eighteen fractional digits or a coefficient beyond `i128`. Narrowing never
-    /// rounds: a caller that wants the nearest bounded value rounds first
-    /// ([`Self::round`] to scale 18).
-    pub fn to_bounded(&self) -> Result<BoundedDecimal, ExactError> {
+    /// Internal machine-word fast path. Public decimal values never narrow.
+    pub(crate) fn to_bounded(&self) -> Option<BoundedDecimal> {
         if self.scale > BOUNDED_MAX_SCALE {
-            return Err(ExactError::out_of_range(
-                BoundedTarget::BoundedDecimal,
-                "decimal scale exceeds 18",
-            ));
+            return None;
         }
-        let mantissa = self.unscaled.as_i128().ok_or(ExactError::out_of_range(
-            BoundedTarget::BoundedDecimal,
-            "decimal coefficient exceeds i128",
-        ))?;
+        let mantissa = self.unscaled.as_i128()?;
         let scale = u8::try_from(self.scale).expect("at most 18");
-        Ok(BoundedDecimal::from_parts(mantissa, scale))
+        Some(BoundedDecimal::from_parts(mantissa, scale))
     }
 
     /// The value with its fractional part discarded — the `xs:decimal` to
@@ -2217,13 +2215,6 @@ impl Default for Decimal {
 impl From<i128> for Decimal {
     fn from(value: i128) -> Self {
         Self::from_integer(Integer::from_i128(value))
-    }
-}
-
-impl TryFrom<&Decimal> for BoundedDecimal {
-    type Error = ExactError;
-    fn try_from(value: &Decimal) -> Result<Self, ExactError> {
-        value.to_bounded()
     }
 }
 

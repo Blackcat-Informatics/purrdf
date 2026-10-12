@@ -136,7 +136,7 @@ publishes nothing, including declarations made by earlier operations.
   with certified rows rather than a wrong answer, and `explain_query` returns
   a `QueryExplanation` whose ledger decomposes the fuel spent per algebra node
   and per charge point, beside the cost planner's estimate for each basic
-  graph pattern. The normative charge schedule and the frozen 52-case governor
+  graph pattern. The normative charge schedule and the frozen 54-case governor
   corpus are documented in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
@@ -371,6 +371,14 @@ defines no arithmetic beyond the numeric tower; the one documented table is
 [SEP-0002](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0002/sep-0002.md)'s,
 which this section follows for coverage. `ADJUST` (below) is SEP-0002's
 remaining, non-arithmetic addition.
+
+Temporal seconds retain every decimal place. For example, adding
+`"PT0.000000000000000000009S"^^xsd:dayTimeDuration` to
+`"2024-01-02T03:04:05.123456789012345678901Z"^^xsd:dateTime` yields
+`"2024-01-02T03:04:05.12345678901234567891Z"^^xsd:dateTime`, and `SECONDS`
+returns `5.12345678901234567891`. The result does not stop at eighteen
+fractional places. A `time` shifted by whole days wraps to the same time of
+day, even when the duration's day count exceeds a machine integer.
 
 ### The operator table
 

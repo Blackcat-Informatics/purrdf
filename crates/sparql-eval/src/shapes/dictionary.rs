@@ -317,7 +317,7 @@ fn adjacency(
                 || super::window::compare(
                     &value,
                     &purrdf_xsd::XsdValue::Integer {
-                        value: 1,
+                        value: purrdf_xsd::exact::Integer::ONE,
                         datatype: purrdf_xsd::XsdDatatype::Integer,
                     },
                     workspace,

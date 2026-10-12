@@ -12,7 +12,7 @@
 
 use purrdf_testkit::exact::Rational;
 use purrdf_testkit::rng::splitmix64_next;
-use purrdf_xsd::{Decimal, XsdDatatype, XsdValue};
+use purrdf_xsd::{XsdDatatype, XsdValue, exact::Decimal};
 
 use super::cast_numeric_value;
 use purrdf_xsd::numeric::{xpath_double_text, xpath_float_text};
@@ -72,7 +72,7 @@ impl Draws {
 
 fn integer(value: i128) -> XsdValue {
     XsdValue::Integer {
-        value,
+        value: purrdf_xsd::exact::Integer::from_i128(value),
         datatype: XsdDatatype::Integer,
     }
 }
@@ -547,11 +547,11 @@ fn assert_integer_casts(source: &XsdValue, exact: Option<&Rational>) -> usize {
         let cast = cast_numeric_value(source, target).map(|cast| {
             assert_eq!(cast.datatype(), target, "{source:?} cast to {target:?}");
             assert!(
-                matches!(cast, XsdValue::Integer { .. } | XsdValue::BigInteger { .. }),
+                matches!(cast, XsdValue::Integer { .. }),
                 "{source:?} cast to {target:?} is {cast:?}"
             );
             assert_eq!(
-                matches!(cast, XsdValue::BigInteger { .. }),
+                matches!(&cast, XsdValue::Integer { value, .. } if value.as_i128().is_none()),
                 cast.canonical_lexical().parse::<i128>().is_err(),
                 "{cast:?} is in the bounded variant exactly when i128 holds it"
             );

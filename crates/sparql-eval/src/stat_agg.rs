@@ -377,7 +377,7 @@ fn largest(shapes: &[Shape]) -> Option<Shape> {
 
 fn count_shape(n: usize) -> Shape {
     Shape::of_value(&XsdValue::Integer {
-        value: i128::try_from(n).unwrap_or(i128::MAX),
+        value: purrdf_xsd::exact::Integer::from_i128(i128::try_from(n).unwrap_or(i128::MAX)),
         datatype: XsdDatatype::Integer,
     })
     .expect("an integer has a shape")
@@ -541,16 +541,16 @@ fn native_floor_index(
     workspace: &crate::WorkspaceCapability,
 ) -> Result<Option<i128>, EvalError> {
     Ok(match value {
-        XsdValue::Integer { value, .. } => Some(*value),
-        XsdValue::Decimal(value) => Some(value.whole_part()),
+        XsdValue::Integer { value, .. } => Some(value.as_i128().unwrap_or_else(|| {
+            if value.is_negative() {
+                i128::MIN
+            } else {
+                i128::MAX
+            }
+        })),
         XsdValue::Float(value) => Some(*value as i128),
         XsdValue::Double(value) => Some(*value as i128),
-        XsdValue::BigInteger { value, .. } => Some(if value.is_negative() {
-            i128::MIN
-        } else {
-            i128::MAX
-        }),
-        XsdValue::BigDecimal(decimal) => {
+        XsdValue::Decimal(decimal) => {
             let mut frame = crate::native_numeric::NumericFrame::new(workspace);
             let answer = purrdf_xsd::numeric::numeric_cast_admitted(
                 value,
@@ -559,16 +559,13 @@ fn native_floor_index(
             );
             match frame.finish_cast(answer)? {
                 Some(integer) => match &*integer {
-                    XsdValue::Integer { value, .. } => Some(*value),
-                    XsdValue::BigInteger { value, .. } => {
-                        Some(value.as_i128().unwrap_or_else(|| {
-                            if decimal.is_negative() {
-                                i128::MIN
-                            } else {
-                                i128::MAX
-                            }
-                        }))
-                    }
+                    XsdValue::Integer { value, .. } => Some(value.as_i128().unwrap_or_else(|| {
+                        if decimal.is_negative() {
+                            i128::MIN
+                        } else {
+                            i128::MAX
+                        }
+                    })),
                     _ => None,
                 },
                 None => None,
@@ -620,11 +617,11 @@ fn percentile_native(
 ) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
     use purrdf_xsd::numeric::NumericBinaryOperator::{Add, Multiply, Subtract};
     let zero = XsdValue::Integer {
-        value: 0,
+        value: purrdf_xsd::exact::Integer::ZERO,
         datatype: XsdDatatype::Integer,
     };
     let one = XsdValue::Integer {
-        value: 1,
+        value: purrdf_xsd::exact::Integer::ONE,
         datatype: XsdDatatype::Integer,
     };
     let (Some(lower), Some(upper)) = (
@@ -644,7 +641,7 @@ fn percentile_native(
         return Ok(None);
     };
     let count_value = XsdValue::Integer {
-        value: count,
+        value: purrdf_xsd::exact::Integer::from_i128(count),
         datatype: XsdDatatype::Integer,
     };
     let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
@@ -1054,11 +1051,11 @@ impl AggregateAccumulator for MomentsAccumulator {
             return Ok(None);
         };
         let n_value = XsdValue::Integer {
-            value: i128::from(n),
+            value: purrdf_xsd::exact::Integer::from_i128(i128::from(n)),
             datatype: XsdDatatype::Integer,
         };
         let denominator_value = XsdValue::Integer {
-            value: i128::from(denominator),
+            value: purrdf_xsd::exact::Integer::from_i128(i128::from(denominator)),
             datatype: XsdDatatype::Integer,
         };
         let ordinary = purrdf_xsd::exact::DivisionPolicy::xsd_default();
@@ -1726,7 +1723,10 @@ impl CustomAggregate for TopKAggregate {
             let k = scalarval_native(scalarvals, TOPK_K, workspace)?
                 .as_deref()
                 .and_then(|value| match value {
-                    XsdValue::Integer { value, .. } if *value > 0 => u64::try_from(*value).ok(),
+                    XsdValue::Integer { value, .. } if !value.is_negative() => value
+                        .as_i128()
+                        .and_then(|value| u64::try_from(value).ok())
+                        .filter(|value| *value > 0),
                     _ => None,
                 })
                 .unwrap_or(1);
@@ -1756,9 +1756,10 @@ impl CustomAggregate for TopKAggregate {
                 state: match scalarval_native(scalarvals, TOPK_K, workspace)?
                     .as_deref()
                     .and_then(|value| match value {
-                        XsdValue::Integer { value, .. } if *value > 0 => {
-                            usize::try_from(*value).ok()
-                        }
+                        XsdValue::Integer { value, .. } if !value.is_negative() => value
+                            .as_i128()
+                            .and_then(|value| usize::try_from(value).ok())
+                            .filter(|value| *value > 0),
                         _ => None,
                     }) {
                     Some(k) => TopKState::Valid {

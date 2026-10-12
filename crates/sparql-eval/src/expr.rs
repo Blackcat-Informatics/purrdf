@@ -48,6 +48,7 @@ use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value,
     numeric::{
         CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
+        temporal_subtract_cost, timezone_adjust_cost,
     },
 };
 #[cfg(test)]
@@ -890,7 +891,7 @@ fn xsd_integer_of_admitted(
     };
     let parsed = parse_owned_xsd(lexical_form, datatype, workspace)?;
     Ok(match parsed.as_deref() {
-        Some(XsdValue::Integer { value, .. }) => Some(*value),
+        Some(XsdValue::Integer { value, .. }) => value.to_i128().ok(),
         _ => None,
     })
 }
@@ -5180,10 +5181,8 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             _ => Ok(None),
         },
         Function::Seconds => match temporal_value {
-            Some(XsdValue::DateTime(dt)) => {
-                Ok(Some(xsd_to_term(ctx, &XsdValue::Decimal(dt.second()))?))
-            }
-            Some(XsdValue::Time(t)) => Ok(Some(xsd_to_term(ctx, &XsdValue::Decimal(t.second()))?)),
+            Some(XsdValue::DateTime(dt)) => borrowed_temporal_seconds_to_term(ctx, dt.second_ref()),
+            Some(XsdValue::Time(t)) => borrowed_temporal_seconds_to_term(ctx, t.second_ref()),
             _ => Ok(None),
         },
         Function::Timezone => match temporal_value {
@@ -5264,26 +5263,49 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 _ => None,
             }
             .map(AdjustTimezone::into_seconds);
-            match (value, timezone) {
-                (Some(XsdValue::DateTime(dt)), Some(tz)) => {
-                    match purrdf_xsd::temporal::adjust_datetime_to_timezone(dt, tz) {
-                        Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::DateTime(result))?)),
-                        Err(_) => Ok(None),
-                    }
+            let (Some(value), Some(tz)) = (value, timezone) else {
+                return Ok(None);
+            };
+            if !numeric_step_admitted(ctx, timezone_adjust_cost(value, tz)) {
+                return Ok(None);
+            }
+            let capability = ctx.growth.clone();
+            let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+            let adjusted = match value {
+                XsdValue::DateTime(dt) => {
+                    purrdf_xsd::temporal::adjust_datetime_to_timezone_admitted(
+                        dt,
+                        tz,
+                        &mut |layout| frame.admit(layout),
+                    )
+                    .map(XsdValue::DateTime)
                 }
-                (Some(XsdValue::Date(d)), Some(tz)) => {
-                    match purrdf_xsd::temporal::adjust_date_to_timezone(d, tz) {
-                        Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Date(result))?)),
-                        Err(_) => Ok(None),
-                    }
+                XsdValue::Date(d) => {
+                    purrdf_xsd::temporal::adjust_date_to_timezone_admitted(d, tz, &mut |layout| {
+                        frame.admit(layout)
+                    })
+                    .map(XsdValue::Date)
                 }
-                (Some(XsdValue::Time(t)), Some(tz)) => {
-                    match purrdf_xsd::temporal::adjust_time_to_timezone(t, tz) {
-                        Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Time(result))?)),
-                        Err(_) => Ok(None),
-                    }
+                XsdValue::Time(t) => {
+                    purrdf_xsd::temporal::adjust_time_to_timezone_admitted(t, tz, &mut |layout| {
+                        frame.admit(layout)
+                    })
+                    .map(XsdValue::Time)
                 }
-                _ => Ok(None),
+                _ => return Ok(None),
+            };
+            match adjusted {
+                Ok(value) => {
+                    let value = frame
+                        .finish_value(Ok(value))?
+                        .expect("timezone adjustment has no numeric value-space error");
+                    governed_xsd_to_term(ctx, &value)
+                }
+                Err(purrdf_xsd::XsdError::Storage(error)) => {
+                    frame.finish_scalar::<()>(Err(error))?;
+                    Ok(None)
+                }
+                Err(_) => Ok(None),
             }
         }
 
@@ -5580,22 +5602,34 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if target.is_calendar() {
         match calendar_cast_source(datatype_iri, source_datatype) {
             CalendarSource::Value(source_datatype) => {
-                let Some(value) = crate::parsed_value::ParsedValue::parse(
+                let Some(source_value) = crate::parsed_value::ParsedValue::parse(
                     lexical,
                     source_datatype,
                     true,
                     &ctx.growth,
                 )?
-                .and_then(|value| {
-                    purrdf_xsd::temporal::cast_calendar(&value, target)
-                        .ok()
-                        .flatten()
-                }) else {
+                else {
                     return Ok(None);
                 };
-                let text = purrdf_xsd::value::canonical_non_numeric(&value)
-                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
-                return borrowed_xsd_text_to_term(ctx, &text, target.iri());
+                let capability = ctx.growth.clone();
+                let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+                let cast = purrdf_xsd::temporal::cast_calendar_admitted(
+                    &source_value,
+                    target,
+                    &mut |layout| frame.admit(layout),
+                );
+                let value = match cast {
+                    Ok(Some(value)) => frame
+                        .finish_value(Ok(value))?
+                        .expect("calendar cast has no numeric value-space error"),
+                    Ok(None) => return Ok(None),
+                    Err(purrdf_xsd::XsdError::Storage(error)) => {
+                        frame.finish_scalar::<()>(Err(error))?;
+                        return Ok(None);
+                    }
+                    Err(_) => return Ok(None),
+                };
+                return governed_xsd_to_term(ctx, &value);
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -5630,11 +5664,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // One native parser; malformed lexical and physical refusal stay separate.
     let result =
         match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
-            Ok(value) if target.is_calendar() => {
-                let text = purrdf_xsd::value::canonical_non_numeric(&value)
-                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
-                borrowed_xsd_text_to_term(ctx, &text, target.iri())
-            }
+            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value),
             Ok(value) => governed_xsd_to_term(ctx, &value),
             Err(code) => {
                 if target.is_numeric() {
@@ -5674,8 +5704,6 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Float(_)
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_)
     )
 }
 
@@ -5790,14 +5818,24 @@ fn cast_duration_or_binary<D: DatasetView + Sync>(
     }
     let result = match &*value {
         XsdValue::Duration(duration) => {
-            let (months, seconds) = match target {
-                T::Duration => (duration.months(), duration.seconds()),
-                T::YearMonthDuration => (duration.months(), purrdf_xsd::Decimal::from_integer(0)),
-                T::DayTimeDuration => (0, duration.seconds()),
-                _ => return Ok(ValueCast::Cast(None)),
-            };
-            match purrdf_xsd::temporal::Duration::new(months, seconds, target) {
-                Ok(duration) => Some(xsd_to_term(ctx, &XsdValue::Duration(duration))?),
+            let capability = ctx.growth.clone();
+            let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+            let cast =
+                purrdf_xsd::temporal::cast_duration_admitted(duration, target, &mut |layout| {
+                    frame.admit(layout)
+                });
+            match cast {
+                Ok(Some(duration)) => {
+                    let value = frame
+                        .finish_value(Ok(XsdValue::Duration(duration)))?
+                        .expect("duration cast has no numeric value-space error");
+                    Some(xsd_to_term(ctx, &value)?)
+                }
+                Ok(None) | Err(purrdf_xsd::XsdError::TypeMismatch { .. }) => None,
+                Err(purrdf_xsd::XsdError::Storage(error)) => {
+                    frame.finish_scalar::<()>(Err(error))?;
+                    None
+                }
                 Err(_) => None,
             }
         }
@@ -6907,6 +6945,22 @@ pub(crate) fn xsd_workspace_value(
     match frame.finish_text(prepared)? {
         Some(text) => numeric_text_value(text, value.datatype().iri(), workspace),
         None => {
+            let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+            let prepared = purrdf_xsd::temporal::prepare_calendar_text(value, &mut |layout| {
+                frame.admit(layout)
+            });
+            if let Some(text) = frame.finish_calendar_text(prepared)? {
+                return workspace.literal(text, value.datatype().iri());
+            }
+            if let XsdValue::Duration(duration) = value {
+                let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+                let prepared =
+                    purrdf_xsd::temporal::prepare_duration_text(duration, &mut |layout| {
+                        frame.admit(layout)
+                    });
+                let text = frame.finish_duration_text(prepared)?;
+                return workspace.literal(text, value.datatype().iri());
+            }
             let text = purrdf_xsd::value::canonical_non_numeric(value)
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
             workspace.literal(text, value.datatype().iri())
@@ -6931,6 +6985,22 @@ fn numeric_text_to_term<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let value = numeric_text_value(text, datatype, &ctx.growth)?;
     ctx.intern_workspace_term(value)
+}
+
+fn borrowed_temporal_seconds_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    seconds: &purrdf_xsd::exact::Decimal,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if !numeric_step_admitted(ctx, purrdf_xsd::numeric::decimal_render_cost(seconds)) {
+        return Ok(None);
+    }
+    let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
+    let prepared =
+        purrdf_xsd::numeric::prepare_decimal_text(seconds, &mut |layout| frame.admit(layout));
+    let text = frame
+        .finish_text(prepared.map(Some))?
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    numeric_text_to_term(ctx, text, purrdf_xsd::datatype::XSD_DECIMAL)
 }
 
 /// The exact writer owns its admitted groups; destination sizing precedes
@@ -7024,7 +7094,12 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
         ArithmeticOperator::Multiply => CostOp::Mul,
         ArithmeticOperator::Divide => CostOp::Div(ctx.division),
     };
-    if !numeric_step_admitted(ctx, numeric_cost(&xa, &xb, cost_op)) {
+    let cost = if op == ArithmeticOperator::Subtract {
+        temporal_subtract_cost(&xa, &xb)
+    } else {
+        numeric_cost(&xa, &xb, cost_op)
+    };
+    if !numeric_step_admitted(ctx, cost) {
         return Ok(None);
     }
     let operation = match op {
@@ -7331,12 +7406,15 @@ fn adjust_timezone_arg(v: &XsdValue) -> Option<AdjustTimezone> {
             if dur.months() != 0 {
                 return None;
             }
-            let seconds = dur.seconds();
-            if !seconds.frac_part().is_zero() {
+            let seconds = dur.seconds_ref();
+            if !seconds.is_integer() {
                 return None; // non-integer seconds: not a whole-minute timezone
             }
-            i64::try_from(seconds.whole_part())
+            seconds
+                .unscaled()
+                .to_i128()
                 .ok()
+                .and_then(|seconds| i64::try_from(seconds).ok())
                 .map(AdjustTimezone::Offset)
         }
         _ => None,
@@ -9226,6 +9304,39 @@ mod tests {
         assert_eq!(lex(&ds, &minutes), Some("30".to_owned()));
         // SECONDS returns xsd:decimal; XSD 1.1 whole-decimal lexical has no point.
         assert_eq!(lex(&ds, &seconds), Some("45".to_owned()));
+    }
+
+    #[test]
+    fn seconds_extracts_wide_fraction_from_borrowed_temporal_owner() {
+        let ds = empty_ds();
+        let seconds = format!("45.{}1", "0".repeat(1000));
+        for (lexical, datatype) in [
+            (format!("2024-03-15T10:30:{seconds}Z"), XSD_DATETIME),
+            (format!("10:30:{seconds}Z"), XSD_TIME),
+        ] {
+            let source = typed_lit(&lexical, datatype);
+            let expression = Expression::FunctionCall(Function::Seconds, vec![source].into());
+            assert_eq!(lex(&ds, &expression).as_deref(), Some(seconds.as_str()));
+        }
+    }
+
+    #[test]
+    fn borrowed_seconds_keep_zero_exact_work_for_small_values() {
+        let ds = empty_ds();
+        let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(0);
+        for (lexical, accepted) in [
+            ("12:00:45.5Z".to_owned(), true),
+            (format!("12:00:45.{}1Z", "0".repeat(1000)), false),
+        ] {
+            let value = purrdf_xsd::parse(&lexical, XsdDatatype::Time).unwrap();
+            let XsdValue::Time(value) = &value else {
+                unreachable!();
+            };
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            let mut ctx = EvalCtx::new(&ds).with_governors(state);
+            let result = borrowed_temporal_seconds_to_term(&mut ctx, value.second_ref()).unwrap();
+            assert_eq!(result.is_some(), accepted, "{lexical}");
+        }
     }
 
     #[test]

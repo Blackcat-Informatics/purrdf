@@ -4,14 +4,8 @@
 //! The exact branch of the numeric operators: integer and decimal operands of any
 //! size, computed on [`crate::exact`].
 //!
-//! The public operators in [`crate::numeric`] answer an operation over two
-//! bounded values ([`XsdValue::Integer`], [`XsdValue::Decimal`]) with the bounded
-//! arithmetic whenever its result is exact and representable, and come here
-//! otherwise: when an operand is [`XsdValue::BigInteger`] or
-//! [`XsdValue::BigDecimal`], when an `i128` result overflows, and when a product
-//! needs more than eighteen fractional digits. Every result goes back through
-//! [`XsdValue::from_exact_integer`] / [`XsdValue::from_exact_decimal`], so a value
-//! the bounded variants hold is always returned in them.
+//! [`XsdValue::Integer`] and [`XsdValue::Decimal`] carry one exact representation
+//! at every size. Their inline values still use machine-word operations.
 
 use std::cmp::Ordering;
 
@@ -31,16 +25,12 @@ pub(crate) enum Op {
 /// Whether either operand is on the exact branch but outside the bounded
 /// variants, which the bounded arithmetic cannot read.
 pub(crate) const fn involves_big(a: &XsdValue, b: &XsdValue) -> bool {
-    matches!(a, XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
-        || matches!(b, XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
+    super::is_big(a) || super::is_big(b)
 }
 
 /// Whether the value belongs to the integer family (of any size).
 const fn is_integer_family(value: &XsdValue) -> bool {
-    matches!(
-        value,
-        XsdValue::Integer { .. } | XsdValue::BigInteger { .. }
-    )
+    matches!(value, XsdValue::Integer { .. })
 }
 
 /// The exact decimal of an exact-branch operand.
@@ -173,13 +163,8 @@ pub(crate) fn with_coefficient<T>(
     use_value: impl FnOnce(&exact::Integer, u32) -> T,
 ) -> T {
     match value {
-        XsdValue::BigInteger { value, .. } => use_value(value, 0),
-        XsdValue::BigDecimal(value) => use_value(value.unscaled(), value.scale()),
-        XsdValue::Integer { value, .. } => use_value(&exact::Integer::from_i128(*value), 0),
-        XsdValue::Decimal(value) => use_value(
-            &exact::Integer::from_i128(value.mantissa()),
-            u32::from(value.scale()),
-        ),
+        XsdValue::Integer { value, .. } => use_value(value, 0),
+        XsdValue::Decimal(value) => use_value(value.unscaled(), value.scale()),
         _ => unreachable!("exact-branch operands were checked before dispatch"),
     }
 }
@@ -205,28 +190,6 @@ pub(crate) fn cmp_ieee_admitted_using(
     with_coefficient(exact, |coefficient, scale| {
         exact::decimal::cmp_scaled_f64_admitted_using(coefficient, scale, ieee, storage, admit)
     })
-}
-
-/// The correctly rounded `f64` of an exact-branch operand.
-#[cold]
-#[inline(never)]
-pub(crate) fn to_f64(value: &XsdValue) -> f64 {
-    match value {
-        XsdValue::BigInteger { value, .. } => value.to_f64(),
-        XsdValue::BigDecimal(decimal) => decimal.to_f64(),
-        _ => decimal_of(value).to_f64(),
-    }
-}
-
-/// The correctly rounded `f32` of an exact-branch operand, rounded once.
-#[cold]
-#[inline(never)]
-pub(crate) fn to_f32(value: &XsdValue) -> f32 {
-    match value {
-        XsdValue::BigInteger { value, .. } => value.to_f32(),
-        XsdValue::BigDecimal(decimal) => decimal.to_f32(),
-        _ => decimal_of(value).to_f32(),
-    }
 }
 
 /// Negation: an `xsd:integer` for an integer-family operand (F&O 3.1 §4.2), a
@@ -274,12 +237,8 @@ pub(crate) fn round_to_integer(value: &XsdValue, rounding: Rounding) -> XsdValue
 /// touching its digits.
 pub(crate) fn shape_of(value: &XsdValue) -> Option<Shape> {
     Some(match value {
-        XsdValue::Integer { value, .. } => Shape::of_i128(*value, 0),
-        XsdValue::Decimal(decimal) => {
-            Shape::of_i128(decimal.mantissa(), u64::from(decimal.scale()))
-        }
-        XsdValue::BigInteger { value, .. } => value.shape(),
-        XsdValue::BigDecimal(decimal) => decimal.shape(),
+        XsdValue::Integer { value, .. } => value.shape(),
+        XsdValue::Decimal(decimal) => decimal.shape(),
         _ => return None,
     })
 }

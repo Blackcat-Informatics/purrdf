@@ -38,12 +38,12 @@ fn integers_past_i128_parse_exactly_and_in_range_ones_stay_bounded() {
     let max = int(&i128::MAX.to_string());
     assert!(matches!(max, XsdValue::Integer { .. }));
     let past = int(I128_MAX_PLUS_ONE);
-    assert!(matches!(past, XsdValue::BigInteger { .. }));
+    assert!(matches!(past, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
     assert_eq!(past.canonical_lexical(), I128_MAX_PLUS_ONE);
     assert_eq!(past.datatype(), D::Integer);
     assert!(past.is_numeric());
     let below = int("-170141183460469231731687303715884105729");
-    assert!(matches!(below, XsdValue::BigInteger { .. }));
+    assert!(matches!(below, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
     let huge = format!("-{}", "9".repeat(300));
     assert_eq!(int(&huge).canonical_lexical(), huge);
     assert_eq!(int("+000123").canonical_lexical(), "123");
@@ -63,7 +63,7 @@ fn derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not() {
     let big = "1".repeat(60);
     assert!(matches!(
         parse(&big, D::NonNegativeInteger),
-        Ok(XsdValue::BigInteger { .. })
+        Ok(XsdValue::Integer { value, .. }) if value.as_i128().is_none()
     ));
     assert!(parse(&big, D::PositiveInteger).is_ok());
     assert!(parse(&format!("-{big}"), D::NonNegativeInteger).is_err());
@@ -80,14 +80,14 @@ fn derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not() {
 #[test]
 fn decimals_past_the_bounded_form_parse_exactly() {
     let long = dec("0.1000000000000000000000000001");
-    assert!(matches!(long, XsdValue::BigDecimal(_)));
+    assert!(matches!(long, XsdValue::Decimal(ref value) if value.scale() > 18));
     assert_eq!(long.canonical_lexical(), "0.1000000000000000000000000001");
     // Trailing zeros past eighteen digits are not significant.
     let padded = dec("2.50000000000000000000000000");
     assert!(matches!(padded, XsdValue::Decimal(_)));
     assert_eq!(padded.canonical_lexical(), "2.5");
     let wide = dec(&format!("{}.5", "7".repeat(50)));
-    assert!(matches!(wide, XsdValue::BigDecimal(_)));
+    assert!(matches!(wide, XsdValue::Decimal(ref value) if value.unscaled().as_i128().is_none()));
     assert!(parse("1.2.3", D::Decimal).is_err());
     assert!(parse(".5", D::Decimal).is_ok());
 }
@@ -98,10 +98,12 @@ fn arithmetic_that_overflowed_now_returns_the_exact_value() {
     let one = int("1");
     let sum = numeric_add(&max, &one).expect("exact");
     assert_eq!(sum.canonical_lexical(), I128_MAX_PLUS_ONE);
-    assert!(matches!(sum, XsdValue::BigInteger { .. }));
+    assert!(matches!(sum, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
     // Coming back into range returns the bounded variant.
     let back = numeric_sub(&sum, &one).expect("exact");
-    assert!(matches!(back, XsdValue::Integer { value, .. } if value == i128::MAX));
+    assert!(
+        matches!(back, XsdValue::Integer { ref value, .. } if value.as_i128() == Some(i128::MAX))
+    );
     let square = numeric_mul(&max, &max).expect("exact");
     assert_eq!(
         square.canonical_lexical(),

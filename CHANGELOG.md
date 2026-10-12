@@ -24,6 +24,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **One exact XSD numeric value API:** public `XsdValue::Integer` and
+  `XsdValue::Decimal` carry the exact integer and decimal types at every size.
+  The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal
+  narrowing conversions are removed; callers that matched the old wide
+  variants use the same exact variants as small values. Integer narrowing to
+  `i128` or `i64` remains explicit and typed. Decimal division now keeps every
+  digit of a terminating quotient and otherwise rounds to 18 fractional
+  places, half to even. Explicit `exact`, `N`, `N:ROUNDING` and
+  `exact-or-N[:ROUNDING]` policies remain available. Temporal seconds use exact
+  decimals, including fractional precision beyond 18 places, through
+  arithmetic, comparisons and canonical output.
+
 - **Unrestricted exact BM25F ranking:** the ranking identity is now
   `purrdf-bm25f-fixed-v2`, revision 2. Query terms, ranking fields, corpus
   populations, field lengths/frequencies and nonnegative weights no longer have

@@ -118,7 +118,7 @@ impl XsdDoubleMetres {
     /// Refuses an incompatible floating environment or a nonfinite promoted result.
     pub fn from_integer(value: i128) -> Result<Self, GeoError> {
         Self::from_xsd(&XsdValue::Integer {
-            value,
+            value: purrdf_xsd::exact::Integer::from_i128(value),
             datatype: XsdDatatype::Integer,
         })
     }

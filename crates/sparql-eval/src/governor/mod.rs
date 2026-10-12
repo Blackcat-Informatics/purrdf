@@ -1840,7 +1840,16 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// digits, half to even. This changes both the retained value and the work
 /// charged through `row-expression-evaluation`, including AVG's final division.
 /// A budget sized against v16 can therefore trip at another computation.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 17;
+///
+/// # v18
+///
+/// The point schedule stays unchanged. Exact-only numeric values and exact temporal
+/// seconds now retain and admit arbitrary-precision results through the governed
+/// evaluator. Temporal arithmetic, comparison, timezone adjustment and rendering
+/// charge their actual numeric work and scratch instead of the former bounded or
+/// zero-cost path. Even when a query's answer is unchanged, its fuel and scratch
+/// cut points can move; consumers must remeasure those ceilings.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 18;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2229,7 +2238,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "bb0868775231b60bbac29abe27037c7e0b6852f6393cc665a5dc27afb55db991";
+    "6f856ca8ab7274b85908ac329bff7d8b806ac9e18f91f479ddb002bd07090a2f";
 
 #[cfg(test)]
 mod tests {
@@ -2880,7 +2889,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 17);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 18);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(

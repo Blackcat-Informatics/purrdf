@@ -27,11 +27,11 @@ fn lexical_refusals_name_their_code_beside_an_accepted_neighbour() {
     let huge = format!("1{}", "0".repeat(60));
     assert!(matches!(
         value(&huge, D::Integer),
-        XsdValue::BigInteger { .. }
+        XsdValue::Integer { ref value, .. } if value.as_i128().is_none()
     ));
     assert!(matches!(
         value(&format!("0.{}1", "0".repeat(60)), D::Decimal),
-        XsdValue::BigDecimal(_)
+        XsdValue::Decimal(ref value) if value.scale() > 18
     ));
     assert_eq!(code(parse("300", D::Byte)), Some(ErrorCode::Forg0001));
     assert!(parse("127", D::Byte).is_ok());
@@ -43,7 +43,7 @@ fn lexical_refusals_name_their_code_beside_an_accepted_neighbour() {
     );
     assert!(matches!(
         value(&huge, D::NonNegativeInteger),
-        XsdValue::BigInteger { .. }
+        XsdValue::Integer { ref value, .. } if value.as_i128().is_none()
     ));
     assert_eq!(code(parse("1.5", D::Integer)), Some(ErrorCode::Forg0001));
     assert_eq!(code(parse("1.5x", D::Decimal)), Some(ErrorCode::Forg0001));
@@ -117,11 +117,11 @@ fn tower_refusals_name_their_code() {
     let fits: exact::Integer = "12".parse().expect("an integer");
     assert_eq!(fits.to_i128(), Ok(12));
     let fine: exact::Decimal = "0.0000000000000000001".parse().expect("a decimal");
-    assert_eq!(fine.to_bounded().unwrap_err().code(), ErrorCode::Foca0001);
+    assert_eq!(fine.canonical_lexical(), "0.0000000000000000001");
     let coarse: exact::Decimal = "0.000000000000000001".parse().expect("a decimal");
-    assert!(coarse.to_bounded().is_ok());
-    // Both public readers keep exact values; explicit narrowing owns the
-    // machine-word range codes.
+    assert_eq!(coarse.canonical_lexical(), "0.000000000000000001");
+    // Both public readers keep exact values; explicit integer narrowing owns
+    // the machine-word range code.
     assert_eq!(
         purrdf_xsd::numeric::parse_integer(&past)
             .expect("an exact integer")
@@ -203,7 +203,7 @@ fn unary_results_of_a_derived_integer_are_xsd_integer() {
     for result in [numeric_unary_minus(&huge), numeric_abs(&huge)] {
         let result = result.expect("a value");
         assert_eq!(result.datatype(), D::Integer);
-        assert!(matches!(result, XsdValue::BigInteger { .. }));
+        assert!(matches!(result, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
         assert_eq!(result.canonical_lexical(), format!("1{}", "0".repeat(40)));
     }
     for op in [numeric_ceil, numeric_floor, numeric_round] {
@@ -235,7 +235,7 @@ fn a_huge_value_outside_a_sign_restricted_type_is_forg0001() {
             "{refused} as {datatype:?}"
         );
         assert!(
-            matches!(value(&held, datatype), XsdValue::BigInteger { .. }),
+            matches!(value(&held, datatype), XsdValue::Integer { ref value, .. } if value.as_i128().is_none()),
             "{held} as {datatype:?}"
         );
     }

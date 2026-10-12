@@ -76,7 +76,7 @@ fn intern_count<D: DatasetView + Sync>(
     xsd_to_term(
         ctx,
         &XsdValue::Integer {
-            value,
+            value: purrdf_xsd::exact::Integer::from_i128(value),
             datatype: XsdDatatype::Integer,
         },
     )
@@ -269,7 +269,7 @@ fn as_index(value: &TermValue, workspace: &WorkspaceCapability) -> Result<Option
         return Ok(None);
     };
     Ok(match &*value {
-        XsdValue::Integer { value, .. } => i64::try_from(*value).ok(),
+        XsdValue::Integer { value, .. } => value.to_i64().ok(),
         _ => None,
     })
 }

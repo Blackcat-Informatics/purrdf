@@ -381,6 +381,33 @@ impl Integer {
         self.div_rem_using(divisor, &crate::bigint::scratch::Fallible)
     }
 
+    /// Truncating quotient/remainder with checked native destination admission.
+    /// # Errors
+    /// Preserves division-by-zero separately from admission and allocation refusal.
+    pub fn try_div_rem_admitted(
+        &self,
+        divisor: &Self,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<(Self, Self), super::ExactOperationError> {
+        if divisor.is_zero() {
+            return Err(ExactError::DivisionByZero.into());
+        }
+        if self
+            .as_i128()
+            .zip(divisor.as_i128())
+            .is_some_and(|(a, b)| a.checked_div(b).is_some())
+        {
+            return self.try_div_rem(divisor);
+        }
+        admit(cost::integer_division_layout(
+            self.limb_len(),
+            divisor.limb_len(),
+        )?)?;
+        self.try_div_rem(divisor)
+    }
+
     pub(crate) fn div_rem_using(
         &self,
         divisor: &Self,

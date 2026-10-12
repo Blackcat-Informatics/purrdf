@@ -329,8 +329,7 @@ fn relate_inner<W: RelateWork>(
     // supplies only ceilings: degenerate polygons still exhaust the witnesses.
     if point_targets.is_some() && (targets.interior_exterior || targets.exterior_interior) {
         scan_for_areas(
-            a,
-            b,
+            (a, b),
             &events,
             &edges,
             &mut matrix,
@@ -365,8 +364,7 @@ fn relate_inner<W: RelateWork>(
     }
     if point_targets.is_none() && (targets.interior_exterior || targets.exterior_interior) {
         scan_for_areas(
-            a,
-            b,
+            (a, b),
             &events,
             &edges,
             &mut matrix,
@@ -567,8 +565,7 @@ impl AreaTargets {
 }
 
 fn scan_for_areas<W: RelateWork>(
-    a: &Geometry,
-    b: &Geometry,
+    geometries: (&Geometry, &Geometry),
     events: &[Coord],
     edges: &[(&Coord, &Coord)],
     matrix: &mut IntersectionMatrix,
@@ -576,6 +573,7 @@ fn scan_for_areas<W: RelateWork>(
     point_targets: Option<PointTargets>,
     work: &mut W,
 ) -> Result<(), GeoError> {
+    let (a, b) = geometries;
     let Some(bands) = band_boundaries(events, work)? else {
         return Ok(());
     };
