@@ -902,14 +902,6 @@ fingerprints = []
 names = ['^(mul_small|mul_pow5|mul_by_small|from_binary|from_digits|div_two|is_multiple_of|pow10|cmp_exact)$']
 
 [[job.variant]]
-symbol = "purrdf_xsd::numeric::Decimal::cmp_exact"
-file = "crates/xsd/src/numeric.rs"
-detector = "forbidden"
-criterion = "a"
-anchor = "purrdf_xsd::numeric::Decimal"
-reason = "The xsd:decimal value space this crate models is an i128 mantissa at a scale of at most 18 digits, which XSD 1.1 permits a processor to bound; a literal past it is refused, so its comparison is fixed-width integer arithmetic, not a big integer."
-
-[[job.variant]]
 symbol = "purrdf_shapes::json_schema::numeric_order::Decimal::from_binary"
 file = "crates/shapes/src/json_schema/numeric_order.rs"
 detector = "forbidden"
