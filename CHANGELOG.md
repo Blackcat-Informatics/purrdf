@@ -24,6 +24,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Rust query-algebra projections:** parsed `SELECT *` can now produce
+  `GraphPattern::ProjectStar`, whose ordered `ProjectionVars` shares earlier
+  projection snapshots. Explicit `Project` retains its `Vec<Variable>`.
+  Downstream exhaustive matches must handle the new variant; code that reads
+  either projection's names can use `GraphPattern::projected_names()`.
+  This source break requires the 4.0 major release and must not ship as a 3.x
+  patch. See the [4.0 migration guide](docs/MIGRATION-4.0.md).
+
 - **Unrestricted exact BM25F ranking:** the ranking identity is now
   `purrdf-bm25f-fixed-v2`, revision 2. Query terms, ranking fields, corpus
   populations, field lengths/frequencies and nonnegative weights no longer have
