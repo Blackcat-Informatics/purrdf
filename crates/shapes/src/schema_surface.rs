@@ -3459,7 +3459,7 @@ fn propagate_sets_with_limit<T: Clone + Ord>(
     if graph.is_empty() {
         return Ok(Vec::new());
     }
-    let components = purrdf_core::graph::scc_component_index(graph);
+    let components = purrdf_core::graph::scc_component_index::<BTreeSet<usize>>(graph);
     let component_count = components.iter().copied().max().map_or(0, |max| max + 1);
     let mut values = vec![BTreeSet::new(); component_count];
     let mut materialized = 0_usize;
