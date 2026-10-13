@@ -566,6 +566,10 @@ impl AreaTargets {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The complete-matrix scan keeps both source geometries, noded events and edges, the output matrix, and independent area and singleton witness policies explicit under one admitted work owner"
+)]
 fn scan_for_areas<W: RelateWork>(
     a: &Geometry,
     b: &Geometry,
