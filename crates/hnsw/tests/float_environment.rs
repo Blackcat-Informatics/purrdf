@@ -12,10 +12,8 @@
 //! named refusal; then it runs the same calls in the default environment and asserts
 //! they answer. The register is per-thread, so no other test observes it.
 //!
-//! On `x86_64` the refusal names the MXCSR, which is read before anything else. On 32-bit
-//! x86 with SSE2 no register is read, so the same flushed thread is refused on the
-//! behavioural probe's evidence alone, and the default environment still answers: that is
-//! the target class the probe exists for. The refusal itself is unit-tested for
+//! On `x86_64` and 32-bit x86 with SSE2 the refusal names the MXCSR, which is read
+//! before anything else. The default environment still answers. The refusal is unit-tested for
 //! `aarch64`'s FPCR and RISC-V's `frm` in `purrdf_core::distance`, and wasm has no such
 //! register.
 //!
@@ -34,47 +32,19 @@ mod purremb;
 
 #[path = "support/fixture.rs"]
 mod fixture;
-use fixture::{bits, knn_invoke, params};
+use fixture::{bits, is_ftz, is_ftz_refusal, knn_invoke, params};
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::control::Mxcsr;
 use purrdf_core::distance::{
-    Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
-    Reassociated, RecordedPathError, Resolved, RowsRef,
+    Arithmetic, Bound, Bounded, Exact, Measure, Reassociated, RecordedPathError, Resolved, RowsRef,
 };
 use purrdf_core::purremb_fixture::reference_norm;
 use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Ranked, VectorMatrix, guard, relation::HnswSpace};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
-
-/// Whether `refusal` is the flush-to-zero refusal this target reports for an FTZ thread:
-/// the MXCSR by name where it is read, and the probe's flushed-result row where not.
-fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
-    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
-        return false;
-    };
-    if cfg!(target_arch = "x86_64") {
-        matches!(
-            evidence,
-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
-        )
-    } else {
-        matches!(
-            evidence,
-            FloatEnvironmentEvidence::Probe {
-                operation: "f64::MIN_POSITIVE * 0.5",
-                observed: 0,
-                ..
-            }
-        )
-    }
-}
-
-fn is_ftz(error: &HnswError) -> bool {
-    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
-}
 
 fn is_ftz_eval(error: &EvalError) -> bool {
     matches!(error, EvalError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))

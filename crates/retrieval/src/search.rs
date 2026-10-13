@@ -65,7 +65,7 @@
 //! read it back off the answer, which is what happens here —
 //! [`execute`](crate::execute) tags each stream with the plan its unit was
 //! compiled from, the bridge below keeps
-//! the tag, and [`fuse`] names it in the trailer only when every stream still
+//! the tag, and [`crate::fuse`] names it in the trailer only when every stream still
 //! agrees on it.
 //!
 //! `search` therefore takes [`SearchResult::plan_id`] from the trailer and
@@ -179,7 +179,7 @@
 //! nothing. That is [`FusionError::UnknownStratum`], naming the first executed
 //! stratum the profile does not weight.
 //!
-//! [`fuse`] itself keeps refusing an unweighted stratum outright, and that is
+//! [`crate::fuse`] itself keeps refusing an unweighted stratum outright, and that is
 //! not a contradiction: its caller hands it `(stratum, stream)` pairs directly
 //! and thereby asserts that each one belongs in this fusion. `search` makes no
 //! such assertion on the caller's behalf — it decides which streams to hand over
@@ -469,7 +469,7 @@ impl From<FusionError> for SearchError {
 /// — and a caller that wants the whole of every stratum says so with
 /// [`ReadBound::Complete`](crate::ReadBound::Complete).
 ///
-/// [`fuse`] remains the lower-level entry and still takes a bound, because a
+/// [`crate::fuse`] remains the lower-level entry and still takes a bound, because a
 /// caller assembling its own streams has no request to read one from. That entry
 /// refuses a bound the streams were not planned for
 /// ([`FusionError::ReadBoundMismatch`]), so the two cannot drift.
@@ -962,7 +962,7 @@ struct Attempt {
 /// the profile is
 /// deliberately not a planning input, and keeping the executor profile-free is
 /// what lets the unfused rung be consumed with no fusion law in the path.
-/// [`fuse`] nonetheless
+/// [`crate::fuse`] nonetheless
 /// requires a [`RankedRow`], which carries the contribution beside them. This
 /// adapter is that conversion, and
 /// it is the *only* place the crate performs it.
@@ -1050,7 +1050,7 @@ impl<'d> RankedStreamAdapter<'d> {
     /// [`execute`](crate::execute) tags every stream it returns with the bound
     /// the bundle was compiled for
     /// ([`StratumStream::fused_bound`](crate::StratumStream)), and
-    /// this is how that tag continues into the fusion: [`fuse`] reads it back
+    /// this is how that tag continues into the fusion: [`crate::fuse`] reads it back
     /// through [`RankedStream::fused_bound`] and refuses a `top_k` that disagrees
     /// with it, so a read taken for one bound is never served as an answer to
     /// another.
@@ -1071,7 +1071,7 @@ impl<'d> RankedStreamAdapter<'d> {
     /// [`execute`](crate::execute) tags every stream it returns with the plan its
     /// unit was compiled from
     /// ([`StratumStream::plan_id`](crate::StratumStream)), and
-    /// this is how that tag continues into the fusion: [`fuse`] reads it back
+    /// this is how that tag continues into the fusion: [`crate::fuse`] reads it back
     /// through [`RankedStream::plan_id`] and names it in the trailer, so the
     /// identity in a fused answer is the one that travelled with the rows.
     ///
