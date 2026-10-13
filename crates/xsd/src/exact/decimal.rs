@@ -1017,6 +1017,15 @@ impl Decimal {
             self.limb_len(),
             rhs.limb_len(),
         )?)?;
+        // Preserve the exact-attempt admission boundary before deciding whether
+        // machine arithmetic can avoid the general integer scratch.
+        match self.div_exact_small(rhs) {
+            Some(SmallQuotient::Exact(quotient)) => return Ok(quotient),
+            Some(SmallQuotient::NonTerminating) => {
+                return Err(ExactError::NonTerminating.into());
+            }
+            None => {}
+        }
         self.div_exact_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
     }
 
