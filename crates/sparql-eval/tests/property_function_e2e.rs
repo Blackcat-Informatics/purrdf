@@ -84,8 +84,9 @@ fn call_of(query: &Query) -> &purrdf_sparql_algebra::PropertyFunctionCall {
     let Query::Select { pattern, .. } = query else {
         panic!("the acceptance query is a SELECT");
     };
-    let GraphPattern::Project { inner, .. } = pattern else {
-        panic!("a SELECT's algebra root is a Project, got {pattern:?}");
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("a SELECT's algebra root is a projection, got {pattern:?}");
     };
     let GraphPattern::Lateral { left, right } = &**inner else {
         panic!("a call joins through a Lateral, got {inner:?}");
@@ -171,8 +172,9 @@ fn the_call_serializes_and_re_parses_byte_exactly() {
     let Query::Select { pattern, .. } = &query else {
         panic!("the acceptance query is a SELECT");
     };
-    let GraphPattern::Project { inner, .. } = pattern else {
-        panic!("a SELECT's algebra root is a Project");
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("a SELECT's algebra root is a projection");
     };
 
     let serialized = pattern_to_select_query(inner);
@@ -192,12 +194,16 @@ fn the_call_serializes_and_re_parses_byte_exactly() {
     else {
         panic!("the serialized text is a SELECT");
     };
-    let GraphPattern::Project {
+    let (GraphPattern::Project {
         inner: reparsed_inner,
         ..
-    } = reparsed_pattern
+    }
+    | GraphPattern::ProjectStar {
+        inner: reparsed_inner,
+        ..
+    }) = reparsed_pattern
     else {
-        panic!("a SELECT's algebra root is a Project");
+        panic!("a SELECT's algebra root is a projection");
     };
     assert_eq!(
         &**reparsed_inner, &**inner,
