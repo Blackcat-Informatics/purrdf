@@ -18,144 +18,6 @@ pub enum ConstraintDecision {
     Undecided(ReasonId),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{TermBox, TermValue, evidence::ReasonDescription};
-    use core::convert::Infallible;
-    use purrdf_lex::allocation::Resident;
-
-    #[test]
-    fn unknown_time_is_counted_separately_even_when_place_rejects() {
-        let cause = TermValue::iri("https://example.org/missing-time");
-        let concern = TermValue::Triple {
-            s: TermBox::new(TermValue::iri("https://example.org/constraint")),
-            p: TermBox::new(TermValue::iri("https://example.org/time")),
-            o: TermBox::new(TermValue::simple_literal("required")),
-        };
-        let reason = ReasonDescription {
-            cause: &cause,
-            concern: &concern,
-            constraint: None,
-            vault: None,
-            watermark: None,
-        }
-        .identity(&mut Memory::new(&mut Resident))
-        .unwrap();
-        let time = Digest32::new([1; 32]);
-        let place = Digest32::new([2; 32]);
-        let mut scope = ScopeCounters::with_admission(&[time, place], Resident).unwrap();
-        let retained = scope.live;
-        for _ in 0..2279 {
-            scope
-                .evaluate(
-                    |constraint| {
-                        Ok::<_, Infallible>(if constraint == time {
-                            ConstraintDecision::Undecided(reason)
-                        } else {
-                            ConstraintDecision::Rejected
-                        })
-                    },
-                    |decisions| {
-                        assert_eq!(
-                            decisions,
-                            &[
-                                (0, ConstraintDecision::Undecided(reason)),
-                                (1, ConstraintDecision::Rejected)
-                            ]
-                        );
-                        Ok::<_, Infallible>(())
-                    },
-                )
-                .unwrap();
-            assert_eq!(scope.live, retained);
-        }
-        let counts = scope.counts().unwrap();
-        assert_eq!(
-            (counts[0].satisfied, counts[0].rejected, counts[0].undecided),
-            (0, 0, 2279)
-        );
-        assert_eq!(
-            (counts[1].satisfied, counts[1].rejected, counts[1].undecided),
-            (0, 2279, 0)
-        );
-    }
-
-    #[test]
-    fn operational_failure_cannot_publish_partial_counts_or_an_unknown_row() {
-        let constraints = [Digest32::new([1; 32]), Digest32::new([2; 32])];
-        let mut scope = ScopeCounters::with_admission(&constraints, Resident).unwrap();
-        let mut emitted = false;
-        let error = scope
-            .evaluate(
-                |constraint| {
-                    if constraint == constraints[0] {
-                        Ok(ConstraintDecision::Satisfied)
-                    } else {
-                        Err("original scan failed")
-                    }
-                },
-                |_| {
-                    emitted = true;
-                    Ok(())
-                },
-            )
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            ScopeError::Callback("original scan failed")
-        ));
-        assert!(!emitted);
-        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
-    }
-
-    #[test]
-    fn satisfied_candidates_need_no_temporary_decision_capacity() {
-        #[derive(Debug)]
-        struct Capacity {
-            live: usize,
-            limit: usize,
-        }
-        impl Admission for Capacity {
-            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
-                if bytes > self.limit {
-                    return Err(StorageError::AdmissionFailed);
-                }
-                self.live = bytes;
-                Ok(())
-            }
-        }
-        let mut scope = ScopeCounters::with_admission(
-            &[Digest32::new([1; 32])],
-            Capacity {
-                live: 0,
-                limit: usize::MAX,
-            },
-        )
-        .unwrap();
-        scope.admission.limit = scope.live;
-        scope
-            .evaluate(
-                |_| Ok::<_, Infallible>(ConstraintDecision::Satisfied),
-                |decisions| {
-                    assert_eq!(decisions, []);
-                    Ok::<_, Infallible>(())
-                },
-            )
-            .unwrap();
-        assert_eq!(scope.counts().unwrap()[0].satisfied, 1);
-        assert_eq!(scope.admission.live, scope.live);
-        assert!(matches!(
-            scope.evaluate(
-                |_| Ok::<_, Infallible>(ConstraintDecision::Rejected),
-                |_| Ok::<_, Infallible>(())
-            ),
-            Err(ScopeError::Storage(StorageError::AdmissionFailed))
-        ));
-        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
-    }
-}
-
 /// Separate exact counts for one caller-declared constraint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConstraintCounts {
@@ -311,5 +173,143 @@ impl<S: Admission> ScopeCounters<S> {
         self.live = memory.admitted_bytes();
         self.aborted = result.is_err();
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{TermBox, TermValue, evidence::ReasonDescription};
+    use core::convert::Infallible;
+    use purrdf_lex::allocation::Resident;
+
+    #[test]
+    fn unknown_time_is_counted_separately_even_when_place_rejects() {
+        let cause = TermValue::iri("https://example.org/missing-time");
+        let concern = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("https://example.org/constraint")),
+            p: TermBox::new(TermValue::iri("https://example.org/time")),
+            o: TermBox::new(TermValue::simple_literal("required")),
+        };
+        let reason = ReasonDescription {
+            cause: &cause,
+            concern: &concern,
+            constraint: None,
+            vault: None,
+            watermark: None,
+        }
+        .identity(&mut Memory::new(&mut Resident))
+        .unwrap();
+        let time = Digest32::new([1; 32]);
+        let place = Digest32::new([2; 32]);
+        let mut scope = ScopeCounters::with_admission(&[time, place], Resident).unwrap();
+        let retained = scope.live;
+        for _ in 0..2279 {
+            scope
+                .evaluate(
+                    |constraint| {
+                        Ok::<_, Infallible>(if constraint == time {
+                            ConstraintDecision::Undecided(reason)
+                        } else {
+                            ConstraintDecision::Rejected
+                        })
+                    },
+                    |decisions| {
+                        assert_eq!(
+                            decisions,
+                            &[
+                                (0, ConstraintDecision::Undecided(reason)),
+                                (1, ConstraintDecision::Rejected)
+                            ]
+                        );
+                        Ok::<_, Infallible>(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(scope.live, retained);
+        }
+        let counts = scope.counts().unwrap();
+        assert_eq!(
+            (counts[0].satisfied, counts[0].rejected, counts[0].undecided),
+            (0, 0, 2279)
+        );
+        assert_eq!(
+            (counts[1].satisfied, counts[1].rejected, counts[1].undecided),
+            (0, 2279, 0)
+        );
+    }
+
+    #[test]
+    fn operational_failure_cannot_publish_partial_counts_or_an_unknown_row() {
+        let constraints = [Digest32::new([1; 32]), Digest32::new([2; 32])];
+        let mut scope = ScopeCounters::with_admission(&constraints, Resident).unwrap();
+        let mut emitted = false;
+        let error = scope
+            .evaluate(
+                |constraint| {
+                    if constraint == constraints[0] {
+                        Ok(ConstraintDecision::Satisfied)
+                    } else {
+                        Err("original scan failed")
+                    }
+                },
+                |_| {
+                    emitted = true;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ScopeError::Callback("original scan failed")
+        ));
+        assert!(!emitted);
+        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
+    }
+
+    #[test]
+    fn satisfied_candidates_need_no_temporary_decision_capacity() {
+        #[derive(Debug)]
+        struct Capacity {
+            live: usize,
+            limit: usize,
+        }
+        impl Admission for Capacity {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                if bytes > self.limit {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live = bytes;
+                Ok(())
+            }
+        }
+        let mut scope = ScopeCounters::with_admission(
+            &[Digest32::new([1; 32])],
+            Capacity {
+                live: 0,
+                limit: usize::MAX,
+            },
+        )
+        .unwrap();
+        scope.admission.limit = scope.live;
+        scope
+            .evaluate(
+                |_| Ok::<_, Infallible>(ConstraintDecision::Satisfied),
+                |decisions| {
+                    assert_eq!(decisions, []);
+                    Ok::<_, Infallible>(())
+                },
+            )
+            .unwrap();
+        assert_eq!(scope.counts().unwrap()[0].satisfied, 1);
+        assert_eq!(scope.admission.live, scope.live);
+        assert!(matches!(
+            scope.evaluate(
+                |_| Ok::<_, Infallible>(ConstraintDecision::Rejected),
+                |_| Ok::<_, Infallible>(())
+            ),
+            Err(ScopeError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
     }
 }

@@ -3969,7 +3969,7 @@ impl CallCursor {
     }
 
     /// The work the relation has reported so far, summed over every pull
-    /// ([`PfCursor::take_work`]).
+    /// ([`crate::property_fn::PfCursor::take_work`]).
     #[must_use]
     pub const fn work(&self) -> u64 {
         self.work
@@ -4191,7 +4191,7 @@ impl CallCursor {
                             )?);
                         }
                         let linked = link.as_mut().expect("the admitted link was initialized");
-                        if linked.ebv(&row, schema, ctx)? != Some(true) {
+                        if linked.ebv(None, &row, schema, ctx)? != Some(true) {
                             continue 'pull;
                         }
                     }
