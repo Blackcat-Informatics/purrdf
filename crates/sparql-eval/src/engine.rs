@@ -6628,21 +6628,6 @@ fn check_plan_matches_registries(
         .map_err(EvaluationFailure::into_diagnostic)
 }
 
-/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
-/// registry fingerprint — validated against `relations` by
-/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
-/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
-/// taken over, sorted.
-///
-/// Called once per governed execution rather than per outcome arm, so the refusal path
-/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
-/// the SAME identity for the SAME execution — there is exactly one place this is computed
-/// and every [`GovernedOutcome`] arm reads from it.
-///
-/// # Errors
-///
-/// The host's execution diagnostic if a registered relation's declaration
-/// methods panic.
 /// A governed visitor result retaining its original registry identity buffers.
 /// Native callers borrow the outcome; only legacy egress transfers caller storage.
 pub struct AdmittedInternedGoverned<R> {
@@ -6698,6 +6683,21 @@ struct AdmittedRelationIdentity {
     frame: crate::workspace::LexicalFrame,
 }
 
+/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+/// registry fingerprint — validated by the preparation and registry admission
+/// checks before this runs, so it is safe to
+/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+/// taken over, sorted.
+///
+/// Called once per governed execution rather than per outcome arm, so the refusal path
+/// (`NativeSparqlEngine::admit_refusal`), the complete path, and the truncated path all carry
+/// the SAME identity for the SAME execution — there is exactly one place this is computed
+/// and every [`GovernedOutcome`] arm reads from it.
+///
+/// # Errors
+///
+/// The host's execution diagnostic if a registered relation's declaration
+/// methods panic, or the original admission failure while retaining the identity.
 fn relation_identity(
     prepared: &PreparedQuery,
     relations: &crate::property_fn::PropertyFunctionRegistry,
