@@ -42,7 +42,7 @@ fn assert_agrees(view: &ShaclDatasetView, label: &str, expected: &[&str]) {
 
 #[test]
 fn shacl_views_answer_membership_like_their_enumeration() {
-    let source = graph_slots("");
+    let source = graph_slots("").expect("authored fixture");
     assert_agrees(
         &ShaclDatasetView::native(Arc::clone(&source)),
         "native",

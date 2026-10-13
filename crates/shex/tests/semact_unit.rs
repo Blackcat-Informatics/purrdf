@@ -22,6 +22,7 @@ fn data() -> Arc<RdfDataset> {
         "http://a.example/p1",
         "http://a.example/o1",
     )
+    .expect("authored fixture")
 }
 
 /// Validate focus `s1` against shape `S1` with the Test extension registered.

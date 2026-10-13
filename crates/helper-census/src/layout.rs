@@ -601,11 +601,9 @@ impl<'ast> Visit<'ast> for Layout<'_> {
         });
     }
 
-    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-        if !crate::source::is_test_only(&node.attrs) {
-            syn::visit::visit_item_impl(self, node);
-        }
-    }
+    crate::rules::shipping_visits!('ast;
+        visit_item_impl(syn::ItemImpl);
+    );
 
     fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
         if crate::source::is_test_only(&node.attrs) {
@@ -733,6 +731,16 @@ mod tests {
             .iter()
             .map(|hit| (hit.rule, hit.line))
             .collect()
+    }
+
+    #[test]
+    fn shipping_impl_walk_keeps_portable_items_and_omits_test_only_items() {
+        let source = "\
+#[cfg(test)] impl Test { fn read(b:&[u8])->u32 {u32::from_le_bytes(b[0..4].try_into().unwrap())} }
+#[cfg(any(test,target_arch=\"wasm32\"))] impl Portable { fn read(b:&[u8])->u32 {u32::from_le_bytes(b[0..4].try_into().unwrap())} }
+impl Production { #[cfg(test)] fn test(b:&[u8])->u32 {u32::from_le_bytes(b[0..4].try_into().unwrap())} }
+";
+        assert_eq!(hits(source), vec![(LE_SLICE_INT, 2)]);
     }
 
     #[test]

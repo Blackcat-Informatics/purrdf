@@ -39,6 +39,28 @@ use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
 use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
+#[test]
+fn split_pages_refuses_zero_destinations_only_for_nonempty_input() {
+    assert!(
+        split_pages(&[], 0)
+            .expect("empty zero-page split")
+            .is_empty()
+    );
+    let triples = [(iri("s"), iri("p"), iri("o"))];
+    let error = split_pages(&triples, 0).expect_err("nonempty input needs a page");
+    assert_eq!(error.code, "fixture-page-count");
+    assert_eq!(
+        error.message,
+        "nonempty triples require at least one destination page"
+    );
+    let pages = split_pages(&triples, 1).expect("one destination is valid");
+    assert_eq!(pages.len(), 1);
+    assert_eq!(
+        collect_rows(pages[0].as_ref()),
+        collect_rows(build_page(&triples).unwrap().as_ref())
+    );
+}
+
 /// A generic two-pattern join `(a_s a_p ?x)(?x b_p ?y)` returning the sorted
 /// `(?x, ?y)` value pairs. `?x` is threaded as a NATIVE view id from the first
 /// pattern into the second — the id-space unification a `PagedDataset` must provide
@@ -111,11 +133,11 @@ fn cross_page_parity_via_trait_surface() {
     let corpus = parity_corpus();
 
     // The single-dataset reference.
-    let single = build_page(&corpus);
+    let single = build_page(&corpus).expect("authored fixture");
 
     // The multi-page paged view over the SAME triples, split across 3 pages so the
     // join chain and the list cons cells straddle page boundaries.
-    let pages = split_pages(&corpus, 3);
+    let pages = split_pages(&corpus, 3).expect("authored fixture");
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
 
@@ -167,6 +189,7 @@ fn lazy_page1() -> Arc<RdfDataset> {
         "http://example.org/p",
         "http://example.org/o_shared",
     )
+    .expect("authored fixture")
 }
 
 /// Page 2: `s2` present only here.
@@ -176,6 +199,7 @@ fn lazy_page2() -> Arc<RdfDataset> {
         "http://example.org/p",
         "http://example.org/o_shared",
     )
+    .expect("authored fixture")
 }
 
 #[test]
@@ -269,9 +293,10 @@ fn cross_page_cost_model_is_per_page_sum() {
         (iri("a2"), dense.clone(), iri("x2")),
         (iri("a3"), dense.clone(), iri("x3")),
         (iri("a4"), dense.clone(), iri("x4")),
-    ]);
-    let page1 = build_page(&[(iri("b0"), dense.clone(), iri("y0"))]);
-    let page2 = build_page(&[(iri("c0"), dense.clone(), iri("z0"))]);
+    ])
+    .expect("authored fixture");
+    let page1 = build_page(&[(iri("b0"), dense.clone(), iri("y0"))]).expect("authored fixture");
+    let page2 = build_page(&[(iri("c0"), dense.clone(), iri("z0"))]).expect("authored fixture");
 
     let raw_pages = vec![page0, page1, page2];
     let provider = Arc::new(InMemoryPageProvider::new(raw_pages.clone()));
@@ -318,8 +343,8 @@ fn cardinality_estimate_materializes_no_page() {
     // one fallible operation).
     let p = iri("p");
     let provider = Arc::new(CountingDemandProvider::new(vec![
-        Box::new(|| build_page(&[(iri("a0"), iri("p"), iri("o0"))])),
-        Box::new(|| build_page(&[(iri("a1"), iri("p"), iri("o1"))])),
+        Box::new(|| build_page(&[(iri("a0"), iri("p"), iri("o0"))]).expect("authored fixture")),
+        Box::new(|| build_page(&[(iri("a1"), iri("p"), iri("o1"))]).expect("authored fixture")),
     ]));
     let paged =
         PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
@@ -375,8 +400,9 @@ fn cardinality_estimate_is_residency_independent() {
     let page0 = build_page(&[
         (iri("a0"), p.clone(), iri("o0")),
         (iri("a1"), p.clone(), iri("o1")),
-    ]);
-    let page1 = build_page(&[(iri("b0"), p.clone(), iri("o2"))]);
+    ])
+    .expect("authored fixture");
+    let page1 = build_page(&[(iri("b0"), p.clone(), iri("o2"))]).expect("authored fixture");
     let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
     let p_id = paged
@@ -578,8 +604,8 @@ fn freeze_refuses_non_quad_disjoint_pages() {
     // to the shared GlobalTermId space they are the SAME global quad, so the seal MUST
     // refuse (never silently dedup).
     let shared = (iri("s"), iri("p"), iri("o"));
-    let page0 = build_page(std::slice::from_ref(&shared));
-    let page1 = build_page(std::slice::from_ref(&shared));
+    let page0 = build_page(std::slice::from_ref(&shared)).expect("authored fixture");
+    let page1 = build_page(std::slice::from_ref(&shared)).expect("authored fixture");
     let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
     let err = PagedDataset::from_provider(provider).expect_err("overlapping pages must refuse");
     match err {
@@ -598,8 +624,8 @@ fn freeze_refuses_non_quad_disjoint_pages() {
 
     // The disjoint construction (distinct global quads) is the normal path and Oks.
     let ok_pages = vec![
-        build_page(&[(iri("s"), iri("p"), iri("o"))]),
-        build_page(&[(iri("s2"), iri("p"), iri("o"))]),
+        build_page(&[(iri("s"), iri("p"), iri("o"))]).expect("authored fixture"),
+        build_page(&[(iri("s2"), iri("p"), iri("o"))]).expect("authored fixture"),
     ];
     let ok_provider = Arc::new(InMemoryPageProvider::new(ok_pages));
     let paged = PagedDataset::from_provider(ok_provider).expect("disjoint pages seal");
@@ -702,9 +728,9 @@ fn freeze_refuses_non_disjoint_side_tables() {
 /// so dropping page 2 makes exactly those three ids dead.
 fn reclaim_pages() -> Vec<Arc<RdfDataset>> {
     vec![
-        build_page(&[(iri("alice"), iri("knows"), iri("bob"))]),
-        build_page(&[(iri("bob"), iri("knows"), iri("carol"))]),
-        build_page(&[(iri("dave"), iri("likes"), iri("eve"))]),
+        build_page(&[(iri("alice"), iri("knows"), iri("bob"))]).expect("authored fixture"),
+        build_page(&[(iri("bob"), iri("knows"), iri("carol"))]).expect("authored fixture"),
+        build_page(&[(iri("dave"), iri("likes"), iri("eve"))]).expect("authored fixture"),
     ]
 }
 
@@ -811,10 +837,11 @@ fn compact_reclaims_dead_ids_deterministically() {
 fn materialize_to_dataset(paged: &PagedDataset) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for q in paged.quads() {
-        let s = intern_value(&mut b, &to_value(paged, q.s));
-        let p = intern_value(&mut b, &to_value(paged, q.p));
-        let o = intern_value(&mut b, &to_value(paged, q.o));
-        let g = q.g.map(|g| intern_value(&mut b, &to_value(paged, g)));
+        let s = intern_value(&mut b, &to_value(paged, q.s)).expect("authored fixture");
+        let p = intern_value(&mut b, &to_value(paged, q.p)).expect("authored fixture");
+        let o = intern_value(&mut b, &to_value(paged, q.o)).expect("authored fixture");
+        let g =
+            q.g.map(|g| intern_value(&mut b, &to_value(paged, g)).expect("authored fixture"));
         b.push_quad(s, p, o, g).unwrap();
     }
     b.freeze().expect("materialized freeze")
@@ -825,14 +852,14 @@ fn compacted_paged_serializes_byte_identical_to_single() {
     let corpus = parity_corpus();
 
     // The single-dataset reference and its canonical Turtle.
-    let single = build_page(&corpus);
+    let single = build_page(&corpus).expect("authored fixture");
     let single_ttl = render_canonical_turtle(&single, &[]);
 
     // The paged view over the SAME triples, split across 3 pages, then COMPACTED
     // (a canonical renumber). Materialize its quads back into one RdfDataset and
     // serialize — the honest determinism check (there is no standalone paged
     // serializer; proving the materialized-equivalent is byte-identical is the point).
-    let pages = split_pages(&corpus, 3);
+    let pages = split_pages(&corpus, 3).expect("authored fixture");
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
     let compacted = paged.compact().unwrap();
@@ -852,7 +879,7 @@ fn from_parts_reconstitutes_without_materializing_pages() {
     // Seal a 3-page dataset the EAGER way (from_provider materializes every page once),
     // then decompose it into its persisted parts.
     let corpus = parity_corpus();
-    let raw = split_pages(&corpus, 3);
+    let raw = split_pages(&corpus, 3).expect("authored fixture");
     let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(raw.clone())))
         .expect("seal pages");
     let (dictionary, generation, parts) = eager.to_parts();
@@ -925,8 +952,8 @@ fn graph_drift_fixture() -> (Arc<RdfDataset>, Arc<RdfDataset>, TermValue, TermVa
         let bob = b.intern_iri("http://example.org/bob").unwrap();
         let carol = b.intern_iri("http://example.org/carol").unwrap();
         let knows = b.intern_iri("http://example.org/knows").unwrap();
-        let g1_id = intern_value(&mut b, &g1);
-        let g2_id = intern_value(&mut b, &g2);
+        let g1_id = intern_value(&mut b, &g1).expect("authored fixture");
+        let g2_id = intern_value(&mut b, &g2).expect("authored fixture");
         b.push_quad(alice, knows, bob, Some(g1_id)).unwrap();
         b.push_quad(bob, knows, carol, Some(g1_id)).unwrap();
         b.declare_named_graph(g2_id).unwrap();
@@ -939,8 +966,8 @@ fn graph_drift_fixture() -> (Arc<RdfDataset>, Arc<RdfDataset>, TermValue, TermVa
         let bob = b.intern_iri("http://example.org/bob").unwrap();
         let carol = b.intern_iri("http://example.org/carol").unwrap();
         let knows = b.intern_iri("http://example.org/knows").unwrap();
-        let g1_id = intern_value(&mut b, &g1);
-        let g2_id = intern_value(&mut b, &g2);
+        let g1_id = intern_value(&mut b, &g1).expect("authored fixture");
+        let g2_id = intern_value(&mut b, &g2).expect("authored fixture");
         b.push_quad(alice, knows, bob, Some(g1_id)).unwrap();
         // Moved from g1 (honest) to g2: same terms, same quad, different graph.
         b.push_quad(bob, knows, carol, Some(g2_id)).unwrap();
@@ -1299,7 +1326,7 @@ impl PageProvider for MismatchedGenerationProvider {
 #[test]
 fn seal_rejects_a_typed_generation_mismatch() {
     let provider = Arc::new(MismatchedGenerationProvider {
-        page: build_page(&[(iri("s"), iri("p"), iri("o"))]),
+        page: build_page(&[(iri("s"), iri("p"), iri("o"))]).expect("authored fixture"),
         current: PageGeneration(7),
         materialized: PageGeneration(8),
     });
@@ -1321,8 +1348,8 @@ fn seal_rejects_a_typed_generation_mismatch() {
 #[test]
 fn warm_restart_rejects_generation_and_page_count_mismatches() {
     let pages = vec![
-        build_page(&[(iri("s0"), iri("p"), iri("o0"))]),
-        build_page(&[(iri("s1"), iri("p"), iri("o1"))]),
+        build_page(&[(iri("s0"), iri("p"), iri("o0"))]).expect("authored fixture"),
+        build_page(&[(iri("s1"), iri("p"), iri("o1"))]).expect("authored fixture"),
     ];
     let generation = PageGeneration(12);
     let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
@@ -1468,13 +1495,13 @@ fn named_graphs_fixture() -> (Vec<Arc<RdfDataset>>, TermValue, TermValue, TermVa
         let s = b.intern_iri("http://example.org/s0").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o0").unwrap();
-        let ga_id = intern_value(&mut b, &ga);
+        let ga_id = intern_value(&mut b, &ga).expect("authored fixture");
         b.push_quad(s, p, o, Some(ga_id)).unwrap();
         b.freeze().expect("page0 freeze")
     };
     let page1 = {
         let mut b = RdfDatasetBuilder::new();
-        let g_empty_id = intern_value(&mut b, &g_empty);
+        let g_empty_id = intern_value(&mut b, &g_empty).expect("authored fixture");
         b.declare_named_graph(g_empty_id).unwrap();
         b.freeze().expect("page1 freeze")
     };
@@ -1485,7 +1512,7 @@ fn named_graphs_fixture() -> (Vec<Arc<RdfDataset>>, TermValue, TermValue, TermVa
         let c = b.intern_iri("http://example.org/c").unwrap();
         let triple = b.intern_triple(a, bb, c).unwrap();
         let r = b.intern_iri("http://example.org/r").unwrap();
-        let g_reifier_only_id = intern_value(&mut b, &g_reifier_only);
+        let g_reifier_only_id = intern_value(&mut b, &g_reifier_only).expect("authored fixture");
         b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id))
             .unwrap();
         b.freeze().expect("page2 freeze")
@@ -1566,16 +1593,16 @@ fn paged_named_graphs_match_a_single_merged_dataset() {
     let s = b.intern_iri("http://example.org/s0").unwrap();
     let p = b.intern_iri("http://example.org/p").unwrap();
     let o = b.intern_iri("http://example.org/o0").unwrap();
-    let ga_id = intern_value(&mut b, &ga);
+    let ga_id = intern_value(&mut b, &ga).expect("authored fixture");
     b.push_quad(s, p, o, Some(ga_id)).unwrap();
-    let g_empty_id = intern_value(&mut b, &g_empty);
+    let g_empty_id = intern_value(&mut b, &g_empty).expect("authored fixture");
     b.declare_named_graph(g_empty_id).unwrap();
     let a = b.intern_iri("http://example.org/a").unwrap();
     let bb = b.intern_iri("http://example.org/b").unwrap();
     let c = b.intern_iri("http://example.org/c").unwrap();
     let triple = b.intern_triple(a, bb, c).unwrap();
     let r = b.intern_iri("http://example.org/r").unwrap();
-    let g_reifier_only_id = intern_value(&mut b, &g_reifier_only);
+    let g_reifier_only_id = intern_value(&mut b, &g_reifier_only).expect("authored fixture");
     b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id))
         .unwrap();
     let single = b.freeze().expect("single dataset freeze");
@@ -1613,7 +1640,7 @@ fn populate_graph_narrow_page_a(b: &mut RdfDatasetBuilder, g_owns: &TermValue, g
 
     let triple1 = b.intern_triple(s, p, o).unwrap();
     let r1 = b.intern_iri("http://example.org/r1").unwrap();
-    let g_owns_id = intern_value(b, g_owns);
+    let g_owns_id = intern_value(b, g_owns).expect("authored fixture");
     b.push_reifier_in_graph(r1, triple1, Some(g_owns_id))
         .unwrap();
     let conf = b.intern_iri("http://example.org/confidence").unwrap();
@@ -1628,7 +1655,7 @@ fn populate_graph_narrow_page_a(b: &mut RdfDatasetBuilder, g_owns: &TermValue, g
     let doc = b.intern_iri("http://example.org/doc").unwrap();
     b.push_annotation_in_graph(r2, source, doc, None).unwrap();
 
-    let g_none_id = intern_value(b, g_none);
+    let g_none_id = intern_value(b, g_none).expect("authored fixture");
     b.declare_named_graph(g_none_id).unwrap();
 }
 
@@ -1641,7 +1668,7 @@ fn populate_graph_narrow_page_b(b: &mut RdfDatasetBuilder, g_other: &TermValue) 
     let c = b.intern_iri("http://example.org/c").unwrap();
     let triple3 = b.intern_triple(a, bb, c).unwrap();
     let r3 = b.intern_iri("http://example.org/r3").unwrap();
-    let g_other_id = intern_value(b, g_other);
+    let g_other_id = intern_value(b, g_other).expect("authored fixture");
     b.push_reifier_in_graph(r3, triple3, Some(g_other_id))
         .unwrap();
     let p3 = b.intern_iri("http://example.org/p3").unwrap();
@@ -1917,7 +1944,7 @@ fn named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_t
     let g = iri("g");
     let declares_empty_page = {
         let mut b = RdfDatasetBuilder::new();
-        let g_id = intern_value(&mut b, &g);
+        let g_id = intern_value(&mut b, &g).expect("authored fixture");
         b.declare_named_graph(g_id).unwrap();
         b.freeze().expect("declares-empty page freeze")
     };
@@ -1926,7 +1953,7 @@ fn named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_t
         let s = b.intern_iri("http://example.org/s").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o").unwrap();
-        let g_id = intern_value(&mut b, &g);
+        let g_id = intern_value(&mut b, &g).expect("authored fixture");
         b.push_quad(s, p, o, Some(g_id)).unwrap();
         b.freeze().expect("owns-rows page freeze")
     };
@@ -2033,7 +2060,7 @@ fn reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_o
         let s = b.intern_iri("http://example.org/s").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o").unwrap();
-        let g_id = intern_value(&mut b, &g);
+        let g_id = intern_value(&mut b, &g).expect("authored fixture");
         b.push_quad(s, p, o, Some(g_id)).unwrap();
         b.freeze().expect("base-only page freeze")
     };
@@ -2050,7 +2077,7 @@ fn reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_o
         let c = b.intern_iri("http://example.org/c").unwrap();
         let triple = b.intern_triple(a, bb, c).unwrap();
         let r = b.intern_iri("http://example.org/r").unwrap();
-        let g_id = intern_value(&mut b, &g);
+        let g_id = intern_value(&mut b, &g).expect("authored fixture");
         b.push_reifier_in_graph(r, triple, Some(g_id)).unwrap();
         b.freeze().expect("reifier-in-g page freeze")
     };
@@ -2119,7 +2146,7 @@ fn annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_w
         let c = b.intern_iri("http://example.org/c").unwrap();
         let triple = b.intern_triple(a, bb, c).unwrap();
         let r = b.intern_iri("http://example.org/r").unwrap();
-        let g_id = intern_value(&mut b, &g);
+        let g_id = intern_value(&mut b, &g).expect("authored fixture");
         b.push_reifier_in_graph(r, triple, Some(g_id)).unwrap();
         b.freeze().expect("reifier-in-g page freeze")
     };
@@ -2135,7 +2162,7 @@ fn annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_w
         b.push_reifier_in_graph(r2, triple, None).unwrap();
         let conf = b.intern_iri("http://example.org/confidence").unwrap();
         let high = b.intern_iri("http://example.org/high").unwrap();
-        let g_id = intern_value(&mut b, &g);
+        let g_id = intern_value(&mut b, &g).expect("authored fixture");
         b.push_annotation_in_graph(r2, conf, high, Some(g_id))
             .unwrap();
         b.freeze().expect("annotation-in-g page freeze")
@@ -2206,7 +2233,7 @@ fn multi_graph_page_thunks() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Syn
         let s = b.intern_iri("http://example.org/s0").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o0").unwrap();
-        let ga_id = intern_value(&mut b, &ga);
+        let ga_id = intern_value(&mut b, &ga).expect("authored fixture");
         b.push_quad(s, p, o, Some(ga_id)).unwrap();
         b.freeze().expect("page 0 freeze")
     };
@@ -2215,11 +2242,11 @@ fn multi_graph_page_thunks() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Syn
         let s = b.intern_iri("http://example.org/s1").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o1").unwrap();
-        let gb_id = intern_value(&mut b, &gb);
+        let gb_id = intern_value(&mut b, &gb).expect("authored fixture");
         b.push_quad(s, p, o, Some(gb_id)).unwrap();
         let triple = b.intern_triple(s, p, o).unwrap();
         let r = b.intern_iri("http://example.org/r1").unwrap();
-        let ga_id = intern_value(&mut b, &ga);
+        let ga_id = intern_value(&mut b, &ga).expect("authored fixture");
         b.push_reifier_in_graph(r, triple, Some(ga_id)).unwrap();
         b.freeze().expect("page 1 freeze")
     };
@@ -2228,7 +2255,7 @@ fn multi_graph_page_thunks() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Syn
         let r = b.intern_iri("http://example.org/r2").unwrap();
         let conf = b.intern_iri("http://example.org/confidence").unwrap();
         let high = b.intern_iri("http://example.org/high").unwrap();
-        let ga_id = intern_value(&mut b, &ga);
+        let ga_id = intern_value(&mut b, &ga).expect("authored fixture");
         b.push_annotation_in_graph(r, conf, high, Some(ga_id))
             .unwrap();
         b.freeze().expect("page 2 freeze")
@@ -2238,15 +2265,15 @@ fn multi_graph_page_thunks() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Syn
         let s = b.intern_iri("http://example.org/s3").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o3").unwrap();
-        let gb_id = intern_value(&mut b, &gb);
+        let gb_id = intern_value(&mut b, &gb).expect("authored fixture");
         b.push_quad(s, p, o, Some(gb_id)).unwrap();
         b.freeze().expect("page 3 freeze")
     };
     let page4 = {
         let mut b = RdfDatasetBuilder::new();
-        let g_empty_id = intern_value(&mut b, &g_empty);
+        let g_empty_id = intern_value(&mut b, &g_empty).expect("authored fixture");
         b.declare_named_graph(g_empty_id).unwrap();
-        let ga_id = intern_value(&mut b, &ga);
+        let ga_id = intern_value(&mut b, &ga).expect("authored fixture");
         b.declare_named_graph(ga_id).unwrap();
         b.freeze().expect("page 4 freeze")
     };

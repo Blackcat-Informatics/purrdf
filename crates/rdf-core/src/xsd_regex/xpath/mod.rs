@@ -595,8 +595,20 @@ pub struct Refusal {
     pub resource: Resource,
     /// The exact requirement, including requirements beyond `u64::MAX`.
     pub required: u128,
-    /// The current request's finite bound.
+    /// The current request's finite bound, or the native representation ceiling.
     pub limit: u64,
+}
+
+impl Refusal {
+    /// Admit a native u32 table count or endpoint independently of application
+    /// presets. This check happens before growing the corresponding output.
+    pub(super) fn u32_representation(resource: Resource, required: u128) -> Result<u32, Self> {
+        u32::try_from(required).map_err(|_| Self {
+            resource,
+            required,
+            limit: u64::from(u32::MAX),
+        })
+    }
 }
 
 impl fmt::Display for Refusal {
@@ -734,7 +746,31 @@ impl std::error::Error for Error {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::{Budget, Error, Limits, Profile, Resource};
+    use super::{Budget, Error, Limits, Profile, Refusal, Resource};
+
+    #[test]
+    fn native_u32_representation_refuses_exactly_without_application_presets() {
+        for resource in [Resource::ProgramNodes, Resource::CompileSlots] {
+            let last = u128::from(u32::MAX);
+            assert_eq!(Refusal::u32_representation(resource, last), Ok(u32::MAX));
+            for required in [last + 1, u128::from(u64::MAX), u128::MAX] {
+                let refusal = Refusal::u32_representation(resource, required).unwrap_err();
+                assert_eq!(refusal.resource, resource);
+                assert_eq!(refusal.required, required);
+                assert_eq!(refusal.limit, u64::from(u32::MAX));
+                assert!(Error::from(refusal).is_operational());
+            }
+            assert!(Limits::without_presets().admit(resource, last + 1).is_ok());
+        }
+        let program = super::compile(
+            Profile::Xpath31,
+            "(a?){2,4}[a-c]",
+            "",
+            Limits::without_presets(),
+        )
+        .unwrap();
+        assert!(program.is_match("aa", Limits::without_presets()).unwrap());
+    }
 
     #[test]
     fn source_admission_counts_utf8_bytes_and_refuses_before_syntax() {

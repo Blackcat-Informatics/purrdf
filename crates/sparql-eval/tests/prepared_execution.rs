@@ -979,6 +979,7 @@ fn relation_dataset() -> Arc<RdfDataset> {
         &format!("{REL_NS}memberOf"),
         &format!("{REL_EX}graph_only_team"),
     )
+    .expect("authored fixture")
 }
 
 /// The extension environment `registry` describes, which is what a query text is

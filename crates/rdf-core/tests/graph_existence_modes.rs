@@ -206,7 +206,7 @@ fn role_base(graph: &TermValue, role: u8) -> Arc<RdfDataset> {
     let subject = builder.intern_iri("http://example.org/s").unwrap();
     let predicate = builder.intern_iri("http://example.org/p").unwrap();
     let object = builder.intern_iri("http://example.org/o").unwrap();
-    let graph = intern_value(&mut builder, graph);
+    let graph = intern_value(&mut builder, graph).expect("authored fixture");
     let reifier = builder.intern_iri("http://example.org/reifier").unwrap();
     match role {
         0 => builder

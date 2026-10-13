@@ -59,6 +59,7 @@ fn build_simple_page(subject: &str, predicate: &str, object: &str) -> Arc<RdfDat
         &format!("http://example.org/{predicate}"),
         &format!("http://example.org/{object}"),
     )
+    .expect("authored fixture")
 }
 
 /// One `(subject predicate object)` triple in named graph `graph`, as its own page.

@@ -3917,6 +3917,18 @@ mod native_graph_birth_tests {
             .unwrap();
         let new_source = new_source.freeze().unwrap();
         for _ in 0..3 {
+            assert_eq!(
+                crate::term_fixture::intern_value(&mut builder, &crate::TermValue::iri("urn:s")),
+                Ok(s)
+            );
+            assert_eq!(
+                crate::term_fixture::intern_value(&mut builder, &crate::TermValue::iri("urn:new")),
+                Err(StorageError::Capacity(CapacityError::new(
+                    CapacitySpace::LocalTerms,
+                    u128::from(terms) + 1,
+                    u128::from(terms)
+                )))
+            );
             let result = DatasetImporter::new(&mut builder, new_source.as_ref())
                 .unwrap()
                 .append();
@@ -3969,7 +3981,10 @@ mod native_graph_birth_tests {
         builder.push_quad(o, p, s, None).unwrap();
         builder.push_reifier(o, t).unwrap();
         builder.push_annotation(o, p, s).unwrap();
-        builder.intern_iri("urn:new").unwrap();
+        let new_id =
+            crate::term_fixture::intern_value(&mut builder, &crate::TermValue::iri("urn:new"))
+                .unwrap();
+        assert_eq!(builder.intern_iri("urn:new"), Ok(new_id));
         assert_eq!(
             (
                 builder.quads.len(),

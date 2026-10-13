@@ -55,9 +55,12 @@ fn fixture(wide: bool) -> (SegmentedImage, Arc<RdfDataset>, Arc<TextIndex>) {
                 g: None,
             })
             .unwrap();
-        let s = purrdf_core::term_fixture::intern_value(&mut resident, &triple[0]);
-        let p = purrdf_core::term_fixture::intern_value(&mut resident, &triple[1]);
-        let o = purrdf_core::term_fixture::intern_value(&mut resident, &triple[2]);
+        let s = purrdf_core::term_fixture::intern_value(&mut resident, &triple[0])
+            .expect("authored fixture");
+        let p = purrdf_core::term_fixture::intern_value(&mut resident, &triple[1])
+            .expect("authored fixture");
+        let o = purrdf_core::term_fixture::intern_value(&mut resident, &triple[2])
+            .expect("authored fixture");
         resident.push_quad(s, p, o, None).unwrap();
     }
     let resident = resident.freeze().unwrap();

@@ -198,6 +198,7 @@ pub fn unrelated_quad() -> Arc<RdfDataset> {
         "https://example.org/d/p",
         "https://example.org/d/o",
     )
+    .expect("authored fixture")
 }
 
 /// Borrowed variables and rows of a SELECT result.

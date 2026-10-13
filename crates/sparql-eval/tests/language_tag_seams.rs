@@ -67,7 +67,7 @@ const REFUSED: &[&str] = &[
 /// A single-quad dataset, so the query below evaluates over exactly one row and
 /// an unbound answer is distinguishable from no answer at all.
 fn dataset() -> Arc<RdfDataset> {
-    one_quad(&format!("{EX}s"), &format!("{EX}p"), &format!("{EX}o"))
+    one_quad(&format!("{EX}s"), &format!("{EX}p"), &format!("{EX}o")).expect("authored fixture")
 }
 
 /// Register `ex:tagged()` as a native function that returns

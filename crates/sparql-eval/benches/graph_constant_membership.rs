@@ -105,7 +105,7 @@ fn bench_graph_constant_membership(c: &mut Bench) {
         ),
     ];
 
-    let frozen = graph_membership_corpus("", GRAPHS);
+    let frozen = graph_membership_corpus("", GRAPHS).expect("authored fixture");
     let mut mutable = MutableDataset::new(Arc::clone(&frozen));
     mutable
         .insert(QuadValues {
@@ -117,7 +117,10 @@ fn bench_graph_constant_membership(c: &mut Bench) {
         .expect("insert applies");
     let delta = mutable.snapshot_view().expect("snapshot builds");
     let composite = CompositeDatasetView::new(
-        vec![Arc::clone(&frozen), graph_membership_corpus("b", GRAPHS)],
+        vec![
+            Arc::clone(&frozen),
+            graph_membership_corpus("b", GRAPHS).expect("authored fixture"),
+        ],
         ViewLimits::default(),
     )
     .expect("two sources compose");

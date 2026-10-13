@@ -1156,7 +1156,9 @@ fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDa
         .expect("terms");
     let native: Vec<_> = values
         .iter()
-        .map(|value| purrdf_core::term_fixture::intern_value(&mut resident, value))
+        .map(|value| {
+            purrdf_core::term_fixture::intern_value(&mut resident, value).expect("authored fixture")
+        })
         .collect();
     for (s, p, o, g) in [(0, 1, 2, None), (0, 1, 4, Some(3))] {
         persistent

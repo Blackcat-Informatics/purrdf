@@ -210,7 +210,13 @@ pub(crate) struct Workspace {
     /// Every census rule hit over every first-party `.rs` file, tests,
     /// benches and examples included.
     pub(crate) rule_hits: Vec<crate::rules::RuleHit>,
+    /// Literal-preserving identities of shipping source for capacity proofs.
+    pub(crate) capacity_sources: BTreeMap<String, String>,
+    /// Complete shipping source-reference closure of the crate-private constructor.
+    pub(crate) capacity_constructors: BTreeSet<String>,
     pending: Vec<Pending>,
+    /// Shipping files already examined for logical capacity panics.
+    capacity_files: BTreeSet<String>,
     /// `(file, byte offset)` of every item already fingerprinted, so a file
     /// reached twice yields its units once.
     fingerprinted: BTreeSet<(String, usize)>,
@@ -363,6 +369,20 @@ impl Workspace {
             module,
             directory,
         };
+        if context.shipping && self.capacity_files.insert(file.to_owned()) {
+            let tokens = TokenStream::from_str(source).expect("already parsed Rust source");
+            self.capacity_sources
+                .insert(file.to_owned(), normalize::literal_fingerprint(&tokens));
+            if crate::capacity::references_constructor(tokens, parsed) {
+                self.capacity_constructors.insert(file.to_owned());
+            }
+            self.rule_hits.extend(crate::capacity::check(
+                context.package,
+                file,
+                source,
+                parsed,
+            ));
+        }
         self.walk_items(context, &place, &parsed.items);
     }
 
@@ -882,7 +902,7 @@ impl<'ast> Visit<'ast> for ParamNames {
 
 /// Re-lex the source a span covers. With `strip_braces`, the span is a braced
 /// block and only its contents are returned.
-fn relex(source: &str, span: proc_macro2::Span, strip_braces: bool) -> TokenStream {
+pub(crate) fn relex(source: &str, span: proc_macro2::Span, strip_braces: bool) -> TokenStream {
     let range = span.byte_range();
     let (start, end) = if strip_braces {
         (range.start + 1, range.end.saturating_sub(1))

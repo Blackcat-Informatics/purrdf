@@ -141,11 +141,11 @@ fn graph_corpus(graph_index: usize, entity_count: usize) -> Vec<Triple> {
 /// its `PagedDataset` with.
 fn build_graph_page(triples: &[Triple], graph: &TermValue) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let g = intern_value(&mut b, graph);
+    let g = intern_value(&mut b, graph).expect("authored fixture");
     for (s, p, o) in triples {
-        let s = intern_value(&mut b, s);
-        let p = intern_value(&mut b, p);
-        let o = intern_value(&mut b, o);
+        let s = intern_value(&mut b, s).expect("authored fixture");
+        let p = intern_value(&mut b, p).expect("authored fixture");
+        let o = intern_value(&mut b, o).expect("authored fixture");
         b.push_quad(s, p, o, Some(g)).unwrap();
     }
     b.freeze().expect("graph page freeze")
@@ -158,11 +158,11 @@ fn build_graph_page(triples: &[Triple], graph: &TermValue) -> Arc<RdfDataset> {
 fn build_multi_graph_dataset(graphs: &[(TermValue, Vec<Triple>)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for (graph, triples) in graphs {
-        let g = intern_value(&mut b, graph);
+        let g = intern_value(&mut b, graph).expect("authored fixture");
         for (s, p, o) in triples {
-            let s = intern_value(&mut b, s);
-            let p = intern_value(&mut b, p);
-            let o = intern_value(&mut b, o);
+            let s = intern_value(&mut b, s).expect("authored fixture");
+            let p = intern_value(&mut b, p).expect("authored fixture");
+            let o = intern_value(&mut b, o).expect("authored fixture");
             b.push_quad(s, p, o, Some(g)).unwrap();
         }
     }
@@ -211,7 +211,7 @@ const DECLARED_EMPTY_GRAPH_COUNT: usize = 24;
 fn build_declared_empty_page(graphs: &[TermValue]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for graph in graphs {
-        let g = intern_value(&mut b, graph);
+        let g = intern_value(&mut b, graph).expect("authored fixture");
         b.declare_named_graph(g).unwrap();
     }
     b.freeze().expect("declared-empty page freeze")
@@ -226,16 +226,16 @@ fn build_multi_graph_dataset_with_empties(
 ) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for (graph, triples) in graphs {
-        let g = intern_value(&mut b, graph);
+        let g = intern_value(&mut b, graph).expect("authored fixture");
         for (s, p, o) in triples {
-            let s = intern_value(&mut b, s);
-            let p = intern_value(&mut b, p);
-            let o = intern_value(&mut b, o);
+            let s = intern_value(&mut b, s).expect("authored fixture");
+            let p = intern_value(&mut b, p).expect("authored fixture");
+            let o = intern_value(&mut b, o).expect("authored fixture");
             b.push_quad(s, p, o, Some(g)).unwrap();
         }
     }
     for graph in declared_empty {
-        let g = intern_value(&mut b, graph);
+        let g = intern_value(&mut b, graph).expect("authored fixture");
         b.declare_named_graph(g).unwrap();
     }
     b.freeze().expect("multi-graph dataset freeze")
@@ -245,11 +245,11 @@ fn bench_cross_page_bgp(c: &mut Bench) {
     let corpus = corpus();
 
     // (1) The single-dataset baseline: every triple in one frozen `RdfDataset`.
-    let single = build_page(&corpus);
+    let single = build_page(&corpus).expect("authored fixture");
 
     // (2) The paged view over the SAME triples, split across several pages so the
     // join crosses page boundaries.
-    let pages = split_pages(&corpus, PAGE_COUNT);
+    let pages = split_pages(&corpus, PAGE_COUNT).expect("authored fixture");
     let provider = Arc::new(InMemoryPageProvider::new(pages));
     let paged = PagedDataset::from_provider(provider).expect("seal pages");
     assert_eq!(
@@ -318,8 +318,8 @@ fn bench_cross_page_bgp(c: &mut Bench) {
 /// "faster/slower" assertion meaningless — this exists for comparison, not a threshold.
 fn bench_paged_full_scan(c: &mut Bench) {
     let corpus = corpus();
-    let single = build_page(&corpus);
-    let pages = split_pages(&corpus, PAGE_COUNT);
+    let single = build_page(&corpus).expect("authored fixture");
+    let pages = split_pages(&corpus, PAGE_COUNT).expect("authored fixture");
     let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages)))
         .expect("seal pages");
 
