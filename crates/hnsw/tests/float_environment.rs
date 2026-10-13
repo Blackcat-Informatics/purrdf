@@ -12,10 +12,8 @@
 //! named refusal; then it runs the same calls in the default environment and asserts
 //! they answer. The register is per-thread, so no other test observes it.
 //!
-//! On `x86_64` the refusal names the MXCSR, which is read before anything else. On 32-bit
-//! x86 with SSE2 no register is read, so the same flushed thread is refused on the
-//! behavioural probe's evidence alone, and the default environment still answers: that is
-//! the target class the probe exists for. The refusal itself is unit-tested for
+//! On `x86_64` and 32-bit x86 with SSE2 the refusal names the MXCSR, which is read
+//! before anything else. The default environment still answers. The refusal is unit-tested for
 //! `aarch64`'s FPCR and RISC-V's `frm` in `purrdf_core::distance`, and wasm has no such
 //! register.
 //!
@@ -49,27 +47,15 @@ use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
 
-/// Whether `refusal` is the flush-to-zero refusal this target reports for an FTZ thread:
-/// the MXCSR by name where it is read, and the probe's flushed-result row where not.
+/// Whether `refusal` names this target's MXCSR flush-to-zero departure.
 fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
     let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
         return false;
     };
-    if cfg!(target_arch = "x86_64") {
-        matches!(
-            evidence,
-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
-        )
-    } else {
-        matches!(
-            evidence,
-            FloatEnvironmentEvidence::Probe {
-                operation: "f64::MIN_POSITIVE * 0.5",
-                observed: 0,
-                ..
-            }
-        )
-    }
+    matches!(
+        evidence,
+        FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
+    )
 }
 
 fn is_ftz(error: &HnswError) -> bool {
