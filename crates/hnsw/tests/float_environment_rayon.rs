@@ -32,41 +32,16 @@
 
 #[path = "support/fixture.rs"]
 mod fixture;
-use fixture::{bits, params, seeded_matrix};
+use fixture::{bits, is_ftz, params, seeded_matrix};
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::control;
-use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
-use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
+use purrdf_hnsw::{HnswIndex, Ranked};
 
 /// Set FTZ on the calling thread for the rest of its life: called only from the global
 /// pool's start handler, on threads this binary's pool owns and no other test shares.
 fn flush_this_thread() {
     control::set_mxcsr(control::mxcsr() | control::MXCSR_FTZ);
-}
-
-/// Whether `error` is the flush-to-zero refusal this target reports: the MXCSR by name
-/// on `x86_64`, where it is read, and the probe's flushed-result row on 32-bit x86 with
-/// SSE2.
-fn is_ftz(error: &HnswError) -> bool {
-    let HnswError::FloatEnvironment(FloatEnvironmentError::FlushToZero { evidence }) = error else {
-        return false;
-    };
-    if cfg!(target_arch = "x86_64") {
-        matches!(
-            evidence,
-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
-        )
-    } else {
-        matches!(
-            evidence,
-            FloatEnvironmentEvidence::Probe {
-                operation: "f64::MIN_POSITIVE * 0.5",
-                observed: 0,
-                ..
-            }
-        )
-    }
 }
 
 #[test]
