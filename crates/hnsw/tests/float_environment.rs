@@ -32,35 +32,19 @@ mod purremb;
 
 #[path = "support/fixture.rs"]
 mod fixture;
-use fixture::{bits, knn_invoke, params};
+use fixture::{bits, is_ftz, is_ftz_refusal, knn_invoke, params};
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::control::Mxcsr;
 use purrdf_core::distance::{
-    Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
-    Reassociated, RecordedPathError, Resolved, RowsRef,
+    Arithmetic, Bound, Bounded, Exact, Measure, Reassociated, RecordedPathError, Resolved, RowsRef,
 };
 use purrdf_core::purremb_fixture::reference_norm;
 use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Ranked, VectorMatrix, guard, relation::HnswSpace};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
-
-/// Whether `refusal` names this target's MXCSR flush-to-zero departure.
-fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
-    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
-        return false;
-    };
-    matches!(
-        evidence,
-        FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
-    )
-}
-
-fn is_ftz(error: &HnswError) -> bool {
-    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
-}
 
 fn is_ftz_eval(error: &EvalError) -> bool {
     matches!(error, EvalError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
