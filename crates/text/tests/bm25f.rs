@@ -5,9 +5,8 @@
 
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_text::{
-    B, DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, Fixed, GraphSelector, K1,
-    MAX_FIELDS, PartitionKey, PreparedCorpus, QUERY_TERMS_MAX, RankingField, RankingProfile,
-    SCORE_BITS, SCORE_MAX, TextIndex, TextIndexConfig, explain, rank_partition,
+    B, FieldInput, Fixed, GraphSelector, PartitionKey, PreparedCorpus, RankingField,
+    RankingProfile, TextIndex, TextIndexConfig, explain, rank_partition,
 };
 
 fn field(name: &str, weight: Fixed, b: Fixed) -> RankingField {
@@ -26,59 +25,36 @@ fn independent_integer_reference_corpus_matches_every_raw_unit() {
 #[test]
 fn score_bound_is_exact_and_width_is_derived() {
     let profile = RankingProfile::single_field();
-    assert_eq!(SCORE_BITS, 56);
+    let corpus = PreparedCorpus::new(&profile, 1, &[2]).expect("corpus");
+    let query = corpus.prepare_query(&[("a", 1), ("b", 1)]).expect("query");
+    let bound = query.score_bound();
+    // Independent integer reference: two IDFs ln(4/3), each saturated below
+    // 2.2. The raw ceiling is 2 * floor(287682072451 * 2.2).
+    assert_eq!(bound.maximum().into_raw(), 1_265_801_118_784);
+    assert_eq!(bound.bits(), 41);
+    assert_eq!(bound.profile_fingerprint(), profile.fingerprint());
     assert_eq!(
-        profile.validate_score(SCORE_MAX).expect("inclusive"),
-        SCORE_MAX
+        bound.validate(bound.maximum()).expect("inclusive"),
+        bound.maximum()
     );
-    let too_large = Fixed::from_raw(SCORE_MAX.into_raw() + 1);
-    assert!(too_large.into_raw().unsigned_abs() < (1_u128 << SCORE_BITS));
-    assert!(profile.validate_score(too_large).is_err());
-    assert!(profile.validate_score(Fixed::from_raw(-1)).is_err());
-    // For N <= 2^40, IDF's argument is <= 2N+2. Its integer ln is a
-    // lower approximation, and ln(2^41+2) < 29. Saturation is <= 2.2,
-    // including each truncation. This coarse bound has no rounding ambiguity.
-    let conservative = Fixed::from_integer(QUERY_TERMS_MAX as i64)
-        .expect("count")
-        .checked_mul(Fixed::from_integer(29).expect("integer"))
-        .expect("product")
-        .checked_mul(K1.checked_add(Fixed::ONE).expect("sum"))
-        .expect("product");
-    assert!(conservative < SCORE_MAX);
-    let actual_idf_ceiling = Fixed::from_integer(2 * DOCUMENTS_MAX as i64 + 2)
-        .expect("argument")
-        .ln()
-        .expect("ln");
-    assert!(actual_idf_ceiling < Fixed::from_integer(29).expect("integer"));
-    let scale = 1_000_000_000_000_i128;
-    let minimum_normalization = scale / i128::from(FIELD_LENGTH_MAX);
-    let pseudo_ceiling = i128::from(FIELD_LENGTH_MAX) * scale * scale / minimum_normalization;
-    let weighted_ceiling = Fixed::from_raw(pseudo_ceiling)
-        .checked_mul(FIELD_WEIGHT_MAX)
-        .expect("bounded field pseudo-frequency");
-    let sum_ceiling = weighted_ceiling
-        .checked_mul(Fixed::from_integer(MAX_FIELDS as i64).expect("count"))
-        .expect("bounded field sum");
-    let numerator_ceiling = sum_ceiling
-        .checked_mul(K1.checked_add(Fixed::ONE).expect("sum"))
-        .expect("bounded saturation numerator");
-    assert!(numerator_ceiling.into_raw() < i128::MAX);
+    let too_large = Fixed::from_raw(bound.maximum().into_raw() + 1);
+    assert!(too_large.into_raw().unsigned_abs() < (1_u128 << bound.bits()));
+    assert!(bound.validate(too_large).is_err());
+    assert!(bound.validate(Fixed::from_raw(-1)).is_err());
+    let empty = corpus.prepare_query(&[]).expect("empty query");
+    assert_eq!(empty.score_bound().maximum(), Fixed::ZERO);
+    assert_eq!(empty.score_bound().bits(), 0);
+    assert_eq!(
+        empty.score(&[]).expect("empty sum").bound,
+        empty.score_bound()
+    );
 }
 
 #[test]
 fn profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping() {
     assert!(RankingField::new("", Fixed::ONE, B).is_err());
     assert!(RankingField::new("x", Fixed::from_raw(-1), B).is_err());
-    assert!(
-        RankingField::new(
-            "x",
-            FIELD_WEIGHT_MAX
-                .checked_add(Fixed::from_raw(1))
-                .expect("sum"),
-            B
-        )
-        .is_err()
-    );
+    assert!(RankingField::new("x", Fixed::from_raw(i128::MAX), B).is_ok());
     assert!(RankingField::new("x", Fixed::ONE, Fixed::from_raw(-1)).is_err());
     assert!(
         RankingField::new(
@@ -91,13 +67,13 @@ fn profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping() {
     assert!(RankingProfile::new(Vec::new(), Vec::new(), None).is_err());
     assert!(
         RankingProfile::new(
-            (0..=MAX_FIELDS)
+            (0..32)
                 .map(|i| field(&i.to_string(), Fixed::ONE, B))
                 .collect(),
             Vec::new(),
             None
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         RankingProfile::new(
@@ -137,17 +113,13 @@ fn profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping() {
 #[test]
 fn invalid_inputs_fail_before_zero_contribution_shortcuts() {
     let profile = RankingProfile::single_field();
-    assert!(PreparedCorpus::new(&profile, DOCUMENTS_MAX + 1, &[0]).is_err());
+    assert!(PreparedCorpus::new(&profile, u64::MAX, &[0]).is_ok());
     assert!(PreparedCorpus::new(&profile, 0, &[1]).is_err());
     assert!(PreparedCorpus::new(&profile, 1, &[]).is_err());
-    assert!(PreparedCorpus::new(&profile, 1, &[u128::from(FIELD_LENGTH_MAX) + 1]).is_err());
+    assert!(PreparedCorpus::new(&profile, 1, &[u128::from(u64::MAX) + 1]).is_err());
     let corpus = PreparedCorpus::new(&profile, 2, &[10]).expect("corpus");
     assert!(corpus.prepare_query(&[("a", 3)]).is_err());
-    assert!(
-        corpus
-            .prepare_query(&vec![("a", 0); QUERY_TERMS_MAX + 1])
-            .is_err()
-    );
+    assert!(corpus.prepare_query(&[("a", 0), ("a", 0)]).is_err());
     assert!(corpus.prepare_query(&[("a", 1), ("a", 1)]).is_err());
     assert!(corpus.prepare_query(&[("b", 1), ("a", 1)]).is_err());
     assert!(corpus.prepare_query(&[("", 1)]).is_err());
@@ -158,7 +130,7 @@ fn invalid_inputs_fail_before_zero_contribution_shortcuts() {
                 0,
                 &[FieldInput {
                     term_frequency: 0,
-                    length: FIELD_LENGTH_MAX + 1
+                    length: u64::MAX
                 }]
             )
             .is_err()
@@ -379,7 +351,7 @@ fn the_ranking_profile_fingerprint_is_frozen() {
     let hex = |profile: &RankingProfile| purrdf_hash::hex::encode(&profile.fingerprint());
     assert_eq!(
         hex(&RankingProfile::single_field()),
-        "bf2c2c0e1388e3b350b61fa16dab981f11623792465600964da3351aa6303b75"
+        "0640f4572eb75938bfdb202ce627ba796de5308581c9ab09ebbe536096cbf7a8"
     );
     let routed = RankingProfile::new(
         vec![field("title", Fixed::ONE, B), field("body", Fixed::ONE, B)],
@@ -392,6 +364,6 @@ fn the_ranking_profile_fingerprint_is_frozen() {
     .expect("a routed profile");
     assert_eq!(
         hex(&routed),
-        "ea96772c8390ba67068b726dc8cc269ff5ec46bc728976b78b0c356564eb15cf"
+        "ade45c9a911230438d4cd179d2d7cbef09d67a88ec045611a8845b125f97c674"
     );
 }

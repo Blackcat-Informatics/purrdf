@@ -20,6 +20,20 @@ pub fn iri(text: &str) -> Iri {
     Iri::parse(text).expect("fixture IRIs are valid")
 }
 
+/// Immutable fixture membership through the same storage as a returned score.
+/// # Panics
+/// When the resident allocator cannot acquire the fixture's storage.
+#[must_use]
+pub fn iri_members(
+    values: impl IntoIterator<Item = Iri>,
+) -> purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedOrderedSet<Iri>> {
+    let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+    let members = purrdf_sparql_eval::AdmittedOrderedSet::from_iter_admitted(values, &workspace)
+        .expect("resident fixture membership storage");
+    purrdf_sparql_eval::SharedWorkspace::new_admitted(members, &workspace)
+        .expect("resident fixture membership owner")
+}
+
 /// The one block domain the multimodal fixtures' producers share,
 /// `http://example.org/domain/shared`.
 ///

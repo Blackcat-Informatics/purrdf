@@ -710,29 +710,50 @@ where
 
 /// Visit every `EXISTS` pattern reachable from `expr` without leaving the expression —
 /// i.e. without descending into a pattern. Stops as soon as `visit` returns `true`.
-pub(crate) fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) -> bool
-where
-    F: FnMut(&'a GraphPattern) -> bool,
-{
-    let mut pending: purrdf_core::SmallVec<[ExpressionPart<'a>; 16]> =
-        purrdf_core::smallvec![ExpressionPart::Sub(expr)];
+pub(crate) fn visit_exists_patterns_admitted<'a>(
+    expr: &'a Expression,
+    workspace: &WorkspaceCapability,
+    visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut pending = purrdf_lex::walk::WorkList::<ExpressionPart<'a>, 16>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    pending
+        .try_push_admitted(ExpressionPart::Sub(expr), &mut memory)
+        .map_err(|error| memory.admission_mut().storage_error(error, "EXISTS walk"))?;
+    let mut stopped = false;
     while let Some(part) = pending.pop() {
         match part {
             ExpressionPart::Sub(sub) => {
                 let start = pending.len();
+                let mut failure = None;
                 visit_expression_parts(sub, &mut |child| {
-                    pending.push(child);
-                    false
+                    if let Err(error) = pending.try_push_admitted(child, &mut memory) {
+                        failure = Some(memory.admission_mut().storage_error(error, "EXISTS walk"));
+                        true
+                    } else {
+                        false
+                    }
                 });
-                // Preserve the recursive visitor's left-to-right order: child
-                // ordinals are part of soundness certificates, not a work hint.
-                pending[start..].reverse();
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                // Reuse the same lexical work list's exact left-to-right order.
+                pending.reverse_top(pending.len() - start);
             }
-            ExpressionPart::Exists(pattern) if visit(pattern) => return true,
-            ExpressionPart::Exists(_) | ExpressionPart::Call(_) => {}
+            ExpressionPart::Exists(pattern) => {
+                if visit(pattern)? {
+                    stopped = true;
+                    break;
+                }
+            }
+            ExpressionPart::Call(_) => {}
         }
     }
-    false
+    pending
+        .release_admitted(&mut memory)
+        .map_err(|error| memory.admission_mut().storage_error(error, "EXISTS walk"))?;
+    Ok(stopped)
 }
 
 /// Visit every pattern that is a child of `pattern` for classification purposes: its
@@ -742,20 +763,50 @@ where
 ///
 /// This is the certificate's view of the tree, and it is built from the same two
 /// primitives everything else uses — nothing here re-matches on an algebra type.
+#[cfg(test)]
 pub(crate) fn visit_classified_children<'a, F>(pattern: &'a GraphPattern, visit: &mut F) -> bool
 where
     F: FnMut(&'a GraphPattern, ChildEdge) -> bool,
 {
-    visit_pattern_parts(pattern, &mut |part| match part {
-        PatternPart::Child(child, edge) => visit(child, edge),
-        PatternPart::Expression(expr) => {
-            visit_exists_patterns(expr, &mut |inner| visit(inner, ChildEdge::OPAQUE))
+    visit_classified_children_admitted(
+        pattern,
+        &WorkspaceCapability::resident(),
+        &mut |child, edge| Ok(visit(child, edge)),
+    )
+    .expect("resident classified child walk")
+}
+
+pub(crate) fn visit_classified_children_admitted<'a>(
+    pattern: &'a GraphPattern,
+    workspace: &WorkspaceCapability,
+    visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
+    let mut failure = None;
+    let stopped = visit_pattern_parts(pattern, &mut |part| {
+        let result = match part {
+            PatternPart::Child(child, edge) => visit(child, edge),
+            PatternPart::Expression(expr) => {
+                visit_exists_patterns_admitted(expr, workspace, &mut |inner| {
+                    visit(inner, ChildEdge::OPAQUE)
+                })
+            }
+        };
+        match result {
+            Ok(stop) => stop,
+            Err(error) => {
+                failure = Some(error);
+                true
+            }
         }
-    })
+    });
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(stopped),
+    }
 }
 
 /// The classified edges of one node's children, indexed by the ordinal at which
-/// [`visit_classified_children`] yields them — which is exactly the order in which the
+/// [`visit_classified_children_admitted`] yields them — which is exactly the order in which the
 /// evaluator's operator for that variant evaluates them (`left` then `right`, or the
 /// single `inner`, followed by any `EXISTS` pattern the node's expressions carry).
 ///
@@ -765,8 +816,12 @@ where
 /// consumer reads it from there. Restating it at the operator would make a new algebra
 /// variant two edits of which only one gets found — the exact failure this module exists
 /// to prevent.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ChildEdges(purrdf_core::SmallVec<[ChildEdge; 4]>);
+#[derive(Debug)]
+pub(crate) struct ChildEdges {
+    values: purrdf_core::SmallVec<[ChildEdge; 4]>,
+    // The original spilled buffer dies before its admission.
+    allocation: Option<crate::WorkspaceAllocation>,
+}
 
 impl ChildEdges {
     /// The edge to the child at `ordinal`.
@@ -776,18 +831,60 @@ impl ChildEdges {
     /// caller that asks about a child a node does not have cannot be handed a licence to
     /// emit rows as answers.
     pub(crate) fn at(&self, ordinal: usize) -> ChildEdge {
-        self.0.get(ordinal).copied().unwrap_or(ChildEdge::OPAQUE)
+        self.values
+            .get(ordinal)
+            .copied()
+            .unwrap_or(ChildEdge::OPAQUE)
     }
 }
 
-/// The classified edges of `pattern`'s children, in [`visit_classified_children`] order.
+/// The classified edges of `pattern`'s children, in [`visit_classified_children_admitted`] order.
+#[cfg(test)]
 pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
-    let mut edges = purrdf_core::SmallVec::new();
-    visit_classified_children(pattern, &mut |_child, edge| {
-        edges.push(edge);
-        false
-    });
-    ChildEdges(edges)
+    child_edges_admitted(pattern, &WorkspaceCapability::resident())
+        .expect("resident child-edge classification")
+}
+
+/// Keep the original four inline edge slots and admit actual heap growth before
+/// the same fallible SmallVec replacement. Child classification is unchanged.
+pub(crate) fn child_edges_admitted(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<ChildEdges, EvalError> {
+    let mut out = ChildEdges {
+        values: purrdf_core::SmallVec::new(),
+        allocation: None,
+    };
+    visit_classified_children_admitted(pattern, workspace, &mut |_child, edge| {
+        if out.values.len() == out.values.capacity() {
+            let required = out
+                .values
+                .len()
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let capacity = required
+                .checked_next_power_of_two()
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let bytes = u64::try_from(
+                std::alloc::Layout::array::<ChildEdge>(capacity)
+                    .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+                    .size(),
+            )
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+            let allocation = workspace.charge(bytes)?;
+            out.values
+                .try_reserve_exact(capacity - out.values.len())
+                .map_err(|_| EvalError::AllocationFailed {
+                    construct: "child-edge spill",
+                })?;
+            // Reallocation has freed the previous backing layout before its
+            // grant is replaced; admission included both while both could live.
+            out.allocation = Some(allocation);
+        }
+        out.values.push(edge);
+        Ok(false)
+    })?;
+    Ok(out)
 }
 
 /// Walk the whole plan rooted at `root`, invoking `visit` with every node, the
@@ -800,29 +897,67 @@ pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
 /// traversal. This function is for holders of a plan who are not evaluating it — the
 /// plan arena ([`crate::plan::Tree::build`]) is this walk, once per evaluated tree, and
 /// the node order it fixes is the one the per-node charge ledger
-/// ([`crate::governor::ledger`]) and the answer-cap pushdown ([`plan_cap_pushdown`])
+/// ([`crate::governor::ledger`]) and the answer-cap pushdown ([`plan_cap_pushdown_admitted`])
 /// number nodes by.
 ///
-/// The walk is a pre-order over [`visit_classified_children`], so the visit sequence is a
+/// The walk is a pre-order over [`visit_classified_children_admitted`], so the visit sequence is a
 /// pure function of the plan — which is what lets a ledger index a node by its ordinal in
 /// this walk and get the same number on every machine and every run.
 pub(crate) fn walk_spine<'a, F>(root: &'a GraphPattern, visit: &mut F)
 where
     F: FnMut(&'a GraphPattern, SpineContext, usize),
 {
-    let mut stack: purrdf_core::SmallVec<[(&'a GraphPattern, SpineContext, usize); 16]> =
-        purrdf_core::smallvec![(root, SpineContext::ROOT, 0_usize)];
-    while let Some((node, context, depth)) = stack.pop() {
-        visit(node, context, depth);
-        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
-        visit_classified_children(node, &mut |child, edge| {
-            children.push((child, edge));
-            false
-        });
-        for (child, edge) in children.into_iter().rev() {
-            stack.push((child, context.descend(edge), depth + 1));
-        }
+    walk_spine_admitted(
+        root,
+        &WorkspaceCapability::resident(),
+        &mut |node, context, depth| {
+            visit(node, context, depth);
+            Ok(())
+        },
+    )
+    .expect("resident plan walk");
+}
+
+pub(crate) fn walk_spine_admitted<'a>(
+    root: &'a GraphPattern,
+    workspace: &WorkspaceCapability,
+    visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), EvalError>,
+) -> Result<(), EvalError> {
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut pending =
+        purrdf_lex::walk::WorkList::<(&'a GraphPattern, SpineContext, usize), 16>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    pending
+        .try_push_admitted((root, SpineContext::ROOT, 0), &mut memory)
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "plan spine walk")
+        })?;
+    while let Some((node, context, depth)) = pending.pop() {
+        visit(node, context, depth)?;
+        let start = pending.len();
+        visit_classified_children_admitted(node, workspace, &mut |child, edge| {
+            let next = depth
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            pending
+                .try_push_admitted((child, context.descend(edge), next), &mut memory)
+                .map_err(|error| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "plan spine walk")
+                })?;
+            Ok(false)
+        })?;
+        pending.reverse_top(pending.len() - start);
     }
+    pending.release_admitted(&mut memory).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "plan spine walk")
+    })?;
+    Ok(())
 }
 
 /// Refuse an algebra too tall for the walks over it to fit the stack left here.
@@ -834,29 +969,58 @@ where
 /// iteratively, against the stack the evaluation starts on ([`crate::stack::height`]): a
 /// parsed query, a prepared one run on another thread and a pattern built through
 /// [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
-/// that stack holds their walks, and refused with [`crate::EvalError::StackExhausted`]
+/// that stack holds their walks, and refused with [`EvalError::StackExhausted`]
 /// where it does not.
 ///
 /// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
 /// evaluation's recursion too, so graph patterns nested deeper than
 /// [`crate::stack::height::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
-/// [`crate::EvalError::HostStackExhausted`].
-pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
-    crate::stack::height::admit_pattern(root)?;
+/// [`EvalError::HostStackExhausted`].
+pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), EvalError> {
+    let capability = WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    validate_graph_pattern_depth_with_memory(
+        root,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+}
+
+/// The existing native and wasm height laws under actual work-list admission.
+pub(crate) fn validate_graph_pattern_depth_with_memory(
+    root: &GraphPattern,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    crate::stack::height::admit_pattern_with_memory(root, memory)?;
     if cfg!(target_arch = "wasm32") {
+        let capability = memory.admission_mut().workspace().clone();
         let limit = crate::stack::height::WASM_GRAPH_PATTERN_DEPTH;
-        let mut stack = vec![(root, 1_usize)];
-        while let Some((node, depth)) = stack.pop() {
+        let mut pending: purrdf_lex::walk::WorkList<_, 16> =
+            purrdf_lex::walk::WorkList::with((root, 1_usize));
+        while let Some((node, depth)) = pending.pop() {
             if depth > limit {
-                return Err(crate::EvalError::HostStackExhausted {
+                return Err(EvalError::HostStackExhausted {
                     construct: "graph pattern",
                 });
             }
-            visit_classified_children(node, &mut |child, _edge| {
-                stack.push((child, depth + 1));
-                false
-            });
+            visit_classified_children_admitted(node, &capability, &mut |child, _edge| {
+                let next = depth
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                pending
+                    .try_push_admitted((child, next), memory)
+                    .map_err(|error| {
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "graph pattern depth")
+                    })?;
+                Ok(false)
+            })?;
         }
+        pending.release_admitted(memory).map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "graph pattern depth")
+        })?;
     }
     Ok(())
 }
@@ -1048,10 +1212,10 @@ pub(crate) const fn child_row_ceiling(
 /// gives it. `None` means "no ceiling": every node without one evaluates exactly as it
 /// would with no pushdown installed.
 ///
-/// A pushdown over the evaluation's own tree ([`Self::over_plan`]) finds a node's id
+/// A pushdown over the evaluation's own tree ([`Self::over_plan_admitted`]) finds a node's id
 /// through that tree. One over a pattern that is not a node of it — a substituted
 /// temporary, a prepared `EXISTS` body — numbers that pattern in a tree of its own
-/// ([`plan_cap_pushdown`]) and keeps, for the nodes that received a ceiling, the address
+/// ([`plan_cap_pushdown_admitted`]) and keeps, for the nodes that received a ceiling, the address
 /// each one lives at while the pattern is borrowed.
 #[derive(Debug)]
 pub(crate) struct CapPushdown {
@@ -1060,33 +1224,36 @@ pub(crate) struct CapPushdown {
     /// The id of the pushdown's root in that tree.
     base: NodeId,
     /// Each node's ceiling, from `base` on, in pre-order.
-    ceilings: Vec<Option<u64>>,
+    ceilings: AdmittedVec<Option<u64>>,
     /// Where a pushdown over a pattern outside the evaluation's tree finds its nodes.
-    transient: Option<DetHashMap<usize, NodeId>>,
+    transient: Option<AdmittedMap<usize, NodeId>>,
 }
 
 impl CapPushdown {
     /// The pushdown of `root_ceiling` from `root`, a node of `plan`'s tree, with its
     /// ids in that tree; `None` when `root` is not a node of it or no node received a
     /// ceiling.
-    pub(crate) fn over_plan(
+    pub(crate) fn over_plan_admitted(
         plan: &PlanHandle,
         root: &GraphPattern,
         root_ceiling: u64,
-    ) -> Option<Self> {
-        let base = plan.node_of(root)?;
-        let ceilings = cap_ceilings(root, root_ceiling, |_, _| {});
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<Self>, EvalError> {
+        let Some(base) = plan.node_of(root) else {
+            return Ok(None);
+        };
+        let ceilings = cap_ceilings(root, root_ceiling, |_, _| Ok(()), workspace)?;
         debug_assert_eq!(
             base.index() + ceilings.len(),
             plan.shape().subtree_end(base).index(),
             "the pushdown numbers the root's subtree exactly as the tree does"
         );
-        ceilings.iter().any(Option::is_some).then_some(Self {
+        Ok(ceilings.iter().any(Option::is_some).then_some(Self {
             tree: plan.key(),
             base,
             ceilings,
             transient: None,
-        })
+        }))
     }
 
     /// The node `pattern` is, as this pushdown numbers it: `plan`'s id for it when the
@@ -1145,7 +1312,7 @@ impl CapPushdown {
 ///
 /// The pushdown this returns numbers `root`'s subtree as a tree of its own, under a fresh
 /// [`TreeKey`] — the form for a pattern that is not a node of the evaluation's tree.
-/// [`CapPushdown::over_plan`] is the same descent read in that tree's ids.
+/// [`CapPushdown::over_plan_admitted`] is the same descent read in that tree's ids.
 ///
 /// # A restricting `Slice` re-seeds the descent
 ///
@@ -1178,32 +1345,51 @@ impl CapPushdown {
 ///
 /// A ceiling that did survive the descent is never replaced: it is the tighter of the two
 /// (it already passed through this node's `min` with `len`) and it is equally sound.
+#[cfg(test)]
 pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
-    let mut transient = DetHashMap::default();
+    plan_cap_pushdown_admitted(root, root_ceiling, &WorkspaceCapability::resident())
+        .expect("resident transient cap-pushdown planning")
+}
+
+pub(crate) fn plan_cap_pushdown_admitted(
+    root: &GraphPattern,
+    root_ceiling: Option<u64>,
+    workspace: &WorkspaceCapability,
+) -> Result<CapPushdown, EvalError> {
+    let mut transient = AdmittedMap::default();
     let ceilings = match root_ceiling {
-        Some(root_ceiling) => cap_ceilings(root, root_ceiling, |node, id| {
-            transient.insert(std::ptr::from_ref(node) as usize, id);
-        }),
-        None => Vec::new(),
+        Some(root_ceiling) => cap_ceilings(
+            root,
+            root_ceiling,
+            |node, id| {
+                let _ =
+                    transient.insert_admitted(std::ptr::from_ref(node) as usize, id, workspace)?;
+                Ok(())
+            },
+            workspace,
+        )?,
+        None => AdmittedVec::new(workspace),
     };
-    CapPushdown {
+    Ok(CapPushdown {
         tree: TreeKey::fresh(),
         base: NodeId::ROOT,
         ceilings,
         transient: Some(transient),
-    }
+    })
 }
 
-/// The ceilings [`plan_cap_pushdown`] describes, one per node of `root`'s subtree in
+/// The ceilings [`plan_cap_pushdown_admitted`] describes, one per node of `root`'s subtree in
 /// [`walk_spine`]'s pre-order, each node that receives one reported to `recorded` with
 /// its offset from `root`.
 fn cap_ceilings<'a>(
     root: &'a GraphPattern,
     root_ceiling: u64,
-    mut recorded: impl FnMut(&'a GraphPattern, NodeId),
-) -> Vec<Option<u64>> {
-    let mut out = Vec::new();
-    let mut stack = vec![(root, SpineContext::ROOT, Some(root_ceiling))];
+    mut recorded: impl FnMut(&'a GraphPattern, NodeId) -> Result<(), EvalError>,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Option<u64>>, EvalError> {
+    let mut out = AdmittedVec::new(workspace);
+    let mut stack = AdmittedVec::new(workspace);
+    stack.push((root, SpineContext::ROOT, Some(root_ceiling)))?;
     while let Some((node, context, ceiling)) = stack.pop() {
         // The licence is checked at the node the ceiling would be *applied* to, so a node
         // whose own certificate has lapsed keeps no ceiling even if its parent had one.
@@ -1233,22 +1419,23 @@ fn cap_ceilings<'a>(
         // restricting `Slice` or an answer cap.
         let kept = ceiling.filter(|ceiling| *ceiling != u64::MAX);
         if kept.is_some() {
-            recorded(node, NodeId::from_index(out.len()));
+            recorded(node, NodeId::from_index(out.len()))?;
         }
-        out.push(kept);
-        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
-        visit_classified_children(node, &mut |child, edge| {
-            let ordinal = children.len();
-            children.push((child, edge, ordinal));
-            false
-        });
-        for (child, edge, ordinal) in children.into_iter().rev() {
+        out.push(kept)?;
+        let first = stack.len();
+        let mut ordinal = 0_usize;
+        visit_classified_children_admitted(node, workspace, &mut |child, edge| {
             let child_ceiling =
                 ceiling.and_then(|ceiling| child_row_ceiling(node, ordinal, ceiling));
-            stack.push((child, context.descend(edge), child_ceiling));
-        }
+            stack.push((child, context.descend(edge), child_ceiling))?;
+            ordinal = ordinal
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            Ok(false)
+        })?;
+        stack.as_mut_slice()[first..].reverse();
     }
-    out
+    Ok(out)
 }
 
 /// The index of `pattern`'s variant in [`PATTERN_LABELS`].
@@ -1373,8 +1560,8 @@ pub(crate) fn pattern_label(pattern: &GraphPattern) -> &'static str {
 // rule needs the CHILDREN'S OWN computed [`NodeAnalysis`] values in hand, not just
 // a bool for whether visiting them would stop early.
 //
-// What IS preserved from that module's doctrine, verbatim: [`analyze_pattern`] and
-// [`analyze_expr`] below are EXHAUSTIVE, WILDCARD-FREE matches over every
+// What IS preserved from that module's doctrine, verbatim: [`analyze_pattern_admitted`] and
+// [`analyze_expr_admitted`] below are EXHAUSTIVE, WILDCARD-FREE matches over every
 // [`GraphPattern`]/[`Expression`] variant with every field named, for the identical
 // reason this module's header states — a new algebra variant must be a compile
 // error here, not a silent inheritance of the most permissive classification. Kept
@@ -1389,7 +1576,23 @@ use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
 
 use crate::parallel::function_is_builtin_stateful;
 use crate::plan::{NodeId, PlanHandle, TreeKey};
-use crate::{DetHashMap, DetHashSet, VarSchema};
+use crate::solution::SchemaBuilder;
+use crate::{AdmittedMap, AdmittedVec, EvalError, VarSchema, WorkspaceCapability};
+#[cfg(test)]
+use crate::{DetHashMap, DetHashSet};
+
+/// Test oracles compare membership, independently of the native schema's
+/// deterministic column order. Production VarSchema equality stays ordered.
+#[cfg(test)]
+impl PartialEq<DetHashSet<Variable>> for VarSchema {
+    fn eq(&self, expected: &DetHashSet<Variable>) -> bool {
+        self.len() == expected.len()
+            && self
+                .vars()
+                .iter()
+                .all(|variable| expected.contains(variable))
+    }
+}
 
 /// One node's output from the fourth structural analysis: every variable free
 /// anywhere within it, the subset of those CERTAINLY bound in every solution it
@@ -1402,10 +1605,10 @@ pub(crate) struct NodeAnalysis {
     /// a triple/path term, a `VALUES` column, a `GRAPH`/`SERVICE` name, a
     /// property-function argument, a `BIND`/`GROUP BY` target, or an expression
     /// position (including inside a nested `EXISTS`'s own inner pattern).
-    pub(crate) free_vars: DetHashSet<Variable>,
+    pub(crate) free_vars: VarSchema,
     /// The subset of [`Self::free_vars`] bound in EVERY solution this node
-    /// produces — see [`analyze_pattern`]'s per-variant derivation.
-    pub(crate) certainly_bound: DetHashSet<Variable>,
+    /// produces — see [`analyze_pattern_admitted`]'s per-variant derivation.
+    pub(crate) certainly_bound: VarSchema,
     /// Whether a stateful builtin, an unresolved `Function::Custom` call (whose
     /// volatility is registry-dependent and therefore unknowable at this
     /// analysis's evaluation point — see [`function_is_builtin_stateful`]'s doc),
@@ -1413,7 +1616,7 @@ pub(crate) struct NodeAnalysis {
     /// including through a nested `EXISTS`.
     pub(crate) has_stateful_builtin: bool,
     /// Whether evaluating this node **to completion** — no `crate::enf` erasure —
-    /// can raise a hard [`EvalError`](crate::EvalError) or an observable remote
+    /// can raise a hard [`EvalError`](EvalError) or an observable remote
     /// effect, anywhere within it, including through a nested `EXISTS`/`NOT
     /// EXISTS`.
     ///
@@ -1430,25 +1633,25 @@ pub(crate) struct NodeAnalysis {
     /// Conservatively `true` for:
     /// * a [`GraphPattern::Service`] call, of ANY `silent`-ness — `SILENT` only
     ///   swallows the federation transport failure itself
-    ///   ([`EvalError::Remote`](crate::EvalError::Remote)); a property-function call
+    ///   ([`EvalError::Remote`](EvalError::Remote)); a property-function call
     ///   forwarded inside the body is refused at the forwarding boundary regardless
     ///   of `silent` (see [`crate::remote::eval_service`]), and that refusal is a
-    ///   hard [`EvalError::Unsupported`](crate::EvalError::Unsupported) `SILENT`
+    ///   hard [`EvalError::Unsupported`](EvalError::Unsupported) `SILENT`
     ///   does not touch;
     /// * a [`GraphPattern::PropertyFunction`] call — an unresolved relation IRI, an
     ///   access-pattern no declared mode admits, or the relation's own returned
-    ///   `Err`/caught panic is [`EvalError::Function`](crate::EvalError::Function);
+    ///   `Err`/caught panic is [`EvalError::Function`](EvalError::Function);
     /// * an expression [`Function::Custom`] call — an IRI resolving to nothing
-    ///   registered is [`EvalError::Unsupported`](crate::EvalError::Unsupported)
+    ///   registered is [`EvalError::Unsupported`](EvalError::Unsupported)
     ///   (`UnsupportedKind::CustomFunction`), and one that DOES resolve (a SHACL-AF
     ///   SPARQL-bodied function or a host-native closure) can itself raise
-    ///   [`EvalError::Function`](crate::EvalError::Function) — neither is knowable
+    ///   [`EvalError::Function`](EvalError::Function) — neither is knowable
     ///   at this analysis's evaluation point, so every `Custom` call is conservative;
     /// * an expression [`Function::Purrdf`] call — `heldIn` hard-errors
     ///   ([`UnsupportedKind::HeldInUnconfigured`](crate::error::UnsupportedKind::HeldInUnconfigured))
     ///   with no caller-supplied standpoint-predicate configuration, and every
     ///   `rdf:List` function (`listLength`, …) hard-errors
-    ///   ([`EvalError::Data`](crate::EvalError::Data)) over a cyclic or torn list —
+    ///   ([`EvalError::Data`](EvalError::Data)) over a cyclic or torn list —
     ///   both conditions this analysis cannot see from the algebra alone;
     /// * a `GROUP BY` aggregate whose [`AggregateFunction`] is
     ///   [`AggregateFunction::Custom`] — the same "unresolved or the registered
@@ -1459,16 +1662,16 @@ pub(crate) struct NodeAnalysis {
 
 /// Node-identity → [`NodeAnalysis`], covering one `EXISTS`/`NOT EXISTS` inner
 /// pattern and every descendant reachable through its children AND through a
-/// nested `EXISTS`/`NOT EXISTS` inner pattern — populated by [`analyze_pattern`].
+/// nested `EXISTS`/`NOT EXISTS` inner pattern — populated by [`analyze_pattern_admitted`].
 ///
 /// Keyed by node address, safe ONLY over the immutable, prepared query algebra
 /// this analysis runs on (never over a per-row substituted temporary — the same
 /// discipline `crate::eval::EvalCtx::exists_inner_cache` and friends already
 /// observe; see that type's doc on why the ABA hazard applies only to
 /// per-row-substituted trees, not to the tree this table is built from).
-pub(crate) type NodeAnalysisTable = DetHashMap<usize, NodeAnalysis>;
+pub(crate) type NodeAnalysisTable = AdmittedMap<usize, NodeAnalysis>;
 
-/// Look up `pattern`'s entry in `table`, built by an enclosing [`analyze_pattern`]
+/// Look up `pattern`'s entry in `table`, built by an enclosing [`analyze_pattern_admitted`]
 /// call over the same tree. Returns `None` on a miss, which should not happen when
 /// `table` was built from exactly this tree — `probe_admissible`'s walk never
 /// descends into a node `analyze_pattern` did not also visit, since both walks
@@ -1515,13 +1718,18 @@ fn node_analysis<'a>(
 /// reachable somewhere within it (mirroring `collect_term_pattern_vars`'s own
 /// descent through nested quoted-triple components, since that is exactly what
 /// `ground_triple_pattern_to_value` recurses through before it errors).
-fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
+fn path_endpoint_can_hard_error(
+    term: &TermPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
     if !matches!(term, TermPattern::Triple(_)) {
-        return false;
+        return Ok(false);
     }
-    let mut vars = DetHashSet::default();
-    term.collect_variables(&mut vars);
-    !vars.is_empty()
+    let mut variables = SchemaBuilder::new(workspace);
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    crate::expr::collect_term_vars_admitted(term, &mut variables, &mut memory)?;
+    Ok(!variables.vars().is_empty())
 }
 
 /// Analyze `pattern` and every descendant (through its children and through any
@@ -1538,7 +1746,7 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
 /// * `PropertyFunction`: free = every argument-vector variable; certainly-bound =
 ///   ∅ (which side of the call binds which argument is a per-relation, per-mode
 ///   decision this analysis cannot see) — moot for admissibility regardless,
-///   since [`probe_admissible`] refuses `PropertyFunction` outright.
+///   since [`probe_admissible_admitted`] refuses `PropertyFunction` outright.
 /// * `Join` = union of both sides (a row exists only when both matched, so every
 ///   variable either side certainly binds is certainly bound in the join).
 /// * `Union` = free is the union, certainly-bound is the INTERSECTION (a row can
@@ -1558,7 +1766,7 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
 ///   (unchanged; these modifiers restrict or reorder ROWS, never which variables
 ///   a surviving row binds).
 /// * `Extend` = inner's set ∪ `{target}` (`BIND` always yields a bound target for
-///   this analysis's purposes — see [`analyze_pattern`]'s own doc note on this simplification's
+///   this analysis's purposes — see [`analyze_pattern_admitted`]'s own doc note on this simplification's
 ///   scope, below).
 /// * `Project` = inner's set ∩ the projected list (both free and certainly-bound
 ///   narrow at the one true scope boundary the surface language has).
@@ -1578,7 +1786,7 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
 ///
 /// * `Extend` inserts `variable` into `certainly_bound` UNCONDITIONALLY — but a
 ///   `BIND` whose expression raises a TYPE error (not a hard
-///   [`EvalError`](crate::EvalError)) leaves the target unbound per SPARQL §18.6,
+///   [`EvalError`](EvalError)) leaves the target unbound per SPARQL §18.6,
 ///   not bound to some value. This analysis has no per-expression-shape way to
 ///   know whether `expression` can type-error.
 /// * `Group` inserts every aggregate output variable into `certainly_bound`
@@ -1593,7 +1801,7 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
 /// assumption.
 ///
 /// **Which callers neutralize them**: neither over-claim can currently decide a
-/// [`probe_admissible`] outcome, because [`pattern_probe_step`] never reads it in a
+/// [`probe_admissible_admitted`] outcome, because [`pattern_probe_step`] never reads it in a
 /// context where the claim's truth would matter:
 ///
 /// * [`pattern_probe_step`]'s `Extend` arm answers `!current_row_vars.contains(variable)`
@@ -1622,38 +1830,71 @@ fn path_endpoint_can_hard_error(term: &TermPattern) -> bool {
 /// does not currently make, so doing this exactly would need a new, third boolean
 /// output threaded through every `analyze_expr` arm, for a case only reachable
 /// today by caller accident.
+#[cfg(test)]
 pub(crate) fn analyze_pattern(
     pattern: &GraphPattern,
     table: &mut NodeAnalysisTable,
 ) -> NodeAnalysis {
-    let mut values = AnalysisValues::default();
-    run_analysis(AnalysisStep::EnterPattern(pattern), table, &mut values);
-    values
+    analyze_pattern_admitted(pattern, table, &WorkspaceCapability::resident())
+        .expect("resident node analysis")
+}
+
+/// Analyze the same immutable tree through its original admitted working owners.
+pub(crate) fn analyze_pattern_admitted(
+    pattern: &GraphPattern,
+    table: &mut NodeAnalysisTable,
+    workspace: &WorkspaceCapability,
+) -> Result<NodeAnalysis, EvalError> {
+    let mut values = AnalysisValues::new(workspace);
+    run_analysis(
+        AnalysisStep::EnterPattern(pattern),
+        table,
+        &mut values,
+        workspace,
+    )?;
+    Ok(values
         .patterns
         .pop()
-        .expect("the root pattern's analysis is the last one assembled")
+        .expect("the root pattern's analysis is the last one assembled"))
 }
 
 /// Analyze `expr`, returning its free variables, whether a stateful builtin is
 /// reachable within it, and whether a hard error/effect is reachable within it (see
 /// [`NodeAnalysis::can_hard_error`]) — descending into a nested `EXISTS`'s inner
-/// pattern as [`analyze_pattern`] does (so that pattern's own table entry is populated
-/// too, for [`probe_admissible`]'s later lookup).
+/// pattern as [`analyze_pattern_admitted`] does (so that pattern's own table entry is populated
+/// too, for [`probe_admissible_admitted`]'s later lookup).
+#[cfg(test)]
 pub(crate) fn analyze_expr(
     expr: &Expression,
     table: &mut NodeAnalysisTable,
 ) -> (DetHashSet<Variable>, bool, bool) {
-    let mut values = AnalysisValues::default();
-    run_analysis(AnalysisStep::EnterExpr(expr), table, &mut values);
-    values
+    let (variables, stateful, hard_error) =
+        analyze_expr_admitted(expr, table, &WorkspaceCapability::resident())
+            .expect("resident expression analysis");
+    (
+        variables.vars().iter().cloned().collect(),
+        stateful,
+        hard_error,
+    )
+}
+
+/// The same expression synthesis with immutable original schema owners.
+pub(crate) fn analyze_expr_admitted(
+    expr: &Expression,
+    table: &mut NodeAnalysisTable,
+    workspace: &WorkspaceCapability,
+) -> Result<ExprAnalysis, EvalError> {
+    let mut values = AnalysisValues::new(workspace);
+    run_analysis(AnalysisStep::EnterExpr(expr), table, &mut values, workspace)?;
+    Ok(values
         .exprs
         .pop()
-        .expect("the root expression's analysis is the last one assembled")
+        .expect("the root expression's analysis is the last one assembled"))
 }
 
 /// An expression's analysis: its free variables, whether a stateful builtin is
 /// reachable within it, and whether a hard error/effect is.
-type ExprAnalysis = (DetHashSet<Variable>, bool, bool);
+type ExprAnalysis = (VarSchema, bool, bool);
 
 /// One step of the analysis walk: a node entered before its parts, or exited after
 /// every part's analysis exists.
@@ -1667,13 +1908,19 @@ enum AnalysisStep<'a> {
 /// The analyses the walk has computed and not yet consumed: one stack per kind, each
 /// holding, at any node's exit, that node's parts' analyses on top, in the order the
 /// parts were entered.
-#[derive(Default)]
 struct AnalysisValues {
-    patterns: Vec<NodeAnalysis>,
-    exprs: Vec<ExprAnalysis>,
+    patterns: AdmittedVec<NodeAnalysis>,
+    exprs: AdmittedVec<ExprAnalysis>,
 }
 
 impl AnalysisValues {
+    fn new(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            patterns: AdmittedVec::new(workspace),
+            exprs: AdmittedVec::new(workspace),
+        }
+    }
+
     /// The analysis of the pattern part entered last.
     fn pattern(&mut self) -> NodeAnalysis {
         self.patterns
@@ -1681,10 +1928,16 @@ impl AnalysisValues {
             .expect("a pattern part is analyzed before its node is exited")
     }
 
-    /// The analyses of the `count` pattern parts entered last, in entry order.
-    fn pattern_parts(&mut self, count: usize) -> Vec<NodeAnalysis> {
+    /// The analyses of the last pattern parts, retaining both metadata owners.
+    fn pattern_parts(
+        &mut self,
+        count: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<NodeAnalysis>, EvalError> {
         let first = self.patterns.len() - count;
-        self.patterns.drain(first..).collect()
+        let mut out = AdmittedVec::with_capacity(count, workspace)?;
+        out.try_extend(self.patterns.drain_from(first))?;
+        Ok(out)
     }
 
     /// The analysis of the expression part entered last.
@@ -1694,10 +1947,16 @@ impl AnalysisValues {
             .expect("an expression part is analyzed before its node is exited")
     }
 
-    /// The analyses of the `count` expression parts entered last, in entry order.
-    fn expr_parts(&mut self, count: usize) -> Vec<ExprAnalysis> {
+    /// The analyses of the last expression parts in their original entry order.
+    fn expr_parts(
+        &mut self,
+        count: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<ExprAnalysis>, EvalError> {
         let first = self.exprs.len() - count;
-        self.exprs.drain(first..).collect()
+        let mut out = AdmittedVec::with_capacity(count, workspace)?;
+        out.try_extend(self.exprs.drain_from(first))?;
+        Ok(out)
     }
 }
 
@@ -1711,8 +1970,10 @@ fn run_analysis(
     start: AnalysisStep<'_>,
     table: &mut NodeAnalysisTable,
     values: &mut AnalysisValues,
-) {
-    let mut steps = vec![start];
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(start)?;
     while let Some(step) = steps.pop() {
         match step {
             AnalysisStep::EnterPattern(pattern) => {
@@ -1720,39 +1981,47 @@ fn run_analysis(
                 crate::op_count::bump(crate::op_count::Op::Analyzed);
                 let addr = std::ptr::from_ref(pattern) as usize;
                 if let Some(existing) = table.get(&addr) {
-                    values.patterns.push(existing.clone());
+                    values.patterns.push(existing.clone())?;
                     continue;
                 }
-                steps.push(AnalysisStep::ExitPattern(pattern));
+                steps.push(AnalysisStep::ExitPattern(pattern))?;
                 let first = steps.len();
-                push_pattern_parts(pattern, &mut steps);
+                push_pattern_parts(pattern, &mut steps)?;
                 // Pushed in entry order, so reversed to pop in it.
-                steps[first..].reverse();
+                steps.as_mut_slice()[first..].reverse();
             }
             AnalysisStep::ExitPattern(pattern) => {
-                let analysis = assemble_pattern(pattern, values);
-                table.insert(std::ptr::from_ref(pattern) as usize, analysis.clone());
-                values.patterns.push(analysis);
+                let analysis = assemble_pattern(pattern, values, workspace)?;
+                let _ = table.insert_admitted(
+                    std::ptr::from_ref(pattern) as usize,
+                    analysis.clone(),
+                    workspace,
+                )?;
+                values.patterns.push(analysis)?;
             }
             AnalysisStep::EnterExpr(expr) => {
-                steps.push(AnalysisStep::ExitExpr(expr));
+                steps.push(AnalysisStep::ExitExpr(expr))?;
                 let first = steps.len();
-                push_expr_parts(expr, &mut steps);
-                steps[first..].reverse();
+                push_expr_parts(expr, &mut steps)?;
+                steps.as_mut_slice()[first..].reverse();
             }
             AnalysisStep::ExitExpr(expr) => {
-                let analysis = assemble_expr(expr, values);
-                values.exprs.push(analysis);
+                let analysis = assemble_expr(expr, values, workspace)?;
+                values.exprs.push(analysis)?;
             }
         }
     }
+    Ok(())
 }
 
 /// Push the entry step of every part `pattern`'s analysis reads, in the order it reads
 /// them: child patterns first (left before right), then the node's own expressions
 /// (an `OPTIONAL`'s condition, a `FILTER`'s or `BIND`'s or `UNFOLD`'s expression, the
 /// sort keys, each aggregate's arguments then its sort keys).
-fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisStep<'a>>) {
+fn push_pattern_parts<'a>(
+    pattern: &'a GraphPattern,
+    steps: &mut AdmittedVec<AnalysisStep<'a>>,
+) -> Result<(), EvalError> {
     match pattern {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
@@ -1761,20 +2030,20 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::Minus { left, right } => {
-            steps.push(AnalysisStep::EnterPattern(left));
-            steps.push(AnalysisStep::EnterPattern(right));
+            steps.push(AnalysisStep::EnterPattern(left))?;
+            steps.push(AnalysisStep::EnterPattern(right))?;
         }
         GraphPattern::Apply {
             left,
             right,
             policy: _,
         } => {
-            steps.push(AnalysisStep::EnterPattern(left));
-            steps.push(AnalysisStep::EnterPattern(right));
+            steps.push(AnalysisStep::EnterPattern(left))?;
+            steps.push(AnalysisStep::EnterPattern(right))?;
         }
         GraphPattern::Union { arms } => {
             for arm in arms {
-                steps.push(AnalysisStep::EnterPattern(arm));
+                steps.push(AnalysisStep::EnterPattern(arm))?;
             }
         }
         GraphPattern::LeftJoin {
@@ -1782,15 +2051,15 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
             right,
             expression,
         } => {
-            steps.push(AnalysisStep::EnterPattern(left));
-            steps.push(AnalysisStep::EnterPattern(right));
+            steps.push(AnalysisStep::EnterPattern(left))?;
+            steps.push(AnalysisStep::EnterPattern(right))?;
             if let Some(e) = expression {
-                steps.push(AnalysisStep::EnterExpr(e));
+                steps.push(AnalysisStep::EnterExpr(e))?;
             }
         }
         GraphPattern::Filter { expr, inner } => {
-            steps.push(AnalysisStep::EnterPattern(inner));
-            steps.push(AnalysisStep::EnterExpr(expr));
+            steps.push(AnalysisStep::EnterPattern(inner))?;
+            steps.push(AnalysisStep::EnterExpr(expr))?;
         }
         GraphPattern::Extend {
             inner, expression, ..
@@ -1798,41 +2067,45 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
         | GraphPattern::Unfold {
             inner, expression, ..
         } => {
-            steps.push(AnalysisStep::EnterPattern(inner));
-            steps.push(AnalysisStep::EnterExpr(expression));
+            steps.push(AnalysisStep::EnterPattern(inner))?;
+            steps.push(AnalysisStep::EnterExpr(expression))?;
         }
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => steps.push(AnalysisStep::EnterPattern(inner)),
+        | GraphPattern::Slice { inner, .. } => steps.push(AnalysisStep::EnterPattern(inner))?,
         GraphPattern::OrderBy { inner, expression } => {
-            steps.push(AnalysisStep::EnterPattern(inner));
+            steps.push(AnalysisStep::EnterPattern(inner))?;
             for oe in expression {
-                steps.push(AnalysisStep::EnterExpr(oe.expression()));
+                steps.push(AnalysisStep::EnterExpr(oe.expression()))?;
             }
         }
         GraphPattern::Group {
             inner, aggregates, ..
         } => {
-            steps.push(AnalysisStep::EnterPattern(inner));
+            steps.push(AnalysisStep::EnterPattern(inner))?;
             for (_, agg) in aggregates {
                 for arg in agg
                     .args()
                     .iter()
                     .chain(agg.order_by().iter().map(OrderExpression::expression))
                 {
-                    steps.push(AnalysisStep::EnterExpr(arg));
+                    steps.push(AnalysisStep::EnterExpr(arg))?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// Push the entry step of every part `expr`'s analysis reads, in the order it reads
 /// them: operands left to right, and an `EXISTS` body.
-fn push_expr_parts<'a>(expr: &'a Expression, steps: &mut Vec<AnalysisStep<'a>>) {
+fn push_expr_parts<'a>(
+    expr: &'a Expression,
+    steps: &mut AdmittedVec<AnalysisStep<'a>>,
+) -> Result<(), EvalError> {
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)
@@ -1840,13 +2113,13 @@ fn push_expr_parts<'a>(expr: &'a Expression, steps: &mut Vec<AnalysisStep<'a>>) 
         | Expression::Bound(_) => {}
         Expression::Or(operands) | Expression::And(operands) => {
             for operand in operands {
-                steps.push(AnalysisStep::EnterExpr(operand));
+                steps.push(AnalysisStep::EnterExpr(operand))?;
             }
         }
         Expression::Arithmetic(first, operands) => {
-            steps.push(AnalysisStep::EnterExpr(first));
+            steps.push(AnalysisStep::EnterExpr(first))?;
             for (_, operand) in operands {
-                steps.push(AnalysisStep::EnterExpr(operand));
+                steps.push(AnalysisStep::EnterExpr(operand))?;
             }
         }
         Expression::Equal(a, b)
@@ -1855,49 +2128,65 @@ fn push_expr_parts<'a>(expr: &'a Expression, steps: &mut Vec<AnalysisStep<'a>>) 
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
         | Expression::LessOrEqual(a, b) => {
-            steps.push(AnalysisStep::EnterExpr(a));
-            steps.push(AnalysisStep::EnterExpr(b));
+            steps.push(AnalysisStep::EnterExpr(a))?;
+            steps.push(AnalysisStep::EnterExpr(b))?;
         }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            steps.push(AnalysisStep::EnterExpr(a));
+            steps.push(AnalysisStep::EnterExpr(a))?;
         }
         Expression::If(c, t, e) => {
-            steps.push(AnalysisStep::EnterExpr(c));
-            steps.push(AnalysisStep::EnterExpr(t));
-            steps.push(AnalysisStep::EnterExpr(e));
+            steps.push(AnalysisStep::EnterExpr(c))?;
+            steps.push(AnalysisStep::EnterExpr(t))?;
+            steps.push(AnalysisStep::EnterExpr(e))?;
         }
         Expression::In(needle, haystack) => {
-            steps.push(AnalysisStep::EnterExpr(needle));
+            steps.push(AnalysisStep::EnterExpr(needle))?;
             for hay in haystack {
-                steps.push(AnalysisStep::EnterExpr(hay));
+                steps.push(AnalysisStep::EnterExpr(hay))?;
             }
         }
         Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
             for item in items {
-                steps.push(AnalysisStep::EnterExpr(item));
+                steps.push(AnalysisStep::EnterExpr(item))?;
             }
         }
-        Expression::Exists(inner) => steps.push(AnalysisStep::EnterPattern(inner)),
+        Expression::Exists(inner) => steps.push(AnalysisStep::EnterPattern(inner))?,
     }
+    Ok(())
 }
 
 /// `pattern`'s analysis, assembled from its parts' analyses (on top of `values`, in
 /// the order [`push_pattern_parts`] entered them) by the per-variant derivation
-/// [`analyze_pattern`]'s doc states.
-fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> NodeAnalysis {
-    match pattern {
+/// [`analyze_pattern_admitted`]'s doc states.
+fn assemble_pattern(
+    pattern: &GraphPattern,
+    values: &mut AnalysisValues,
+    workspace: &WorkspaceCapability,
+) -> Result<NodeAnalysis, EvalError> {
+    Ok(match pattern {
         GraphPattern::Bgp { patterns } => {
-            let mut vars = DetHashSet::default();
-            for tp in patterns {
-                tp.subject.collect_variables(&mut vars);
-                if let NamedNodePattern::Variable(v) = &tp.predicate {
-                    vars.insert(v.clone());
+            let mut variables = SchemaBuilder::new(workspace);
+            let mut storage = crate::workspace::LexicalFrame::new(workspace);
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+            for triple in patterns {
+                crate::expr::collect_term_vars_admitted(
+                    &triple.subject,
+                    &mut variables,
+                    &mut memory,
+                )?;
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    let _ = variables.push(variable.clone())?;
                 }
-                tp.object.collect_variables(&mut vars);
+                crate::expr::collect_term_vars_admitted(
+                    &triple.object,
+                    &mut variables,
+                    &mut memory,
+                )?;
             }
+            let variables = variables.finish()?;
             NodeAnalysis {
-                certainly_bound: vars.clone(),
-                free_vars: vars,
+                certainly_bound: variables.clone(),
+                free_vars: variables,
                 has_stateful_builtin: false,
                 can_hard_error: false,
             }
@@ -1905,270 +2194,279 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
         GraphPattern::Path {
             subject, object, ..
         } => {
-            let mut vars = DetHashSet::default();
-            subject.collect_variables(&mut vars);
-            object.collect_variables(&mut vars);
+            let mut variables = SchemaBuilder::new(workspace);
+            let mut storage = crate::workspace::LexicalFrame::new(workspace);
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+            crate::expr::collect_term_vars_admitted(subject, &mut variables, &mut memory)?;
+            crate::expr::collect_term_vars_admitted(object, &mut variables, &mut memory)?;
+            let variables = variables.finish()?;
             NodeAnalysis {
-                certainly_bound: vars.clone(),
-                free_vars: vars,
+                certainly_bound: variables.clone(),
+                free_vars: variables,
                 has_stateful_builtin: false,
-                // A variable-bearing quoted-triple-term endpoint (`?s :p { ?x :q ?y }` as
-                // a path subject/object) raises `UnsupportedKind::QuotedTripleTermVariable`
-                // — see `path_endpoint_can_hard_error`'s doc — so an ENF law that erases a
-                // `Path` bearing one must not silently swallow that error along with it.
-                can_hard_error: path_endpoint_can_hard_error(subject)
-                    || path_endpoint_can_hard_error(object),
+                // Only a variable inside a quoted endpoint raises the original
+                // UnsupportedKind::QuotedTripleTermVariable failure.
+                can_hard_error: path_endpoint_can_hard_error(subject, workspace)?
+                    || path_endpoint_can_hard_error(object, workspace)?,
             }
         }
         GraphPattern::Values {
             variables,
             bindings,
         } => {
-            let free: DetHashSet<Variable> = variables.iter().cloned().collect();
-            let mut certainly = DetHashSet::default();
-            for (i, v) in variables.iter().enumerate() {
+            let free = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+            let mut certainly = SchemaBuilder::new(workspace);
+            for (index, variable) in variables.iter().enumerate() {
                 if bindings
                     .iter()
-                    .all(|row| row.get(i).is_some_and(Option::is_some))
+                    .all(|row| row.get(index).is_some_and(Option::is_some))
                 {
-                    certainly.insert(v.clone());
+                    let _ = certainly.push(variable.clone())?;
                 }
             }
             NodeAnalysis {
                 free_vars: free,
-                certainly_bound: certainly,
+                certainly_bound: certainly.finish()?,
                 has_stateful_builtin: false,
                 can_hard_error: false,
             }
         }
         GraphPattern::PropertyFunction(call) => {
-            let mut vars = DetHashSet::default();
+            let mut variables = SchemaBuilder::new(workspace);
+            let mut storage = crate::workspace::LexicalFrame::new(workspace);
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
             for term in call.subject_args.iter().chain(&call.object_args) {
-                term.collect_variables(&mut vars);
+                crate::expr::collect_term_vars_admitted(term, &mut variables, &mut memory)?;
             }
             NodeAnalysis {
-                free_vars: vars,
-                certainly_bound: DetHashSet::default(),
-                // A relation is host code of unknown volatility; conservatively stateful
-                // (moot for `probe_admissible`, which refuses `PropertyFunction` outright).
+                free_vars: variables.finish()?,
+                certainly_bound: VarSchema::default(),
+                // The same unknown relation volatility and hard-failure law.
                 has_stateful_builtin: true,
-                // An unresolved relation IRI, an access pattern no declared mode
-                // admits, or the relation's own returned `Err`/caught panic is
-                // `EvalError::Function` — see `NodeAnalysis::can_hard_error`'s doc.
                 can_hard_error: true,
             }
         }
         GraphPattern::Join { .. } | GraphPattern::Lateral { .. } => {
-            let r = values.pattern();
-            let l = values.pattern();
+            let right = values.pattern();
+            let left = values.pattern();
             NodeAnalysis {
-                free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
-                certainly_bound: l
+                free_vars: left.free_vars.union_admitted(&right.free_vars, workspace)?,
+                certainly_bound: left
                     .certainly_bound
-                    .union(&r.certainly_bound)
-                    .cloned()
-                    .collect(),
-                has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
-                can_hard_error: l.can_hard_error || r.can_hard_error,
+                    .union_admitted(&right.certainly_bound, workspace)?,
+                has_stateful_builtin: left.has_stateful_builtin || right.has_stateful_builtin,
+                can_hard_error: left.can_hard_error || right.can_hard_error,
             }
         }
         GraphPattern::Apply { policy, .. } => {
             let right = values.pattern();
             let left = values.pattern();
-            let mut free_vars: DetHashSet<_> =
-                left.free_vars.union(&right.free_vars).cloned().collect();
-            free_vars.extend(
+            let mut free = SchemaBuilder::new(workspace);
+            free.try_extend(
+                left.free_vars
+                    .vars()
+                    .iter()
+                    .chain(right.free_vars.vars())
+                    .cloned(),
+            )?;
+            free.try_extend(
                 policy
                     .inputs
                     .iter()
                     .flat_map(|(input, driver)| [input.clone(), driver.clone()]),
-            );
+            )?;
             if let Some(optional) = &policy.optional {
-                free_vars.extend(
+                free.try_extend(
                     optional
                         .retry_inputs
                         .iter()
                         .flat_map(|(input, driver)| [input.clone(), driver.clone()]),
-                );
+                )?;
             }
             NodeAnalysis {
-                free_vars,
+                free_vars: free.finish()?,
                 certainly_bound: if policy.optional.is_some() {
                     left.certainly_bound
                 } else {
                     left.certainly_bound
-                        .union(&right.certainly_bound)
-                        .cloned()
-                        .collect()
+                        .union_admitted(&right.certainly_bound, workspace)?
                 },
                 has_stateful_builtin: left.has_stateful_builtin || right.has_stateful_builtin,
                 can_hard_error: left.can_hard_error || right.can_hard_error,
             }
         }
-        // Free variables are the arms' union and a certainly-bound variable is bound by
-        // every arm — the pairwise fold the left-nested binary chain computed. An armless
-        // union produces no solution and binds nothing.
+        // Free is the arms' union and certain is their intersection. The same
+        // armless UNION binds nothing.
         GraphPattern::Union { arms } => {
-            let mut analyses = values.pattern_parts(arms.len()).into_iter();
+            let mut analyses = values.pattern_parts(arms.len(), workspace)?.into_iter();
             let first = analyses.next().unwrap_or_default();
-            analyses.fold(first, |l, r| NodeAnalysis {
-                free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
-                certainly_bound: l
-                    .certainly_bound
-                    .intersection(&r.certainly_bound)
-                    .cloned()
-                    .collect(),
-                has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
-                can_hard_error: l.can_hard_error || r.can_hard_error,
-            })
+            let mut free = SchemaBuilder::new(workspace);
+            free.try_extend(first.free_vars.vars().iter().cloned())?;
+            let mut certainly = first.certainly_bound;
+            let mut stateful = first.has_stateful_builtin;
+            let mut hard_error = first.can_hard_error;
+            for analysis in analyses {
+                free.try_extend(analysis.free_vars.vars().iter().cloned())?;
+                certainly =
+                    certainly.intersection_admitted(&analysis.certainly_bound, workspace)?;
+                stateful |= analysis.has_stateful_builtin;
+                hard_error |= analysis.can_hard_error;
+            }
+            NodeAnalysis {
+                free_vars: free.finish()?,
+                certainly_bound: certainly,
+                has_stateful_builtin: stateful,
+                can_hard_error: hard_error,
+            }
         }
         GraphPattern::LeftJoin { expression, .. } => {
-            let (expr_free, expr_stateful, expr_hard_error) = match expression {
+            let (expression_free, expression_stateful, expression_hard_error) = match expression {
                 Some(_) => values.expr(),
-                None => (DetHashSet::default(), false, false),
+                None => (VarSchema::default(), false, false),
             };
-            let r = values.pattern();
-            let l = values.pattern();
+            let right = values.pattern();
+            let left = values.pattern();
+            let mut free = SchemaBuilder::new(workspace);
+            free.try_extend(
+                left.free_vars
+                    .vars()
+                    .iter()
+                    .chain(right.free_vars.vars())
+                    .chain(expression_free.vars())
+                    .cloned(),
+            )?;
             NodeAnalysis {
-                free_vars: l
-                    .free_vars
-                    .union(&r.free_vars)
-                    .cloned()
-                    .collect::<DetHashSet<_>>()
-                    .union(&expr_free)
-                    .cloned()
-                    .collect(),
-                certainly_bound: l.certainly_bound,
-                has_stateful_builtin: l.has_stateful_builtin
-                    || r.has_stateful_builtin
-                    || expr_stateful,
-                can_hard_error: l.can_hard_error || r.can_hard_error || expr_hard_error,
+                free_vars: free.finish()?,
+                certainly_bound: left.certainly_bound,
+                has_stateful_builtin: left.has_stateful_builtin
+                    || right.has_stateful_builtin
+                    || expression_stateful,
+                can_hard_error: left.can_hard_error
+                    || right.can_hard_error
+                    || expression_hard_error,
             }
         }
         GraphPattern::Minus { .. } => {
-            let r = values.pattern();
-            let l = values.pattern();
+            let right = values.pattern();
+            let left = values.pattern();
             NodeAnalysis {
-                free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
-                certainly_bound: l.certainly_bound,
-                has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
-                can_hard_error: l.can_hard_error || r.can_hard_error,
+                free_vars: left.free_vars.union_admitted(&right.free_vars, workspace)?,
+                certainly_bound: left.certainly_bound,
+                has_stateful_builtin: left.has_stateful_builtin || right.has_stateful_builtin,
+                can_hard_error: left.can_hard_error || right.can_hard_error,
             }
         }
         GraphPattern::Filter { .. } => {
-            let (expr_free, expr_stateful, expr_hard_error) = values.expr();
-            let i = values.pattern();
+            let (expression_free, expression_stateful, expression_hard_error) = values.expr();
+            let inner = values.pattern();
             NodeAnalysis {
-                free_vars: i.free_vars.union(&expr_free).cloned().collect(),
-                certainly_bound: i.certainly_bound,
-                has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
-                can_hard_error: i.can_hard_error || expr_hard_error,
+                free_vars: inner
+                    .free_vars
+                    .union_admitted(&expression_free, workspace)?,
+                certainly_bound: inner.certainly_bound,
+                has_stateful_builtin: inner.has_stateful_builtin || expression_stateful,
+                can_hard_error: inner.can_hard_error || expression_hard_error,
             }
         }
         GraphPattern::Extend { variable, .. } => {
-            let (expr_free, expr_stateful, expr_hard_error) = values.expr();
-            let i = values.pattern();
-            let mut free_vars: DetHashSet<Variable> =
-                i.free_vars.union(&expr_free).cloned().collect();
-            free_vars.insert(variable.clone());
-            let mut certainly_bound = i.certainly_bound;
-            certainly_bound.insert(variable.clone());
+            let (expression_free, expression_stateful, expression_hard_error) = values.expr();
+            let inner = values.pattern();
+            let mut free_vars = inner
+                .free_vars
+                .union_admitted(&expression_free, workspace)?;
+            let _ = free_vars.push_admitted(variable.clone(), workspace)?;
+            let mut certainly_bound = inner.certainly_bound;
+            // Preserve the documented existing Extend over-approximation, which
+            // the probe's target-collision guard neutralizes.
+            let _ = certainly_bound.push_admitted(variable.clone(), workspace)?;
             NodeAnalysis {
                 free_vars,
                 certainly_bound,
-                has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
-                can_hard_error: i.can_hard_error || expr_hard_error,
+                has_stateful_builtin: inner.has_stateful_builtin || expression_stateful,
+                can_hard_error: inner.can_hard_error || expression_hard_error,
             }
         }
-        // `UNFOLD` puts its one or two targets in scope, but NEITHER is certainly
-        // bound: a SEP-0009 `null` element (or a null map value) produces the row
-        // with that variable UNBOUND, and which of the two readings applies —
-        // element/index for a `cdt:List`, key/value for a `cdt:Map` — is a property
-        // of the runtime value, not of the syntax. Claiming either as certainly
-        // bound would license an `EXISTS` probe that answers from a binding the row
-        // may not have.
         GraphPattern::Unfold {
             element, companion, ..
         } => {
-            let (expr_free, expr_stateful, expr_hard_error) = values.expr();
-            let i = values.pattern();
-            let mut free_vars: DetHashSet<Variable> =
-                i.free_vars.union(&expr_free).cloned().collect();
-            free_vars.insert(element.clone());
+            let (expression_free, expression_stateful, expression_hard_error) = values.expr();
+            let inner = values.pattern();
+            let mut free_vars = inner
+                .free_vars
+                .union_admitted(&expression_free, workspace)?;
+            let _ = free_vars.push_admitted(element.clone(), workspace)?;
             if let Some(companion) = companion {
-                free_vars.insert(companion.clone());
+                let _ = free_vars.push_admitted(companion.clone(), workspace)?;
             }
             NodeAnalysis {
                 free_vars,
-                certainly_bound: i.certainly_bound,
-                has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
-                // The expansion itself cannot fail: it reads an already-parsed
-                // composite and every element it can hold has a term (or is the
-                // `null` that binds nothing). Only the expression under it can
-                // hard-error, e.g. through `EvalError::CompositeBound`.
-                can_hard_error: i.can_hard_error || expr_hard_error,
+                certainly_bound: inner.certainly_bound,
+                // A null element/value leaves either target unbound.
+                has_stateful_builtin: inner.has_stateful_builtin || expression_stateful,
+                can_hard_error: inner.can_hard_error || expression_hard_error,
             }
         }
         GraphPattern::Graph { name, .. } => {
-            let i = values.pattern();
-            let mut free_vars = i.free_vars;
-            let mut certainly_bound = i.certainly_bound;
-            if let NamedNodePattern::Variable(v) = name {
-                free_vars.insert(v.clone());
-                certainly_bound.insert(v.clone());
+            let inner = values.pattern();
+            let mut free_vars = inner.free_vars;
+            let mut certainly_bound = inner.certainly_bound;
+            if let NamedNodePattern::Variable(variable) = name {
+                let _ = free_vars.push_admitted(variable.clone(), workspace)?;
+                let _ = certainly_bound.push_admitted(variable.clone(), workspace)?;
             }
             NodeAnalysis {
                 free_vars,
                 certainly_bound,
-                has_stateful_builtin: i.has_stateful_builtin,
-                can_hard_error: i.can_hard_error,
+                has_stateful_builtin: inner.has_stateful_builtin,
+                can_hard_error: inner.can_hard_error,
             }
         }
         GraphPattern::Service { name, .. } => {
-            let i = values.pattern();
-            let mut free_vars = i.free_vars;
-            if let NamedNodePattern::Variable(v) = name {
-                free_vars.insert(v.clone());
+            let inner = values.pattern();
+            let mut free_vars = inner.free_vars;
+            if let NamedNodePattern::Variable(variable) = name {
+                let _ = free_vars.push_admitted(variable.clone(), workspace)?;
             }
             NodeAnalysis {
                 free_vars,
-                // No guarantee a remote/possibly-SILENT call binds anything; moot for
-                // `probe_admissible`, which refuses `Service` outright.
-                certainly_bound: DetHashSet::default(),
+                certainly_bound: VarSchema::default(),
+                // Original unknown volatility and unconditional observable
+                // failure law, including SERVICE SILENT.
                 has_stateful_builtin: true,
-                // Unconditional, regardless of `silent`: `SILENT` only swallows the
-                // federation transport failure itself, never a property-function call
-                // forwarded inside the body, which is refused at the forwarding
-                // boundary either way — see `NodeAnalysis::can_hard_error`'s doc.
                 can_hard_error: true,
             }
         }
         GraphPattern::OrderBy { expression, .. } => {
-            let keys = values.expr_parts(expression.len());
-            let i = values.pattern();
-            let mut free_vars = i.free_vars;
-            let mut stateful = i.has_stateful_builtin;
-            let mut hard_error = i.can_hard_error;
-            for (f, s, h) in keys {
-                free_vars.extend(f);
-                stateful |= s;
-                hard_error |= h;
+            let keys = values.expr_parts(expression.len(), workspace)?;
+            let inner = values.pattern();
+            let mut free = SchemaBuilder::new(workspace);
+            free.try_extend(inner.free_vars.vars().iter().cloned())?;
+            let mut stateful = inner.has_stateful_builtin;
+            let mut hard_error = inner.can_hard_error;
+            for (variables, key_stateful, key_hard_error) in keys {
+                free.try_extend(variables.vars().iter().cloned())?;
+                stateful |= key_stateful;
+                hard_error |= key_hard_error;
             }
             NodeAnalysis {
-                free_vars,
-                certainly_bound: i.certainly_bound,
+                free_vars: free.finish()?,
+                certainly_bound: inner.certainly_bound,
                 has_stateful_builtin: stateful,
                 can_hard_error: hard_error,
             }
         }
         GraphPattern::Project { variables, .. } => {
-            let i = values.pattern();
-            let proj: DetHashSet<Variable> = variables.iter().cloned().collect();
+            let inner = values.pattern();
+            let projected = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
             NodeAnalysis {
-                free_vars: i.free_vars.intersection(&proj).cloned().collect(),
-                certainly_bound: i.certainly_bound.intersection(&proj).cloned().collect(),
-                has_stateful_builtin: i.has_stateful_builtin,
-                can_hard_error: i.can_hard_error,
+                free_vars: inner
+                    .free_vars
+                    .intersection_admitted(&projected, workspace)?,
+                certainly_bound: inner
+                    .certainly_bound
+                    .intersection_admitted(&projected, workspace)?,
+                has_stateful_builtin: inner.has_stateful_builtin,
+                can_hard_error: inner.can_hard_error,
             }
         }
         GraphPattern::Distinct { .. }
@@ -2179,76 +2477,91 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
             aggregates,
             ..
         } => {
-            let argument_count: usize = aggregates
+            let argument_count = aggregates
                 .iter()
-                .map(|(_, agg)| agg.args().len() + agg.order_by().len())
-                .sum();
-            let mut arguments = values.expr_parts(argument_count).into_iter();
-            let i = values.pattern();
-            let keys: DetHashSet<Variable> = variables.iter().cloned().collect();
-            let mut free_vars = i.free_vars;
-            free_vars.extend(keys.iter().cloned());
-            let mut certainly_bound: DetHashSet<Variable> =
-                i.certainly_bound.intersection(&keys).cloned().collect();
-            let mut stateful = i.has_stateful_builtin;
-            let mut hard_error = i.can_hard_error
-                || aggregates
+                .try_fold(0_usize, |count, (_, aggregate)| {
+                    count
+                        .checked_add(aggregate.args().len())
+                        .and_then(|count| count.checked_add(aggregate.order_by().len()))
+                        .ok_or(EvalError::WorkspaceBoundOverflow)
+                })?;
+            let mut arguments = values.expr_parts(argument_count, workspace)?.into_iter();
+            let inner = values.pattern();
+            let keys = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+            let mut free = SchemaBuilder::new(workspace);
+            free.try_extend(inner.free_vars.vars().iter().chain(keys.vars()).cloned())?;
+            let mut certain = SchemaBuilder::new(workspace);
+            certain.try_extend(
+                inner
+                    .certainly_bound
+                    .vars()
                     .iter()
-                    .any(|(_, agg)| matches!(agg.function(), AggregateFunction::Custom(_)));
-            for (v, agg) in aggregates {
-                free_vars.insert(v.clone());
-                certainly_bound.insert(v.clone());
-                for _ in 0..agg.args().len() + agg.order_by().len() {
-                    let (f, s, h) = arguments
+                    .filter(|variable| keys.contains(variable))
+                    .cloned(),
+            )?;
+            let mut stateful = inner.has_stateful_builtin;
+            let mut hard_error = inner.can_hard_error
+                || aggregates.iter().any(|(_, aggregate)| {
+                    matches!(aggregate.function(), AggregateFunction::Custom(_))
+                });
+            for (variable, aggregate) in aggregates {
+                let _ = free.push(variable.clone())?;
+                let _ = certain.push(variable.clone())?;
+                let count = aggregate
+                    .args()
+                    .len()
+                    .checked_add(aggregate.order_by().len())
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                for _ in 0..count {
+                    let (variables, argument_stateful, argument_hard_error) = arguments
                         .next()
                         .expect("every aggregate argument and sort key is analyzed");
-                    free_vars.extend(f);
-                    stateful |= s;
-                    hard_error |= h;
+                    free.try_extend(variables.vars().iter().cloned())?;
+                    stateful |= argument_stateful;
+                    hard_error |= argument_hard_error;
                 }
             }
             NodeAnalysis {
-                free_vars,
-                certainly_bound,
+                free_vars: free.finish()?,
+                certainly_bound: certain.finish()?,
                 has_stateful_builtin: stateful,
                 can_hard_error: hard_error,
             }
         }
-    }
+    })
 }
 
 /// `expr`'s analysis, assembled from its parts' analyses (on top of `values`, in the
 /// order [`push_expr_parts`] entered them): the union of the parts' free variables,
 /// and a stateful builtin or a hard error reachable through any part or named by the
 /// expression itself.
-fn assemble_expr(expr: &Expression, values: &mut AnalysisValues) -> ExprAnalysis {
-    match expr {
-        Expression::NamedNode(_) | Expression::Literal(_) => (DetHashSet::default(), false, false),
-        Expression::Variable(v) | Expression::Bound(v) => {
-            let mut out = DetHashSet::default();
-            out.insert(v.clone());
-            (out, false, false)
-        }
-        Expression::Or(operands) | Expression::And(operands) => {
-            let (mut f, mut s, mut h) = (DetHashSet::default(), false, false);
-            for (fo, so, ho) in values.expr_parts(operands.len()) {
-                f.extend(fo);
-                s |= so;
-                h |= ho;
-            }
-            (f, s, h)
-        }
+fn assemble_expr(
+    expr: &Expression,
+    values: &mut AnalysisValues,
+    workspace: &WorkspaceCapability,
+) -> Result<ExprAnalysis, EvalError> {
+    Ok(match expr {
+        Expression::NamedNode(_) | Expression::Literal(_) => (VarSchema::default(), false, false),
+        Expression::Variable(variable) | Expression::Bound(variable) => (
+            VarSchema::from_vars_admitted([variable.clone()], workspace)?,
+            false,
+            false,
+        ),
+        Expression::Or(operands) | Expression::And(operands) => combine_expr_analysis(
+            (VarSchema::default(), false, false),
+            values.expr_parts(operands.len(), workspace)?,
+            workspace,
+        )?,
         Expression::Arithmetic(_, operands) => {
-            let mut parts = values.expr_parts(1 + operands.len()).into_iter();
-            let (mut f, mut s, mut h) = parts
+            let count = operands
+                .len()
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let mut parts = values.expr_parts(count, workspace)?.into_iter();
+            let first = parts
                 .next()
                 .expect("an arithmetic chain's first operand is analyzed");
-            for (fo, so, ho) in parts {
-                f.extend(fo);
-                s |= so;
-                h |= ho;
-            }
-            (f, s, h)
+            combine_expr_analysis(first, parts, workspace)?
         }
         Expression::Equal(..)
         | Expression::SameTerm(..)
@@ -2256,90 +2569,111 @@ fn assemble_expr(expr: &Expression, values: &mut AnalysisValues) -> ExprAnalysis
         | Expression::GreaterOrEqual(..)
         | Expression::Less(..)
         | Expression::LessOrEqual(..) => {
-            let (fb, sb, hb) = values.expr();
-            let (mut fa, sa, ha) = values.expr();
-            fa.extend(fb);
-            (fa, sa || sb, ha || hb)
+            let (right, right_stateful, right_hard_error) = values.expr();
+            let (left, left_stateful, left_hard_error) = values.expr();
+            (
+                left.union_admitted(&right, workspace)?,
+                left_stateful || right_stateful,
+                left_hard_error || right_hard_error,
+            )
         }
         Expression::UnaryPlus(_) | Expression::UnaryMinus(_) | Expression::Not(_) => values.expr(),
         Expression::If(..) => {
-            let (fe, se, he) = values.expr();
-            let (ft, st, ht) = values.expr();
-            let (mut f, mut s, mut h) = values.expr();
-            f.extend(ft);
-            f.extend(fe);
-            s = s || st || se;
-            h = h || ht || he;
-            (f, s, h)
+            let alternative = values.expr();
+            let consequent = values.expr();
+            let condition = values.expr();
+            combine_expr_analysis(condition, [consequent, alternative], workspace)?
         }
         Expression::In(_, haystack) => {
-            let hays = values.expr_parts(haystack.len());
-            let (mut f, mut s, mut h) = values.expr();
-            for (fh, sh, hh) in hays {
-                f.extend(fh);
-                s |= sh;
-                h |= hh;
-            }
-            (f, s, h)
+            let hays = values.expr_parts(haystack.len(), workspace)?;
+            let needle = values.expr();
+            combine_expr_analysis(needle, hays, workspace)?
         }
-        Expression::Coalesce(items) => {
-            let mut f = DetHashSet::default();
-            let mut s = false;
-            let mut h = false;
-            for (fi, si, hi) in values.expr_parts(items.len()) {
-                f.extend(fi);
-                s |= si;
-                h |= hi;
-            }
-            (f, s, h)
-        }
+        Expression::Coalesce(items) => combine_expr_analysis(
+            (VarSchema::default(), false, false),
+            values.expr_parts(items.len(), workspace)?,
+            workspace,
+        )?,
         Expression::FunctionCall(function, args) => {
-            let mut f = DetHashSet::default();
-            let mut s =
+            let stateful =
                 function_is_builtin_stateful(function) || matches!(function, Function::Custom(_));
-            // `Function::Custom` may hard-fail unresolved (`UnsupportedKind::CustomFunction`)
-            // or, once resolved, raise `EvalError::Function` from the registered callee's
-            // own body — neither is knowable here. `Function::Purrdf` covers `heldIn`
-            // (`UnsupportedKind::HeldInUnconfigured` with no standpoint-predicate
-            // configuration) and every `rdf:List` function (`EvalError::Data` over a
-            // cyclic/torn list) — see `NodeAnalysis::can_hard_error`'s doc.
-            let mut h =
-                matches!(function, Function::Custom(_)) || matches!(function, Function::Purrdf(_));
-            for (fa, sa, ha) in values.expr_parts(args.len()) {
-                f.extend(fa);
-                s |= sa;
-                h |= ha;
-            }
-            (f, s, h)
+            // Preserve unknown registered/custom side effects and every PurRDF
+            // list/heldIn hard-failure classification.
+            let hard_error = matches!(function, Function::Custom(_) | Function::Purrdf(_));
+            combine_expr_analysis(
+                (VarSchema::default(), stateful, hard_error),
+                values.expr_parts(args.len(), workspace)?,
+                workspace,
+            )?
         }
         Expression::Exists(_) => {
-            let a = values.pattern();
-            (a.free_vars, a.has_stateful_builtin, a.can_hard_error)
+            let analysis = values.pattern();
+            (
+                analysis.free_vars,
+                analysis.has_stateful_builtin,
+                analysis.can_hard_error,
+            )
         }
+    })
+}
+
+/// The original expression union/boolean fold, with one admitted builder for
+/// all operands rather than repeated immutable prefix copies.
+fn combine_expr_analysis(
+    initial: ExprAnalysis,
+    parts: impl IntoIterator<Item = ExprAnalysis>,
+    workspace: &WorkspaceCapability,
+) -> Result<ExprAnalysis, EvalError> {
+    let (initial_variables, mut stateful, mut hard_error) = initial;
+    let mut free = SchemaBuilder::new(workspace);
+    free.try_extend(initial_variables.vars().iter().cloned())?;
+    for (variables, operand_stateful, operand_hard_error) in parts {
+        free.try_extend(variables.vars().iter().cloned())?;
+        stateful |= operand_stateful;
+        hard_error |= operand_hard_error;
     }
+    Ok((free.finish()?, stateful, hard_error))
 }
 
 /// Whether evaluating `pattern` **to completion** — no `crate::enf` erasure — can
-/// raise a hard [`EvalError`](crate::EvalError) or an observable remote effect
+/// raise a hard [`EvalError`](EvalError) or an observable remote effect
 /// anywhere within it; see [`NodeAnalysis::can_hard_error`].
 ///
-/// `crate::enf`'s laws call this (and [`expr_can_hard_error`]) on the PORTION they
+/// `crate::enf`'s laws call this (and [`expr_can_hard_error_admitted`]) on the PORTION they
 /// are about to erase — a `LeftJoin`'s right operand and join condition, an
 /// `ORDER BY`'s sort keys, or a folded `Slice`'s whole inner — before erasing it, so
 /// a law never deletes a subtree whose evaluation could have failed loudly or
 /// reached a federation endpoint. Builds a fresh, throwaway [`NodeAnalysisTable`]:
-/// sound because `can_hard_error`, unlike [`probe_admissible`], needs no lookup
+/// sound because `can_hard_error`, unlike [`probe_admissible_admitted`], needs no lookup
 /// into an enclosing table — it is a pure bottom-up fold over `pattern` alone.
+#[cfg(test)]
 pub(crate) fn pattern_can_hard_error(pattern: &GraphPattern) -> bool {
-    let mut table = NodeAnalysisTable::default();
-    analyze_pattern(pattern, &mut table).can_hard_error
+    pattern_can_hard_error_admitted(pattern, &WorkspaceCapability::resident())
+        .expect("resident hard-error analysis")
 }
 
-/// The expression twin of [`pattern_can_hard_error`], for a `LeftJoin` join
-/// condition or an `ORDER BY` sort key `crate::enf` is about to erase.
-pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
+pub(crate) fn pattern_can_hard_error_admitted(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
     let mut table = NodeAnalysisTable::default();
-    analyze_expr(expr, &mut table).2
+    Ok(analyze_pattern_admitted(pattern, &mut table, workspace)?.can_hard_error)
+}
+
+/// The expression twin of [`pattern_can_hard_error_admitted`], for a `LeftJoin` join
+/// condition or an `ORDER BY` sort key `crate::enf` is about to erase.
+#[cfg(test)]
+pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
+    expr_can_hard_error_admitted(expr, &WorkspaceCapability::resident())
+        .expect("resident hard-error expression analysis")
+}
+
+pub(crate) fn expr_can_hard_error_admitted(
+    expr: &Expression,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut table = NodeAnalysisTable::default();
+    Ok(analyze_expr_admitted(expr, &mut table, workspace)?.2)
 }
 
 /// Whether `pattern` (its top level ALREADY known to be correlated with the
@@ -2362,7 +2696,7 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 /// this function's "Per-row vs per-schema" section below for why that distinction
 /// matters). `current_row_vars`, the set every arm below actually tests membership
 /// against, is `pattern`'s OWN root [`NodeAnalysis::free_vars`] (from `table`, populated
-/// by an enclosing [`analyze_pattern`] call over this exact tree) INTERSECTED with
+/// by an enclosing [`analyze_pattern_admitted`] call over this exact tree) INTERSECTED with
 /// `outer_schema`'s columns: a variable only counts as a potential SEP-0007 rebinding
 /// collision when it is BOTH still visible at `pattern`'s own root (not scoped away by
 /// an internal `Project` boundary — `NodeAnalysis::free_vars`'s `Project` rule) AND a
@@ -2446,47 +2780,61 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 ///   answer that depends on WHICH outer row drove the evaluation, which a single
 ///   evaluate-once-and-probe pass cannot reproduce — unconditionally, regardless of
 ///   `outer_schema`.
+#[cfg(test)]
 pub(crate) fn probe_admissible(
     pattern: &GraphPattern,
     table: &NodeAnalysisTable,
     outer_schema: &VarSchema,
 ) -> bool {
-    // A miss here (see `node_analysis`'s doc) fails closed: refuse the probe
-    // rather than treat a synthesized empty `free_vars` as "uncorrelated".
+    probe_admissible_admitted(
+        pattern,
+        table,
+        outer_schema,
+        &WorkspaceCapability::resident(),
+    )
+    .expect("resident probe-admissibility walk")
+}
+
+pub(crate) fn probe_admissible_admitted(
+    pattern: &GraphPattern,
+    table: &NodeAnalysisTable,
+    outer_schema: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    // Preserve the original fail-closed root lookup, never synthesize an empty set.
     let Some(root) = node_analysis(pattern, table) else {
-        return false;
+        return Ok(false);
     };
-    let current_row_vars: DetHashSet<Variable> = root
+    let current_row_vars = root
         .free_vars
-        .iter()
-        .filter(|v| outer_schema.contains(v))
-        .cloned()
-        .collect();
-    pattern_probe_admissible(pattern, &current_row_vars, table)
+        .intersection_admitted(outer_schema, workspace)?;
+    pattern_probe_admissible(pattern, &current_row_vars, table, workspace)
 }
 
 /// One node the admissibility walk has still to judge: a pattern, or an expression
 /// together with the certainly-bound set of the inner pattern it is evaluated over.
 enum ProbeStep<'p, 't> {
     Pattern(&'p GraphPattern),
-    Expr(&'p Expression, &'t DetHashSet<Variable>),
+    Expr(&'p Expression, &'t VarSchema),
 }
 
-/// [`probe_admissible`]'s walk: every node under `pattern` is judged in depth-first
+/// [`probe_admissible_admitted`]'s walk: every node under `pattern` is judged in depth-first
 /// order, each node's own verdict conjoined with its parts' — a `Filter`'s or
 /// `Extend`'s or `Unfold`'s inner before its expression — and the walk ends at the
 /// first refusal. Over a work list, so a pattern of any depth needs no more machine
 /// stack.
-fn pattern_probe_admissible<'p, 't>(
-    pattern: &'p GraphPattern,
-    current_row_vars: &DetHashSet<Variable>,
-    table: &'t NodeAnalysisTable,
-) -> bool {
-    let mut pending: Vec<ProbeStep<'p, 't>> = vec![ProbeStep::Pattern(pattern)];
+fn pattern_probe_admissible(
+    pattern: &GraphPattern,
+    current_row_vars: &VarSchema,
+    table: &NodeAnalysisTable,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(ProbeStep::Pattern(pattern))?;
     while let Some(step) = pending.pop() {
         let admitted = match step {
             ProbeStep::Pattern(pattern) => {
-                pattern_probe_step(pattern, current_row_vars, table, &mut pending)
+                pattern_probe_step(pattern, current_row_vars, table, &mut pending)?
             }
             ProbeStep::Expr(expr, inner_certainly_bound) => expr_probe_step(
                 expr,
@@ -2494,13 +2842,13 @@ fn pattern_probe_admissible<'p, 't>(
                 inner_certainly_bound,
                 table,
                 &mut pending,
-            ),
+            )?,
         };
         if !admitted {
-            return false;
+            return Ok(false);
         }
     }
-    true
+    Ok(true)
 }
 
 /// One pattern node's own verdict for [`pattern_probe_admissible`], with the parts
@@ -2514,28 +2862,28 @@ fn pattern_probe_admissible<'p, 't>(
 /// here would license a WRONG probe).
 fn pattern_probe_step<'p, 't>(
     pattern: &'p GraphPattern,
-    current_row_vars: &DetHashSet<Variable>,
+    current_row_vars: &VarSchema,
     table: &'t NodeAnalysisTable,
-    pending: &mut Vec<ProbeStep<'p, 't>>,
-) -> bool {
-    match pattern {
+    pending: &mut AdmittedVec<ProbeStep<'p, 't>>,
+) -> Result<bool, EvalError> {
+    Ok(match pattern {
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => true,
         GraphPattern::Values { variables, .. } => {
             !variables.iter().any(|v| current_row_vars.contains(v))
         }
         GraphPattern::PropertyFunction(_) => false,
         GraphPattern::Graph { name: _, inner } => {
-            pending.push(ProbeStep::Pattern(inner));
+            pending.push(ProbeStep::Pattern(inner))?;
             true
         }
         GraphPattern::Join { left, right } => {
-            pending.push(ProbeStep::Pattern(right));
-            pending.push(ProbeStep::Pattern(left));
+            pending.push(ProbeStep::Pattern(right))?;
+            pending.push(ProbeStep::Pattern(left))?;
             true
         }
         GraphPattern::Union { arms } => {
             for arm in arms.iter().rev() {
-                pending.push(ProbeStep::Pattern(arm));
+                pending.push(ProbeStep::Pattern(arm))?;
             }
             true
         }
@@ -2543,10 +2891,10 @@ fn pattern_probe_step<'p, 't>(
             // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
             // rather than read a synthesized empty `certainly_bound`.
             let Some(inner_analysis) = node_analysis(inner, table) else {
-                return false;
+                return Ok(false);
             };
-            pending.push(ProbeStep::Expr(expr, &inner_analysis.certainly_bound));
-            pending.push(ProbeStep::Pattern(inner));
+            pending.push(ProbeStep::Expr(expr, &inner_analysis.certainly_bound))?;
+            pending.push(ProbeStep::Pattern(inner))?;
             true
         }
         // The target's own collision with a current-row variable is answered before
@@ -2558,13 +2906,13 @@ fn pattern_probe_step<'p, 't>(
             expression,
         } => {
             let Some(inner_analysis) = node_analysis(inner, table) else {
-                return false;
+                return Ok(false);
             };
             if current_row_vars.contains(variable) {
-                return false;
+                return Ok(false);
             }
-            pending.push(ProbeStep::Expr(expression, &inner_analysis.certainly_bound));
-            pending.push(ProbeStep::Pattern(inner));
+            pending.push(ProbeStep::Expr(expression, &inner_analysis.certainly_bound))?;
+            pending.push(ProbeStep::Pattern(inner))?;
             true
         }
         // `Extend`'s rule, applied to both targets: the probe evaluates the inner
@@ -2577,24 +2925,24 @@ fn pattern_probe_step<'p, 't>(
             companion,
         } => {
             let Some(inner_analysis) = node_analysis(inner, table) else {
-                return false;
+                return Ok(false);
             };
             if current_row_vars.contains(element)
                 || companion
                     .as_ref()
                     .is_some_and(|v| current_row_vars.contains(v))
             {
-                return false;
+                return Ok(false);
             }
-            pending.push(ProbeStep::Expr(expression, &inner_analysis.certainly_bound));
-            pending.push(ProbeStep::Pattern(inner));
+            pending.push(ProbeStep::Expr(expression, &inner_analysis.certainly_bound))?;
+            pending.push(ProbeStep::Pattern(inner))?;
             true
         }
         GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner } => {
-            pending.push(ProbeStep::Pattern(inner));
+            pending.push(ProbeStep::Pattern(inner))?;
             true
         }
         GraphPattern::LeftJoin { .. }
@@ -2604,10 +2952,10 @@ fn pattern_probe_step<'p, 't>(
         | GraphPattern::Lateral { .. }
         | GraphPattern::Apply { .. }
         | GraphPattern::Service { .. } => false,
-    }
+    })
 }
 
-/// Whether the fresh binding [`exists_row_collision`] reports is an `Extend`/
+/// Whether the fresh binding [`exists_row_collision_admitted`] reports is an `Extend`/
 /// `(expr AS ?v)` target, a `VALUES` column or an `UNFOLD` target — the same
 /// shapes, and the same message wording, as the parser's scope check reports:
 /// the parser's own [`ScopeIntro`](purrdf_sparql_algebra::parser::ScopeIntro),
@@ -2619,7 +2967,7 @@ pub(crate) use purrdf_sparql_algebra::parser::ScopeIntro as RowCollisionIntro;
 /// variable, or `VALUES`) that collides with a variable in `row_scope` — the
 /// CALLER'S ACTUAL current-row variables for one specific μ (`crate::expr::exists`'s
 /// own `outer_bound`: the schema columns THIS row concretely binds), never
-/// [`probe_admissible`]'s `current_row_vars` (`NodeAnalysis::free_vars` intersected
+/// [`probe_admissible_admitted`]'s `current_row_vars` (`NodeAnalysis::free_vars` intersected
 /// with the caller's outer SCHEMA — see that function's doc — a PER-SITE
 /// over-approximation computed once for the whole pattern, not a per-row one).
 /// The two must not be conflated: `current_row_vars` is sized to answer "is the
@@ -2681,13 +3029,26 @@ pub(crate) use purrdf_sparql_algebra::parser::ScopeIntro as RowCollisionIntro;
 /// reported, so the variable a diagnostic names is the one a reader finds first in the
 /// query text. A `Project` that narrows the scope gives its subtree an owned narrowed
 /// set; every other node reads its parent's.
+#[cfg(test)]
 pub(crate) fn exists_row_collision<'a>(
     pattern: &'a GraphPattern,
     row_scope: &DetHashSet<Variable>,
 ) -> Option<(&'a Variable, RowCollisionIntro)> {
+    let workspace = WorkspaceCapability::resident();
+    let scope = VarSchema::from_vars_admitted(row_scope.iter().cloned(), &workspace)
+        .expect("resident row-collision scope");
+    exists_row_collision_admitted(pattern, &scope, &workspace).expect("resident row-collision walk")
+}
+
+pub(crate) fn exists_row_collision_admitted<'a>(
+    pattern: &'a GraphPattern,
+    row_scope: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<(&'a Variable, RowCollisionIntro)>, EvalError> {
     // The scopes `Project` nodes narrowed to, indexed by `CollisionScope::Narrowed`.
-    let mut narrowed: Vec<DetHashSet<Variable>> = Vec::new();
-    let mut pending = vec![CollisionStep::Row(pattern, CollisionScope::Outer)];
+    let mut narrowed = AdmittedVec::<VarSchema>::new(workspace);
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(CollisionStep::Row(pattern, CollisionScope::Outer))?;
     while let Some(step) = pending.pop() {
         match step {
             CollisionStep::Row(pattern, scope) => {
@@ -2703,16 +3064,16 @@ pub(crate) fn exists_row_collision<'a>(
                     | GraphPattern::Lateral { left, right }
                     | GraphPattern::Apply { left, right, .. }
                     | GraphPattern::LeftJoin { left, right, .. } => {
-                        pending.push(CollisionStep::Row(right, scope));
-                        pending.push(CollisionStep::Row(left, scope));
+                        pending.push(CollisionStep::Row(right, scope))?;
+                        pending.push(CollisionStep::Row(left, scope))?;
                     }
                     GraphPattern::Union { arms } => {
                         for arm in arms.iter().rev() {
-                            pending.push(CollisionStep::Row(arm, scope));
+                            pending.push(CollisionStep::Row(arm, scope))?;
                         }
                     }
                     GraphPattern::Minus { left, .. } => {
-                        pending.push(CollisionStep::Row(left, scope));
+                        pending.push(CollisionStep::Row(left, scope))?;
                     }
                     GraphPattern::Filter { inner, .. }
                     | GraphPattern::Graph { inner, .. }
@@ -2721,15 +3082,15 @@ pub(crate) fn exists_row_collision<'a>(
                     | GraphPattern::Distinct { inner }
                     | GraphPattern::Reduced { inner }
                     | GraphPattern::Slice { inner, .. } => {
-                        pending.push(CollisionStep::Row(inner, scope));
+                        pending.push(CollisionStep::Row(inner, scope))?;
                     }
                     GraphPattern::Extend {
                         inner, variable, ..
                     } => {
                         if in_scope.contains(variable) {
-                            return Some((variable, RowCollisionIntro::Bind));
+                            return Ok(Some((variable, RowCollisionIntro::Bind)));
                         }
-                        pending.push(CollisionStep::Row(inner, scope));
+                        pending.push(CollisionStep::Row(inner, scope))?;
                     }
                     // `Extend`'s arm with two targets: the first that collides wins, in
                     // declaration order, so the variable named in the diagnostic is the
@@ -2742,28 +3103,26 @@ pub(crate) fn exists_row_collision<'a>(
                     } => {
                         for variable in std::iter::once(element).chain(companion.as_ref()) {
                             if in_scope.contains(variable) {
-                                return Some((variable, RowCollisionIntro::Unfold));
+                                return Ok(Some((variable, RowCollisionIntro::Unfold)));
                             }
                         }
-                        pending.push(CollisionStep::Row(inner, scope));
+                        pending.push(CollisionStep::Row(inner, scope))?;
                     }
                     GraphPattern::Values { variables, .. } => {
                         if let Some(v) = variables.iter().find(|v| in_scope.contains(v)) {
-                            return Some((v, RowCollisionIntro::Values));
+                            return Ok(Some((v, RowCollisionIntro::Values)));
                         }
                     }
                     GraphPattern::Project { inner, variables } => {
-                        let inner_scope: DetHashSet<Variable> = in_scope
-                            .iter()
-                            .filter(|v| variables.contains(v))
-                            .cloned()
-                            .collect();
+                        let projected =
+                            VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+                        let inner_scope = in_scope.intersection_admitted(&projected, workspace)?;
                         if !inner_scope.is_empty() {
-                            narrowed.push(inner_scope);
+                            narrowed.push(inner_scope)?;
                             pending.push(CollisionStep::Row(
                                 inner,
                                 CollisionScope::Narrowed(narrowed.len() - 1),
-                            ));
+                            ))?;
                         }
                     }
                     GraphPattern::Group {
@@ -2773,10 +3132,10 @@ pub(crate) fn exists_row_collision<'a>(
                     } => {
                         for (v, _) in aggregates {
                             if in_scope.contains(v) {
-                                return Some((v, RowCollisionIntro::Bind));
+                                return Ok(Some((v, RowCollisionIntro::Bind)));
                             }
                         }
-                        pending.push(CollisionStep::GroupKey(inner, variables, scope));
+                        pending.push(CollisionStep::GroupKey(inner, variables, scope))?;
                     }
                 }
             }
@@ -2792,24 +3151,24 @@ pub(crate) fn exists_row_collision<'a>(
                         ..
                     } => {
                         if variables.contains(variable) && in_scope.contains(variable) {
-                            return Some((variable, RowCollisionIntro::Bind));
+                            return Ok(Some((variable, RowCollisionIntro::Bind)));
                         }
-                        pending.push(CollisionStep::GroupKey(next, variables, scope));
+                        pending.push(CollisionStep::GroupKey(next, variables, scope))?;
                     }
                     GraphPattern::Join { left, right }
                     | GraphPattern::Lateral { left, right }
                     | GraphPattern::Apply { left, right, .. }
                     | GraphPattern::LeftJoin { left, right, .. } => {
-                        pending.push(CollisionStep::GroupKey(right, variables, scope));
-                        pending.push(CollisionStep::GroupKey(left, variables, scope));
+                        pending.push(CollisionStep::GroupKey(right, variables, scope))?;
+                        pending.push(CollisionStep::GroupKey(left, variables, scope))?;
                     }
                     GraphPattern::Union { arms } => {
                         for arm in arms.iter().rev() {
-                            pending.push(CollisionStep::GroupKey(arm, variables, scope));
+                            pending.push(CollisionStep::GroupKey(arm, variables, scope))?;
                         }
                     }
                     GraphPattern::Minus { left, .. } => {
-                        pending.push(CollisionStep::GroupKey(left, variables, scope));
+                        pending.push(CollisionStep::GroupKey(left, variables, scope))?;
                     }
                     // Transparent: `UNFOLD` never lowers a `GROUP BY` grouping condition
                     // (only `Extend` does), so its own targets are not candidates for
@@ -2823,7 +3182,7 @@ pub(crate) fn exists_row_collision<'a>(
                     | GraphPattern::Reduced { inner }
                     | GraphPattern::Slice { inner, .. }
                     | GraphPattern::Unfold { inner, .. } => {
-                        pending.push(CollisionStep::GroupKey(inner, variables, scope));
+                        pending.push(CollisionStep::GroupKey(inner, variables, scope))?;
                     }
                     GraphPattern::Bgp { .. }
                     | GraphPattern::Path { .. }
@@ -2835,10 +3194,10 @@ pub(crate) fn exists_row_collision<'a>(
             }
         }
     }
-    None
+    Ok(None)
 }
 
-/// Which row scope a node of [`exists_row_collision`]'s walk is checked against: the
+/// Which row scope a node of [`exists_row_collision_admitted`]'s walk is checked against: the
 /// caller's, or the one a `Project` above it narrowed to.
 #[derive(Clone, Copy)]
 enum CollisionScope {
@@ -2848,7 +3207,7 @@ enum CollisionScope {
     Narrowed(usize),
 }
 
-/// One node [`exists_row_collision`]'s walk has still to search.
+/// One node [`exists_row_collision_admitted`]'s walk has still to search.
 enum CollisionStep<'a> {
     /// A node searched for every introduction — `BIND`, `UNFOLD`, `VALUES`, a
     /// sub-`SELECT` target, an aggregate output — against its scope.
@@ -2868,7 +3227,7 @@ enum CollisionStep<'a> {
     /// the grouped pattern really is such a chain. But this search is also the
     /// evaluator's OWN backstop for algebra that never went through the parser at all
     /// (a SHACL-AF pre-binding, an entailment-chase rewrite, or any other caller of
-    /// the public algebra API) — see [`exists_row_collision`]'s own "Why this exists"
+    /// the public algebra API) — see [`exists_row_collision_admitted`]'s own "Why this exists"
     /// section — and nothing stops hand-built algebra from putting a grouping-key
     /// `Extend` behind a `Join`/`Filter`/other transparent wrapper instead of directly
     /// beneath `Group` (`Group{ inner: Join(Extend(?x, ..), Bgp), variables: [?x] }`,
@@ -2883,7 +3242,7 @@ enum CollisionStep<'a> {
     /// nested beneath it, and the same "keep searching past a non-match" discipline
     /// the binary/unary wrappers need applies here too. `Bgp`/`Path`/
     /// `PropertyFunction`/`Values`/`Project`/a nested `Group` are the terminal case:
-    /// the search stops there, as [`exists_row_collision`]'s own `Values`/`Project`/
+    /// the search stops there, as [`exists_row_collision_admitted`]'s own `Values`/`Project`/
     /// `Group` arms are handled by the whole-pattern search (for ITS OWN scope) rather
     /// than folded into this narrower grouping-key search.
     GroupKey(&'a GraphPattern, &'a [Variable], CollisionScope),
@@ -2911,24 +3270,29 @@ enum CollisionStep<'a> {
 /// entry here and never descended.
 fn expr_probe_step<'p, 't>(
     expr: &'p Expression,
-    current_row_vars: &DetHashSet<Variable>,
-    inner_certainly_bound: &'t DetHashSet<Variable>,
+    current_row_vars: &VarSchema,
+    inner_certainly_bound: &'t VarSchema,
     table: &'t NodeAnalysisTable,
-    pending: &mut Vec<ProbeStep<'p, 't>>,
-) -> bool {
-    let mut operands: purrdf_core::SmallVec<[&'p Expression; 4]> = purrdf_core::SmallVec::new();
+    pending: &mut AdmittedVec<ProbeStep<'p, 't>>,
+) -> Result<bool, EvalError> {
+    let first = pending.len();
     let admitted = match expr {
         Expression::NamedNode(_) | Expression::Literal(_) => true,
         Expression::Variable(v) | Expression::Bound(v) => {
             !current_row_vars.contains(v) || inner_certainly_bound.contains(v)
         }
         Expression::Or(list) | Expression::And(list) => {
-            operands.extend(list.iter());
+            pending.try_extend(
+                (list.iter()).map(|operand| ProbeStep::Expr(operand, inner_certainly_bound)),
+            )?;
             true
         }
         Expression::Arithmetic(first, steps) => {
-            operands.push(first);
-            operands.extend(steps.iter().map(|(_, e)| e));
+            pending.push(ProbeStep::Expr(first, inner_certainly_bound))?;
+            pending.try_extend(
+                (steps.iter().map(|(_, e)| e))
+                    .map(|operand| ProbeStep::Expr(operand, inner_certainly_bound)),
+            )?;
             true
         }
         Expression::Equal(a, b)
@@ -2937,46 +3301,55 @@ fn expr_probe_step<'p, 't>(
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
         | Expression::LessOrEqual(a, b) => {
-            operands.push(a);
-            operands.push(b);
+            pending.push(ProbeStep::Expr(a, inner_certainly_bound))?;
+            pending.push(ProbeStep::Expr(b, inner_certainly_bound))?;
             true
         }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            operands.push(a);
+            pending.push(ProbeStep::Expr(a, inner_certainly_bound))?;
             true
         }
         Expression::If(c, t, e) => {
-            operands.push(c);
-            operands.push(t);
-            operands.push(e);
+            pending.push(ProbeStep::Expr(c, inner_certainly_bound))?;
+            pending.push(ProbeStep::Expr(t, inner_certainly_bound))?;
+            pending.push(ProbeStep::Expr(e, inner_certainly_bound))?;
             true
         }
         Expression::In(needle, haystack) => {
-            operands.push(needle);
-            operands.extend(haystack.iter());
+            pending.push(ProbeStep::Expr(needle, inner_certainly_bound))?;
+            pending.try_extend(
+                (haystack.iter()).map(|operand| ProbeStep::Expr(operand, inner_certainly_bound)),
+            )?;
             true
         }
         Expression::Coalesce(items) => {
-            operands.extend(items.iter());
+            pending.try_extend(
+                (items.iter()).map(|operand| ProbeStep::Expr(operand, inner_certainly_bound)),
+            )?;
             true
         }
         Expression::FunctionCall(function, args) => {
-            operands.extend(args.iter());
+            pending.try_extend(
+                (args.iter()).map(|operand| ProbeStep::Expr(operand, inner_certainly_bound)),
+            )?;
             !function_is_builtin_stateful(function) && !matches!(function, Function::Custom(_))
         }
         // A miss on `inner` (see `node_analysis`'s doc) fails closed: refuse
         // rather than read a synthesized `free_vars`/`has_stateful_builtin`.
         Expression::Exists(inner) => match node_analysis(inner, table) {
             Some(a) => {
-                !a.has_stateful_builtin && !a.free_vars.iter().any(|v| current_row_vars.contains(v))
+                !a.has_stateful_builtin
+                    && !a
+                        .free_vars
+                        .vars()
+                        .iter()
+                        .any(|v| current_row_vars.contains(v))
             }
             None => false,
         },
     };
-    for operand in operands.into_iter().rev() {
-        pending.push(ProbeStep::Expr(operand, inner_certainly_bound));
-    }
-    admitted
+    pending.as_mut_slice()[first..].reverse();
+    Ok(admitted)
 }
 
 #[cfg(test)]
@@ -3024,7 +3397,7 @@ mod tests {
     }
 
     /// The context at the node reached by following `path` — a list of child ordinals in
-    /// [`visit_classified_children`] order — down from the root of `root`.
+    /// [`visit_classified_children_admitted`] order — down from the root of `root`.
     fn context_at(root: &GraphPattern, path: &[usize]) -> SpineContext {
         let mut node = root;
         let mut context = SpineContext::ROOT;
@@ -3070,7 +3443,7 @@ mod tests {
                     .expect("the small stack runs the check")
                     .expect_err("direct algebra too tall for the stack is refused");
             assert!(
-                matches!(error, crate::EvalError::StackExhausted { .. }),
+                matches!(error, EvalError::StackExhausted { .. }),
                 "{error:?}"
             );
         })
@@ -4160,11 +4533,20 @@ mod iterative_walks {
 
     // ---- recursive references -----------------------------------------------
 
-    /// [`analyze_pattern`], as a recursion over the tree.
+    /// [`analyze_pattern_admitted`], as a recursion over the tree.
+    #[derive(Debug, Clone, Default)]
+    struct ReferenceAnalysis {
+        free_vars: DetHashSet<Variable>,
+        certainly_bound: DetHashSet<Variable>,
+        has_stateful_builtin: bool,
+        can_hard_error: bool,
+    }
+    type ReferenceAnalysisTable = DetHashMap<usize, ReferenceAnalysis>;
+
     fn reference_analyze_pattern(
         pattern: &GraphPattern,
-        table: &mut NodeAnalysisTable,
-    ) -> NodeAnalysis {
+        table: &mut ReferenceAnalysisTable,
+    ) -> ReferenceAnalysis {
         crate::op_count::bump(crate::op_count::Op::Analyzed);
         let addr = std::ptr::from_ref(pattern) as usize;
         if let Some(existing) = table.get(&addr) {
@@ -4180,7 +4562,7 @@ mod iterative_walks {
                     }
                     reference_term_vars(&tp.object, &mut vars);
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     certainly_bound: vars.clone(),
                     free_vars: vars,
                     has_stateful_builtin: false,
@@ -4193,12 +4575,12 @@ mod iterative_walks {
                 let mut vars = DetHashSet::default();
                 reference_term_vars(subject, &mut vars);
                 reference_term_vars(object, &mut vars);
-                NodeAnalysis {
+                ReferenceAnalysis {
                     certainly_bound: vars.clone(),
                     free_vars: vars,
                     has_stateful_builtin: false,
-                    can_hard_error: path_endpoint_can_hard_error(subject)
-                        || path_endpoint_can_hard_error(object),
+                    can_hard_error: reference_path_endpoint_can_hard_error(subject)
+                        || reference_path_endpoint_can_hard_error(object),
                 }
             }
             GraphPattern::Values {
@@ -4215,7 +4597,7 @@ mod iterative_walks {
                         certainly.insert(v.clone());
                     }
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: free,
                     certainly_bound: certainly,
                     has_stateful_builtin: false,
@@ -4227,7 +4609,7 @@ mod iterative_walks {
                 for term in call.subject_args.iter().chain(&call.object_args) {
                     reference_term_vars(term, &mut vars);
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: vars,
                     certainly_bound: DetHashSet::default(),
                     has_stateful_builtin: true,
@@ -4237,7 +4619,7 @@ mod iterative_walks {
             GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
                 let l = reference_analyze_pattern(left, table);
                 let r = reference_analyze_pattern(right, table);
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
                     certainly_bound: l
                         .certainly_bound
@@ -4266,7 +4648,7 @@ mod iterative_walks {
                         free.extend([input.clone(), driver.clone()]);
                     }
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: free,
                     certainly_bound: if policy.optional.is_some() {
                         l.certainly_bound
@@ -4283,7 +4665,7 @@ mod iterative_walks {
             GraphPattern::Union { arms } => {
                 let mut analyses = arms.iter().map(|arm| reference_analyze_pattern(arm, table));
                 let first = analyses.next().unwrap_or_default();
-                analyses.fold(first, |l, r| NodeAnalysis {
+                analyses.fold(first, |l, r| ReferenceAnalysis {
                     free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
                     certainly_bound: l
                         .certainly_bound
@@ -4305,7 +4687,7 @@ mod iterative_walks {
                     Some(e) => reference_analyze_expr(e, table),
                     None => (DetHashSet::default(), false, false),
                 };
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: l
                         .free_vars
                         .union(&r.free_vars)
@@ -4324,7 +4706,7 @@ mod iterative_walks {
             GraphPattern::Minus { left, right } => {
                 let l = reference_analyze_pattern(left, table);
                 let r = reference_analyze_pattern(right, table);
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: l.free_vars.union(&r.free_vars).cloned().collect(),
                     certainly_bound: l.certainly_bound,
                     has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
@@ -4335,7 +4717,7 @@ mod iterative_walks {
                 let i = reference_analyze_pattern(inner, table);
                 let (expr_free, expr_stateful, expr_hard_error) =
                     reference_analyze_expr(expr, table);
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: i.free_vars.union(&expr_free).cloned().collect(),
                     certainly_bound: i.certainly_bound,
                     has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
@@ -4355,7 +4737,7 @@ mod iterative_walks {
                 free_vars.insert(variable.clone());
                 let mut certainly_bound = i.certainly_bound;
                 certainly_bound.insert(variable.clone());
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars,
                     certainly_bound,
                     has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
@@ -4377,7 +4759,7 @@ mod iterative_walks {
                 if let Some(companion) = companion {
                     free_vars.insert(companion.clone());
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars,
                     certainly_bound: i.certainly_bound,
                     has_stateful_builtin: i.has_stateful_builtin || expr_stateful,
@@ -4392,7 +4774,7 @@ mod iterative_walks {
                     free_vars.insert(v.clone());
                     certainly_bound.insert(v.clone());
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars,
                     certainly_bound,
                     has_stateful_builtin: i.has_stateful_builtin,
@@ -4405,7 +4787,7 @@ mod iterative_walks {
                 if let NamedNodePattern::Variable(v) = name {
                     free_vars.insert(v.clone());
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars,
                     certainly_bound: DetHashSet::default(),
                     has_stateful_builtin: true,
@@ -4423,7 +4805,7 @@ mod iterative_walks {
                     stateful |= s;
                     hard_error |= h;
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars,
                     certainly_bound: i.certainly_bound,
                     has_stateful_builtin: stateful,
@@ -4433,7 +4815,7 @@ mod iterative_walks {
             GraphPattern::Project { inner, variables } => {
                 let i = reference_analyze_pattern(inner, table);
                 let proj: DetHashSet<Variable> = variables.iter().cloned().collect();
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars: i.free_vars.intersection(&proj).cloned().collect(),
                     certainly_bound: i.certainly_bound.intersection(&proj).cloned().collect(),
                     has_stateful_builtin: i.has_stateful_builtin,
@@ -4473,7 +4855,7 @@ mod iterative_walks {
                         hard_error |= h;
                     }
                 }
-                NodeAnalysis {
+                ReferenceAnalysis {
                     free_vars,
                     certainly_bound,
                     has_stateful_builtin: stateful,
@@ -4485,10 +4867,10 @@ mod iterative_walks {
         analysis
     }
 
-    /// [`analyze_expr`], as a recursion over the tree.
+    /// [`analyze_expr_admitted`], as a recursion over the tree.
     fn reference_analyze_expr(
         expr: &Expression,
-        table: &mut NodeAnalysisTable,
+        table: &mut ReferenceAnalysisTable,
     ) -> (DetHashSet<Variable>, bool, bool) {
         match expr {
             Expression::NamedNode(_) | Expression::Literal(_) => {
@@ -4583,6 +4965,15 @@ mod iterative_walks {
     }
 
     /// [`collect_term_pattern_vars`], as a recursion over the quoted triples.
+    fn reference_path_endpoint_can_hard_error(term: &TermPattern) -> bool {
+        if !matches!(term, TermPattern::Triple(_)) {
+            return false;
+        }
+        let mut variables = DetHashSet::default();
+        reference_term_vars(term, &mut variables);
+        !variables.is_empty()
+    }
+
     fn reference_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
         match term {
             TermPattern::Variable(v) => {
@@ -4599,7 +4990,7 @@ mod iterative_walks {
         }
     }
 
-    /// [`probe_admissible`], over the recursive references.
+    /// [`probe_admissible_admitted`], over the recursive references.
     fn reference_probe_admissible(
         pattern: &GraphPattern,
         table: &NodeAnalysisTable,
@@ -4610,6 +5001,7 @@ mod iterative_walks {
         };
         let current_row_vars: DetHashSet<Variable> = root
             .free_vars
+            .vars()
             .iter()
             .filter(|v| outer_schema.contains(v))
             .cloned()
@@ -4617,7 +5009,7 @@ mod iterative_walks {
         reference_admissible(pattern, &current_row_vars, table)
     }
 
-    /// The pattern half of [`probe_admissible`]'s walk, as a recursion.
+    /// The pattern half of [`probe_admissible_admitted`]'s walk, as a recursion.
     fn reference_admissible(
         pattern: &GraphPattern,
         current_row_vars: &DetHashSet<Variable>,
@@ -4705,11 +5097,11 @@ mod iterative_walks {
         }
     }
 
-    /// The expression half of [`probe_admissible`]'s walk, as a recursion.
+    /// The expression half of [`probe_admissible_admitted`]'s walk, as a recursion.
     fn reference_expr_admissible(
         expr: &Expression,
         current_row_vars: &DetHashSet<Variable>,
-        inner_certainly_bound: &DetHashSet<Variable>,
+        inner_certainly_bound: &VarSchema,
         table: &NodeAnalysisTable,
     ) -> bool {
         let sub = |e: &Expression| {
@@ -4740,14 +5132,18 @@ mod iterative_walks {
             Expression::Exists(inner) => match node_analysis(inner, table) {
                 Some(a) => {
                     !a.has_stateful_builtin
-                        && !a.free_vars.iter().any(|v| current_row_vars.contains(v))
+                        && !a
+                            .free_vars
+                            .vars()
+                            .iter()
+                            .any(|v| current_row_vars.contains(v))
                 }
                 None => false,
             },
         }
     }
 
-    /// [`exists_row_collision`], as a recursion over the tree.
+    /// [`exists_row_collision_admitted`], as a recursion over the tree.
     fn reference_row_collision<'a>(
         pattern: &'a GraphPattern,
         row_scope: &DetHashSet<Variable>,
@@ -4827,7 +5223,7 @@ mod iterative_walks {
         }
     }
 
-    /// The grouping-key half of [`exists_row_collision`]'s walk, as a recursion.
+    /// The grouping-key half of [`exists_row_collision_admitted`]'s walk, as a recursion.
     fn reference_group_key_collision<'a>(
         inner: &'a GraphPattern,
         variables: &[Variable],
@@ -5259,7 +5655,7 @@ mod iterative_walks {
         (value, crate::op_count::read().analyzed)
     }
 
-    fn same_analysis(left: &NodeAnalysis, right: &NodeAnalysis, what: &str) {
+    fn same_analysis(left: &NodeAnalysis, right: &ReferenceAnalysis, what: &str) {
         assert_eq!(left.free_vars, right.free_vars, "{what}: free variables");
         assert_eq!(
             left.certainly_bound, right.certainly_bound,
@@ -5275,14 +5671,18 @@ mod iterative_walks {
         );
     }
 
-    fn same_table(left: &NodeAnalysisTable, right: &NodeAnalysisTable, what: &str) {
-        let mut left_keys: Vec<usize> = left.keys().copied().collect();
+    fn same_table(left: &NodeAnalysisTable, right: &ReferenceAnalysisTable, what: &str) {
+        let mut left_keys: Vec<usize> = left.iter().map(|(key, _)| *key).collect();
         let mut right_keys: Vec<usize> = right.keys().copied().collect();
         left_keys.sort_unstable();
         right_keys.sort_unstable();
         assert_eq!(left_keys, right_keys, "{what}: table keys");
         for key in left_keys {
-            same_analysis(&left[&key], &right[&key], what);
+            same_analysis(
+                left.get(&key).expect("native analysis table key"),
+                &right[&key],
+                what,
+            );
         }
     }
 
@@ -5298,7 +5698,7 @@ mod iterative_walks {
             let (pattern, _) = shape(seed);
             let what = format!("seed {seed}");
             let mut table = NodeAnalysisTable::default();
-            let mut reference_table = NodeAnalysisTable::default();
+            let mut reference_table = ReferenceAnalysisTable::default();
             let (root, entered) = counted(|| analyze_pattern(&pattern, &mut table));
             let (reference_root, reference_entered) =
                 counted(|| reference_analyze_pattern(&pattern, &mut reference_table));
@@ -5329,7 +5729,7 @@ mod iterative_walks {
             let expr = choices.expression();
             let what = format!("seed {seed}");
             let mut table = NodeAnalysisTable::default();
-            let mut reference_table = NodeAnalysisTable::default();
+            let mut reference_table = ReferenceAnalysisTable::default();
             let (analysis, entered) = counted(|| analyze_expr(&expr, &mut table));
             let (reference, reference_entered) =
                 counted(|| reference_analyze_expr(&expr, &mut reference_table));

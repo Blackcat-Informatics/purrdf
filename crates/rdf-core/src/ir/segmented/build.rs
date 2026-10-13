@@ -9,7 +9,9 @@ use crate::backend::TermFactory;
 use crate::{GlobalTermId, QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
-use super::{SegmentedBytes, SegmentedError, SegmentedReceipt};
+use super::{
+    SegmentedBytes, SegmentedError, SegmentedReadLimits, SegmentedReceipt, SegmentedSession,
+};
 
 // The v1 cost law is a wire-profile constant, independent of the builder's
 // pointer width: 80 bytes for an owned node plus 64 bytes of allocation slack.
@@ -331,6 +333,18 @@ impl SegmentedImage {
     #[must_use]
     pub fn provider(&self) -> SegmentedBytes {
         SegmentedBytes::new(Arc::clone(&self.bytes), self.receipt.snapshot)
+    }
+
+    /// Open a selective session over this image's immutable provider and receipt.
+    /// The caller supplies every read and residency limit.
+    ///
+    /// # Errors
+    /// Propagates the original session's authentication, capacity and request refusal.
+    pub fn open_session(
+        &self,
+        limits: SegmentedReadLimits,
+    ) -> Result<SegmentedSession, SegmentedError> {
+        SegmentedSession::open(Arc::new(self.provider()), self.receipt(), limits)
     }
 
     /// Fully validate an untrusted image, including every dictionary/index block,

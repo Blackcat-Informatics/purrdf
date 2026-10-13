@@ -18,4 +18,3 @@ Source: https://github.com/w3c/data-shapes/tree/08adb3776709a014bc3062ede793c362
 Evidence: vectors/shacl/README.md
 Notice: third-party/shacl/0-W3C-software-document-2015.html
 Notice: third-party/shacl/1-LICENSE.md
-

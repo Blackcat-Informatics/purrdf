@@ -2876,6 +2876,7 @@ fn the_status_enum_is_append_only() {
             PurrdfStatus::ShapesProductError => 11,
             PurrdfStatus::ShapesImportError => 12,
             PurrdfStatus::RegexResourceError => 13,
+            PurrdfStatus::GeoError => 14,
             PurrdfStatus::Panic => 100,
         }
     }
@@ -2897,6 +2898,7 @@ fn the_status_enum_is_append_only() {
         (PurrdfStatus::ShapesProductError, 11),
         (PurrdfStatus::ShapesImportError, 12),
         (PurrdfStatus::RegexResourceError, 13),
+        (PurrdfStatus::GeoError, 14),
         (PurrdfStatus::Panic, 100),
     ] {
         assert_eq!(status as i32, expected, "a status discriminant moved");
@@ -3203,12 +3205,14 @@ fn graph_existence_selects_whether_an_emptied_named_graph_survives() {
 unsafe fn governed_update_in(
     update: &str,
     graph_existence: i32,
-    xpath: bool,
+    entry: u8,
 ) -> (i32, Option<String>, bool, usize) {
     use purrdf::governor::{
         PurrdfGovernorEvidence, PurrdfQueryGovernors, purrdf_query_governors_init,
     };
-    use purrdf::query::{purrdf_update_governed, purrdf_update_governed_xpath_regex};
+    use purrdf::query::{
+        purrdf_update_governed, purrdf_update_governed_with_geo, purrdf_update_governed_xpath_regex,
+    };
     unsafe {
         let dataset = parse("application/n-quads", ONE_NAMED_QUAD);
         let mut governors = std::mem::MaybeUninit::<PurrdfQueryGovernors>::uninit();
@@ -3226,7 +3230,21 @@ unsafe fn governed_update_in(
         evidence.limits.fuel = 998;
         let before = evidence;
         let mut error: *mut PurrdfError = std::ptr::null_mut();
-        let status = if xpath {
+        let status = if entry == 2 {
+            purrdf_update_governed_with_geo(
+                std::ptr::null(),
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                c"xpath-3.1-2017-03-21".as_ptr(),
+                graph_existence,
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut evidence,
+                &raw mut error,
+            )
+        } else if entry == 1 {
             purrdf_update_governed_xpath_regex(
                 dataset,
                 request.as_ptr(),
@@ -3276,20 +3294,20 @@ fn governed_update_applies_under_the_selected_graph_existence() {
     let remember = PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY;
     let implicit = PURRDF_GRAPH_EXISTENCE_IMPLICIT;
     let ok = PurrdfStatus::Ok as i32;
-    for xpath in [false, true] {
+    for entry in 0..3 {
         unsafe {
             let clear = "CLEAR GRAPH <http://example.org/g>";
             assert_eq!(
-                governed_update_in(clear, remember, xpath),
+                governed_update_in(clear, remember, entry),
                 (ok, None, true, 0)
             );
             assert_eq!(
-                governed_update_in(clear, implicit, xpath),
+                governed_update_in(clear, implicit, entry),
                 (ok, None, false, 0)
             );
 
             let missing = "CLEAR GRAPH <http://example.org/missing>";
-            let (status, message, named, quads) = governed_update_in(missing, remember, xpath);
+            let (status, message, named, quads) = governed_update_in(missing, remember, entry);
             assert_eq!(status, PurrdfStatus::QueryError as i32);
             let message = message.expect("a refusal carries its error");
             assert!(
@@ -3299,17 +3317,17 @@ fn governed_update_applies_under_the_selected_graph_existence() {
             assert_eq!((named, quads), (true, 1), "a refusal changes nothing");
             let silent = "CLEAR SILENT GRAPH <http://example.org/missing>";
             assert_eq!(
-                governed_update_in(silent, remember, xpath),
+                governed_update_in(silent, remember, entry),
                 (ok, None, true, 1)
             );
             assert_eq!(
-                governed_update_in(missing, implicit, xpath),
+                governed_update_in(missing, implicit, entry),
                 (ok, None, true, 1)
             );
 
             for invalid in [2, -1] {
                 let (status, message, named, quads) =
-                    governed_update_in("DELETE WHERE {", invalid, xpath);
+                    governed_update_in("DELETE WHERE {", invalid, entry);
                 assert_eq!(status, PurrdfStatus::InvalidArgument as i32, "{invalid}");
                 assert!(
                     message

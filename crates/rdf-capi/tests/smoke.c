@@ -853,6 +853,110 @@ static int check_division_policy(PurrdfDataset *dataset) {
     return 0;
 }
 
+/* Opaque geographic handles must work from the installed C declaration, including
+ * the distinct semantic/operational error channels and a retained child index. */
+static int check_geo_handles(const PurrdfDataset *dataset) {
+    const char *distance =
+        "{\"version\":1,\"operation\":\"distance\","
+        "\"a\":{\"longitude\":\"0\",\"latitude\":\"0\"},"
+        "\"b\":{\"longitude\":\"0\",\"latitude\":\"0\"}}";
+    PurrdfGeoSession *session = NULL;
+    PurrdfGeoPointIndex *index = NULL;
+    PurrdfBuffer *response = NULL;
+    PurrdfError *error = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    CHECK(purrdf_geo_session_create(NULL, &session, &error) == PURRDF_STATUS_OK &&
+              session != NULL && error == NULL, "geo session creation");
+    CHECK(purrdf_geo_session_call(session, distance, &response, &error) ==
+              PURRDF_STATUS_OK && response != NULL && error == NULL,
+          "geo distance completes through C");
+    CHECK(purrdf_buffer_data(response, &bytes, &len) == PURRDF_STATUS_OK &&
+              contains_bytes(bytes, len, "\"micrometres\":\"0\""),
+          "geo distance has the native exact zero result");
+    purrdf_buffer_free(response);
+    response = NULL;
+    CHECK(purrdf_geo_session_call(session,
+              "{\"version\":1,\"operation\":\"not-an-operation\"}",
+              &response, &error) == PURRDF_STATUS_GEO_ERROR &&
+              response != NULL && error != NULL,
+          "geo semantic refusal retains its complete response and error");
+    CHECK(purrdf_buffer_data(response, &bytes, &len) == PURRDF_STATUS_OK &&
+              contains_bytes(bytes, len, "\"code\":\"invalid-record\"") &&
+              purrdf_error_code(error) == PURRDF_STATUS_GEO_ERROR,
+          "geo semantic refusal preserves the typed code");
+    purrdf_buffer_free(response);
+    response = NULL;
+    purrdf_error_free(error);
+    error = NULL;
+    CHECK(purrdf_geo_point_index_create(session,
+              "{\"version\":1,\"operation\":\"point-index\",\"grid\":\"wgs84\","
+              "\"level\":2,\"points\":[{\"key\":\"7\",\"point\":{\"longitude\":\"0\","
+              "\"latitude\":\"0\"}},{\"key\":\"11\",\"point\":{\"longitude\":\"1\","
+              "\"latitude\":\"0\"}}]}", &index, &error) == PURRDF_STATUS_OK &&
+              index != NULL && error == NULL, "geo index creation");
+    purrdf_geo_session_free(session);
+    session = NULL;
+    CHECK(purrdf_geo_point_index_call(index,
+              "{\"version\":1,\"operation\":\"search-physical\","
+              "\"center\":{\"longitude\":\"0\",\"latitude\":\"0\"},"
+              "\"radius_metres\":\"0\"}", &response, &error) == PURRDF_STATUS_OK &&
+              response != NULL && error == NULL,
+          "geo index outlives the creating session");
+    CHECK(purrdf_buffer_data(response, &bytes, &len) == PURRDF_STATUS_OK &&
+              contains_bytes(bytes, len, "\"keys\":[\"7\"]"),
+          "retained geo index refines its original points");
+    purrdf_buffer_free(response);
+    response = NULL;
+    purrdf_geo_point_index_free(index);
+    CHECK(purrdf_geo_session_create(
+              "{\"version\":1,\"limits\":{\"max_work_items\":1}}",
+              &session, &error) == PURRDF_STATUS_OK && error == NULL,
+          "bounded geo session creation");
+    CHECK(purrdf_geo_session_call(session, distance, &response, &error) ==
+              PURRDF_STATUS_GEO_ERROR && response == NULL && error != NULL,
+          "geo operational refusal emits no partial response");
+    CHECK(purrdf_error_code(error) == PURRDF_STATUS_GEO_ERROR &&
+              strstr(purrdf_error_message(error), "geometry work exhausted at 1 items") != NULL,
+          "geo operational refusal preserves the original work cause");
+    purrdf_error_free(error);
+    error = NULL;
+    purrdf_geo_session_free(session);
+    session = NULL;
+
+    const char *axes_query =
+        "ASK { FILTER(<http://www.opengis.net/def/function/geosparql/distance>("
+        "\"<http://www.opengis.net/def/crs/EPSG/0/4326> POINT(0 1)\""
+        "^^<http://www.opengis.net/ont/geosparql#wktLiteral>,"
+        "\"POINT(1 0)\"^^<http://www.opengis.net/ont/geosparql#wktLiteral>,"
+        "<http://www.opengis.net/def/uom/OGC/1.0/metre>) = 0) }";
+    PurrdfRowCursor *rows = NULL;
+    PurrdfDataset *graph = NULL;
+    uint8_t boolean = 0;
+    int32_t kind = -1;
+    CHECK(purrdf_query_with_geo(NULL, dataset, axes_query, NULL, NULL,
+              &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
+              error != NULL && rows == NULL && graph == NULL &&
+              strstr(purrdf_error_message(error), "unregistered") != NULL,
+          "C query refuses undeclared geographic axes");
+    purrdf_error_free(error);
+    error = NULL;
+    CHECK(purrdf_geo_session_create(
+              "{\"version\":1,\"references\":[{"
+              "\"crs\":\"http://www.opengis.net/def/crs/EPSG/0/4326\","
+              "\"ellipsoid\":\"wgs84\",\"axes\":\"lat-lon\"}]}",
+              &session, &error) == PURRDF_STATUS_OK && error == NULL,
+          "C query geographic profile creation");
+    CHECK(purrdf_query_with_geo(session, dataset, axes_query, NULL, NULL,
+              &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
+              error == NULL && rows == NULL && graph == NULL &&
+              kind == PURRDF_RESULT_KIND_BOOLEAN && boolean == 1,
+          "C query forwards the declared geographic axes");
+    purrdf_geo_session_free(session);
+    printf("geo: session, typed refusals, retained index and query profile passed\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
@@ -879,6 +983,7 @@ int main(int argc, char **argv) {
     int rc = purrdf_parse((const uint8_t *)doc, strlen(doc), "text/turtle", NULL,
                           NULL, &dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && dataset != NULL, "parse");
+    CHECK(check_geo_handles(dataset) == 0, "geographic C handles");
 
     size_t quad_count = 0;
     CHECK(purrdf_dataset_quad_count(dataset, &quad_count) == PURRDF_STATUS_OK,
@@ -1456,7 +1561,7 @@ int main(int argc, char **argv) {
               after_update_count == 1,
           "exhausted update applied no mutation");
 
-    /* Both governed UPDATE doors carry the explicit graph lifetime. These calls
+    /* All three governed UPDATE doors carry the explicit graph lifetime. These calls
      * compile against the generated public header and use the shared library. */
     const char *lifetime_document =
         "<http://example.org/s> <http://example.org/p> <http://example.org/o> <http://example.org/g> .";
@@ -1466,7 +1571,7 @@ int main(int argc, char **argv) {
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
           "lifetime governor initializer");
     for (size_t mode_index = 0; mode_index < 2; ++mode_index) {
-        for (int xpath = 0; xpath < 2; ++xpath) {
+        for (int entry = 0; entry < 3; ++entry) {
             PurrdfDataset *lifetime_dataset = NULL;
             CHECK(purrdf_parse((const uint8_t *)lifetime_document,
                                strlen(lifetime_document), "application/n-quads",
@@ -1482,7 +1587,12 @@ int main(int argc, char **argv) {
                   "explicit graph selector constructs branch");
             purrdf_graph_free(branch);
             update_outcome = -1;
-            if (xpath) {
+            if (entry == 2) {
+                rc = purrdf_update_governed_with_geo(
+                    NULL, lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
+                    NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
+                    &governors, &update_outcome, &update_evidence, &error);
+            } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
@@ -1502,7 +1612,12 @@ int main(int argc, char **argv) {
                   "remembered CLEAR retains slot and explicit implicit removes it");
             PurrdfGovernorEvidence evidence_before = update_evidence;
             update_outcome = -1;
-            if (xpath) {
+            if (entry == 2) {
+                rc = purrdf_update_governed_with_geo(
+                    NULL, lifetime_dataset, "DELETE WHERE {", NULL, NULL,
+                    "xpath-3.1-2017-03-21", 2, &governors,
+                    &update_outcome, &update_evidence, &error);
+            } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL,
                     "xpath-3.1-2017-03-21", 2, &governors,

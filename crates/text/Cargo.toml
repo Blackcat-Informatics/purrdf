@@ -55,6 +55,8 @@ purrdf-lex.workspace = true
 purrdf-stack = { workspace = true }
 # Solution-sequence shapes for the ranked-row tests.
 purrdf-sparql-results.workspace = true
+# Construct the original logical subtree in physical-provider acceptance cases.
+purrdf-sparql-algebra.workspace = true
 # Property tests (encoding injectivity, and the fixed-point arithmetic laws), and
 # the `harness = false` runner used by native ranking expectations. Path-only
 # and unpublished, so it is stripped from
@@ -67,6 +69,15 @@ purrdf-alloc-probe.workspace = true
 # Actual WASM behaviors are selected separately in `make wasm-test`.
 [[test]]
 name = "wasm_determinism"
+harness = false
+
+[[test]]
+# The same public exact shapes, dictionary and span consumers on native/WASM.
+name = "physical_shapes"
+harness = false
+
+[[bench]]
+name = "physical_shapes"
 harness = false
 
 [[bench]]

@@ -506,6 +506,26 @@ pub struct PlanIdentity {
 }
 
 impl PlanIdentity {
+    /// Identity of the rules and every admission declaration and source.
+    #[must_use]
+    pub fn with_declarations(
+        contract_hash: &str,
+        rules: &[DlClause],
+        declarations: &crate::admission::NeverDeriveDeclarations,
+    ) -> Self {
+        if declarations.is_empty() {
+            return Self::new(contract_hash, rules);
+        }
+        const DOMAIN: Domain = Domain::new(b"purrdf-datalog/never-derive-plan/v1");
+        let mut hasher = purrdf_hash::blake3::Hasher::new();
+        frame_le_into(&mut hasher, DOMAIN.as_bytes());
+        hasher.update(Self::new(contract_hash, rules).digest());
+        hasher.update(&declarations.digest());
+        Self {
+            digest: Digest32::new(*hasher.finalize().as_bytes()),
+        }
+    }
+
     /// The identity of `rules` compiled under `contract_hash` by this planner.
     ///
     /// `contract_hash` is whatever digest the caller uses to identify the *configuration*
@@ -651,6 +671,26 @@ impl PlanCache {
     /// failure to produce one.
     pub fn get_or_compile(&mut self, contract_hash: &str, rules: Vec<DlClause>) -> PlanLookup {
         let identity = PlanIdentity::new(contract_hash, &rules);
+        self.lookup_or_compile(identity, rules, None)
+    }
+
+    /// Cache admitted programs and typed refusals by the complete policy identity.
+    pub fn get_or_compile_with_declarations(
+        &mut self,
+        contract_hash: &str,
+        rules: Vec<DlClause>,
+        declarations: &crate::admission::NeverDeriveDeclarations,
+    ) -> PlanLookup {
+        let identity = PlanIdentity::with_declarations(contract_hash, &rules, declarations);
+        self.lookup_or_compile(identity, rules, Some(declarations))
+    }
+
+    fn lookup_or_compile(
+        &mut self,
+        identity: PlanIdentity,
+        rules: Vec<DlClause>,
+        declarations: Option<&crate::admission::NeverDeriveDeclarations>,
+    ) -> PlanLookup {
         let stamp = self.tick();
         if let Some(entry) = self.entries.get_mut(&identity) {
             entry.used = stamp;
@@ -663,7 +703,11 @@ impl PlanCache {
         }
 
         let planning_units = static_planning_units(&rules);
-        let plan = compile(rules).map(Arc::new);
+        let plan = match declarations {
+            Some(declarations) => crate::seminaive::compile_with_declarations(rules, declarations),
+            None => compile(rules),
+        }
+        .map(Arc::new);
         self.insert(identity, plan.clone());
         PlanLookup {
             plan,

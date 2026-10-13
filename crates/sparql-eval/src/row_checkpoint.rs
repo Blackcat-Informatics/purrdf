@@ -1522,13 +1522,13 @@ mod tests {
         use super::{ItemLedger, RowAdmission, RowCheckpoint};
         use crate::eval::EvalCtx;
         use crate::governor::{ChargePoint, GovernorState, QueryGovernors};
-        use crate::solution::Solution;
+        use crate::solution::RetainedRow;
         use purrdf_core::{DatasetView, RdfDatasetBuilder, ResourceDimension, TermValue};
         use std::sync::Arc;
 
         fn scheduler_output<D: DatasetView + Sync>(
             ctx: &mut EvalCtx<'_, D>,
-        ) -> Vec<Solution<D::Id>> {
+        ) -> Vec<RetainedRow<D::Id>> {
             let mut rows = crate::parallel::reserve_concatenated_rows(Vec::new(), [53])
                 .expect("fallibly allocated scheduler output");
             for index in 0..37 {
@@ -1539,11 +1539,11 @@ mod tests {
                         TermValue::simple_literal(format!("row{index}")),
                     )
                     .expect("fixture read");
-                rows.push(
+                rows.push(RetainedRow::from_resident(
                     [Some(term), (index % 2 == 0).then_some(term)]
                         .into_iter()
                         .collect(),
-                );
+                ));
             }
             rows
         }
@@ -1604,12 +1604,20 @@ mod tests {
             let minted = expected
                 .iter()
                 .cloned()
-                .map(crate::parallel::MintedRow::Direct)
-                .collect();
+                .map(|row| {
+                    crate::parallel::minted_row(&ctx.scratch, ctx.scratch.computed_count(), row)
+                })
+                .collect::<Result<_, _>>()
+                .expect("parent-native worker transport");
             let checkpoint =
                 RowCheckpoint::with_mode(RowAdmission::Free, ChargePoint::RowExpressionEvaluation);
             let admit_row = |ctx: &mut EvalCtx<'_, _>, row| {
-                crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+                crate::parallel::reintern_minted_row(
+                    &mut ctx.scratch,
+                    ctx.dataset,
+                    row,
+                    &ctx.growth,
+                )
             };
             let (rows, resume) = if grouped {
                 ledger.commit_into(&mut ctx, minted, [], input, admit_row)
@@ -1721,7 +1729,7 @@ mod tests {
                             false,
                             &items,
                             || {
-                                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref()).expect("resident worker owner admission");
                                 let mut local = checkpoint.clone();
                                 local.defer(&mut child);
                                 (child, local)
@@ -1885,7 +1893,9 @@ mod tests {
                         false,
                         &items,
                         || {
-                            let mut child = ctx.fork_for_worker();
+                            let mut child = ctx
+                                .fork_for_worker()
+                                .expect("resident worker owner admission");
                             let mut local = checkpoint.clone();
                             local.defer(&mut child);
                             (child, local)

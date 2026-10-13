@@ -45,8 +45,8 @@ use purrdf_alloc_probe::{Measurement, WholeProcessWindow};
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
-    PagedQueryLimits, RdfDataset, RdfLookaside, ResourceDimension, SparqlRequest, SparqlResult,
-    TermValue, ViewOperationStatus,
+    PagedQueryLimits, RdfDataset, RdfLookaside, ResourceDimension, SparqlRequest, TermValue,
+    ViewOperationStatus,
 };
 use purrdf_rdf::gts_fixtures::{keystone_base, keystone_contribution};
 use purrdf_rdf::{
@@ -297,20 +297,19 @@ struct SolutionSet {
 }
 
 /// Normalizes a SELECT result, refusing anything that is not a solution sequence.
-fn solution_set(result: SparqlResult, label: &str) -> Result<SolutionSet, String> {
-    match result {
-        SparqlResult::Solutions {
-            variables,
-            mut rows,
-            ..
-        } => {
-            rows.sort_unstable();
-            Ok(SolutionSet { variables, rows })
-        }
-        SparqlResult::Graph(_) | SparqlResult::Boolean(_) => {
-            Err(format!("{label} produced no solution sequence to count"))
-        }
-    }
+fn solution_set(
+    result: &purrdf_sparql_eval::RetainedSparqlResult,
+    label: &str,
+) -> Result<SolutionSet, String> {
+    let (variables, rows) = result
+        .solutions()
+        .ok_or_else(|| format!("{label} produced no solution sequence to count"))?;
+    let mut rows = rows.to_vec();
+    rows.sort_unstable();
+    Ok(SolutionSet {
+        variables: variables.to_vec(),
+        rows,
+    })
 }
 
 /// The dataset-bearing formats of the round-trip workload. Turtle is absent
@@ -745,7 +744,7 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         )
         .map_err(|diagnostic| format!("the single-graph query failed unbounded: {diagnostic}"))?;
     let (answer, _) = first.into_parts();
-    let answers = solution_set(answer, "the unbounded single-graph query")?;
+    let answers = solution_set(&answer, "the unbounded single-graph query")?;
     let ViewOperationStatus::Ready { evidence } = measured.operation_status() else {
         return Err("unbounded single-graph query left the view failed".to_owned());
     };
@@ -814,7 +813,7 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
             format!("the single-graph query failed after graph-scoped eviction: {diagnostic}")
         })?;
     let (retained_answer, _) = retained_answer.into_parts();
-    let retained_answers = solution_set(retained_answer, "the single-graph query after eviction")?;
+    let retained_answers = solution_set(&retained_answer, "the single-graph query after eviction")?;
     if retained_answers != answers {
         return Err(format!(
             "graph-scoped eviction changed the single-graph answer: {} rows before against {} \
@@ -877,7 +876,7 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
     // change the answer, so the exact-budget re-run is compared row for row against the
     // unbounded one rather than merely counted.
     let (narrowed_answer, _) = neighbor.into_parts();
-    let narrowed = solution_set(narrowed_answer, "the exact-budget single-graph query")?;
+    let narrowed = solution_set(&narrowed_answer, "the exact-budget single-graph query")?;
     if narrowed != answers {
         return Err(format!(
             "the exact {touched}-page budget changed the single-graph answer: {} rows unbounded \

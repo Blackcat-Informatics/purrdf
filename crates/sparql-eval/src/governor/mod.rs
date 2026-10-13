@@ -868,16 +868,24 @@ pub struct GovernorState {
     /// Every invocation a `SILENT` clause absorbed, in the order they were recorded.
     /// Sorted when [`Self::evidence`] reads it, so the report does not depend on how a
     /// forked evaluation was scheduled.
-    silenced: Mutex<Vec<SilencedInvocation>>,
+    silenced: Mutex<purrdf_core::SilencedEvidenceBuilder>,
     /// How many numeric expression errors of each XPath F&O code the evaluation
     /// absorbed into unbound values, by [`purrdf_xsd::ErrorCode::ALL`] position.
     expression_errors: [AtomicU64; purrdf_xsd::ErrorCode::ALL.len()],
+    workspace: crate::WorkspaceCapability,
 }
 
 impl GovernorState {
     /// Fresh state for one execution under `governors`.
     #[must_use]
     pub fn new(governors: &QueryGovernors) -> Self {
+        Self::with_workspace(governors, crate::WorkspaceCapability::default())
+    }
+
+    pub(crate) fn with_workspace(
+        governors: &QueryGovernors,
+        workspace: crate::WorkspaceCapability,
+    ) -> Self {
         Self {
             limits: governors.limits(),
             consumed: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -886,8 +894,9 @@ impl GovernorState {
             abandon: AtomicBool::new(false),
             stop: governors.stop.clone(),
             pending_work: AtomicU64::new(0),
-            silenced: Mutex::new(Vec::new()),
+            silenced: Mutex::new(purrdf_core::SilencedEvidenceBuilder::new()),
             expression_errors: std::array::from_fn(|_| AtomicU64::new(0)),
+            workspace,
         }
     }
 
@@ -902,12 +911,35 @@ impl GovernorState {
         }
     }
 
-    /// Record an invocation a `SILENT` clause absorbed.
-    pub(crate) fn record_silenced(&self, invocation: SilencedInvocation) {
-        self.silenced
+    /// A shared operation state's records may outlive this query. Each admitted
+    /// immutable record retains the producing query's original account.
+    pub(crate) fn record_silenced_admitted(
+        &self,
+        invocation: SilencedInvocation,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        let workspace = if workspace.is_bounded() {
+            workspace
+        } else {
+            &self.workspace
+        };
+        let mut current = self
+            .silenced
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(invocation);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bytes = current
+            .insertion_bytes::<crate::WorkspaceAllocation>(&invocation)
+            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+        let admission = workspace
+            .charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
+        let insertion = if workspace.is_bounded() {
+            current.insert_admitted(invocation, admission)
+        } else {
+            current.insert_resident(invocation)
+        };
+        insertion.map_err(|_| crate::EvalError::AllocationFailed {
+            construct: "SILENT evidence records",
+        })
     }
 
     /// The inclusive ceilings in force.
@@ -1146,13 +1178,11 @@ impl GovernorState {
                 .set(dimension, self.consumed_in(dimension));
         }
         evidence.tripped = self.tripped();
-        let mut silenced = self
+        evidence.silenced = self
             .silenced
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        silenced.sort();
-        evidence.silenced = silenced;
+            .snapshot();
         evidence.expression_errors = purrdf_xsd::ErrorCode::ALL
             .iter()
             .zip(&self.expression_errors)
@@ -1785,7 +1815,24 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// decimal base conversion. Constant-time shape bounds are conservative and
 /// cannot take exact-decimal exponent shortcuts. Machine-word dispatch remains
 /// unchanged. Consumers must remeasure numeric fuel and scratch ceilings.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
+///
+/// # v15
+///
+/// The schedule stays unchanged. Evidence-bearing `EXISTS`/`NOT EXISTS` evaluates
+/// the original body and retains every alternative witness instead of entering
+/// the ordinary definition path's synthetic first-witness `Slice`. Its node-entry
+/// and output charges therefore describe the body actually executed; an empty
+/// property-function body charges one fewer node entry. Evidence preservation
+/// also retains algebra nodes whose normalization could discard declarations.
+/// An unused relation registry does not select this execution path. Consumers
+/// must remeasure fuel ceilings and stop cut points for evidence-bearing queries.
+///
+/// # v16
+///
+/// Appends native-function-work. Native kernels price their own documented
+/// internal chunks, share physical admission, and stop between chunks. Existing
+/// seventeen point labels and prices retain their order and values.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 16;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1822,7 +1869,7 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
 /// define that unit for host code, so it prices it at one and lets the relation say how
 /// many; what makes the number comparable across relations is that each one documents its
 /// unit, not that the engine imposed one.
-pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
+pub const CHARGE_SCHEDULE: [(&str, u64); 18] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1840,6 +1887,7 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
     ("exists-definition-answered", 1),
     ("exists-inner-solutions-consumed", 1),
     ("property-function-work", 1),
+    ("native-function-work", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1974,6 +2022,9 @@ pub enum ChargePoint {
     /// searches eagerly in `open` are charged the same total. A relation that does not
     /// override `take_work` reports zero and charges nothing.
     PropertyFunctionWork,
+    /// Documented internal native work, charged before each bounded chunk.
+    /// The kernel releases floating control guards before any host stop poll.
+    NativeFunctionWork,
 }
 
 impl ChargePoint {
@@ -1996,6 +2047,7 @@ impl ChargePoint {
         Self::ExistsDefinitionAnswered,
         Self::ExistsInnerSolutionsConsumed,
         Self::PropertyFunctionWork,
+        Self::NativeFunctionWork,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -2024,6 +2076,7 @@ impl ChargePoint {
             Self::ExistsDefinitionAnswered => 14,
             Self::ExistsInnerSolutionsConsumed => 15,
             Self::PropertyFunctionWork => 16,
+            Self::NativeFunctionWork => 17,
         }
     }
 
@@ -2064,24 +2117,38 @@ impl GovernorState {
 /// one `label\tcost` line per entry in table order, every line terminated by `\n`. Tab and
 /// newline cannot occur in a label, so no entry can be encoded two ways and no two
 /// distinct schedules can encode alike.
-fn schedule_preimage(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
-    let mut preimage = String::new();
-    preimage.push_str(id);
-    preimage.push('\n');
-    preimage.push_str(&version.to_string());
-    preimage.push('\n');
+fn write_schedule(
+    out: &mut impl std::fmt::Write,
+    id: &str,
+    version: u32,
+    schedule: &[(&str, u64)],
+) -> std::fmt::Result {
+    writeln!(out, "{id}")?;
+    writeln!(out, "{version}")?;
     for (label, cost) in schedule {
-        preimage.push_str(label);
-        preimage.push('\t');
-        preimage.push_str(&cost.to_string());
-        preimage.push('\n');
+        writeln!(out, "{label}\t{cost}")?;
     }
-    preimage
+    Ok(())
+}
+
+/// Hash the one schedule spelling directly from its borrowed fields. No
+/// temporary preimage String or decimal conversion String is constructed.
+fn schedule_hash(id: &str, version: u32, schedule: &[(&str, u64)]) -> [u8; 32] {
+    struct HashText(sha2::Sha256);
+    impl std::fmt::Write for HashText {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.update(text.as_bytes());
+            Ok(())
+        }
+    }
+    let mut text = HashText(sha2::Sha256::new());
+    write_schedule(&mut text, id, version, schedule).expect("the SHA text sink cannot fail");
+    text.0.finalize().into()
 }
 
 /// The lowercase-hex SHA-256 of [`schedule_preimage`].
 fn schedule_digest(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
-    let digest = sha2::Sha256::digest(schedule_preimage(id, version, schedule).as_bytes());
+    let digest = schedule_hash(id, version, schedule);
     purrdf_hash::hex::encode(&digest)
 }
 
@@ -2154,7 +2221,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb";
+    "e41edb5340fc26e81e6de6d22ee644ee4e3e2bf580a2feced9585ad108449421";
 
 #[cfg(test)]
 mod tests {
@@ -2805,16 +2872,28 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 14);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 16);
+        assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
+        let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 13, historical),
             "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
             "the historical v13 identity pins the unchanged charge table"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 13, historical),
             pinned,
             "binary-limb charging cannot reuse the v13 receipt identity"
+        );
+        assert_ne!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 14, historical),
+            pinned,
+            "binary-limb charging cannot reuse the v14 receipt identity"
+        );
+        assert_eq!(
+            schedule_digest(GOVERNOR_PROFILE_ID, 15, historical),
+            "34f3ed243e70e82eb473de8a264af5a712ccab053c48bc4be286f1c7293071a1",
+            "the evidence-preserving EXISTS profile keeps its published v15 identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

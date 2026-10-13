@@ -24,6 +24,7 @@ use alloc::string::String;
 
 use crate::datatype::{RDF_DIR_LANG_STRING, RDF_LANG_STRING};
 use crate::error::CdtError;
+use crate::memory::{CdtMemory as _, Memory, ReadError, Resident, Storage, StorageError};
 use crate::value::CdtValue;
 
 /// The RDF 1.2 base direction of a directional language-tagged string: the
@@ -45,7 +46,7 @@ pub use purrdf_events::TextDirection;
 ///
 /// [`CdtLiteral::plain`], [`CdtLiteral::typed`], [`CdtLiteral::lang`] and
 /// [`CdtLiteral::dir_lang`] establish them; the scanner establishes them too.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CdtLiteral {
     /// The lexical form, byte-for-byte as authored (escapes already decoded).
     pub lexical: String,
@@ -113,10 +114,10 @@ impl CdtLiteral {
 /// well-formed RDF is the consumer's question, not this lexical layer's.
 ///
 /// The components may nest triple terms and composites without bound, so this type
-/// implements `Drop` iteratively ([`crate::tree`]); the fields are public to read and
+/// implements allocation-free iterative `Drop` ([`crate::tree`]); the fields are public to read and
 /// assign, and are moved out with `core::mem::replace` / `take` rather than by
 /// destructuring the struct by value, which a type with a `Drop` does not allow.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CdtTripleTerm {
     /// The subject component.
     pub subject: CdtTerm,
@@ -134,7 +135,8 @@ pub struct CdtTripleTerm {
 /// [`crate::MAX_ELEMENTS`] and a few bytes of [`crate::MAX_LEXICAL_BYTES`], and those
 /// two are the only bounds. Its `Drop`, `Clone` and `Debug` are therefore not the
 /// compiler's recursive glue but the loops in [`crate::tree`], each over an explicit
-/// heap work list, and equality and ordering are the loops in [`crate::ops`]. The
+/// work lists for copying/debugging and existing evacuated slots for destruction;
+/// equality and ordering are the loops in [`crate::ops`]. The
 /// variants below are free to be public: an element assembled by hand nests as deep
 /// as its author likes, costs heap for every level and stack for none, and is
 /// measured against the two bounds the moment it is offered to [`CdtValue::list`] /
@@ -185,9 +187,9 @@ impl CdtTerm {
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
     pub fn composite(value: CdtValue) -> Result<Self, CdtError> {
-        let term = Self::Composite(Box::new(value));
-        crate::limits::check_term(&term)?;
-        Ok(term)
+        Self::composite_admitted(value, &mut Resident)
+            .map(|(value, _)| value)
+            .map_err(resident_error)
     }
 
     /// A triple-term element.
@@ -217,13 +219,9 @@ impl CdtTerm {
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
     pub fn triple(subject: Self, predicate: Self, object: Self) -> Result<Self, CdtError> {
-        let term = Self::TripleTerm(Box::new(CdtTripleTerm {
-            subject,
-            predicate,
-            object,
-        }));
-        crate::limits::check_term(&term)?;
-        Ok(term)
+        Self::triple_admitted(subject, predicate, object, &mut Resident)
+            .map(|(value, _)| value)
+            .map_err(resident_error)
     }
 
     /// `true` for [`CdtTerm::Null`].
@@ -252,7 +250,7 @@ impl CdtTerm {
 /// — narrower than [`CdtTerm`]: a key is never a blank node, never `null`, never a
 /// nested composite and never a triple term. Modelling that as its own closed enum
 /// makes the restriction unrepresentable rather than merely checked.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CdtKey {
     /// `IRIREF` — always absolute.
     Iri(String),
@@ -265,10 +263,9 @@ impl CdtKey {
     /// so this allocates at most the key's own strings and never recurses).
     #[must_use]
     pub fn to_term(&self) -> CdtTerm {
-        match self {
-            Self::Iri(iri) => CdtTerm::Iri(iri.clone()),
-            Self::Literal(lit) => CdtTerm::Literal(lit.clone()),
-        }
+        self.to_term_admitted(&mut Resident)
+            .expect("resident CDT key capacity")
+            .0
     }
 
     /// The key a term denotes, or `None` when the term is **not admissible as a map
@@ -295,13 +292,9 @@ impl CdtKey {
     /// ```
     #[must_use]
     pub fn from_term(term: &CdtTerm) -> Option<Self> {
-        match term {
-            CdtTerm::Iri(iri) => Some(Self::Iri(iri.clone())),
-            CdtTerm::Literal(literal) => Some(Self::Literal(literal.clone())),
-            CdtTerm::Blank(_) | CdtTerm::Null | CdtTerm::TripleTerm(_) | CdtTerm::Composite(_) => {
-                None
-            }
-        }
+        Self::from_term_admitted(term, &mut Resident)
+            .expect("resident CDT key capacity")
+            .0
     }
 
     /// The ordering rank of this key's category, aligned with [`CdtTerm::rank`] so
@@ -315,10 +308,287 @@ impl CdtKey {
 }
 
 /// One `cdt:Map` entry: `MapKey ':' MapValue`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CdtEntry {
     /// The entry's key.
     pub key: CdtKey,
     /// The entry's value.
     pub value: CdtTerm,
+}
+
+fn resident_error(error: ReadError) -> CdtError {
+    match error {
+        ReadError::Lexical(error) => error,
+        ReadError::Storage(error) => panic!("resident CDT construction capacity: {error}"),
+    }
+}
+
+impl CdtLiteral {
+    fn fields_with_memory(
+        lexical: &str,
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<TextDirection>,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            lexical: memory.string(lexical)?,
+            datatype: memory.string(datatype)?,
+            language: language.map(|value| memory.string(value)).transpose()?,
+            direction,
+        })
+    }
+
+    pub(crate) fn clone_with_memory(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Self::fields_with_memory(
+            &self.lexical,
+            &self.datatype,
+            self.language.as_deref(),
+            self.direction,
+            memory,
+        )
+    }
+    /// Construct from borrowed plain spelling, before admitting each destination.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    pub fn plain_admitted(
+        lexical: &str,
+        storage: &mut dyn Storage,
+    ) -> Result<(Self, usize), StorageError> {
+        Self::typed_admitted(lexical, crate::datatype::XSD_STRING, storage)
+    }
+    /// Construct a typed literal from borrowed verbatim spelling.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    pub fn typed_admitted(
+        lexical: &str,
+        datatype: &str,
+        storage: &mut dyn Storage,
+    ) -> Result<(Self, usize), StorageError> {
+        let mut memory = Memory::new(storage);
+        let value = memory
+            .scope(|memory| Self::fields_with_memory(lexical, datatype, None, None, memory))?;
+        Ok((value, memory.admitted_bytes()))
+    }
+    /// Construct a language-tagged literal from borrowed verbatim spelling.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    pub fn lang_admitted(
+        lexical: &str,
+        language: &str,
+        storage: &mut dyn Storage,
+    ) -> Result<(Self, usize), StorageError> {
+        let mut memory = Memory::new(storage);
+        let value = memory.scope(|memory| {
+            Self::fields_with_memory(lexical, RDF_LANG_STRING, Some(language), None, memory)
+        })?;
+        Ok((value, memory.admitted_bytes()))
+    }
+    /// Construct a directional language literal from borrowed verbatim spelling.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    pub fn dir_lang_admitted(
+        lexical: &str,
+        language: &str,
+        direction: TextDirection,
+        storage: &mut dyn Storage,
+    ) -> Result<(Self, usize), StorageError> {
+        let mut memory = Memory::new(storage);
+        let value = memory.scope(|memory| {
+            Self::fields_with_memory(
+                lexical,
+                RDF_DIR_LANG_STRING,
+                Some(language),
+                Some(direction),
+                memory,
+            )
+        })?;
+        Ok((value, memory.admitted_bytes()))
+    }
+    pub(crate) fn owned_bytes(&self) -> Result<usize, StorageError> {
+        self.lexical
+            .capacity()
+            .checked_add(self.datatype.capacity())
+            .and_then(|bytes| bytes.checked_add(self.language.as_ref().map_or(0, String::capacity)))
+            .ok_or(StorageError::SizeOverflow)
+    }
+    crate::memory::release_entry!();
+}
+crate::tree::clone_entry! {
+    /// Copy verbatim fields under original native storage.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    CdtLiteral, "resident CDT literal capacity"
+}
+
+impl CdtKey {
+    pub(crate) fn clone_with_memory(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(match self {
+            Self::Iri(iri) => Self::Iri(memory.string(iri)?),
+            Self::Literal(value) => Self::Literal(value.clone_with_memory(memory)?),
+        })
+    }
+    /// Copy a lexical key as its corresponding term.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    pub fn to_term_admitted(
+        &self,
+        storage: &mut dyn Storage,
+    ) -> Result<(CdtTerm, usize), StorageError> {
+        let mut memory = Memory::new(storage);
+        let value = memory.scope(|memory| self.to_term_with_memory(memory))?;
+        Ok((value, memory.admitted_bytes()))
+    }
+    pub(crate) fn to_term_with_memory(
+        &self,
+        memory: &mut Memory<'_>,
+    ) -> Result<CdtTerm, StorageError> {
+        Ok(match self {
+            Self::Iri(iri) => CdtTerm::Iri(memory.string(iri)?),
+            Self::Literal(value) => CdtTerm::Literal(value.clone_with_memory(memory)?),
+        })
+    }
+    /// Copy only the key admitted by the grammar; invalid categories allocate nothing.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    pub fn from_term_admitted(
+        term: &CdtTerm,
+        storage: &mut dyn Storage,
+    ) -> Result<(Option<Self>, usize), StorageError> {
+        let mut memory = Memory::new(storage);
+        let value = memory.scope(|memory| Self::from_term_with_memory(term, memory))?;
+        Ok((value, memory.admitted_bytes()))
+    }
+    pub(crate) fn from_term_with_memory(
+        term: &CdtTerm,
+        memory: &mut Memory<'_>,
+    ) -> Result<Option<Self>, StorageError> {
+        Ok(match term {
+            CdtTerm::Iri(iri) => Some(Self::Iri(memory.string(iri)?)),
+            CdtTerm::Literal(value) => Some(Self::Literal(value.clone_with_memory(memory)?)),
+            CdtTerm::Blank(_) | CdtTerm::Null | CdtTerm::TripleTerm(_) | CdtTerm::Composite(_) => {
+                None
+            }
+        })
+    }
+    pub(crate) fn owned_bytes(&self) -> Result<usize, StorageError> {
+        match self {
+            Self::Iri(value) => Ok(value.capacity()),
+            Self::Literal(value) => value.owned_bytes(),
+        }
+    }
+    crate::memory::release_entry!();
+}
+crate::tree::clone_entry! {
+    /// Copy this lexical key without changing its identity.
+    ///
+    /// # Errors
+    /// Returns checked physical layout, allocator or original admission refusal.
+    CdtKey, "resident CDT key capacity"
+}
+
+impl CdtEntry {
+    pub(crate) fn clone_with_memory(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            key: self.key.clone_with_memory(memory)?,
+            value: self.value.clone_with_memory(memory)?,
+        })
+    }
+}
+impl Clone for CdtEntry {
+    fn clone(&self) -> Self {
+        self.clone_with_memory(&mut Memory::new(&mut Resident))
+            .expect("resident CDT entry capacity")
+    }
+}
+impl CdtTripleTerm {
+    pub(crate) fn clone_with_memory(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            subject: self.subject.clone_with_memory(memory)?,
+            predicate: self.predicate.clone_with_memory(memory)?,
+            object: self.object.clone_with_memory(memory)?,
+        })
+    }
+}
+impl Clone for CdtTripleTerm {
+    fn clone(&self) -> Self {
+        self.clone_with_memory(&mut Memory::new(&mut Resident))
+            .expect("resident CDT triple capacity")
+    }
+}
+
+impl CdtTerm {
+    /// Move an original composite into its before-admitted box.
+    /// The caller keeps the input payload's original account; the live byte
+    /// result is additional surviving constructor storage.
+    ///
+    /// # Errors
+    /// Keeps existing canonical/element bounds separate from physical failures.
+    pub fn composite_admitted(
+        value: CdtValue,
+        storage: &mut dyn Storage,
+    ) -> Result<(Self, usize), ReadError> {
+        let mut memory = Memory::new(storage);
+        let term = memory.scope(|memory| Self::composite_with_memory(value, memory))??;
+        Ok((term, memory.admitted_bytes()))
+    }
+    pub(crate) fn composite_with_memory(
+        value: CdtValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<Result<Self, CdtError>, StorageError> {
+        let extent = value.extent();
+        if let Err(error) = crate::limits::check_extent(&crate::limits::Extent {
+            elements: extent.elements.saturating_add(1),
+            bytes: extent.bytes.saturating_add(2),
+        }) {
+            return Ok(Err(error));
+        }
+        Ok(Ok(Self::Composite(memory.boxed_value(value)?)))
+    }
+
+    /// Move original components into a box only after their original bound checks.
+    /// Input payload accounts remain with the caller until the result dies.
+    ///
+    /// # Errors
+    /// Keeps existing canonical/element bounds separate from physical failures.
+    pub fn triple_admitted(
+        subject: Self,
+        predicate: Self,
+        object: Self,
+        storage: &mut dyn Storage,
+    ) -> Result<(Self, usize), ReadError> {
+        let mut memory = Memory::new(storage);
+        let term = memory
+            .scope(|memory| Self::triple_with_memory(subject, predicate, object, memory))??;
+        Ok((term, memory.admitted_bytes()))
+    }
+    pub(crate) fn triple_with_memory(
+        subject: Self,
+        predicate: Self,
+        object: Self,
+        memory: &mut Memory<'_>,
+    ) -> Result<Result<Self, CdtError>, StorageError> {
+        let triple = CdtTripleTerm {
+            subject,
+            predicate,
+            object,
+        };
+        let mut elements = 1usize;
+        for term in [&triple.subject, &triple.predicate, &triple.object] {
+            elements = elements.saturating_add(crate::limits::try_term_elements(term, memory)?);
+        }
+        let bytes = crate::render::try_triple_lexical_len(&triple, memory)?.saturating_add(2);
+        if let Err(error) = crate::limits::check_extent(&crate::limits::Extent { elements, bytes })
+        {
+            return Ok(Err(error));
+        }
+        Ok(Ok(Self::TripleTerm(memory.boxed_triple(triple)?)))
+    }
 }

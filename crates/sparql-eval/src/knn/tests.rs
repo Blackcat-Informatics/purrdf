@@ -477,7 +477,11 @@ fn a_zero_norm_vector_is_refused_under_cosine_and_admitted_under_the_metrics_tha
     let error = fixture(&DistanceMetric::Cosine, &with_origin)
         .open(roomy())
         .expect_err("a zero-norm vector has no direction");
-    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Data(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+        "got {error:?}"
+    );
     assert!(error.to_string().contains("zero L2 norm"), "got {error}");
 
     for metric in [
@@ -513,7 +517,11 @@ fn a_corrupted_artifact_is_a_data_error_rather_than_a_panic() {
     let error = built
         .open(roomy())
         .expect_err("a flipped byte must be caught by PURREMB's own sealing");
-    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Data(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+        "got {error:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -768,12 +776,20 @@ fn a_free_query_or_count_is_refused_and_the_bound_forms_are_not() {
 
     let error = invoke(&relation, &[None, None, Some(count(2)), None], None)
         .expect_err("this relation cannot enumerate seeds");
-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Function(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        "got {error:?}"
+    );
     assert!(error.to_string().contains("is free"), "got {error}");
 
     let error = invoke(&relation, &[None, Some(iri("a")), None, None], None)
         .expect_err("this relation cannot invent how many neighbours to return");
-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Function(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        "got {error:?}"
+    );
 
     // The neighbouring VALID case.
     assert_eq!(
@@ -802,7 +818,11 @@ fn a_non_integer_count_is_refused_and_a_derived_integer_type_is_not() {
     ] {
         let error = invoke(&relation, &[None, Some(iri("a")), Some(bad), None], None)
             .expect_err("there is no number of neighbours that names");
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            matches!(error, EvalError::Function(_))
+                || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+            "got {error:?}"
+        );
     }
 
     // The over-refusal control. `xsd:int` and `xsd:unsignedByte` are integer-family
@@ -837,7 +857,11 @@ fn a_negative_count_is_refused_and_zero_is_an_honest_empty_answer() {
         None,
     )
     .expect_err("a search cannot return a negative number of neighbours");
-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Function(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        "got {error:?}"
+    );
 
     // Zero is the boundary a clamp-or-refuse rule gets wrong in both directions: it is a
     // well-formed request for nothing, answered with nothing.
@@ -872,7 +896,11 @@ fn a_count_above_the_guard_is_refused_and_one_exactly_at_it_is_not() {
         None,
     )
     .expect_err("k one past the guard is refused, not clamped");
-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Function(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        "got {error:?}"
+    );
     assert!(error.to_string().contains("asks for 3"), "got {error}");
     assert!(error.to_string().contains("at most 2"), "got {error}");
 }
@@ -922,7 +950,11 @@ fn a_wrong_argument_count_is_refused_before_the_search() {
     let Err(error) = relation.open(&args, None) else {
         panic!("a zero-argument subject side does not match the declaration")
     };
-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Function(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        "got {error:?}"
+    );
     assert!(error.to_string().contains("expects"), "got {error}");
 }
 
@@ -3034,7 +3066,11 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
         roomy(),
         "zero L2 norm",
     );
-    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+    assert!(
+        matches!(error, EvalError::Data(_))
+            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+        "got {error:?}"
+    );
     assert!(
         EmbeddingSpace::from_vectors(
             &DistanceMetric::NegativeDot,

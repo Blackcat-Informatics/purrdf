@@ -5,11 +5,13 @@
 
 use std::borrow::Cow;
 
+use purrdf_lex::allocation::{Admission, Memory};
+
 use super::r#match::Vm;
 use super::{Budget, CompiledPattern, Error, Limits, Resource};
 use crate::xsd_regex::replace::{Cursor, ParseFailure, Part};
 
-fn next<'a>(cursor: &mut Cursor<'a>, budget: &mut Budget) -> Result<Option<Part<'a>>, Error> {
+fn next<'a>(cursor: &mut Cursor<'a>, budget: &mut Budget<'_>) -> Result<Option<Part<'a>>, Error> {
     cursor
         .next(&mut |amount| budget.charge(Resource::MatchSteps, amount))
         .map_err(|failure| match failure {
@@ -18,7 +20,12 @@ fn next<'a>(cursor: &mut Cursor<'a>, budget: &mut Budget) -> Result<Option<Part<
         })
 }
 
-fn append(out: &mut String, text: &str, budget: &mut Budget) -> Result<(), Error> {
+fn append(
+    out: &mut String,
+    text: &str,
+    budget: &mut Budget<'_>,
+    output: &mut Option<&mut Memory<'_, dyn Admission + '_>>,
+) -> Result<(), Error> {
     budget.charge_wide(Resource::OutputBytes, text.len() as u128)?;
     let copy = if text.len() > out.capacity() - out.len() {
         out.len() as u128
@@ -26,15 +33,70 @@ fn append(out: &mut String, text: &str, budget: &mut Budget) -> Result<(), Error
         0
     };
     budget.charge_wide(Resource::MatchSteps, text.len() as u128 + copy)?;
-    out.try_reserve(text.len()).map_err(|_| Error::Allocation {
-        resource: Resource::OutputBytes,
-        units: budget.used(Resource::OutputBytes),
-    })?;
+    if let Some(memory) = output {
+        let required = out.len().checked_add(text.len()).ok_or(Error::Storage(
+            purrdf_lex::allocation::StorageError::SizeOverflow,
+        ))?;
+        if required > out.capacity() {
+            let capacity = out
+                .capacity()
+                .checked_mul(2)
+                .ok_or(Error::Storage(
+                    purrdf_lex::allocation::StorageError::SizeOverflow,
+                ))?
+                .max(required);
+            memory
+                .reserve_string(out, capacity)
+                .map_err(Error::Storage)?;
+        }
+    } else {
+        out.try_reserve(text.len()).map_err(|_| Error::Allocation {
+            resource: Resource::OutputBytes,
+            units: budget.used(Resource::OutputBytes),
+        })?;
+    }
     out.push_str(text);
     Ok(())
 }
 
+/// Replacement text retaining both original native accounts.
+pub type OwnedReplacement<'h, M, O> = super::OwnedPatternValue<Cow<'h, str>, (M, O)>;
+
 impl CompiledPattern {
+    /// Run the same dated replacement law with separately admitted matcher and
+    /// output storage. Matcher handover cannot release surviving output bytes.
+    ///
+    /// # Errors
+    /// Returns the original accounts on grammar, work, allocation or capacity
+    /// refusal; no partial replacement text is published.
+    pub fn replace_all_with_storage<'h, M: Admission, O: Admission>(
+        &self,
+        input: &'h str,
+        replacement: &str,
+        limits: Limits,
+        mut matcher: M,
+        mut output: O,
+    ) -> Result<OwnedReplacement<'h, M, O>, super::OwnedPatternError<(M, O)>> {
+        let verdict = {
+            let budget = Budget::with_storage(limits, &mut matcher);
+            let mut memory = Memory::new(&mut output as &mut dyn Admission);
+            self.replace_budget(input, replacement, budget, Some(&mut memory))
+        };
+        match verdict {
+            Ok(value) => match matcher.resize(0) {
+                Ok(()) => Ok(super::OwnedPatternValue::new(value, (matcher, output))),
+                Err(error) => {
+                    drop(value);
+                    Err(super::OwnedPatternValue::new(
+                        Error::Storage(error),
+                        (matcher, output),
+                    ))
+                }
+            },
+            Err(error) => Err(super::OwnedPatternValue::new(error, (matcher, output))),
+        }
+    }
+
     /// Replace every nonoverlapping ordered match under this dated XPath law.
     ///
     /// Pattern admission, replacement validation, the empty-string check,
@@ -56,37 +118,78 @@ impl CompiledPattern {
         replacement: &str,
         limits: Limits,
     ) -> Result<Cow<'h, str>, Error> {
+        self.replace_budget(input, replacement, Budget::new(limits), None)
+    }
+
+    fn replace_budget<'h, 'storage>(
+        &'storage self,
+        input: &'h str,
+        replacement: &str,
+        mut budget: Budget<'storage>,
+        mut output: Option<&mut Memory<'_, dyn Admission + '_>>,
+    ) -> Result<Cow<'h, str>, Error>
+    where
+        'h: 'storage,
+    {
+        let limits = budget.limits();
         self.admit(limits)?;
-        let mut budget = Budget::new(limits);
         if !self.modes.quoted {
             let mut template = Cursor::new(replacement, self.captures);
             while next(&mut template, &mut budget)?.is_some() {}
         }
-        let mut empty = Vm::new(self, "", limits);
-        *empty.budget() = budget;
-        if empty.find_from(0)?.is_some() {
-            return Err(Error::EmptyMatch);
-        }
-        let mut vm = Vm::new(self, input, limits);
-        *vm.budget() = std::mem::replace(empty.budget(), Budget::new(limits));
+        let budget = if self.law.is_compatibility() {
+            budget
+        } else {
+            let mut empty = Vm::with_budget(self, "", budget);
+            if empty.find_from(0)?.is_some() {
+                return Err(Error::EmptyMatch);
+            }
+            empty.into_budget()?
+        };
+        let mut vm = Vm::with_budget(self, input, budget);
         let mut out = String::new();
         let mut position = 0;
+        let mut search = Some(0);
+        let mut previous_nonempty_end = None;
         let mut changed = false;
         loop {
-            let Some(captures) = vm.find_from(position)? else {
+            let found = search
+                .map(|start| vm.find_from(start))
+                .transpose()?
+                .flatten();
+            let Some(captures) = found else {
                 if !changed {
                     // The unchanged input is returned borrowed: no output
                     // byte is produced, so none is admitted.
                     return Ok(Cow::Borrowed(input));
                 }
-                append(&mut out, &input[position..], vm.budget())?;
+                append(&mut out, &input[position..], vm.budget(), &mut output)?;
                 return Ok(Cow::Owned(out));
             };
             let matched = captures.get(0).expect("successful match has capture zero");
-            debug_assert!(matched.end > matched.start, "empty-match guard was passed");
-            append(&mut out, &input[position..matched.start], vm.budget())?;
+            let empty = matched.start == matched.end;
+            debug_assert!(
+                !empty || self.law.is_compatibility(),
+                "dated empty-match guard was passed"
+            );
+            if empty && previous_nonempty_end == Some(matched.end) {
+                // The original find iterator suppresses an empty match directly
+                // after a nonempty one. The output cursor stays at that end.
+                search = input[matched.end..]
+                    .chars()
+                    .next()
+                    .map(|ch| matched.end + ch.len_utf8());
+                vm.release_captures(captures)?;
+                continue;
+            }
+            append(
+                &mut out,
+                &input[position..matched.start],
+                vm.budget(),
+                &mut output,
+            )?;
             if self.modes.quoted {
-                append(&mut out, replacement, vm.budget())?;
+                append(&mut out, replacement, vm.budget(), &mut output)?;
             } else {
                 let mut template = Cursor::new(replacement, self.captures);
                 while let Some(part) = next(&mut template, vm.budget())? {
@@ -97,13 +200,22 @@ impl CompiledPattern {
                         }
                         Part::Group(None) => "",
                     };
-                    append(&mut out, text, vm.budget())?;
+                    append(&mut out, text, vm.budget(), &mut output)?;
                 }
             }
             position = matched.end;
+            search = if empty {
+                input[matched.end..]
+                    .chars()
+                    .next()
+                    .map(|ch| matched.end + ch.len_utf8())
+            } else {
+                Some(matched.end)
+            };
+            previous_nonempty_end = (!empty).then_some(matched.end);
             changed = true;
             // No previous match's capture vector survives the next search.
-            drop(captures);
+            vm.release_captures(captures)?;
         }
     }
 }

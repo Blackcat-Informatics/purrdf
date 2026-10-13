@@ -1861,7 +1861,7 @@ fn an_untagged_needle_is_refused_where_a_language_position_is_declared() {
                 TermPattern::of_kind(TermKind::Literal),
                 vec![
                     TermPlacement {
-                        facet: RequestFacet::Value,
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 1,
                         datatype: None,
                     },
@@ -1918,7 +1918,7 @@ fn embedding_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
             vec![alternative(
                 TermPattern::of_kind(TermKind::Literal),
                 vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     datatype: Some(embedding_datatype()),
                 }],

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: CC-BY-4.0
+# Exact longitude; exact latitude; level-thirty key (unsigned big-endian hex).
+0 0 1000000000000001
+45 0 17ffffffffffffff
+90 0 3000000000000001
+180 0 7000000000000001
+-180 0 7000000000000001
+0 90 5000000000000001
+87 90 5000000000000001
+0 -90 b000000000000001
+45 45 4054545155144101
+-45 -45 bfababaeaaebbeff

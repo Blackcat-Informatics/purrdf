@@ -31,6 +31,7 @@ const EXT_NS: &str = "https://example.org/ext/";
 /// parse-time configuration the conformance harness uses.
 fn make_engine(cost: bool) -> NativeSparqlEngine {
     let options = EvalOptions {
+        disable_shapes: false,
         exists_memo: true,
         force_structural_bgp_order: !cost,
         force_sequential: false,

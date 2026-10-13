@@ -22,11 +22,12 @@
 //! (several facets or values on one restriction, several constructs) is their
 //! conjunction.
 //!
-//! Every walk over an expression is bounded: an expression nests at most
-//! `MAX_OWL_EXPRESSION_DEPTH` levels and one request expands at most
-//! `MAX_SCHEMA_RELATIONS` expression nodes, and RDF lists are read by the
-//! strict iterative walker, so neither recursion depth nor work grows with the
-//! input beyond those ceilings.
+//! Expression nesting retains the shared `MAX_OWL_EXPRESSION_DEPTH` guard.
+//! Class width, list membership, fact closure and coverage dimensions are
+//! derived from the current input. The existing expression-expansion guard
+//! bounds exponentially repeated anonymous subtrees; caching charges the same
+//! original occurrences and retains their original depth before copying.
+//! RDF lists are read by the strict iterative walker.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,8 +36,7 @@ use purrdf_xsd::XsdDatatype;
 
 use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::json_schema::{
-    MAX_OWL_EXPRESSION_DEPTH, MAX_SCHEMA_CLASS_MEMBERSHIPS, MAX_SCHEMA_CLASSES,
-    MAX_SCHEMA_PROPERTIES, MAX_SCHEMA_RELATIONS, SchemaClassExpressionAxiom,
+    MAX_OWL_EXPRESSION_DEPTH, MAX_OWL_EXPRESSION_NODES, SchemaClassExpressionAxiom,
     SchemaClassExpressionCoverage, SchemaClassExpressionReport, SchemaClassPropertyCoverage,
     SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision, SchemaCoverageProvenance,
     SchemaCoverageReport, SchemaCoverageStatus, SchemaExpressionComponent, SchemaExpressionOutcome,
@@ -915,7 +915,12 @@ pub(crate) fn facet_supported(base: &str, facet: &str, value: &Term) -> bool {
             };
             let temporal = matches!(
                 base_type,
-                Some(XsdDatatype::Date | XsdDatatype::Time | XsdDatatype::DateTime)
+                Some(
+                    XsdDatatype::Date
+                        | XsdDatatype::Time
+                        | XsdDatatype::DateTime
+                        | XsdDatatype::DateTimeStamp
+                )
             );
             (exact_number(base_type) && exact_number(value_type))
                 || (temporal && value_type == base_type)
@@ -1172,11 +1177,14 @@ impl SchemaSurface {
                 emitted += 1;
             }
         }
-        // Bounded by the coverage-cell ceiling checked before assembly. The
-        // range expressions and provenance records per cell are bounded by the
-        // ontology's own axioms, not by a separate ceiling: an IRI-only ontology
-        // with any number of them within the cell ceiling compiles.
-        debug_assert!(emitted <= MAX_SCHEMA_RELATIONS);
+        // Every emitted property has a corresponding input-derived coverage row.
+        let covered = self
+            .report
+            .properties
+            .iter()
+            .map(|property| property.classes.len())
+            .sum::<usize>();
+        debug_assert!(emitted <= covered);
         // Never silently dropped: every anonymous class axiom carries at least
         // one component, on a class or on the axiom itself.
         for axiom in &self.class_expressions.axioms {
@@ -1194,6 +1202,8 @@ impl SchemaSurface {
 #[derive(Debug, Clone, Default)]
 struct ShapeClassInfo {
     direct_properties: BTreeSet<String>,
+    /// Direct constraints that prove XMLLiteral values cannot reach this cell.
+    xml_excluded: BTreeSet<String>,
     closed_surfaces: Vec<ClosedSurface>,
 }
 
@@ -1386,10 +1396,16 @@ const RESTRICTION_FACETS: [(&str, FacetKind); 10] = [
 /// ontology ∪ shapes dataset, under one expansion budget per request.
 struct ExpressionReader<'a> {
     dataset: &'a RdfDataset,
-    /// Expression nodes expanded so far. A blank node shared by several
-    /// expressions is expanded once per occurrence, so the budget bounds the
-    /// expanded size, not only the graph size.
+    /// Expanded RDF expression occurrences. A cache hit consumes the same
+    /// occurrence count as the original reading before copying its tree.
     nodes: usize,
+    /// Decoded expressions and their original RDF relative nesting depths. A
+    /// reused expression is checked at its new depth and charged for its original
+    /// expanded occurrences before cloning, even if normalization
+    /// flattened its expression tree.
+    cache: BTreeMap<String, (OntologyExpression, usize, usize)>,
+    /// Deepest absolute RDF expression depth observed in each active reading.
+    depths: Vec<usize>,
     /// The most expression nodes one request may expand.
     budget: usize,
     /// The blank nodes on the path from the expression root being read: one
@@ -1398,14 +1414,16 @@ struct ExpressionReader<'a> {
 }
 
 impl<'a> ExpressionReader<'a> {
-    const fn new(dataset: &'a RdfDataset) -> Self {
-        Self::with_budget(dataset, MAX_SCHEMA_RELATIONS)
+    fn new(dataset: &'a RdfDataset) -> Self {
+        Self::with_budget(dataset, MAX_OWL_EXPRESSION_NODES)
     }
 
     const fn with_budget(dataset: &'a RdfDataset, budget: usize) -> Self {
         Self {
             dataset,
             nodes: 0,
+            cache: BTreeMap::new(),
+            depths: Vec::new(),
             budget,
             path: Vec::new(),
         }
@@ -1423,8 +1441,24 @@ impl<'a> ExpressionReader<'a> {
                 observed: depth,
             });
         }
+        let cache_key = term.to_string();
+        if let Some((relative_depth, expanded)) = self
+            .cache
+            .get(cache_key.as_str())
+            .map(|(_, relative_depth, expanded)| (*relative_depth, *expanded))
+        {
+            let deepest = input_count("OWL expression depth", depth.checked_add(relative_depth))?;
+            enforce_limit("OWL expression depth", deepest, MAX_OWL_EXPRESSION_DEPTH)?;
+            self.count_nodes(expanded)?;
+            if let Some(parent) = self.depths.last_mut() {
+                *parent = (*parent).max(deepest);
+            }
+            return Ok(self.cache[cache_key.as_str()].0.clone());
+        }
+        let before = self.nodes;
         self.count_nodes(1)?;
-        match term {
+        self.depths.push(depth);
+        let parsed = match term {
             Term::NamedNode(node) => Ok(OntologyExpression::Named(node.as_str().to_owned())),
             Term::BlankNode(_) => {
                 let key = term.to_string();
@@ -1446,11 +1480,21 @@ impl<'a> ExpressionReader<'a> {
                 reason: "an OWL class expression or data range must be an IRI or a blank node"
                     .to_owned(),
             }),
+        };
+        let deepest = self.depths.pop().expect("active expression reading");
+        if let Some(parent) = self.depths.last_mut() {
+            *parent = (*parent).max(deepest);
         }
+        let parsed = parsed?;
+        self.cache.insert(
+            cache_key,
+            (parsed.clone(), deepest - depth, self.nodes - before),
+        );
+        Ok(parsed)
     }
 
     fn count_nodes(&mut self, count: usize) -> Result<(), SchemaCompileError> {
-        self.nodes = self.nodes.saturating_add(count);
+        self.nodes = input_count("OWL expression nodes", self.nodes.checked_add(count))?;
         enforce_limit("OWL expression nodes", self.nodes, self.budget)
     }
 
@@ -1743,13 +1787,11 @@ impl<'a> ExpressionReader<'a> {
                     .to_owned(),
             ));
         }
-        self.count_nodes(
-            properties
-                .len()
-                .saturating_mul(restrictions.len())
-                .saturating_sub(1),
+        let readings = input_count(
+            "OWL restriction readings",
+            properties.len().checked_mul(restrictions.len()),
         )?;
-        let mut members = Vec::with_capacity(properties.len().saturating_mul(restrictions.len()));
+        let mut members = Vec::with_capacity(readings);
         for property in &properties {
             for restriction in &restrictions {
                 members.push(OntologyExpression::Restriction(
@@ -1815,7 +1857,7 @@ impl<'a> ExpressionReader<'a> {
     /// OWL 2 Mapping to RDF Graphs §3.1 reads a sequence only from a
     /// well-formed collection, so a malformed or cyclic one is refused rather
     /// than read short.
-    fn list_items(&mut self, head: &Term, owner: &str) -> Result<Vec<Term>, SchemaCompileError> {
+    fn list_items(&self, head: &Term, owner: &str) -> Result<Vec<Term>, SchemaCompileError> {
         let malformed = |reason: String| SchemaCompileError::InvalidOntology {
             subject: owner.to_owned(),
             reason,
@@ -1836,9 +1878,8 @@ impl<'a> ExpressionReader<'a> {
         enforce_limit(
             "OWL expression list members",
             items.len(),
-            MAX_SCHEMA_CLASSES,
+            self.dataset.term_count(),
         )?;
-        self.count_nodes(items.len())?;
         Ok(items
             .into_iter()
             .map(|item| crate::term::term_id_to_native(self.dataset, item))
@@ -1866,7 +1907,7 @@ impl<'a> ExpressionReader<'a> {
     /// An `owl:oneOf` list. An empty one denotes nothing: the OWL 2 Mapping
     /// (Table 18) reads `C owl:oneOf ()` as `C ≡ owl:Nothing`.
     fn one_of(
-        &mut self,
+        &self,
         head: &Term,
         owner: &str,
         data_range: bool,
@@ -1906,7 +1947,7 @@ impl<'a> ExpressionReader<'a> {
     }
 
     fn datatype_restriction(
-        &mut self,
+        &self,
         base: String,
         head: &Term,
         owner: &str,
@@ -2162,7 +2203,7 @@ fn catalog_restrictions(
 ) -> Result<(), SchemaCompileError> {
     expression.visit_restrictions(&mut |on, _restriction| {
         for iri in on.iris() {
-            let facts = property_entry(properties, iri)?;
+            let facts = property_entry(properties, iri);
             facts.declarations.insert(OWL_ON_PROPERTY.to_owned());
         }
         Ok(())
@@ -2213,7 +2254,7 @@ pub(crate) fn build(
     for (class, info) in &shape_classes {
         explicit_classes.insert(class.clone());
         for property in &info.direct_properties {
-            let facts = property_entry(&mut properties, property)?;
+            let facts = property_entry(&mut properties, property);
             facts.declarations.insert("sh:path".to_owned());
             facts.provenance.insert(SchemaCoverageProvenance {
                 subject: class.clone(),
@@ -2303,12 +2344,12 @@ pub(crate) fn build(
                     predicate: row.predicate.clone(),
                     object: right.canonical(),
                 };
-                let left_facts = property_entry(&mut properties, left.iri())?;
+                let left_facts = property_entry(&mut properties, left.iri());
                 left_facts
                     .declarations
                     .insert(format!("{}:subject", row.predicate));
                 left_facts.provenance.insert(provenance.clone());
-                let right_facts = property_entry(&mut properties, right.iri())?;
+                let right_facts = property_entry(&mut properties, right.iri());
                 right_facts
                     .declarations
                     .insert(format!("{}:object", row.predicate));
@@ -2409,7 +2450,7 @@ pub(crate) fn build(
                             | OWL_ANNOTATION_PROPERTY
                             | OWL_FUNCTIONAL_PROPERTY
                             | OWL_INVERSE_FUNCTIONAL_PROPERTY => {
-                                let facts = property_entry(&mut properties, subject_iri)?;
+                                let facts = property_entry(&mut properties, subject_iri);
                                 facts.declarations.insert(type_iri.to_owned());
                                 let provenance = axiom_provenance(subject_iri, rdf::TYPE, type_iri);
                                 facts.provenance.insert(provenance.clone());
@@ -2447,7 +2488,7 @@ pub(crate) fn build(
                             expression,
                             provenance: provenance.clone(),
                         };
-                        let facts = property_entry(&mut properties, subject_iri)?;
+                        let facts = property_entry(&mut properties, subject_iri);
                         facts.declarations.insert(predicate.to_owned());
                         facts.provenance.insert(provenance);
                         if predicate == RDFS_DOMAIN {
@@ -2603,7 +2644,6 @@ pub(crate) fn build(
 
     globalize_thing_universals(&mut class_axioms, &mut properties)?;
 
-    enforce_limit("properties", properties.len(), MAX_SCHEMA_PROPERTIES)?;
     propagate_property_facts(&mut properties, &property_relations)?;
     // A property whose range contradicts its declared kind (an
     // owl:ObjectProperty over xsd:string, an owl:DatatypeProperty over a class)
@@ -2659,7 +2699,6 @@ pub(crate) fn build(
         }
     }
     explicit_classes.extend(shape_classes.keys().cloned());
-    enforce_limit("classes", explicit_classes.len(), MAX_SCHEMA_CLASSES)?;
     let supertypes = class_supertypes(
         &explicit_classes,
         &subclass_relations,
@@ -2801,7 +2840,7 @@ fn globalize_thing_universals(
                     kept.push(conjunct);
                     continue;
                 };
-                let facts = property_entry(properties, property.iri())?;
+                let facts = property_entry(properties, property.iri());
                 let sourced = SourcedExpression {
                     expression: filler.clone(),
                     provenance: provenance.clone(),
@@ -3122,15 +3161,8 @@ fn named_iri(term: &Term) -> Option<&str> {
 fn property_entry<'a>(
     properties: &'a mut BTreeMap<String, PropertyFacts>,
     iri: &str,
-) -> Result<&'a mut PropertyFacts, SchemaCompileError> {
-    if !properties.contains_key(iri) && properties.len() == MAX_SCHEMA_PROPERTIES {
-        return Err(SchemaCompileError::LimitExceeded {
-            resource: "properties",
-            limit: MAX_SCHEMA_PROPERTIES,
-            observed: MAX_SCHEMA_PROPERTIES + 1,
-        });
-    }
-    Ok(properties.entry(iri.to_owned()).or_default())
+) -> &'a mut PropertyFacts {
+    properties.entry(iri.to_owned()).or_default()
 }
 
 fn axiom_provenance(subject: &str, predicate: &str, object_iri: &str) -> SchemaCoverageProvenance {
@@ -3139,6 +3171,11 @@ fn axiom_provenance(subject: &str, predicate: &str, object_iri: &str) -> SchemaC
         predicate: predicate.to_owned(),
         object: format!("<{object_iri}>"),
     }
+}
+
+/// A native target cannot represent an overflowing exact input-derived count.
+fn input_count(resource: &'static str, count: Option<usize>) -> Result<usize, SchemaCompileError> {
+    count.ok_or(SchemaCompileError::SizeOverflow { resource })
 }
 
 fn enforce_limit(
@@ -3163,10 +3200,12 @@ fn coverage_cell_count(
     external_shaped_cells: usize,
     limit: usize,
 ) -> Result<usize, SchemaCompileError> {
-    let observed = property_count
-        .checked_mul(eligible_class_count)
-        .and_then(|cells| cells.checked_add(external_shaped_cells))
-        .unwrap_or(usize::MAX);
+    let observed = input_count(
+        "class/property coverage cells",
+        property_count
+            .checked_mul(eligible_class_count)
+            .and_then(|cells| cells.checked_add(external_shaped_cells)),
+    )?;
     enforce_limit("class/property coverage cells", observed, limit)?;
     Ok(observed)
 }
@@ -3194,6 +3233,14 @@ fn shape_class_info(shapes: &crate::shapes::Shapes) -> BTreeMap<String, ShapeCla
 fn merge_shape_info(info: &mut ShapeClassInfo, shape: &Shape, class: &str) {
     let direct = direct_shape_properties(shape);
     info.direct_properties.extend(direct.iter().cloned());
+    for property in &shape.property_shapes {
+        if !property.deactivated
+            && let Path::Predicate(predicate) = &property.path
+            && crate::json_schema::property_excludes_xml(property)
+        {
+            info.xml_excluded.insert(predicate.as_str().to_owned());
+        }
+    }
     for constraint in &shape.constraints {
         if let Constraint::Closed { ignored, mode } = constraint {
             // What the closed shape permits an instance of `class`: under
@@ -3253,7 +3300,8 @@ fn propagate_property_facts(
         .enumerate()
         .map(|(index, name)| (name.as_str(), index))
         .collect();
-    let mut expression_graph = vec![BTreeSet::new(); names.len() * 2];
+    let expression_count = input_count("property-expression nodes", names.len().checked_mul(2))?;
+    let mut expression_graph = vec![BTreeSet::new(); expression_count];
     let mut functional_graph = vec![BTreeSet::new(); names.len()];
 
     for relation in relations {
@@ -3282,11 +3330,8 @@ fn propagate_property_facts(
             }
         }
     }
-    let edge_count = expression_graph.iter().map(BTreeSet::len).sum::<usize>()
-        + functional_graph.iter().map(BTreeSet::len).sum::<usize>();
-    enforce_limit("ontology relation edges", edge_count, MAX_SCHEMA_RELATIONS)?;
 
-    let mut expression_seeds = vec![BTreeSet::new(); names.len() * 2];
+    let mut expression_seeds = vec![BTreeSet::new(); expression_count];
     let mut functional_seeds = vec![BTreeSet::new(); names.len()];
     for (index, name) in names.iter().enumerate() {
         let facts = &properties[name];
@@ -3383,21 +3428,11 @@ fn class_supertypes(
             add_bidirectional_edge(&mut graph, left, right);
         }
     }
-    enforce_limit(
-        "class hierarchy edges",
-        graph.iter().map(BTreeSet::len).sum(),
-        MAX_SCHEMA_RELATIONS,
-    )?;
     let seeds: Vec<BTreeSet<String>> = names
         .iter()
         .map(|name| BTreeSet::from([name.clone()]))
         .collect();
-    let effective = propagate_sets_with_limit(
-        &graph,
-        seeds,
-        "propagated class memberships",
-        MAX_SCHEMA_CLASS_MEMBERSHIPS,
-    )?;
+    let effective = propagate_sets(&graph, seeds, "propagated class memberships")?;
     Ok(names.into_iter().zip(effective).collect())
 }
 
@@ -3408,7 +3443,10 @@ fn propagate_sets<T: Clone + Ord>(
     seeds: Vec<BTreeSet<T>>,
     resource: &'static str,
 ) -> Result<Vec<BTreeSet<T>>, SchemaCompileError> {
-    propagate_sets_with_limit(graph, seeds, resource, MAX_SCHEMA_RELATIONS)
+    // Every output node can hold at most the union of the input seed facts.
+    let distinct: BTreeSet<&T> = seeds.iter().flat_map(BTreeSet::iter).collect();
+    let limit = input_count(resource, graph.len().checked_mul(distinct.len()))?;
+    propagate_sets_with_limit(graph, seeds, resource, limit)
 }
 
 fn propagate_sets_with_limit<T: Clone + Ord>(
@@ -3495,7 +3533,7 @@ fn insert_propagated_fact<T: Ord>(
     limit: usize,
 ) -> Result<(), SchemaCompileError> {
     if destination.get(&fact).is_none() {
-        let observed = materialized.saturating_add(1);
+        let observed = input_count(resource, materialized.checked_add(1))?;
         enforce_limit(resource, observed, limit)?;
         destination.insert(fact);
         *materialized = observed;
@@ -3728,7 +3766,6 @@ fn assemble_surface(
             .chain(shaped_classes.iter().cloned())
             .collect(),
     };
-    enforce_limit("classes", represented_classes.len(), MAX_SCHEMA_CLASSES)?;
 
     let mut classes: BTreeMap<String, SurfaceClass> = represented_classes
         .iter()
@@ -3749,12 +3786,21 @@ fn assemble_surface(
     let external_shaped_cells = external_shaped_classes
         .iter()
         .map(|class| shape_classes[*class].direct_properties.len())
-        .fold(0_usize, usize::saturating_add);
+        .try_fold(0_usize, |sum, count| {
+            input_count("external shaped cells", sum.checked_add(count))
+        })?;
+    let coverage_bound = input_count(
+        "class/property coverage cells",
+        properties
+            .len()
+            .checked_mul(eligible_classes.len())
+            .and_then(|cells| cells.checked_add(external_shaped_cells)),
+    )?;
     coverage_cell_count(
         properties.len(),
         eligible_classes.len(),
         external_shaped_cells,
-        MAX_SCHEMA_RELATIONS,
+        coverage_bound,
     )?;
 
     let infos = conjunct_infos(class_axioms);
@@ -3832,6 +3878,11 @@ fn assemble_surface(
         // node under a data range (an IRI may denote a data value), a literal
         // under a class that is neither owl:Thing nor disjoint with
         // rdfs:Literal, and a range whose own value schema is approximate.
+        let admits_unjudged_xml = !empty_range
+            && !facts
+                .ranges
+                .iter()
+                .any(|range| range.expression.excludes_literals(&literal_disjoint));
         let approximate_range = !empty_range
             && facts.ranges.iter().any(|range| {
                 let expression = &range.expression;
@@ -3906,7 +3957,11 @@ fn assemble_surface(
             let (status, precision) = if has_shape {
                 (
                     SchemaCoverageStatus::HasShape,
-                    SchemaCoveragePrecision::Exact,
+                    if shape_info.is_some_and(|info| info.xml_excluded.contains(&property_iri)) {
+                        SchemaCoveragePrecision::Exact
+                    } else {
+                        SchemaCoveragePrecision::RepresentationApproximation
+                    },
                 )
             } else if request.mode() == SchemaSurfaceMode::ShapedOnly {
                 (
@@ -3965,7 +4020,8 @@ fn assemble_surface(
                     && (empty_range
                         || (facts.functional.is_empty()
                             && !restricted_approximately
-                            && !approximate_range))
+                            && !approximate_range
+                            && !admits_unjudged_xml))
                 {
                     SchemaCoveragePrecision::Exact
                 } else {
@@ -4035,7 +4091,14 @@ fn assemble_surface(
                     class_iri: class_iri.to_owned(),
                     synthesized_open_class: false,
                     status: SchemaCoverageStatus::HasShape,
-                    precision: SchemaCoveragePrecision::Exact,
+                    precision: if shape_classes[class_iri]
+                        .xml_excluded
+                        .contains(&property_iri)
+                    {
+                        SchemaCoveragePrecision::Exact
+                    } else {
+                        SchemaCoveragePrecision::RepresentationApproximation
+                    },
                     provenance: base_provenance.clone(),
                 });
             }
@@ -4114,6 +4177,13 @@ fn class_expression_facts<'a>(
     let eligible: BTreeSet<&str> = eligible_classes.iter().map(String::as_str).collect();
     let no_supertypes = BTreeSet::new();
     let supers_of = |class: &str| supertypes.get(class).unwrap_or(&no_supertypes);
+    let input_conjuncts = carried.values().try_fold(0_usize, |sum, entries| {
+        input_count("input class conjuncts", sum.checked_add(entries.len()))
+    })?;
+    let assertion_bound = input_count(
+        "inherited class-expression assertions",
+        eligible_classes.len().checked_mul(input_conjuncts),
+    )?;
     let mut assertions = 0_usize;
     for class_iri in eligible_classes {
         let Some(types) = supertypes.get(class_iri) else {
@@ -4170,11 +4240,14 @@ fn class_expression_facts<'a>(
         // copies; the bound keeps that bookkeeping proportionate to the
         // ontology (a 50,000-class tree 15 deep with two restrictions per
         // class holds 1.5 million).
-        assertions = assertions.saturating_add(entries.len());
+        assertions = input_count(
+            "inherited class-expression assertions",
+            assertions.checked_add(entries.len()),
+        )?;
         enforce_limit(
             "inherited class-expression assertions",
             assertions,
-            MAX_SCHEMA_CLASS_MEMBERSHIPS,
+            assertion_bound,
         )?;
         facts.insert(
             class_iri.as_str(),
@@ -4795,12 +4868,7 @@ fn class_expression_report(
                 if component.outcome == SchemaExpressionOutcome::Unrepresented {
                     unrepresented.insert(format!("{}: {}", component.expression, component.reason));
                 }
-                cells = cells.saturating_add(1);
-                enforce_limit(
-                    "class-expression coverage cells",
-                    cells,
-                    MAX_SCHEMA_RELATIONS,
-                )?;
+                cells = input_count("class-expression coverage cells", cells.checked_add(1))?;
                 per_axiom[axiom]
                     .entry(class_iri)
                     .or_default()
@@ -5479,17 +5547,18 @@ mod tests {
                 "{ontology}"
             );
         }
-        // Neighbour: a property no range constrains takes any node or any
-        // well-typed literal, which states its OWL 2 Full extension exactly.
-        let exact = surface(
+        // Neighbour: a property no range constrains also admits XMLLiteral
+        // spellings the emitted schema does not judge. Its status stays
+        // included, while its precision reports that real representation gap.
+        let unchecked = surface(
             "",
             "ex:A a owl:Class . ex:r a owl:DatatypeProperty ; rdfs:domain ex:A .",
             SchemaSurfaceMode::OntologyComplete,
         )
         .expect("an unconstrained datatype property");
         assert_eq!(
-            exact.report.properties[0].classes[0].precision,
-            SchemaCoveragePrecision::Exact
+            unchecked.report.properties[0].classes[0].precision,
+            SchemaCoveragePrecision::RepresentationApproximation
         );
     }
 
@@ -5942,6 +6011,46 @@ mod tests {
         }
         let _ = writeln!(turtle, "_:u{levels} owl:complementOf ex:Leaf .");
         turtle
+    }
+
+    #[test]
+    fn cached_expression_keeps_original_depth_after_single_member_normalization() {
+        use std::fmt::Write as _;
+        let mut ontology = String::from("ex:Root rdfs:subClassOf _:d0 .\n");
+        for depth in 0..MAX_OWL_EXPRESSION_DEPTH {
+            let target = if depth + 1 == MAX_OWL_EXPRESSION_DEPTH {
+                "ex:Leaf".to_owned()
+            } else {
+                format!("_:d{}", depth + 1)
+            };
+            writeln!(ontology, "_:d{depth} owl:unionOf ( {target} ) .").expect("fixture text");
+        }
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{ontology}"), None)
+                .expect("Turtle");
+        let root = objects_of(
+            dataset.as_ref(),
+            &Term::NamedNode(NamedNode::from("https://example.org/schema/Root")),
+            rdfs::SUB_CLASS_OF,
+        )
+        .pop()
+        .expect("root");
+        let mut reader = ExpressionReader::new(dataset.as_ref());
+        assert_eq!(
+            reader.expression(&root, 0).expect("exact depth boundary"),
+            OntologyExpression::Named(format!("{EXS}Leaf")),
+            "single-member union normalization removes the structural nesting from the returned tree"
+        );
+        let error = reader
+            .expression(&root, 1)
+            .expect_err("the cached original path is one level too deep");
+        assert!(matches!(error, SchemaCompileError::LimitExceeded {
+            resource: "OWL expression depth", limit: MAX_OWL_EXPRESSION_DEPTH, observed
+        } if observed == MAX_OWL_EXPRESSION_DEPTH + 1));
+        reader
+            .expression(&root, 0)
+            .expect("the shallow cached neighbor still succeeds");
+        complete(&ontology).expect("the public surface preserves the supported depth boundary");
     }
 
     #[test]

@@ -1826,7 +1826,24 @@ pub fn is_well_formed(tag: &str) -> bool {
 /// ```
 #[must_use]
 pub fn identity_fold(tag: &str) -> String {
-    tag.to_ascii_lowercase()
+    identity_fold_with_memory(
+        tag,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident language identity fold allocation failed")
+}
+
+/// Fold a language identity into an originally admitted destination.
+///
+/// # Errors
+/// Returns native layout, admission or allocator refusal.
+pub fn identity_fold_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    tag: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<String, purrdf_lex::allocation::StorageError> {
+    let mut text = memory.string(tag)?;
+    text.make_ascii_lowercase();
+    Ok(text)
 }
 
 /// `true` when `tag` is already its own [`identity_fold`], tested without

@@ -34,11 +34,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   argument to `Dataset.parse`, or CLI `--graph-existence implicit`. Otherwise use
   `DROP` where an old `CLEAR` was intended to remove the graph itself.
   C ABI **0.11.0** adds a required `int32_t graph_existence` to
-  `purrdf_graph_from_dataset`, `purrdf_update_governed` and
-  `purrdf_update_governed_xpath_regex`: pass `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`
+  `purrdf_graph_from_dataset`, `purrdf_update_governed`,
+  `purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo`:
+  pass `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`
   (0) or `PURRDF_GRAPH_EXISTENCE_IMPLICIT` (1); other values are invalid arguments.
   Recompile C callers against the generated header. Dataset status and capability
   layouts are unchanged; remembered empty graphs still set `named_graphs`.
+
+- **Unrestricted exact BM25F ranking:** the ranking identity is now
+  `purrdf-bm25f-fixed-v2`, revision 2. Query terms, ranking fields, corpus
+  populations, field lengths/frequencies and nonnegative weights no longer have
+  selected admission ceilings. Overflowing intermediates use the existing exact
+  Integer/BigInt at the original rounding boundaries; previously admitted score
+  lexicals remain byte-identical. Profile/index fingerprints change because the
+  admission and bound laws changed. The fixed maximum/width exports are removed;
+  `PreparedQuery::score` now returns `BoundedScore { value, bound }`, native
+  `Scored` carries `score_bound`, and matched-term counts use usize. The bound is
+  derived from the actual prepared query/corpus, with no reserved host tie bits.
+
 
 - **Developer-schema output for ontologies without anonymous expressions:**
   correctness fixes change what an IRI-only ontology emits. Each change:

@@ -37,6 +37,7 @@ pub fn as_solutions(parsed: purrdf_sparql_results::ParsedSolutions) -> SparqlRes
         rows: parsed.rows,
         aux: RdfDatasetBuilder::new()
             .freeze()
-            .expect("an empty dataset always freezes"),
+            .expect("an empty dataset always freezes")
+            .into(),
     }
 }

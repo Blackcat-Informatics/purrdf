@@ -406,7 +406,16 @@ fn request(
         Door::FallibleView => {
             return engine
                 .query_fallible_view(&**data, owned, options)
-                .map(|complete| solutions(complete.into_parts().0))
+                .map(|complete| {
+                    sorted(
+                        complete
+                            .result
+                            .solutions()
+                            .expect("SELECT shape")
+                            .1
+                            .to_vec(),
+                    )
+                })
                 .map_err(|error| format!("{error:?}"));
         }
     };

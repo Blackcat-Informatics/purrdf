@@ -56,6 +56,32 @@ pub fn push_token(pointer: &mut String, token: &str) {
     push_escaped(pointer, token);
 }
 
+/// Append the original reference-token spelling after admitting its exact
+/// escaped extent. The shared escape body then writes within that capacity.
+///
+/// # Errors
+///
+/// Returns checked length, allocator or original admission refusal.
+pub fn push_token_with_memory<S: crate::allocation::Admission + ?Sized>(
+    pointer: &mut String,
+    token: &str,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<(), crate::allocation::StorageError> {
+    let escaped = token
+        .bytes()
+        .filter(|byte| matches!(byte, b'~' | b'/'))
+        .count();
+    let required = pointer
+        .len()
+        .checked_add(1)
+        .and_then(|length| length.checked_add(token.len()))
+        .and_then(|length| length.checked_add(escaped))
+        .ok_or(crate::allocation::StorageError::SizeOverflow)?;
+    memory.reserve_string(pointer, required)?;
+    push_token(pointer, token);
+    Ok(())
+}
+
 /// Append `token`, escaped, to `out`.
 fn push_escaped(out: &mut String, token: &str) {
     let mut rest = token;

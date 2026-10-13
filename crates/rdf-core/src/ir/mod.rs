@@ -62,7 +62,7 @@ pub mod term;
 mod term_walk;
 pub mod validate;
 
-pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
+pub use builder::{NativeBuildError, RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
 pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{
     BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
@@ -79,8 +79,8 @@ pub use canon::{
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
-    QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter,
-    TermRef,
+    QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QueryIndexAllocationError,
+    RdfDataset, RdfDatasetIter, TermRef,
 };
 pub use embedding::*;
 pub use event_sink::RdfDatasetVisitor;
@@ -114,8 +114,11 @@ pub use segmented::{
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};
+pub(crate) use term_walk::try_owned_text;
 pub use term_walk::{
-    Nested, TermBox, TermVisit, fold_term, try_fold_nested, try_fold_term, visit_nested,
+    Nested, OwnedTermFoldError, TermBox, TermVisit, fold_term, fold_workspace_bound,
+    try_fold_nested, try_fold_nested_with_memory, try_fold_term, try_fold_term_with_memory,
+    try_fold_term_with_storage, visit_nested,
 };
 
 pub use composite::{

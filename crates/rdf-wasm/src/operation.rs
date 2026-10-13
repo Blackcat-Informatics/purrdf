@@ -316,6 +316,10 @@ pub(crate) fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
 // ---------------------------------------------------------------------------
 
 /// What a finished operation left for its caller to take.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The stopped-update payload moves inline so outcome transfer does not allocate after workspace refusal."
+)]
 pub(crate) enum JobOutcome {
     Query(SparqlResult),
     Raw(String),
@@ -444,8 +448,9 @@ impl JobRun<'_> {
         env: &'o purrdf_sparql_eval::ExtensionEnv,
         division: DivisionPolicy,
         xpath_regex: Option<Profile>,
+        geo: &'o purrdf_validate::geo::GeoProfile,
     ) -> QueryOptions<'o> {
-        crate::xpath_regex::select(self.options_under(env, division), xpath_regex)
+        crate::xpath_regex::select(self.options_under(env, division).with_geo(geo), xpath_regex)
     }
 
     /// The run's sources, for an ambient execution scope.
@@ -524,6 +529,8 @@ pub(crate) struct OperationInput<'a> {
     pub(crate) division: DivisionPolicy,
     /// The dataset policy captured before freezing, retained through UPDATE execution.
     pub(crate) graph_existence: GraphExistenceMode,
+    /// The immutable profile captured when this operation starts.
+    pub(crate) geo: purrdf_validate::geo::GeoProfileSnapshot,
 }
 
 impl<'a> OperationInput<'a> {
@@ -553,12 +560,17 @@ impl<'a> OperationInput<'a> {
             xpath_regex: None,
             division: DivisionPolicy::xsd_default(),
             graph_existence: GraphExistenceMode::default(),
+            geo: purrdf_validate::geo::GeoSession::default().profile_snapshot(),
         }
     }
 }
 
 /// Run an ungoverned query: on the engine's ungoverned entry when nothing polls the run,
 /// and under the metered base and the run's signal when something does.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The run keeps explicit dataset, source, arithmetic, regex and geographic policies as independently borrowed query inputs"
+)]
 fn ungoverned_query(
     run: &JobRun<'_>,
     engine: &NativeSparqlEngine,
@@ -567,8 +579,9 @@ fn ungoverned_query(
     base: Option<&str>,
     division: DivisionPolicy,
     xpath_regex: Option<Profile>,
+    geo: &purrdf_validate::geo::GeoProfile,
 ) -> Result<SparqlResult, JobError> {
-    let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex);
+    let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex, geo);
     let Some(governors) = run.ungoverned_watch() else {
         // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
         // the plan, then its evaluation with no governor state.
@@ -627,6 +640,7 @@ impl OperationInput<'_> {
             xpath_regex,
             division,
             graph_existence,
+            geo,
         } = self;
         let base = base.as_deref();
         let request = sparql_request(&sparql, base);
@@ -639,10 +653,19 @@ impl OperationInput<'_> {
                 base,
                 division,
                 xpath_regex,
+                &geo,
             )?)),
             AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result =
-                    ungoverned_query(run, &engine, &frozen, &sparql, base, division, xpath_regex)?;
+                let result = ungoverned_query(
+                    run,
+                    &engine,
+                    &frozen,
+                    &sparql,
+                    base,
+                    division,
+                    xpath_regex,
+                    &geo,
+                )?;
                 let text = run.serialize(|| match (&jsonld, format.as_deref()) {
                     (Some(options), Some(format)) => {
                         serialize_configured_graph(result, format, options)
@@ -670,7 +693,7 @@ impl OperationInput<'_> {
                         engine.query_governed(
                             &frozen,
                             request,
-                            run.selected_options(&env, division, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             &governors,
                         )
                     })
@@ -690,7 +713,7 @@ impl OperationInput<'_> {
                         engine.query_governed(
                             &frozen,
                             request,
-                            run.selected_options(&env, division, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             &governors,
                         )
                     })
@@ -750,7 +773,7 @@ impl OperationInput<'_> {
                             request,
                             &EntailmentClosure::new(plan.entailment(), &imports)
                                 .with_limits(limits.eval_options()),
-                            run.selected_options(&env, division, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             // This surface registers no relation, so there is none to
                             // re-derive over the closure.
                             &ClosureRelations::NONE,
@@ -780,7 +803,8 @@ impl OperationInput<'_> {
             AsyncOperationKind::Explain => {
                 // The measuring run — metered, never bounded — with the run's sources
                 // installed and its signal, when it has one, polled at every charge point.
-                let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex);
+                let options =
+                    run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex, &geo);
                 let explanation = run
                     .evaluate(|| match &run.stop {
                         Some(stop) => engine.explain_query_with_stop_signal(
@@ -812,8 +836,13 @@ impl OperationInput<'_> {
                         engine.update_with_options(
                             &mut target,
                             request,
-                            run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex)
-                                .with_graph_existence(graph_existence),
+                            run.selected_options(
+                                QueryOptions::EMPTY.env,
+                                division,
+                                xpath_regex,
+                                &geo,
+                            )
+                            .with_graph_existence(graph_existence),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -824,8 +853,13 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex)
-                                .with_graph_existence(graph_existence),
+                            run.selected_options(
+                                QueryOptions::EMPTY.env,
+                                division,
+                                xpath_regex,
+                                &geo,
+                            )
+                            .with_graph_existence(graph_existence),
                             &governors,
                         )
                     })
@@ -855,7 +889,7 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.selected_options(&env, division, xpath_regex)
+                            run.selected_options(&env, division, xpath_regex, &geo)
                                 .with_graph_existence(graph_existence),
                             &governors,
                         )

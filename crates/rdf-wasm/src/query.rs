@@ -1292,6 +1292,8 @@ pub struct QueryEngine {
     /// The precision of every `xsd:integer`/`xsd:decimal` quotient this engine forms
     /// (`divisionPolicy`). An asynchronous job takes the policy in force when it begins.
     division: Cell<DivisionPolicy>,
+    /// An operation retains the immutable profile selected when it starts.
+    geo: std::cell::RefCell<purrdf_validate::geo::GeoProfileSnapshot>,
 }
 
 impl Default for QueryEngine {
@@ -1300,6 +1302,9 @@ impl Default for QueryEngine {
             inner: Rc::default(),
             blank_scope: Cell::default(),
             division: Cell::new(DivisionPolicy::xsd_default()),
+            geo: std::cell::RefCell::new(
+                purrdf_validate::geo::GeoSession::default().profile_snapshot(),
+            ),
         }
     }
 }
@@ -1312,6 +1317,24 @@ impl std::fmt::Debug for QueryEngine {
 
 #[wasm_bindgen]
 impl QueryEngine {
+    /// Select the immutable native geographic profile for subsequent operations.
+    /// An already started asynchronous operation retains its original selection.
+    #[wasm_bindgen(js_name = setGeoSession)]
+    pub fn set_geo_session(&self, session: &crate::geo::GeoSession) {
+        *self.geo.borrow_mut() = session.native().profile_snapshot();
+    }
+
+    /// Select the same strict version-one profile used by every native host.
+    ///
+    /// # Errors
+    /// Malformed records or invalid configuration leave the current selection intact.
+    #[wasm_bindgen(js_name = setGeoProfile)]
+    pub fn set_geo_profile(&self, profile: &str) -> Result<(), JsValue> {
+        let session = purrdf_validate::geo::GeoSession::from_profile_str(profile)
+            .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))?;
+        *self.geo.borrow_mut() = session.profile_snapshot();
+        Ok(())
+    }
     /// How a blank node's scope crosses to JS in the typed results this engine returns:
     /// `"keep"` (the default) or `"merge"`.
     ///
@@ -1875,6 +1898,11 @@ impl QueryEngine {
         self.division.get()
     }
 
+    /// Retain the immutable geographic selection for one complete operation.
+    pub(crate) fn geo_profile(&self) -> purrdf_validate::geo::GeoProfileSnapshot {
+        self.geo.borrow().clone()
+    }
+
     /// Set the division policy from its text form, through [`DivisionPolicy`]'s own
     /// reader; a refusal leaves the policy in force as it was.
     ///
@@ -1913,6 +1941,7 @@ impl QueryEngine {
         input.xpath_regex = xpath_regex;
         input.division = self.division();
         input.graph_existence = dataset.graph_existence();
+        input.geo = self.geo_profile();
         Ok(input)
     }
 
@@ -2350,8 +2379,8 @@ const QUAD_CAPABLE_REMEDY: &str =
 /// graph-carrying result is a request this binding cannot honour, and silently
 /// answering with TriG would hand a triple-only consumer bytes it cannot read. That
 /// case throws — see [`refuse_uncarriable_named_graphs`].
-fn default_graph_format(graph: &Arc<purrdf::RdfDataset>) -> &'static str {
-    if distinct_graph_names(&**graph).is_empty() {
+fn default_graph_format(graph: &purrdf::RdfDataset) -> &'static str {
+    if distinct_graph_names(graph).is_empty() {
         "turtle"
     } else {
         "trig"
@@ -2372,7 +2401,7 @@ fn default_graph_format(graph: &Arc<purrdf::RdfDataset>) -> &'static str {
 /// the default graph). Both silent answers are wrong, so this one is loud, exactly as
 /// the `purrdf query` lane and the Python `QueryQuads.serialize` are.
 fn refuse_uncarriable_named_graphs(
-    graph: &Arc<purrdf::RdfDataset>,
+    graph: &purrdf::RdfDataset,
     fmt: purrdf::NativeRdfFormat,
     token: &str,
 ) -> Result<(), String> {
@@ -2391,14 +2420,14 @@ fn refuse_uncarriable_named_graphs(
 /// (`js/tests/query.test.mjs`) then observes the real thrown message on the real
 /// module, so both halves of the refusal are pinned.
 fn uncarriable_named_graphs(
-    graph: &Arc<purrdf::RdfDataset>,
+    graph: &purrdf::RdfDataset,
     fmt: purrdf::NativeRdfFormat,
     token: &str,
 ) -> Option<String> {
     if fmt.supports_datasets() {
         return None;
     }
-    let names = distinct_graph_names(&**graph);
+    let names = distinct_graph_names(graph);
     if names.is_empty() {
         return None;
     }
@@ -2414,7 +2443,7 @@ fn uncarriable_named_graphs(
 /// Giving callers one means a new parameter on the `queryRaw`/`queryGraph` surface, not
 /// reusing the query base. `serialize_dataset` applies `StatementLayer::Emit`, so an
 /// answer graph carrying RDF 1.2 statement rows keeps them.
-fn serialize_graph_result(graph: &Arc<purrdf::RdfDataset>, format: &str) -> Result<String, String> {
+fn serialize_graph_result(graph: &purrdf::RdfDataset, format: &str) -> Result<String, String> {
     let fmt = resolve_format(format)?;
     // Refused BEFORE the serializer runs: a result the requested syntax would silently
     // empty out never becomes a string.
@@ -2557,6 +2586,102 @@ mod tests {
         assert!(Rc::ptr_eq(&result.variables, &first.variables));
         assert_eq!(result.remaining(), 0);
         assert!(result.next_row().is_none());
+    }
+
+    /// The native graph's original storage survives serialization, a wrong-kind
+    /// take, and transfer out of the result wrapper; only its last host owner releases it.
+    #[test]
+    fn native_graph_storage_follows_wasm_result_and_dataset_lifetimes() {
+        use purrdf_core::DatasetHandle;
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct GraphStorage {
+            live: Arc<AtomicUsize>,
+            dropped: Arc<AtomicUsize>,
+        }
+
+        impl Admission for GraphStorage {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                self.live.store(bytes, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        impl Drop for GraphStorage {
+            fn drop(&mut self) {
+                self.live.store(0, Ordering::SeqCst);
+                self.dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        for typed_wrapper in [false, true] {
+            let live = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let mut storage = GraphStorage {
+                live: Arc::clone(&live),
+                dropped: Arc::clone(&dropped),
+            };
+            let mut memory = Memory::new(&mut storage);
+            let mut builder = purrdf::RdfDatasetBuilder::new();
+            let subject = builder
+                .intern_iri_with_memory("https://example.org/s", &mut memory)
+                .expect("native subject");
+            let predicate = builder
+                .intern_iri_with_memory("https://example.org/p", &mut memory)
+                .expect("native predicate");
+            let object = builder
+                .intern_iri_with_memory("https://example.org/o", &mut memory)
+                .expect("native object");
+            let graph_name = builder
+                .intern_iri_with_memory("https://example.org/g", &mut memory)
+                .expect("native graph name");
+            builder
+                .push_quad_with_memory(subject, predicate, object, Some(graph_name), &mut memory)
+                .expect("native quad");
+            let value = builder
+                .freeze_with_memory(&mut memory)
+                .expect("native freeze");
+            memory
+                .add_bytes(DatasetHandle::allocation_layout::<GraphStorage>().size())
+                .expect("original shared control admission");
+            let admitted = memory.admitted_bytes();
+            assert!(admitted > 0);
+            let graph = DatasetHandle::try_from_admitted(value, storage)
+                .expect("original storage publication");
+            assert!(graph.retains_admission());
+            let original = std::ptr::from_ref(graph.as_ref());
+            let retained = graph.clone();
+            let result = SparqlResult::Graph(graph);
+            let bytes = serialize_query_result(&result, Some("nquads"), None, "")
+                .expect("borrowed native graph serialization");
+            assert!(bytes.contains("<https://example.org/g>"));
+            assert_eq!(live.load(Ordering::SeqCst), admitted);
+            let dataset = if typed_wrapper {
+                let mut result = query_result_from_sparql(result, BlankScopeMode::Keep)
+                    .expect("native graph wrapper");
+                assert!(result.take_select().is_none());
+                assert_eq!(live.load(Ordering::SeqCst), admitted);
+                let dataset = result.take_dataset().expect("move host dataset");
+                assert!(result.take_dataset().is_none());
+                drop(result);
+                dataset
+            } else {
+                graph_result_from_sparql(result).expect("direct host dataset")
+            };
+            assert!(std::ptr::eq(dataset.view().base().as_ref(), original));
+            drop(retained);
+            assert_eq!(live.load(Ordering::SeqCst), admitted);
+            assert_eq!(dropped.load(Ordering::SeqCst), 0);
+            let bytes = dataset
+                .serialize("nquads", None)
+                .expect("host graph serialization");
+            assert!(bytes.contains("<https://example.org/g>"));
+            assert_eq!(live.load(Ordering::SeqCst), admitted);
+            drop(dataset);
+            assert_eq!(live.load(Ordering::SeqCst), 0);
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        }
     }
 
     /// Two blank nodes that share the label `b` in different scopes: the engine's

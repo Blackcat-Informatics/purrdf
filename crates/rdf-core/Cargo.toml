@@ -268,3 +268,7 @@ harness = false
 [[test]]
 name = "csv_scan_wasm"
 harness = false
+
+[[test]]
+name = "byte_cover"
+harness = false

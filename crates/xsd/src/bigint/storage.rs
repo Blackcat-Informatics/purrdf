@@ -19,6 +19,7 @@ pub(crate) enum Mag {
     Inline { words: [u64; 3], length: NonZeroU8 },
     Heap(Vec<u64>),
     Shared(Arc<Vec<u64>>),
+    Owned(purrdf_lex::allocation::SharedOwned<Vec<u64>>),
     Pooled(super::scratch::Pooled),
 }
 
@@ -61,6 +62,25 @@ impl Mag {
         }
     }
 
+    /// A fully sized native arithmetic destination, refusing physical allocation.
+    pub(crate) fn try_destination(
+        capacity: usize,
+        length: usize,
+    ) -> Result<Self, super::LimbScratchError> {
+        if length > capacity {
+            return Err(super::LimbScratchError::SizeOverflow);
+        }
+        if capacity <= 3 {
+            return Ok(Self::zeroed(length));
+        }
+        let mut words = Vec::new();
+        words
+            .try_reserve_exact(capacity)
+            .map_err(|_| super::LimbScratchError::SizeOverflow)?;
+        words.resize(length, 0);
+        Ok(Self::Heap(words))
+    }
+
     pub(super) fn push(&mut self, word: u64) {
         match self {
             Self::Inline { words, length } if length.get() <= 3 => {
@@ -77,14 +97,10 @@ impl Mag {
             Self::Shared(words) => Arc::get_mut(words)
                 .expect("a shared canonical magnitude is never an arithmetic destination")
                 .push(word),
-            Self::Pooled(words) => {
-                let unique = words.words_mut();
-                assert!(
-                    unique.len() < unique.capacity(),
-                    "admitted integer destination capacity"
-                );
-                unique.push(word);
+            Self::Owned(_) => {
+                panic!("an immutable owned magnitude is not an arithmetic destination")
             }
+            Self::Pooled(words) => words.push(word),
         }
     }
 
@@ -102,7 +118,10 @@ impl Mag {
             Self::Shared(words) => Arc::get_mut(words)
                 .expect("a shared canonical magnitude is never an arithmetic destination")
                 .pop(),
-            Self::Pooled(words) => words.words_mut().pop(),
+            Self::Pooled(words) => words.pop(),
+            Self::Owned(_) => {
+                panic!("an immutable owned magnitude is not an arithmetic destination")
+            }
         };
         if !matches!(self, Self::Inline { .. }) && self.len() <= 3 {
             *self = Self::from_slice(self);
@@ -129,6 +148,13 @@ impl Mag {
                     + 2 * size_of::<usize>()
             }
             Self::Pooled(words) => words.allocated_bytes(),
+            Self::Owned(words) => {
+                words.capacity().saturating_mul(size_of::<u64>())
+                    + purrdf_lex::allocation::SharedOwned::<Vec<u64>>::allocation_layout::<
+                        purrdf_lex::allocation::SharedOwned<()>,
+                    >()
+                    .size()
+            }
         }
     }
 }
@@ -140,6 +166,7 @@ impl Deref for Mag {
             Self::Inline { words, length } => &words[..usize::from(length.get() - 1)],
             Self::Heap(words) => words,
             Self::Shared(words) => words,
+            Self::Owned(words) => words,
             Self::Pooled(words) => words.words(),
         }
     }
@@ -153,6 +180,9 @@ impl DerefMut for Mag {
             Self::Shared(words) => Arc::get_mut(words)
                 .expect("a shared canonical magnitude is never an arithmetic destination"),
             Self::Pooled(words) => words.words_mut(),
+            Self::Owned(_) => {
+                panic!("an immutable owned magnitude is not an arithmetic destination")
+            }
         }
     }
 }

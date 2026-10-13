@@ -1545,3 +1545,103 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
     }
     unsafe { purrdf_dataset_free(data) };
 }
+
+/// The first column of a query's answer under `regex`, through the C ABI.
+fn query_column(data: *mut PurrdfDataset, query: &str, regex: Option<&str>) -> Vec<String> {
+    let query = CString::new(query).expect("query");
+    let (_owned, regex) = profile_arg(regex);
+    let mut buffer = std::ptr::null_mut();
+    let mut error = std::ptr::null_mut();
+    let status = unsafe {
+        purrdf_query_json_xpath_regex(
+            data,
+            query.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            regex,
+            &raw mut buffer,
+            &raw mut error,
+        )
+    };
+    assert!(status == PurrdfStatus::Ok as i32, "{:?}", unsafe {
+        take_failure(status, error)
+    });
+    json_first_column(&unsafe { take_buffer(buffer) })
+}
+
+#[test]
+fn large_counts_of_one_class_or_one_group_answer_at_the_production_defaults() {
+    use std::fmt::Write as _;
+    // Each matching shape was refused at these sizes: a large maximum or an
+    // exact count kept a distinct state at every position.
+    let mut prose = purrdf_testkit::text::word_prose(4 << 20);
+    prose.truncate(4 << 20);
+    let ab = purrdf_testkit::text::binary_text(4 << 20, 7);
+    let half = &prose[..2 << 20];
+    let mut nt = String::new();
+    for (subject, value) in [
+        ("prose", prose.clone()),
+        ("prose_lt", format!("{prose}<")),
+        ("prose_bang", format!("{prose}!")),
+        ("ab", ab.clone()),
+        ("ab_longer", format!("{ab}a")),
+        (
+            "ab_broken",
+            format!("{}c{}", &ab[..3_999_999], &ab[..194_305]),
+        ),
+        ("half", half.to_owned()),
+    ] {
+        writeln!(
+            nt,
+            "<http://example.org/{subject}> <http://example.org/p> \"{value}\" ."
+        )
+        .unwrap();
+    }
+    let data = dataset(&nt);
+    let cases = [
+        (r"^[\s\S]{0,10000000}$", "prose", true),
+        (r"^[^\n]{0,10000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose_lt", false),
+        (r"^[\p{L} ]{1,5000000}$", "prose", true),
+        (r"^(\w+\s?){1,5000000}$", "prose", true),
+        (r"^(\w+\s?){1,5000000}$", "prose_bang", false),
+        ("^(a|b){4194304}$", "ab", true),
+        ("^(a|b){4194304}$", "ab_longer", false),
+        ("(a|b){4000000}", "ab", true),
+        ("(a|b){4000000}", "ab_broken", false),
+    ];
+    let mut rows = String::new();
+    for (index, (pattern, subject, _)) in cases.iter().enumerate() {
+        write!(
+            rows,
+            " ({index} <http://example.org/{subject}> {})",
+            purrdf_testkit::text::sparql_string(pattern)
+        )
+        .unwrap();
+    }
+    let query = format!(
+        "SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{{rows} }} \
+         ?s <http://example.org/p> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i"
+    );
+    let expected: Vec<String> = cases
+        .iter()
+        .map(|&(_, _, matched)| matched.to_string())
+        .collect();
+    let replace = format!(
+        "SELECT ?r WHERE {{ <http://example.org/half> <http://example.org/p> ?v \
+         BIND(REPLACE(?v, {}, \"[$1]\") AS ?r) }}",
+        purrdf_testkit::text::sparql_string(r"^(\w+\s?){1,5000000}$")
+    );
+    let last = &half[half.trim_end_matches(' ').rfind(' ').unwrap() + 1..];
+    for law in [XPATH_20, XPATH_31] {
+        assert_eq!(query_column(data, &query, Some(law)), expected, "{law}");
+        assert_eq!(
+            query_column(data, &replace, Some(law)),
+            [format!("[{last}]")],
+            "{law}"
+        );
+    }
+    unsafe { purrdf_dataset_free(data) };
+}

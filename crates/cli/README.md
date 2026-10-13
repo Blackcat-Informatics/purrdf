@@ -20,11 +20,12 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as sixteen
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seventeen
 subcommands:
 
 | Subcommand | Pipeline |
 |---|---|
+| [`geo`](#geo) | execute a geographic scalar, batch, conversion, cover or point-index request |
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | `update` | atomically apply a SPARQL UPDATE to an RDF source |
@@ -92,6 +93,35 @@ disk it is opened **read-only and memory-mapped**, verified end-to-end
 materialization for `convert` passthroughs, `query`, or serialization. A pack
 arriving on stdin is read into a buffer and verified the same way. A `pack → pack`
 `convert` is a verified byte passthrough (no decode/re-encode churn).
+
+## `geo`
+
+```text
+purrdf [--geo-profile PROFILE.json] geo [INPUT] [OUTPUT]
+```
+
+Execute a version-one geographic JSON request through the shared geographic
+engine. Both positional paths default to `-` for stdin and stdout. Coordinates
+are exact decimal strings. The default profile supplies standard CRS84
+longitude/latitude coordinates and WGS84 metric execution.
+
+```sh
+printf '%s\n' '{"version":1,"operation":"distance","a":{"longitude":"0","latitude":"0"},"b":{"longitude":"1","latitude":"0"}}' | purrdf geo
+purrdf --geo-profile profile.json geo request.json response.json
+```
+
+The first request returns `111319.490793` in `result.metres`, together with its
+identity and certificate. A profile explicitly supplies other coordinate
+references, axis orders and named conversion chains; `--geo-profile` also applies
+to `query` and `update`. For example, EPSG:4326 latitude/longitude input requires
+an explicit registration. The [geographic profile and request specification](../../docs/GEO-PROFILE.md)
+defines scalar, batch, geometry, hierarchy and reusable point-index records.
+
+Success exits 0. A semantic refusal or invalid request record writes its canonical
+JSON error to the selected output and exits 1. An operational failure, including
+precision, work or memory exhaustion, exits 1 and preserves its original cause on
+stderr without a response document. This keeps incomplete computations from
+appearing as completed geographic results.
 
 ## `convert`
 

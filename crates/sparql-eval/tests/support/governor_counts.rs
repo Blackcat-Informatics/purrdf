@@ -63,7 +63,7 @@ impl Product {
                     "the frozen workload has no expression errors"
                 );
                 assert_eq!(
-                    evidence.silenced,
+                    &*evidence.silenced,
                     [] as [purrdf_core::SilencedInvocation; 0]
                 );
                 Some(evidence.clone())

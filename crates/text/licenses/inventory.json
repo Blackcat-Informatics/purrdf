@@ -24,9 +24,11 @@
       ],
       "paths": [
         "crates/lex/src/unicode_tables.rs",
+        "crates/lex/src/unicode/case_tables.rs",
         "crates/iri/src/idna_tables.rs",
         "crates/rdf-core/src/xsd_regex/blocks.rs",
         "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs",
+        "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs",
         "crates/text/src/unicode_tables.rs",
         "crates/jsonschema/src/ecma/property_tables.rs",
         "crates/jsonschema/src/ecma/unicode_ranges.rs",
@@ -46,7 +48,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "098bcaefef0c33bc8733d3da9f5b48b255415ee5fa5e2718b1188d0ede48b6cb",
+    "NOTICE.txt": "36313ebfd4daa1ff6383cf8153a0f981d2dbd73853cd4aafc721c5d0e2ab5e39",
     "third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
   },

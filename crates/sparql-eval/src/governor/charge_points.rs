@@ -626,7 +626,9 @@ fn a_forked_worker_shares_one_accounting_state() {
     let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(4)));
     let parent = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
 
-    let worker = parent.fork_for_worker();
+    let worker = parent
+        .fork_for_worker()
+        .expect("resident worker owner admission");
     let callee = parent
         .child_for_user_fn()
         .expect("depth 1 is not an error")
@@ -634,7 +636,7 @@ fn a_forked_worker_shares_one_accounting_state() {
     for context in [&parent, &worker, &callee] {
         assert!(
             std::ptr::eq(
-                Arc::as_ptr(context.governor_state().expect("governed")),
+                &raw const **context.governor_state().expect("governed"),
                 Arc::as_ptr(&state)
             ),
             "a per-worker copy would multiply the budget by the thread count"

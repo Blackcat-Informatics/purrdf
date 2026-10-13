@@ -52,18 +52,23 @@ impl BigInt {
     /// Exact number of factors of ten, zero for zero.
     #[must_use]
     pub fn trailing_decimal_zeros(&self) -> u64 {
+        self.trailing_decimal_zeros_using(&super::Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    pub(crate) fn trailing_decimal_zeros_using(
+        &self,
+        storage: &impl super::Allocate,
+    ) -> Result<u64, super::LimbScratchError> {
         let Some(limit) = self.trailing_zeros() else {
-            return 0;
+            return Ok(0);
         };
         if let Ok(limit) = u32::try_from(limit) {
-            let (_, removed) = self
-                .strip_fives_using(limit, &super::Unbounded)
-                .expect("unbounded integer storage");
-            u64::from(removed)
+            self.strip_fives_using(limit, storage)
+                .map(|(_, removed)| u64::from(removed))
         } else {
-            self.strip_fives_wide_using(limit, &super::Unbounded)
-                .expect("unbounded integer storage")
-                .1
+            self.strip_fives_wide_using(limit, storage)
+                .map(|(_, removed)| removed)
         }
     }
 
@@ -107,14 +112,23 @@ impl BigInt {
     /// Exact finite decimal representation of a dyadic value.
     #[must_use]
     pub fn from_binary(numerator: i128, exponent: i32) -> (Self, u32) {
+        Self::from_binary_using(numerator, exponent, &super::Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    pub(crate) fn from_binary_using(
+        numerator: i128,
+        exponent: i32,
+        storage: &impl super::Allocate,
+    ) -> Result<(Self, u32), super::LimbScratchError> {
         let value = Self::from_i128(numerator);
         if exponent >= 0 {
-            (value.mul_pow2(exponent.unsigned_abs()), 0)
+            Ok((value.shl_using(exponent.unsigned_abs(), storage)?, 0))
         } else {
-            (
-                value.mul_pow5(exponent.unsigned_abs()),
+            Ok((
+                value.mul_pow5_using(exponent.unsigned_abs(), storage)?,
                 exponent.unsigned_abs(),
-            )
+            ))
         }
     }
 
@@ -130,10 +144,64 @@ impl BigInt {
         }
         f64::from_bits(crate::exact::binary::round_ratio(
             self.is_negative(),
-            &self.abs(),
+            self,
             &Self::one(),
             &crate::exact::binary::BINARY64,
         ))
+    }
+
+    /// Correctly rounded binary64 with admission before native destinations.
+    /// # Errors
+    /// Returns physical admission/allocation refusal, never a numeric fallback.
+    pub fn try_to_f64_admitted(
+        &self,
+        admit: &mut impl FnMut(
+            crate::exact::cost::NumericOperationLayout,
+        ) -> Result<(), super::LimbScratchError>,
+    ) -> Result<f64, super::LimbScratchError> {
+        if self.bit_len() >= 1025 {
+            return Ok(if self.is_negative() {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            });
+        }
+        crate::exact::binary::round_ratio_admitted_using(
+            self.is_negative(),
+            self,
+            &Self::one(),
+            &crate::exact::binary::BINARY64,
+            &super::scratch::Fallible,
+            admit,
+        )
+        .map(f64::from_bits)
+    }
+
+    /// Correctly rounded binary32 with admission before native destinations.
+    /// # Errors
+    /// Returns physical admission/allocation refusal without double rounding.
+    pub fn try_to_f32_admitted(
+        &self,
+        admit: &mut impl FnMut(
+            crate::exact::cost::NumericOperationLayout,
+        ) -> Result<(), super::LimbScratchError>,
+    ) -> Result<f32, super::LimbScratchError> {
+        if self.bit_len() >= 129 {
+            return Ok(if self.is_negative() {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            });
+        }
+        crate::exact::binary::round_ratio_admitted_using(
+            self.is_negative(),
+            self,
+            &Self::one(),
+            &crate::exact::binary::BINARY32,
+            &super::scratch::Fallible,
+            admit,
+        )
+        .map(|bits| f32::from_bits(u32::try_from(bits).expect("binary32 bits")))
     }
 
     /// Correctly rounded binary32 without a binary64 intermediate.
@@ -146,12 +214,15 @@ impl BigInt {
                 f32::INFINITY
             };
         }
-        f32::from_bits(crate::exact::binary::round_ratio(
-            self.is_negative(),
-            &self.abs(),
-            &Self::one(),
-            &crate::exact::binary::BINARY32,
-        ) as u32)
+        f32::from_bits(
+            u32::try_from(crate::exact::binary::round_ratio(
+                self.is_negative(),
+                self,
+                &Self::one(),
+                &crate::exact::binary::BINARY32,
+            ))
+            .expect("binary32 bits"),
+        )
     }
 
     /// Exact remainder with the dividend's sign.
@@ -163,16 +234,31 @@ impl BigInt {
     /// Exact quotient and remainder of a decimal shift.
     #[must_use]
     pub fn div_rem_pow10(&self, exponent: u64) -> (Self, Self) {
+        self.div_rem_pow10_using(exponent, &super::Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    pub(crate) fn div_rem_pow10_using(
+        &self,
+        exponent: u64,
+        storage: &impl super::Allocate,
+    ) -> Result<(Self, Self), super::LimbScratchError> {
         if exponent == 0 {
-            return (self.clone(), Self::zero());
+            return Ok((self.copy_using(storage)?, Self::zero()));
         }
-        if exponent >= self.decimal_digits() {
-            return (Self::zero(), self.clone());
+        // Certified digit upper bound avoids an unpriced decimal_digits render.
+        // The close-boundary case performs the same exact division, at most one
+        // extra power digit; huge padding returns zero before forming its power.
+        if exponent >= crate::exact::cost::digits_for_bits(self.bit_len()) {
+            return Ok((Self::zero(), self.copy_using(storage)?));
         }
-        self.div_rem(&Self::pow10(
-            u32::try_from(exponent).expect("decimal exponent fits u32"),
-        ))
-        .expect("power of ten is nonzero")
+        let power = Self::pow10_using(
+            u32::try_from(exponent).map_err(|_| super::LimbScratchError::SizeOverflow)?,
+            storage,
+        )?;
+        Ok(self
+            .div_rem_using(&power, storage)?
+            .expect("power of ten is nonzero"))
     }
 
     /// Square-and-multiply exact power, including zero to power zero.
@@ -215,10 +301,19 @@ impl BigInt {
     /// Schoolbook small products and recursive Karatsuba large products.
     #[must_use]
     pub fn mul_fast(&self, other: &Self) -> Self {
+        self.mul_fast_using(other, &super::Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same Karatsuba/schoolbook implementation with explicit destinations.
+    pub(crate) fn mul_fast_using(
+        &self,
+        other: &Self,
+        storage: &impl super::Allocate,
+    ) -> Result<Self, super::LimbScratchError> {
+        use super::LimbScratchError::SizeOverflow;
         if self.limb_len().min(other.limb_len()) < KARATSUBA_THRESHOLD {
-            return self
-                .mul_using(other, &super::Unbounded)
-                .expect("unbounded integer storage");
+            return self.mul_using(other, storage);
         }
         let split = self.limb_len().max(other.limb_len()) / 2;
         let (long, short) = if self.limb_len() >= other.limb_len() {
@@ -227,10 +322,19 @@ impl BigInt {
             (other, self)
         };
         if short.limb_len() <= split {
-            let mut output = Mag::zeroed(long.limb_len() + short.limb_len() + 1);
+            let length = long
+                .limb_len()
+                .checked_add(short.limb_len())
+                .and_then(|n| n.checked_add(1))
+                .ok_or(SizeOverflow)?;
+            let mut output = storage.destination(length, length)?;
             for (piece_index, words) in long.magnitude.chunks(short.limb_len()).enumerate() {
-                let piece = Self::from_parts(false, Mag::from_slice(words)).mul_fast(&short.abs());
-                let offset = piece_index * short.limb_len();
+                let left = Self::from_parts(false, storage.copy(words)?);
+                let right = short.abs_using(storage)?;
+                let piece = left.mul_fast_using(&right, storage)?;
+                let offset = piece_index
+                    .checked_mul(short.limb_len())
+                    .ok_or(SizeOverflow)?;
                 let mut carry = 0_u128;
                 let mut at = offset;
                 for &word in piece.magnitude.iter() {
@@ -247,44 +351,48 @@ impl BigInt {
                 }
             }
             super::mag_trim(&mut output);
-            return Self::from_parts(self.is_negative() != other.is_negative(), output);
+            return Ok(Self::from_parts(
+                self.is_negative() != other.is_negative(),
+                output,
+            ));
         }
-        let parts = |value: &Self| {
+        let parts = |value: &Self| -> Result<(Self, Self), super::LimbScratchError> {
             let middle = split.min(value.limb_len());
-            (
-                Self::from_parts(false, Mag::from_slice(&value.magnitude[..middle])),
-                Self::from_parts(false, Mag::from_slice(&value.magnitude[middle..])),
-            )
+            Ok((
+                Self::from_parts(false, storage.copy(&value.magnitude[..middle])?),
+                Self::from_parts(false, storage.copy(&value.magnitude[middle..])?),
+            ))
         };
-        let (a0, a1) = parts(self);
-        let (b0, b1) = parts(other);
-        let z0 = a0.mul_fast(&b0);
-        let z2 = a1.mul_fast(&b1);
-        let z1 = a0.add(&a1).mul_fast(&b0.add(&b1)).sub(&z0).sub(&z2);
+        let (a0, a1) = parts(self)?;
+        let (b0, b1) = parts(other)?;
+        let z0 = a0.mul_fast_using(&b0, storage)?;
+        let z2 = a1.mul_fast_using(&b1, storage)?;
+        let left_sum = a0.add_using(&a1, storage)?;
+        let right_sum = b0.add_using(&b1, storage)?;
+        let middle_product = left_sum.mul_fast_using(&right_sum, storage)?;
+        let first_difference = middle_product.sub_using(&z0, storage)?;
+        drop(middle_product);
+        let z1 = first_difference.sub_using(&z2, storage)?;
+        drop(first_difference);
+        drop(left_sum);
+        drop(right_sum);
         let shift = u64::try_from(split)
-            .expect("limb count fits u64")
+            .map_err(|_| SizeOverflow)?
             .checked_mul(64)
-            .expect("product shift fits u64");
-        let shifted_middle = Self::from_parts(
-            false,
-            super::mag_shl(&z1.magnitude, shift, &super::Unbounded)
-                .expect("unbounded integer storage"),
-        );
+            .ok_or(SizeOverflow)?;
+        let shifted_middle =
+            Self::from_parts(false, super::mag_shl(&z1.magnitude, shift, storage)?);
         let shifted_high = Self::from_parts(
             false,
             super::mag_shl(
                 &z2.magnitude,
-                shift.checked_mul(2).expect("product shift fits u64"),
-                &super::Unbounded,
-            )
-            .expect("unbounded integer storage"),
+                shift.checked_mul(2).ok_or(SizeOverflow)?,
+                storage,
+            )?,
         );
-        let magnitude = z0.add(&shifted_middle).add(&shifted_high);
-        if self.is_negative() != other.is_negative() {
-            magnitude.negated()
-        } else {
-            magnitude
-        }
+        let lower = z0.add_using(&shifted_middle, storage)?;
+        let magnitude = lower.add_using(&shifted_high, storage)?;
+        Ok(magnitude.with_sign(self.is_negative() != other.is_negative()))
     }
 }
 

@@ -91,18 +91,27 @@
 //! charge.
 //!
 
+mod certified_cost;
 pub mod cost;
+pub use certified_cost::{ExactArithmeticCost, ExactOperation};
 
 pub(crate) mod binary;
-mod decimal;
+pub(crate) mod decimal;
 mod error;
 mod integer;
 mod rational;
 mod rounding;
 
 pub use cost::Cost;
-pub use decimal::Decimal;
-pub use error::{BoundedTarget, ExactError, ExactKind};
+pub use decimal::{
+    Decimal, DecimalTextError, PreparedDecimalText, append_scaled_integer_with_memory,
+};
+pub use error::{BoundedTarget, ExactError, ExactKind, ExactOperationError, ExactParseError};
 pub use integer::Integer;
 pub use rational::Rational;
+pub use rational::certified::{
+    DecimalConstructionError, RationalComparisonBody, RationalComparisonError,
+    RationalNativeComparisonBody,
+};
+pub use rational::geometry::Rat as GeometricRational;
 pub use rounding::{DivisionPolicy, DivisionPolicyError, Rounding};

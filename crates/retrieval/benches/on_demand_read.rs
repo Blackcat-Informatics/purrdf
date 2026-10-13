@@ -240,7 +240,10 @@ fn registry(shape: Shape, rows: u64) -> PropertyFunctionRegistry {
                         predicate: Some(ex(predicate)),
                     },
                     placements: vec![TermPlacement {
-                        facet: RequestFacet::Value,
+                        // Carry the original lexical field as well as its text,
+                        // through the producer's one value argument. This is the
+                        // same declaration as the deterministic read-bound control.
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 1,
                         datatype: None,
                     }],

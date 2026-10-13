@@ -394,8 +394,11 @@ fn fielded_arithmetic(criterion: &mut Bench) {
             .expect("sparse corpus");
     let sparse_query = sparse.prepare_query(&terms).expect("query");
     assert_eq!(
-        query.score(&document).expect("dense score"),
-        sparse_query.score(&document).expect("same field means")
+        query.score(&document).expect("dense score").value,
+        sparse_query
+            .score(&document)
+            .expect("same field means")
+            .value
     );
     group.bench_function("prepare_eight_idfs_sparse_fields", |bencher| {
         bencher.iter(|| sparse.prepare_query(black_box(&terms)).expect("prepare"));

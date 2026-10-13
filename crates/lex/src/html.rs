@@ -181,7 +181,9 @@ pub fn resolve(input: &str, mode: Mode) -> Resolution<'_> {
     let mut copied = 0;
     while let Some(relative) = crate::scan::find_byte(&input.as_bytes()[cursor..], b'&') {
         let start = cursor + relative;
-        let (end, replacement) = reference(input, start, mode, &mut result.diagnostics);
+        let (end, replacement) = reference(input, start, mode, &mut |diagnostic| {
+            result.diagnostics.push(diagnostic);
+        });
         if let Some((first, second)) = replacement {
             if matches!(result.decoded.text, Cow::Borrowed(_)) {
                 result.decoded.text = Cow::Owned(String::with_capacity(input.len()));
@@ -217,6 +219,167 @@ pub fn resolve_strict(input: &str, mode: Mode) -> Result<Decoded<'_>, Vec<Diagno
     }
 }
 
+/// Exact counts produced by the existing reference reader, without allocation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResolutionLayout {
+    /// Exact UTF-8 length of the decoded text.
+    pub text_bytes: usize,
+    /// Number of decoded scalar source ranges.
+    pub sources: usize,
+    /// Number of reference-resolution diagnostics.
+    pub diagnostics: usize,
+    /// Whether reference resolution replaces any source text.
+    pub replaced: bool,
+}
+
+/// A caller destination was too small or a checked count overflowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolveIntoError {
+    /// A caller-supplied destination has insufficient capacity.
+    Capacity,
+    /// The exact destination layout exceeds addressable allocation size.
+    LayoutOverflow,
+}
+
+fn visit_resolution(
+    input: &str,
+    mode: Mode,
+    mut scalar: impl FnMut(char, Range<usize>),
+    mut diagnostic: impl FnMut(Diagnostic),
+) -> bool {
+    if mode == Mode::Plain {
+        for (at, c) in input.char_indices() {
+            scalar(c, at..at + c.len_utf8());
+        }
+        return false;
+    }
+    let mut cursor = 0;
+    let mut copied = 0;
+    let mut replaced = false;
+    while let Some(relative) = crate::scan::find_byte(&input.as_bytes()[cursor..], b'&') {
+        let start = cursor + relative;
+        let (end, replacement) = reference(input, start, mode, &mut diagnostic);
+        if let Some((first, second)) = replacement {
+            for (relative, c) in input[copied..start].char_indices() {
+                let at = copied + relative;
+                scalar(c, at..at + c.len_utf8());
+            }
+            scalar(first, start..end);
+            if second != '\0' {
+                scalar(second, start..end);
+            }
+            copied = end;
+            replaced = true;
+        }
+        cursor = end;
+    }
+    for (relative, c) in input[copied..].char_indices() {
+        let at = copied + relative;
+        scalar(c, at..at + c.len_utf8());
+    }
+    replaced
+}
+
+/// Inspect actual decoded bytes, scalar ranges and diagnostics at the native home.
+pub fn resolution_layout(input: &str, mode: Mode) -> Result<ResolutionLayout, ResolveIntoError> {
+    let mut text_bytes = Some(0usize);
+    let mut sources = Some(0usize);
+    let mut diagnostics = Some(0usize);
+    let replaced = visit_resolution(
+        input,
+        mode,
+        |c, _| {
+            text_bytes = text_bytes.and_then(|n| n.checked_add(c.len_utf8()));
+            sources = sources.and_then(|n| n.checked_add(1));
+        },
+        |_| {
+            diagnostics = diagnostics.and_then(|n| n.checked_add(1));
+        },
+    );
+    Ok(ResolutionLayout {
+        text_bytes: if replaced {
+            text_bytes.ok_or(ResolveIntoError::LayoutOverflow)?
+        } else {
+            0
+        },
+        sources: if replaced {
+            sources.ok_or(ResolveIntoError::LayoutOverflow)?
+        } else {
+            0
+        },
+        diagnostics: diagnostics.ok_or(ResolveIntoError::LayoutOverflow)?,
+        replaced,
+    })
+}
+
+/// Fill caller-preallocated storage through the same reference reader.
+/// The result moves those buffers, so their caller keeps the acquired grants.
+pub fn resolve_preallocated(
+    input: &str,
+    mode: Mode,
+    layout: ResolutionLayout,
+    mut text: String,
+    mut sources: Vec<Range<usize>>,
+    mut diagnostics: Vec<Diagnostic>,
+) -> Result<Resolution<'_>, ResolveIntoError> {
+    if text.capacity() < layout.text_bytes
+        || sources.capacity() < layout.sources
+        || diagnostics.capacity() < layout.diagnostics
+    {
+        return Err(ResolveIntoError::Capacity);
+    }
+    text.clear();
+    sources.clear();
+    diagnostics.clear();
+    let failed = core::cell::Cell::new(false);
+    let replaced = visit_resolution(
+        input,
+        mode,
+        |c, source| {
+            if !layout.replaced {
+                return;
+            }
+            if text
+                .len()
+                .checked_add(c.len_utf8())
+                .is_none_or(|n| n > layout.text_bytes)
+                || sources.len() == layout.sources
+            {
+                failed.set(true);
+                return;
+            }
+            text.push(c);
+            sources.push(source);
+        },
+        |diagnostic| {
+            if diagnostics.len() == layout.diagnostics {
+                failed.set(true);
+                return;
+            }
+            diagnostics.push(diagnostic);
+        },
+    );
+    if failed.get()
+        || replaced != layout.replaced
+        || text.len() != layout.text_bytes
+        || sources.len() != layout.sources
+        || diagnostics.len() != layout.diagnostics
+    {
+        return Err(ResolveIntoError::Capacity);
+    }
+    Ok(Resolution {
+        decoded: Decoded {
+            text: if replaced {
+                Cow::Owned(text)
+            } else {
+                Cow::Borrowed(input)
+            },
+            sources,
+        },
+        diagnostics,
+    })
+}
+
 fn append_original(decoded: &mut Decoded<'_>, input: &str, range: Range<usize>) {
     let original = &input[range.clone()];
     decoded.text.to_mut().push_str(original);
@@ -232,7 +395,7 @@ fn reference(
     input: &str,
     start: usize,
     mode: Mode,
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut impl FnMut(Diagnostic),
 ) -> (usize, Option<(char, char)>) {
     let bytes = input.as_bytes();
     let after = start + 1;
@@ -252,7 +415,7 @@ fn reference(
             {
                 return (end, None);
             }
-            diagnostics.push(Diagnostic {
+            diagnostics(Diagnostic {
                 kind: ErrorKind::MissingSemicolonAfterCharacterReference,
                 source: start..end,
             });
@@ -265,7 +428,7 @@ fn reference(
     }
     if bytes.get(end) == Some(&b';') {
         end += 1;
-        diagnostics.push(Diagnostic {
+        diagnostics(Diagnostic {
             kind: ErrorKind::UnknownNamedCharacterReference,
             source: start..end,
         });
@@ -297,7 +460,7 @@ fn named(bytes: &[u8]) -> Option<(usize, &'static Entry)> {
 fn numeric(
     bytes: &[u8],
     start: usize,
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut impl FnMut(Diagnostic),
 ) -> (usize, Option<(char, char)>) {
     let mut end = start + 2;
     let hexadecimal = matches!(bytes.get(end), Some(b'x' | b'X'));
@@ -318,7 +481,7 @@ fn numeric(
         end += 1;
     }
     if end == first_digit {
-        diagnostics.push(Diagnostic {
+        diagnostics(Diagnostic {
             kind: ErrorKind::AbsenceOfDigitsInNumericCharacterReference,
             source: start..end,
         });
@@ -327,7 +490,7 @@ fn numeric(
     if bytes.get(end) == Some(&b';') {
         end += 1;
     } else {
-        diagnostics.push(Diagnostic {
+        diagnostics(Diagnostic {
             kind: ErrorKind::MissingSemicolonAfterCharacterReference,
             source: start..end,
         });
@@ -342,7 +505,7 @@ fn numeric(
         _ => None,
     };
     if let Some(kind) = kind {
-        diagnostics.push(Diagnostic {
+        diagnostics(Diagnostic {
             kind,
             source: start..end,
         });

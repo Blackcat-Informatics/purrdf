@@ -45,7 +45,7 @@ fn select_with_blank(label: &str) -> SparqlResult {
             label: label.to_string(),
             scope: BlankScope::DEFAULT,
         })]],
-        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
     }
 }
 
@@ -57,7 +57,7 @@ fn graph_with_blank(label: &str) -> SparqlResult {
     let p = b.intern_iri("https://example.org/p");
     let o = b.intern_iri("https://example.org/o");
     b.push_quad(s, p, o, None);
-    SparqlResult::Graph(Arc::clone(&b.freeze().expect("dataset freezes")))
+    SparqlResult::Graph(Arc::clone(&b.freeze().expect("dataset freezes")).into())
 }
 
 fn text_of(bytes: Vec<u8>) -> String {
@@ -210,7 +210,7 @@ fn distinct_blank_nodes_stay_distinct_in_every_writer() {
                 scope: BlankScope::DEFAULT,
             })],
         ],
-        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
     };
 
     let tsv = text_of(to_tsv(&result, &provenance).expect("TSV").bytes);

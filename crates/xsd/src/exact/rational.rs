@@ -5,6 +5,9 @@
 //! reasoned result whose decimal expansion does not terminate.
 
 use std::cmp::Ordering;
+
+pub(super) mod certified;
+pub(super) mod geometry;
 use std::fmt;
 use std::ops::{Add, Mul, Neg, Sub};
 use std::str::FromStr;
@@ -221,10 +224,9 @@ impl Rational {
         if rhs.is_zero() {
             return Err(ExactError::DivisionByZero);
         }
-        Ok(Self::reduced(
-            &self.numerator * &rhs.denominator,
-            &self.denominator * &rhs.numerator,
-        ))
+        self.product_using(rhs, true, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
+            .ok_or(ExactError::DivisionByZero)
     }
 
     /// The integer nearest the value in direction `rounding`.
@@ -325,29 +327,38 @@ impl Rational {
         self.numerator.heap_bytes() + self.denominator.heap_bytes()
     }
 
-    /// The cost of `self + rhs` or `self − rhs`: three products, a sum and the
-    /// reduction.
+    /// The checked cancellation body's complete cost for `self + rhs` or
+    /// `self − rhs`, including denominator/numerator gcds and exact quotients.
+    /// Saturation reports an unrepresentable governor certificate; it does not
+    /// supply a physical storage admission.
     #[must_use]
     pub fn add_cost(&self, rhs: &Self) -> Cost {
-        let (la, lb) = (self.limb_len(), rhs.limb_len());
-        let cross = cost::mul(la, lb);
-        let sum = la.saturating_add(lb).saturating_add(1);
-        cross
-            .saturating_add(cross)
-            .saturating_add(cross)
-            .saturating_add(cost::add(sum, sum))
-            .saturating_add(reduce_cost(sum))
+        self.arithmetic_cost(rhs, super::ExactOperation::RationalAdd)
     }
 
-    /// The cost of `self × rhs` or [`Self::checked_div`]: two products and the
-    /// reduction.
+    /// The complete canonical crosswise-cancellation cost for `self × rhs` or
+    /// [`Self::checked_div`]. The shared descriptor covers both operand roles.
     #[must_use]
     pub fn mul_cost(&self, rhs: &Self) -> Cost {
-        let (la, lb) = (self.limb_len(), rhs.limb_len());
-        let cross = cost::mul(la, lb);
-        cross
-            .saturating_add(cross)
-            .saturating_add(reduce_cost(la.saturating_add(lb)))
+        self.arithmetic_cost(rhs, super::ExactOperation::RationalMultiply)
+            .max(self.arithmetic_cost(rhs, super::ExactOperation::RationalDivide))
+    }
+
+    fn arithmetic_cost(&self, rhs: &Self, operation: super::ExactOperation) -> Cost {
+        super::ExactArithmeticCost::for_rational_operands(
+            operation,
+            [self, rhs].map(|value| {
+                (
+                    value.numerator.binary_bits(),
+                    value.denominator.binary_bits(),
+                )
+            }),
+            1,
+        )
+        .map_or(
+            Cost::new(u64::MAX, u64::MAX),
+            super::ExactArithmeticCost::governor_bound,
+        )
     }
 
     /// The cost of [`Self::to_decimal`] under `policy`.
@@ -363,13 +374,6 @@ impl Rational {
         let longer = self.limb_len().saturating_add(5);
         cost::div(longer, self.denominator.limb_len().saturating_add(5))
     }
-}
-
-/// Reducing a fraction whose components have at most `limbs` limbs.
-const fn reduce_cost(limbs: u64) -> Cost {
-    cost::gcd(limbs, limbs)
-        .saturating_add(cost::div(limbs, limbs))
-        .saturating_add(cost::div(limbs, limbs))
 }
 
 impl Default for Rational {
@@ -428,15 +432,8 @@ impl fmt::Debug for Rational {
 
 impl Ord for Rational {
     fn cmp(&self, other: &Self) -> Ordering {
-        let (sa, sb) = (self.numerator.signum(), other.numerator.signum());
-        if sa != sb {
-            return sa.cmp(&sb);
-        }
-        if self.denominator == other.denominator {
-            return self.numerator.cmp(&other.numerator);
-        }
-        // Both denominators are positive, so cross-multiplying keeps the order.
-        (&self.numerator * &other.denominator).cmp(&(&other.numerator * &self.denominator))
+        self.compare_resident(other, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
@@ -449,30 +446,25 @@ impl PartialOrd for Rational {
 impl Add<&Rational> for &Rational {
     type Output = Rational;
     fn add(self, rhs: &Rational) -> Rational {
-        if self.denominator == rhs.denominator {
-            return Rational::reduced(&self.numerator + &rhs.numerator, self.denominator.clone());
-        }
-        Rational::reduced(
-            &(&self.numerator * &rhs.denominator) + &(&rhs.numerator * &self.denominator),
-            &self.denominator * &rhs.denominator,
-        )
+        self.sum_using(rhs, false, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
 impl Sub<&Rational> for &Rational {
     type Output = Rational;
     fn sub(self, rhs: &Rational) -> Rational {
-        self + &(-rhs)
+        self.sum_using(rhs, true, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
 impl Mul<&Rational> for &Rational {
     type Output = Rational;
     fn mul(self, rhs: &Rational) -> Rational {
-        Rational::reduced(
-            &self.numerator * &rhs.numerator,
-            &self.denominator * &rhs.denominator,
-        )
+        self.product_using(rhs, false, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
+            .expect("multiplication has no zero divisor")
     }
 }
 

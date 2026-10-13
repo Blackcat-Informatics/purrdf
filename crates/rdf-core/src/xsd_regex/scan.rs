@@ -276,10 +276,10 @@ impl<'a> Scanner<'a> {
     /// allocation-free, including deeply nested subtraction and groups.
     pub(super) fn bounded(
         pattern: &'a str,
-        budget: &mut super::xpath::Budget,
+        budget: &mut super::xpath::Budget<'_>,
         x_state: bool,
     ) -> Result<Self, super::xpath::Error> {
-        use super::xpath::{Error, Resource};
+        use super::xpath::Resource;
 
         budget.limits().admit_pattern(pattern)?;
         budget.charge(Resource::CompileSteps, pattern.len() as u64)?;
@@ -293,18 +293,8 @@ impl<'a> Scanner<'a> {
         let mut groups = Groups::default();
         let slots = 2 * (count as u128) + 1 + u128::from(x_state) * (count as u128);
         budget.charge_wide(Resource::CompileSlots, slots)?;
-        chars
-            .try_reserve_exact(count)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::CompileSlots,
-                units: count as u64,
-            })?;
-        offsets
-            .try_reserve_exact(count + 1)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::CompileSlots,
-                units: count as u64 + 1,
-            })?;
+        budget.reserve(&mut chars, count)?;
+        budget.reserve(&mut offsets, count + 1)?;
         for (offset, ch) in pattern.char_indices() {
             offsets.push(offset);
             chars.push(ch);
@@ -317,27 +307,11 @@ impl<'a> Scanner<'a> {
             Resource::CompileSlots,
             class_count as u128 + group_count as u128,
         )?;
-        classes
-            .try_reserve_exact(class_count)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::CompileSlots,
-                units: class_count as u64,
-            })?;
-        groups
-            .open_stack
-            .try_reserve_exact(group_count)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::CompileSlots,
-                units: group_count as u64,
-            })?;
+        budget.reserve(&mut classes, class_count)?;
+        budget.reserve(&mut groups.open_stack, group_count)?;
         let x_inside = if x_state {
             let mut inside = Vec::new();
-            inside
-                .try_reserve_exact(count)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::CompileSlots,
-                    units: count as u64,
-                })?;
+            budget.reserve(&mut inside, count)?;
             Some(inside)
         } else {
             None
@@ -359,19 +333,46 @@ impl<'a> Scanner<'a> {
         })
     }
 
+    /// Destroy every token-cursor buffer before releasing its physical grant.
+    pub(super) fn release(
+        self,
+        budget: &mut super::xpath::Budget<'_>,
+    ) -> Result<(), super::xpath::Error> {
+        fn bytes<T>(values: &Vec<T>) -> Result<usize, super::xpath::Error> {
+            std::alloc::Layout::array::<T>(values.capacity())
+                .map(|layout| layout.size())
+                .map_err(|_| {
+                    super::xpath::Error::Storage(purrdf_lex::allocation::StorageError::SizeOverflow)
+                })
+        }
+        let mut total = bytes(&self.chars)?;
+        for size in [
+            bytes(&self.offsets)?,
+            bytes(&self.classes)?,
+            bytes(&self.groups.open_stack)?,
+            self.x_inside.as_ref().map_or(Ok(0), bytes)?,
+        ] {
+            total = total.checked_add(size).ok_or(super::xpath::Error::Storage(
+                purrdf_lex::allocation::StorageError::SizeOverflow,
+            ))?;
+        }
+        drop(self);
+        budget.release_physical(total)
+    }
+
     /// The non-linear part of lexical work is admitted before a token can
     /// search the still-open capturing groups. All character scans were
     /// admitted before constructing the bounded cursor.
     pub(super) fn next_bounded(
         &mut self,
-        budget: &mut super::xpath::Budget,
+        budget: &mut super::xpath::Budget<'_>,
     ) -> Result<Option<Result<Token<'a>, XsdRegexError>>, super::xpath::Error> {
         use super::xpath::Resource;
         budget.charge(Resource::CompileSteps, 1)?;
         if self.peek(0) == Some('\\') && self.peek(1).is_some_and(|ch| matches!(ch, '1'..='9')) {
             budget.charge(Resource::CompileSteps, self.groups.open_stack.len() as u64)?;
         }
-        Ok(self.scan_next())
+        Ok(self.scan_next_with_budget(Some(budget)))
     }
 
     /// Source byte span, also used to retain original offsets after x removal.
@@ -467,6 +468,13 @@ impl<'a> Scanner<'a> {
     }
 
     fn scan_next(&mut self) -> Option<Result<Token<'a>, XsdRegexError>> {
+        self.scan_next_with_budget(None)
+    }
+
+    fn scan_next_with_budget(
+        &mut self,
+        budget: Option<&mut super::xpath::Budget<'_>>,
+    ) -> Option<Result<Token<'a>, XsdRegexError>> {
         if self.pos >= self.chars.len() {
             self.span = 0..0;
             self.span_chars = 0..0;
@@ -477,7 +485,7 @@ impl<'a> Scanner<'a> {
             return None;
         }
         let start = self.pos;
-        let result = self.scan_one();
+        let result = self.scan_one(budget);
         // Record class content for the frame the token was scanned into. A
         // `]` reads this to tell a legitimate close from the literal-first-
         // member Rust-ism; a `ClassOpen` is not content and pushes its own
@@ -498,7 +506,10 @@ impl<'a> Scanner<'a> {
         Some(result)
     }
 
-    fn scan_one(&mut self) -> Result<Token<'a>, XsdRegexError> {
+    fn scan_one(
+        &mut self,
+        budget: Option<&mut super::xpath::Budget<'_>>,
+    ) -> Result<Token<'a>, XsdRegexError> {
         self.negated_wrap_close = false;
         // A `-[…]` subtraction operand is the LAST element of its charGroup
         // (`charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`),
@@ -518,7 +529,7 @@ impl<'a> Scanner<'a> {
             return Err(XsdRegexError::ContentAfterClassSubtraction { found });
         }
         match self.chars[self.pos] {
-            '\\' => self.scan_escape(),
+            '\\' => self.scan_escape(budget),
             '[' => {
                 // A `[` legitimately appears inside an open class in exactly
                 // one place: as the operand `charClassExpr` of a `-[`
@@ -648,11 +659,12 @@ impl<'a> Scanner<'a> {
                         self.pos += 3;
                         Ok(Token::GroupOpen { capturing: false })
                     } else {
-                        let found: String = match self.peek(2) {
-                            Some(c) => format!("(?{c}"),
-                            None => "(?".to_owned(),
-                        };
-                        self.pos += if self.peek(2).is_some() { 3 } else { 2 };
+                        let end = self.pos + if self.peek(2).is_some() { 3 } else { 2 };
+                        let found = diagnostic_text(
+                            &self.pattern[self.offsets[self.pos]..self.offsets[end]],
+                            budget,
+                        )?;
+                        self.pos = end;
                         Err(XsdRegexError::UnsupportedGroupConstruct { found })
                     }
                 } else {
@@ -673,7 +685,10 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn scan_escape(&mut self) -> Result<Token<'a>, XsdRegexError> {
+    fn scan_escape(
+        &mut self,
+        budget: Option<&mut super::xpath::Budget<'_>>,
+    ) -> Result<Token<'a>, XsdRegexError> {
         let Some(esc) = self.peek(1) else {
             self.pos += 1;
             return Err(XsdRegexError::DanglingBackslash);
@@ -706,7 +721,7 @@ impl<'a> Scanner<'a> {
             // `regex-syntax`, exactly XSD's definition, so no rewrite is
             // needed.
             'd' | 'D' => Ok(Token::Escape(esc)),
-            '1'..='9' => return self.scan_backreference(esc),
+            '1'..='9' => return self.scan_backreference(esc, budget),
             // `\0` is NOT a back-reference: XPath F&O 3.1 §5.6.1.4's production
             // is `backReference ::= "\" [1-9][0-9]*`, which starts at 1. Nor is
             // it a `SingleCharEsc` — XML Schema Part 2 Appendix G enumerates
@@ -774,7 +789,11 @@ impl<'a> Scanner<'a> {
     /// only while the resulting number still names a capturing group whose `(`
     /// precedes this point. NOT a greedy digit run — after one group, `\12` is
     /// `\1` then a literal `2`.
-    fn scan_backreference(&mut self, first: char) -> Result<Token<'a>, XsdRegexError> {
+    fn scan_backreference(
+        &mut self,
+        first: char,
+        budget: Option<&mut super::xpath::Budget<'_>>,
+    ) -> Result<Token<'a>, XsdRegexError> {
         let start_digit = self.pos + 1;
         let mut number = usize::try_from(first.to_digit(10).expect("matched 1..=9"))
             .expect("ASCII digit fits usize");
@@ -798,9 +817,10 @@ impl<'a> Scanner<'a> {
             // unsupported construct, because "this implementation cannot run
             // it" would be a misleading excuse for a pattern nothing can run.
             return Err(XsdRegexError::BadBackreference {
-                reference: std::iter::once('\\')
-                    .chain(self.chars[start_digit..j].iter().copied())
-                    .collect(),
+                reference: diagnostic_text(
+                    &self.pattern[self.offsets[start_digit - 1]..self.offsets[j]],
+                    budget,
+                )?,
                 // The existing closed public diagnostic retains its u32
                 // field. Only that summary is capped; recognition above uses
                 // the complete source-size-bounded capture number.
@@ -808,6 +828,23 @@ impl<'a> Scanner<'a> {
             });
         }
         Ok(Token::Backreference(number))
+    }
+}
+
+/// Every scanner-owned diagnostic spelling is copied through this one boundary.
+fn diagnostic_text(
+    text: &str,
+    budget: Option<&mut super::xpath::Budget<'_>>,
+) -> Result<String, XsdRegexError> {
+    match budget {
+        Some(budget) => budget.string(text).map_err(|error| match error {
+            super::xpath::Error::Storage(error) => XsdRegexError::Storage(error),
+            super::xpath::Error::Allocation { .. } => {
+                XsdRegexError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+            }
+            _ => unreachable!("copying a diagnostic spelling has only physical failures"),
+        }),
+        None => Ok(text.to_owned()),
     }
 }
 

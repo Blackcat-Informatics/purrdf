@@ -95,7 +95,7 @@ pub unsafe extern "C" fn purrdf_graph_from_dataset(
             let Some(mode) = self::graph_existence(graph_existence) else {
                 return PurrdfStatus::InvalidArgument as i32;
             };
-            let base = PurrdfDataset::arc(dataset).clone();
+            let base = PurrdfDataset::handle(dataset).clone();
             *out_graph = into_handle(PurrdfGraph(MutableDataset::new_with_graph_existence(
                 base, mode,
             )));

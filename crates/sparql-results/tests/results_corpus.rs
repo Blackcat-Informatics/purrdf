@@ -108,7 +108,7 @@ fn books() -> SparqlResult {
                 Some(integer("5")),
             ],
         ],
-        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
     }
 }
 
@@ -307,7 +307,7 @@ fn starred_graph() -> SparqlResult {
     builder.push_annotation(ann_reifier_id, ann_pred_id, ann_obj_id);
 
     let dataset = builder.freeze().expect("starred dataset freezes");
-    SparqlResult::Graph(dataset)
+    SparqlResult::Graph(dataset.into())
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn edge_cases() -> SparqlResult {
                 Some(dir_lang("hello", "en", RdfTextDirection::Ltr)),
             ],
         ],
-        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
     }
 }
 

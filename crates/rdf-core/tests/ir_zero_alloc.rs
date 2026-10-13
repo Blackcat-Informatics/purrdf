@@ -29,6 +29,88 @@ use purrdf_core::{BlankScope, QuadIds, QuadRef, RdfDatasetBuilder, RdfLiteral};
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+#[test]
+fn destructive_term_drop_allocates_no_traversal_storage() {
+    use purrdf_core::{TermBox, TermValue};
+    let leaf = || TermValue::iri("http://example.org/leaf");
+    let mut chain = leaf();
+    for depth in 0..5000 {
+        let [s, p, o] = match depth % 3 {
+            0 => [chain, leaf(), leaf()],
+            1 => [leaf(), chain, leaf()],
+            _ => [leaf(), leaf(), chain],
+        };
+        chain = TermValue::Triple {
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
+        };
+    }
+    let mut branching = leaf();
+    for _ in 0..7 {
+        branching = TermValue::Triple {
+            s: TermBox::new(branching.clone()),
+            p: TermBox::new(branching.clone()),
+            o: TermBox::new(branching),
+        };
+    }
+    let leaf_bytes = "http://example.org/leaf".len();
+    let branch_leaves = 3usize.pow(7);
+    let branch_boxes = 3 * (branch_leaves - 1) / 2;
+    let expected =
+        (5000 * 3 + branch_boxes) * size_of::<TermValue>() + (10001 + branch_leaves) * leaf_bytes;
+    assert_eq!(size_of::<TermBox>(), 2 * size_of::<Box<TermValue>>());
+    let window = CurrentThreadWindow::open();
+    drop(chain);
+    drop(branching);
+    let measured = window.close();
+    assert_eq!(
+        measured.allocations, 0,
+        "destructive drop must remain possible after allocator refusal"
+    );
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(
+        measured.retained_bytes,
+        -i64::try_from(expected).expect("small fixture layout"),
+        "every original box and lexical allocation is freed exactly once"
+    );
+}
+
+#[test]
+fn destructive_drop_resumes_uneven_leaf_tails_without_allocation() {
+    use purrdf_core::{TermBox, TermValue};
+    let mut nodes = Vec::new();
+    let mut expected = 0usize;
+    for position in 0..3 {
+        let mut term = TermValue::iri("tail");
+        expected += 4;
+        for _ in 0..(position + 1) * 97 {
+            let [s, p, o] = match position {
+                0 => [term, TermValue::iri("p"), TermValue::iri("o")],
+                1 => [TermValue::iri("s"), term, TermValue::iri("o")],
+                _ => [TermValue::iri("s"), TermValue::iri("p"), term],
+            };
+            term = TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            };
+            expected += 3 * size_of::<TermValue>() + 2;
+        }
+        nodes.push(term);
+    }
+    expected += nodes.capacity() * size_of::<TermValue>();
+    let window = CurrentThreadWindow::open();
+    drop(nodes);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(
+        measured.retained_bytes,
+        -i64::try_from(expected).expect("small fixture layout")
+    );
+}
+
 /// Build a non-trivial frozen dataset: many quads across the default graph and named
 /// graphs, with IRIs, blanks, literals (typed + language-tagged + directional), and a
 /// nested triple term — so the iteration genuinely resolves every term variant.

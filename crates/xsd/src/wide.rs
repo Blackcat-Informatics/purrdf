@@ -45,6 +45,10 @@ pub const fn wide_mul(a: u128, b: u128) -> (u128, u128) {
 /// rather than left to overflow.
 #[must_use]
 pub const fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
+    div_wide_rem(high, low, divisor).0
+}
+
+const fn div_wide_rem(high: u128, low: u128, divisor: u128) -> (u128, u128) {
     debug_assert!(high < divisor, "the quotient must fit a u128");
     let mut remainder = high;
     let mut quotient: u128 = 0;
@@ -62,7 +66,7 @@ pub const fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
             quotient |= 1;
         }
     }
-    quotient
+    (quotient, remainder)
 }
 
 /// `a × b / c`, truncated, over the full `u128` range — `None` if `c` is zero or
@@ -77,11 +81,18 @@ pub const fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
 /// operations were written in.
 #[must_use]
 pub const fn mul_div(a: u128, b: u128, c: u128) -> Option<u128> {
+    match mul_div_rem(a, b, c) {
+        Some((quotient, _)) => Some(quotient),
+        None => None,
+    }
+}
+
+const fn mul_div_rem(a: u128, b: u128, c: u128) -> Option<(u128, u128)> {
     if c == 0 {
         return None;
     }
     if let Some(product) = a.checked_mul(b) {
-        return Some(product / c);
+        return Some((product / c, product % c));
     }
     let (high, low) = wide_mul(a, b);
     // The quotient is at least `high · 2^128 / c`, so it exceeds a `u128` unless
@@ -89,7 +100,24 @@ pub const fn mul_div(a: u128, b: u128, c: u128) -> Option<u128> {
     if high >= c {
         return None;
     }
-    Some(div_wide(high, low, c))
+    Some(div_wide_rem(high, low, c))
+}
+
+/// `a × b / c` over the full 256-bit product, rounded to nearest with an
+/// exact halfway quotient rounded to even. Returns `None` for a zero divisor
+/// or an unrepresentable rounded quotient.
+#[must_use]
+pub const fn mul_div_round_even(a: u128, b: u128, c: u128) -> Option<u128> {
+    let Some((quotient, remainder)) = mul_div_rem(a, b, c) else {
+        return None;
+    };
+    // Comparing the two distances avoids doubling a full-width remainder.
+    let complement = c - remainder;
+    if remainder > complement || (remainder == complement && quotient & 1 != 0) {
+        quotient.checked_add(1)
+    } else {
+        Some(quotient)
+    }
 }
 
 /// The greatest common divisor of two `u128`s by Euclid's algorithm;
@@ -106,7 +134,90 @@ pub const fn gcd(mut a: u128, mut b: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{div_wide, gcd, mul_div, wide_mul};
+    use super::{div_wide, div_wide_rem, gcd, mul_div, mul_div_round_even, wide_mul};
+
+    #[test]
+    fn dyadic_divisors_preserve_the_full_quotient_remainder_and_even_ties() {
+        use crate::BigInt;
+        let mut state = 0x2971_4646_57d4_83ab;
+        for shift in 0..128 {
+            let divisor = 1_u128 << shift;
+            state = purrdf_hash::mix::splitmix64_step(state);
+            let high = u128::from(state) & (divisor - 1);
+            state = purrdf_hash::mix::splitmix64_step(state);
+            let low = (u128::from(state) << 64) | u128::from(!state);
+            let (quotient, remainder) = div_wide_rem(high, low, divisor);
+            let dividend = BigInt::from_u128(high)
+                .mul_pow2(128)
+                .plus(&BigInt::from_u128(low));
+            let divisor = BigInt::from_u128(divisor);
+            let expected = dividend.div_rem(&divisor).unwrap();
+            assert_eq!(
+                (BigInt::from_u128(quotient), BigInt::from_u128(remainder)),
+                expected
+            );
+            if shift > 0 {
+                assert_eq!(
+                    mul_div_round_even(3, 1_u128 << (shift - 1), 1_u128 << shift),
+                    Some(2)
+                );
+                assert_eq!(
+                    mul_div_round_even(5, 1_u128 << (shift - 1), 1_u128 << shift),
+                    Some(2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_width_rounding_lies_in_the_exact_nearest_even_cell() {
+        use crate::BigInt;
+        use purrdf_hash::mix::splitmix64_next;
+        let mut state = 0x40de_61c3_826b_9a7f;
+        let mut draw = || {
+            (u128::from(splitmix64_next(&mut state)) << 64)
+                | u128::from(splitmix64_next(&mut state))
+        };
+        for _ in 0..4096 {
+            let (a, b, c) = (draw(), draw(), draw());
+            let doubled = BigInt::from_u128(a).mul(&BigInt::from_u128(b)).mul_small(2);
+            let divisor = BigInt::from_u128(c);
+            match mul_div_round_even(a, b, c) {
+                Some(value) => {
+                    let mut lower = BigInt::from_u128(value).mul_small(2);
+                    lower.add_i128(-1);
+                    let lower = lower.mul(&divisor);
+                    let mut upper = BigInt::from_u128(value).mul_small(2);
+                    upper.add_i128(1);
+                    let upper = upper.mul(&divisor);
+                    assert!(doubled >= lower && doubled <= upper);
+                    if doubled == lower || doubled == upper {
+                        assert_eq!(value & 1, 0, "ties belong to the even neighbor");
+                    }
+                }
+                None => {
+                    let mut beyond = BigInt::from_u128(u128::MAX).mul_small(2);
+                    beyond.add_i128(1);
+                    assert!(c == 0 || doubled >= beyond.mul(&divisor));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_wide_quotient_preserves_halfway_and_overflow_laws() {
+        assert_eq!(mul_div_round_even(5, 1, 2), Some(2));
+        assert_eq!(mul_div_round_even(7, 1, 2), Some(4));
+        assert_eq!(mul_div_round_even(1, 1, 3), Some(0));
+        assert_eq!(mul_div_round_even(2, 1, 3), Some(1));
+        assert_eq!(
+            mul_div_round_even(u128::MAX, u128::MAX, u128::MAX),
+            Some(u128::MAX)
+        );
+        assert_eq!(mul_div_round_even(u128::MAX, 2, 2), Some(u128::MAX));
+        assert_eq!(mul_div_round_even(u128::MAX, 2, 1), None);
+        assert_eq!(mul_div_round_even(1, 1, 0), None);
+    }
 
     /// `mul_div` must agree with the direct computation wherever the direct one
     /// fits, and keep answering where it does not.

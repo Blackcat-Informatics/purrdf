@@ -370,7 +370,7 @@ def bundle(
         notice.extend(f"Evidence: {value}" for value in item.get("provenance", []))
         notice.extend(f"Notice: {value}" for value in item["notices"])
         notice.append("")
-    files["NOTICE.txt"] = ("\n".join(notice) + "\n").encode()
+    files["NOTICE.txt"] = ("\n".join(notice).rstrip() + "\n").encode()
     data = {
         "schema": 1,
         "profile": profile,

@@ -173,5 +173,8 @@ pub use curie::{
     split_local_name,
 };
 pub use error::{IriError, Result};
-pub use parse::{Iri, is_absolute, parse, parse_uri};
+pub use parse::{
+    Iri, IriReadError, absolute_verdict, is_absolute, is_absolute_with_memory, parse, parse_uri,
+    parse_with_memory,
+};
 pub use pos::{LineIndex, Position, PositionError};

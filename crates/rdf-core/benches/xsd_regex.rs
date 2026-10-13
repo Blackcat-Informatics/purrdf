@@ -408,18 +408,14 @@ fn bench_native_xpath_large(c: &mut Bench) {
             bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
         });
     }
-    let random_ab = |bytes: usize, seed: u64| -> String {
-        purrdf_testkit::rng::splitmix64_bytes(bytes, seed)
-            .iter()
-            .map(|byte| if byte & 1 == 0 { 'a' } else { 'b' })
-            .collect()
-    };
+    use purrdf_testkit::text::binary_text as random_ab;
     let pairs_128k = "ab".repeat(64 * 1024);
     let quads = "abcd".repeat(256 * 1024);
     let ab_400k = random_ab(400 * 1024, 0x0047_2600_BE4C_0003);
     let ab_800k = random_ab(800 * 1024, 0x0047_2600_BE4C_0004);
     let ab_4m = random_ab(4 << 20, 0x0047_2600_BE4C_0005);
-    let prose_4m = purrdf_testkit::text::word_prose(4 << 20);
+    let mut prose_4m = purrdf_testkit::text::word_prose(4 << 20);
+    prose_4m.truncate(4 << 20);
     let prose_8m = purrdf_testkit::text::word_prose(8 << 20);
     for (label, source, input) in [
         ("counted/pair_1_1000", "(ab){1,1000}c", pairs_128k.as_str()),
@@ -453,6 +449,166 @@ fn bench_native_xpath_large(c: &mut Bench) {
         group.bench_function(format!("{label}/is_match"), |bencher| {
             bencher.iter(|| black_box(program.is_match(black_box(input), limits).unwrap()));
         });
+    }
+    // Counted repetitions of one class or one group with a maximum no count
+    // on the input reaches, or an exact count the input meets: the set
+    // machine keeps their counts as it keeps an unbounded repetition's, and
+    // the backtracking machine scans a run of one character per iteration
+    // once, so the cost per byte does not depend on the count.
+    let last_word = prose_4m.trim_end_matches(' ').rfind(' ').unwrap() + 1;
+    let broken = format!("{}c{}", &ab_4m[..3_999_999], &ab_4m[..194_305]);
+    for (label, source, input, span) in [
+        (
+            "large_count/any_class",
+            r"^[\s\S]{0,10000000}$",
+            prose_4m.as_str(),
+            Some(0..prose_4m.len()),
+        ),
+        (
+            "large_count/no_newline",
+            r"^[^\n]{0,10000000}$",
+            prose_4m.as_str(),
+            Some(0..prose_4m.len()),
+        ),
+        (
+            "large_count/negated_class",
+            r"^[^<>]{1,5000000}$",
+            prose_4m.as_str(),
+            Some(0..prose_4m.len()),
+        ),
+        (
+            "large_count/property_class",
+            r"^[\p{L} ]{1,5000000}$",
+            prose_4m.as_str(),
+            Some(0..prose_4m.len()),
+        ),
+        (
+            "large_count/word_group",
+            r"^(\w+\s?){1,5000000}$",
+            prose_4m.as_str(),
+            Some(0..prose_4m.len()),
+        ),
+        (
+            "large_count/choice_exact",
+            "^(a|b){4194304}$",
+            ab_4m.as_str(),
+            Some(0..ab_4m.len()),
+        ),
+        (
+            "large_count/choice_search",
+            "(a|b){4000000}",
+            ab_4m.as_str(),
+            Some(0..4_000_000),
+        ),
+        (
+            "large_count/choice_broken",
+            "(a|b){4000000}",
+            broken.as_str(),
+            None,
+        ),
+    ] {
+        let program = compiled(source);
+        let found = program.find(input, limits).unwrap();
+        assert_eq!(
+            found.as_ref().and_then(|captures| captures.get(0)),
+            span,
+            "{label}"
+        );
+        if label == "large_count/word_group" {
+            assert_eq!(
+                found.and_then(|captures| captures.get(1)),
+                Some(last_word..prose_4m.len()),
+                "{label}"
+            );
+        }
+        assert_eq!(
+            program.is_match(input, limits).unwrap(),
+            span.is_some(),
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+        group.bench_function(format!("{label}/is_match"), |bencher| {
+            bencher.iter(|| black_box(program.is_match(black_box(input), limits).unwrap()));
+        });
+    }
+    let prose_2m = &prose_4m[..2 << 20];
+    let word_group = compiled(r"^(\w+\s?){1,5000000}$");
+    let replaced = word_group.replace_all(prose_2m, "[$1]", limits).unwrap();
+    assert_eq!(
+        replaced,
+        format!(
+            "[{}]",
+            &prose_2m[prose_2m.trim_end_matches(' ').rfind(' ').unwrap() + 1..]
+        )
+    );
+    group.throughput(Throughput::Bytes(prose_2m.len() as u64));
+    group.bench_function("large_count/word_group_replace", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                word_group
+                    .replace_all(black_box(prose_2m), "[$1]", limits)
+                    .unwrap(),
+            )
+        });
+    });
+    // Input and count ladders: the finite maxima remain nonbinding while the
+    // exact alternatives' count grows with the actual input. Each lane checks
+    // its complete answer before the harness measures it.
+    for bytes in [1 << 20, 2 << 20, 4 << 20] {
+        let words = &prose_4m[..bytes];
+        let binary = &ab_4m[..bytes];
+        for (label, source) in [
+            ("any_class", r"^[\s\S]{0,M}$"),
+            ("no_newline", r"^[^\n]{0,M}$"),
+            ("negated_class", r"^[^<>]{1,M}$"),
+            ("property_class", r"^[\p{L} ]{1,M}$"),
+            ("word_group", r"^(\w+\s?){1,M}$"),
+        ] {
+            for maximum in [10_000_000, 100_000_000] {
+                let source = source.replace('M', &maximum.to_string());
+                let program = compiled(&source);
+                let found = program.find(words, limits).unwrap().unwrap();
+                assert_eq!(found.get(0), Some(0..bytes));
+                if label == "word_group" {
+                    let last = words.trim_end_matches(' ').rfind(' ').unwrap() + 1;
+                    assert_eq!(found.get(1), Some(last..bytes));
+                }
+                assert!(program.is_match(words, limits).unwrap());
+                group.throughput(Throughput::Bytes(bytes as u64));
+                let lane = format!("large_count_ladder/{label}/{bytes}/{maximum}");
+                group.bench_function(&lane, |bencher| {
+                    bencher.iter(|| black_box(program.find(black_box(words), limits).unwrap()));
+                });
+                group.bench_function(format!("{lane}/is_match"), |bencher| {
+                    bencher.iter(|| black_box(program.is_match(black_box(words), limits).unwrap()));
+                });
+            }
+        }
+        for (label, source, span) in [
+            ("choice_exact", format!("^(a|b){{{bytes}}}$"), 0..bytes),
+            (
+                "choice_search",
+                format!("(a|b){{{}}}", bytes - 1),
+                0..bytes - 1,
+            ),
+        ] {
+            let program = compiled(&source);
+            let found = program.find(binary, limits).unwrap().unwrap();
+            assert_eq!(found.get(0), Some(span.clone()));
+            assert_eq!(found.get(1), Some(span.end - 1..span.end));
+            assert!(program.is_match(binary, limits).unwrap());
+            group.throughput(Throughput::Bytes(bytes as u64));
+            let lane = format!("large_count_ladder/{label}/{bytes}");
+            group.bench_function(&lane, |bencher| {
+                bencher.iter(|| black_box(program.find(black_box(binary), limits).unwrap()));
+            });
+            group.bench_function(format!("{lane}/is_match"), |bencher| {
+                bencher.iter(|| black_box(program.is_match(black_box(binary), limits).unwrap()));
+            });
+        }
     }
     // An exact count above the input's pairs, whose set of live counts grows
     // at every position: no state repeats, and every position costs a closure.

@@ -663,7 +663,8 @@ fn a_datatype_range_keeps_its_literals_and_takes_nodes() {
     // Neighbour of the class range: a datatype property over a datatype keeps
     // its value-space schema for literals. Under the OWL 2 RDF-Based Semantics
     // an IRI may denote a string, so a node is admitted unjudged and the cell
-    // is an approximation; an unconstrained datatype property is exact.
+    // is an approximation. An unconstrained datatype property also admits
+    // unchecked XMLLiteral spelling and must report that representation gap.
     let (compilation, _) = compile(
         "ex:A a owl:Class .
          ex:label a owl:DatatypeProperty ; rdfs:domain ex:A ; rdfs:range xsd:string .
@@ -687,7 +688,7 @@ fn a_datatype_range_keeps_its_literals_and_takes_nodes() {
     );
     assert_eq!(
         cell_precision(&compilation, "note", "A"),
-        purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
     );
 }
 
@@ -1050,8 +1051,8 @@ fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
 }
 
 #[test]
-fn self_restricted_cells_are_approximations_and_unconstrained_cells_exact() {
-    use purrdf_shapes::json_schema::SchemaCoveragePrecision::{Exact, RepresentationApproximation};
+fn self_restricted_and_xml_admitting_cells_are_approximations() {
+    use purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation;
     let (compilation, _) = compile(
         "ex:F a owl:Class . ex:W a owl:Class .
          ex:p a owl:ObjectProperty ; rdfs:domain ex:F .
@@ -1069,21 +1070,36 @@ fn self_restricted_cells_are_approximations_and_unconstrained_cells_exact() {
          ex:plain a owl:ObjectProperty ; rdfs:domain ex:F .",
         &example(),
     );
-    // Every property takes a node or a well-typed literal, so a property no
-    // range constrains states that exactly on F and W, whatever other classes'
-    // restrictions say.
-    assert_eq!(cell_precision(&compilation, "p", "F"), Exact);
-    assert_eq!(cell_precision(&compilation, "u", "F"), Exact);
-    assert_eq!(cell_precision(&compilation, "d", "W"), Exact);
+    // These range-free cells admit the unchecked XML literal representation,
+    // including malformed XML, regardless of other classes' restrictions.
+    for (property, class) in [
+        ("p", "F"),
+        ("u", "F"),
+        ("d", "W"),
+        ("plain", "F"),
+        ("o", "F"),
+    ] {
+        assert_eq!(
+            cell_precision(&compilation, property, class),
+            RepresentationApproximation
+        );
+        let data = format!("ex:x a ex:{class} ; ex:{property} \"<p>unclosed\"^^rdf:XMLLiteral .");
+        assert!(
+            accepts(
+                &compilation.compiled.schema_json,
+                &example(),
+                class,
+                &data,
+                &format!("{EX}x")
+            ),
+            "the actual projected XML branch justifies the approximation"
+        );
+    }
     // A self restriction, reported unrepresented, is no exact cell.
     assert_eq!(
         cell_precision(&compilation, "o", "SO"),
         RepresentationApproximation
     );
-    // Neighbours: a plain object property, and o on a class without the
-    // self restriction, stay exact.
-    assert_eq!(cell_precision(&compilation, "plain", "F"), Exact);
-    assert_eq!(cell_precision(&compilation, "o", "F"), Exact);
 }
 
 #[test]

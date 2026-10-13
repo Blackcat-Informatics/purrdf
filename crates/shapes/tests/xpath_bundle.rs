@@ -23,7 +23,7 @@ fn dated_bundles_resolve_to_their_native_laws_and_finite_limits() {
         );
         let (law, limits) = shacl.resolve_xpath(None).unwrap().unwrap();
         let program = xpath::compile(law, "(a)\\1", "", limits).unwrap();
-        assert_eq!(program.profile(), xpath);
+        assert_eq!(program.profile(), Some(xpath));
         assert_eq!(program.source(), "(a)\\1");
     }
 }

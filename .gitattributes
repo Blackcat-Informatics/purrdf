@@ -11,6 +11,15 @@ crates/rdf/tests/fixtures/obographs-0.3.2/pom.upstream.xml -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/obographs-schema.json -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/subschemas/** -text -diff
 
+# Public mail retains upstream trailing empty lines and its original line ends.
+# Keep the byte-frozen payload visible in diffs; only its empty EOF lines differ
+# from source-code whitespace policy.
+crates/mime/tests/corpus/cpython/msg_*.txt -text whitespace=-blank-at-eof
+
+# The license-bundle writer separates notice sections with empty lines, including
+# the final section. Preserve its generated format and keep the text diff visible.
+crates/mime/licenses/NOTICE.txt whitespace=-blank-at-eof
+
 # Test goldens hold a serializer's exact bytes, CRLF record ends included (see
 # crates/testkit/src/golden.rs), so no end-of-line conversion applies.
 # The pre-push whitespace check accepts the CR of a CRLF record end there.

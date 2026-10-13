@@ -13,8 +13,8 @@ use purrdf_core::{
     BlankScope, DatasetView, FallibleDatasetView, GlobalTermId, PackBuilder, PageFault,
     PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset, PagedQueryError,
     PagedQueryLimits, PagedStack, PagedStackEvidence, PagedStackSnapshot, QuadValues, RdfDataset,
-    RdfDatasetBuilder, RdfTextDirection, SparqlRequest, SparqlResult, StackPageOrigin, StopCause,
-    TermBox, TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
+    RdfDatasetBuilder, RdfTextDirection, SparqlRequest, StackPageOrigin, StopCause, TermBox,
+    TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
 };
 use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine, QueryOptions};
 use std::collections::BTreeSet;
@@ -62,31 +62,33 @@ const QUERIES: &[&str] = &[
     "ASK { GRAPH ex:deltaEmpty {} }",
 ];
 
-fn assert_same_result(actual: SparqlResult, expected: SparqlResult, query: &str) {
-    match (actual, expected) {
-        (
-            SparqlResult::Solutions {
-                variables: av,
-                rows: ar,
-                ..
-            },
-            SparqlResult::Solutions {
-                variables: ev,
-                rows: er,
-                ..
-            },
-        ) => {
+fn assert_same_result(
+    actual: impl support::ResultView,
+    expected: impl support::ResultView,
+    query: &str,
+) {
+    match (
+        actual.solutions_view(),
+        expected.solutions_view(),
+        actual.boolean_view(),
+        expected.boolean_view(),
+        actual.graph_view(),
+        expected.graph_view(),
+    ) {
+        (Some((av, ar)), Some((ev, er)), ..) => {
             assert_eq!(av, ev, "variables: {query}");
             assert_eq!(ar, er, "ordered solution bags: {query}");
         }
-        (SparqlResult::Boolean(a), SparqlResult::Boolean(e)) => assert_eq!(a, e, "ASK: {query}"),
-        (SparqlResult::Graph(a), SparqlResult::Graph(e)) => assert_eq!(
-            PackBuilder::build_bytes(&a).unwrap(),
-            PackBuilder::build_bytes(&e).unwrap(),
+        (_, _, Some(a), Some(e), ..) => assert_eq!(a, e, "ASK: {query}"),
+        (_, _, _, _, Some(a), Some(e)) => assert_eq!(
+            PackBuilder::build_bytes(a).unwrap(),
+            PackBuilder::build_bytes(e).unwrap(),
             "CONSTRUCT carrier: {query}"
         ),
-        (a, e) => panic!("result shapes differ for {query}: {a:?} != {e:?}"),
+        _ => panic!("result shapes differ for {query}: {actual:?} != {expected:?}"),
     }
+    drop(actual);
+    drop(expected);
 }
 
 fn matrix(snapshot: &PagedStackSnapshot, oracle: &RdfDataset, queries: &[&str]) {
@@ -171,7 +173,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     let removed = stack.snapshot().unwrap();
     let removed_oracle = eager(values.clone(), &[iri("empty")]);
     matrix(&removed, &removed_oracle, QUERIES);
-    assert!(matches!(NativeSparqlEngine::new().query_fallible_view(&removed.query_view(PagedQueryLimits::UNBOUNDED), request("ASK { <http://example.org/alice> <http://example.org/knows> <http://example.org/bob> }"), QueryOptions::EMPTY).unwrap().result, SparqlResult::Boolean(false)));
+    assert_eq!(NativeSparqlEngine::new().query_fallible_view(&removed.query_view(PagedQueryLimits::UNBOUNDED), request("ASK { <http://example.org/alice> <http://example.org/knows> <http://example.org/bob> }"), QueryOptions::EMPTY).unwrap().result.boolean(), Some(false));
     assert_eq!(
         stack.insert(repeated.clone()).unwrap(),
         values.insert(repeated)
@@ -619,7 +621,7 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
     let reread = engine
         .query_prepared_fallible_view(&unbounded, &prepared, &[], QueryOptions::EMPTY)
         .unwrap();
-    assert_eq!(reread.evidence, receipt);
+    assert_eq!(*reread.evidence, *receipt);
     assert_eq!(
         (
             a.reads.load(Ordering::Relaxed),
@@ -630,11 +632,11 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
     );
     let exact = snapshot.query_view(PagedQueryLimits::new(3, receipt.pages.consumed_bytes));
     assert_eq!(
-        engine
+        *engine
             .query_fallible_view(&exact, request(query), QueryOptions::EMPTY)
             .unwrap()
             .evidence,
-        receipt
+        *receipt
     );
     for limits in [
         PagedQueryLimits::new(0, 0),

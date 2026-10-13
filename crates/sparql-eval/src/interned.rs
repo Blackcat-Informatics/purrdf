@@ -40,8 +40,6 @@
 //! [`SparqlEngine`](purrdf_core::SparqlEngine) consumer keeps the owned egress; a
 //! caller that wants the interned one asks for it by name.
 
-use std::sync::Arc;
-
 use purrdf_core::{DatasetView, RdfDataset, TermValue};
 use purrdf_sparql_algebra::Variable;
 
@@ -139,8 +137,203 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
 
     /// The solution rows, in solution order, as a bag (duplicates preserved).
     #[must_use]
-    pub fn rows(&self) -> &'a [Solution<D::Id>] {
+    pub fn rows(&self) -> &'a [crate::solution::RetainedRow<D::Id>] {
         &self.seq.rows
+    }
+
+    /// Explicit longest-first non-overlap over this actual SELECT result.
+    /// Domain columns are caller-selected (normally document and language).
+    /// All rows attached to a selected identical span survive in original order,
+    /// with their original dictionary/evidence/search owners. This is a logical
+    /// consumer, independent of whether a physical dictionary shape was used.
+    ///
+    /// # Errors
+    /// Refuses missing columns, unbound/invalid token coordinates, source reads,
+    /// or before-growth storage failures. Positions are unsigned token ordinals.
+    pub fn longest_first_spans(
+        &self,
+        domain: &[&str],
+        start: &str,
+        end: &str,
+    ) -> Result<crate::shapes::spans::SpanSelection<'a, D::Id>, crate::EvalError> {
+        let workspace = &self.ctx.growth;
+        let invalid = || {
+            crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Data,
+                "span selection requires projected domain columns and bound unsigned integer token coordinates",
+                workspace,
+            )
+        };
+        let start = self.column(start).ok_or_else(invalid)?;
+        let end = self.column(end).ok_or_else(invalid)?;
+        let mut columns = crate::AdmittedVec::new(workspace);
+        for name in domain {
+            columns.push(self.column(name).ok_or_else(invalid)?)?;
+        }
+        let mut domains = crate::AdmittedMap::default();
+        let mut spans = crate::AdmittedVec::new(workspace);
+        for row in &self.seq.rows {
+            let key = crate::solution::RetainedRow::from_cells(
+                columns.len(),
+                columns.iter().map(|&column| row[column]),
+                workspace,
+            )?;
+            let next = domains.len();
+            let domain = if let Some(&ordinal) = domains.get(&key) {
+                ordinal
+            } else {
+                domains.insert_admitted(key, next, workspace)?;
+                next
+            };
+            let coordinate = |column: usize| -> Result<u64, crate::EvalError> {
+                let cell = row[column].ok_or_else(invalid)?;
+                let value = crate::expr::owned_value_of(self.ctx, cell)?;
+                let TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language: None,
+                    direction: None,
+                } = &*value
+                else {
+                    return Err(invalid());
+                };
+                let datatype = purrdf_xsd::XsdDatatype::from_iri(datatype)
+                    .filter(|datatype| datatype.is_integer_family())
+                    .ok_or_else(invalid)?;
+                let value = crate::parsed_value::ParsedValue::parse(
+                    lexical_form,
+                    datatype,
+                    false,
+                    workspace,
+                )?
+                .ok_or_else(invalid)?;
+                let integer = match &*value {
+                    purrdf_xsd::XsdValue::Integer { value, .. } => Some(*value),
+                    purrdf_xsd::XsdValue::BigInteger { value, .. } => value.as_i128(),
+                    _ => None,
+                };
+                integer
+                    .and_then(|value| u64::try_from(value).ok())
+                    .ok_or_else(invalid)
+            };
+            spans.push(crate::shapes::spans::SpanGeometry {
+                domain,
+                start: coordinate(start)?,
+                end: coordinate(end)?,
+            })?;
+        }
+        let ordinals = crate::shapes::spans::longest_first_indices(&spans, workspace)?;
+        Ok(crate::shapes::spans::SpanSelection {
+            rows: &self.seq.rows,
+            ordinals,
+        })
+    }
+
+    /// The original whole-search declaration, including a reached producer
+    /// that yielded no row. Reading this does not replay the query or derive
+    /// completeness from the returned row count.
+    #[must_use]
+    pub fn search_evidence(&self) -> &'a crate::RowEvidence {
+        self.seq.rows.search_evidence()
+    }
+
+    /// Retain the existential answer under this query's original evidence owner.
+    /// An empty answer uses the source's explicit closure declaration; its row
+    /// count alone never establishes absence.
+    ///
+    /// # Errors
+    /// Preserves the source, reason-retention and native admission refusal.
+    pub fn existential_evidence(&self) -> Result<crate::RowEvidence, crate::EvalError> {
+        self.ctx.existential_evidence(
+            self.seq
+                .rows
+                .iter()
+                .map(crate::solution::RetainedRow::evidence),
+            self.search_evidence(),
+        )
+    }
+
+    /// Borrow established rows in their original order without constructing a
+    /// second result buffer or resolving any cell out of its native id space.
+    pub fn established_rows(
+        &self,
+    ) -> impl Iterator<Item = &'a crate::solution::RetainedRow<D::Id>> {
+        self.rows()
+            .iter()
+            .filter(|row| !row.evidence().is_undecided())
+    }
+
+    /// Borrow the separate undecided partition, retaining original bindings,
+    /// evidence owners and order. Standard queries have no declared gaps.
+    pub fn undecided_rows(&self) -> impl Iterator<Item = &'a crate::solution::RetainedRow<D::Id>> {
+        self.rows()
+            .iter()
+            .filter(|row| row.evidence().is_undecided())
+    }
+
+    /// Read RDF 1.2 annotations from this actual answer's original evidence and
+    /// reason owners. The caller supplies its row triple terms and vocabulary;
+    /// rendering preserves the complete original solution order. Below this
+    /// explicit read no ledger cursors or RDF terms are constructed.
+    ///
+    /// # Errors
+    /// Refuses absent evidence declarations, invalid row/content nodes, foreign
+    /// evidence owners or original native physical admission failures.
+    pub fn with_evidence_ledger<N: purrdf_core::evidence::LedgerNodes, R>(
+        &self,
+        terms: &[crate::evidence_exec::LedgerRowTerms<'_>],
+        nodes: &N,
+        vocabulary: &purrdf_core::evidence::LedgerVocabulary<'_>,
+        visit: impl FnOnce(&crate::evidence_exec::EvidenceLedger<'_, N>) -> R,
+    ) -> Result<R, crate::EvalError> {
+        let input = self.evidence_input()?;
+        input.with_ledger(self.seq, terms, nodes, vocabulary, &self.ctx.growth, visit)
+    }
+
+    /// Merge accepted undecided rows into the established stream in original
+    /// answer order, retaining the exact native cells, ranks, scores and reasons.
+    /// Each yielded core AcceptedRow exposes its acceptance annotation and the
+    /// identity law binding that override to the caller's original row identity.
+    ///
+    /// # Errors
+    /// Refuses noncanonical or absent reasons, foreign owners or an invalid
+    /// original dictionary before publishing any merged row.
+    pub fn with_accepted_rows<R>(
+        &self,
+        accepted: &[purrdf_core::evidence::ReasonId],
+        visit: impl FnOnce(crate::evidence_exec::AcceptedAnswerRows<'_, D::Id>) -> R,
+    ) -> Result<R, crate::EvalError> {
+        let input = self.evidence_input()?;
+        input.with_accepted_rows(self.seq, accepted, &self.ctx.growth, visit)
+    }
+
+    /// Read the explicitly merged answer as RDF 1.2, preserving original order,
+    /// reasons and incompleteness while adding visible acceptance annotations.
+    /// Unaccepted undecided rows remain in the original partition and are omitted
+    /// from this merged ledger. No producer or scoring function is invoked.
+    ///
+    /// # Errors
+    /// Refuses invalid acceptance, RDF declarations or original native failures
+    /// before publishing the merged ledger.
+    pub fn with_accepted_evidence_ledger<N: purrdf_core::evidence::LedgerNodes, R>(
+        &self,
+        read: &crate::evidence_exec::AcceptedLedgerRead<'_, N>,
+        visit: impl FnOnce(&crate::evidence_exec::EvidenceLedger<'_, N>) -> R,
+    ) -> Result<R, crate::EvalError> {
+        self.evidence_input()?
+            .with_accepted_ledger(self.seq, read, &self.ctx.growth, visit)
+    }
+
+    fn evidence_input(
+        &self,
+    ) -> Result<&crate::evidence_exec::EvidenceInput<'d, D::Id>, crate::EvalError> {
+        self.ctx.evidence_input.as_ref().ok_or_else(|| {
+            crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Config,
+                "evidence reading requires the original evidence source",
+                &self.ctx.growth,
+            )
+        })
     }
 
     /// The number of solutions.
@@ -183,6 +376,32 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
             .transpose()
     }
 
+    /// Copy one bound cell through the native physical allocation factory.
+    /// The returned owner keeps the cell's actual payload admitted after this
+    /// borrowed result and its evaluation context have been dropped.
+    ///
+    /// # Errors
+    /// Preserves the original dataset read or workspace admission failure.
+    pub fn try_cell_owned(
+        &self,
+        row: &Solution<D::Id>,
+        column: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, crate::EvalError> {
+        row.get(column)
+            .copied()
+            .flatten()
+            .map(|term| {
+                self.ctx.scratch.try_owned_value_of(
+                    self.ctx.dataset,
+                    term,
+                    workspace,
+                    crate::EvalError::source_read,
+                )
+            })
+            .transpose()
+    }
+
     /// The auxiliary graph of quads this query INVENTED, reachable from a term
     /// bound in a surviving row.
     ///
@@ -204,8 +423,9 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
     /// every borrowed result, on every row of every SHACL focus node, for an empty
     /// dataset nobody reads. Asked or not, a query that invented no cells walks no
     /// rows here.
-    pub fn try_constructed_dataset(&self) -> Result<Arc<RdfDataset>, crate::EvalError> {
-        self.ctx.constructed_dataset_of(self.seq)
+    pub fn try_constructed_dataset(&self) -> Result<crate::RetainedGraph, crate::EvalError> {
+        let graph = self.ctx.constructed_dataset_of(self.seq)?;
+        InternedGraph::new(&graph, &self.ctx.growth).retain()
     }
 
     /// Materialize a cell of a resident result.
@@ -226,12 +446,73 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
             .map(|term| self.value_of(term))
     }
     /// The auxiliary graph of a resident result.
-    pub fn constructed_dataset(&self) -> Arc<RdfDataset>
+    pub fn constructed_dataset(&self) -> crate::RetainedGraph
     where
         D: DatasetView<ReadError = core::convert::Infallible>,
     {
         self.try_constructed_dataset()
             .expect("resident result terms were admitted by this view")
+    }
+}
+
+/// A graph borrowed inside the evaluator's read scope. Retaining it transfers
+/// its original execution account with the shared frozen dataset, so an Arc
+/// handle cannot escape while its admission is destroyed.
+///
+/// ```compile_fail
+/// /// use purrdf_core::RdfDataset;
+/// use purrdf_sparql_eval::InternedGraph;
+/// fn escape(graph: InternedGraph<'_>) -> Arc<RdfDataset> {
+///     Arc::clone(&graph)
+/// }
+/// ```
+///
+/// ```
+/// use purrdf_sparql_eval::{EvalError, InternedGraph, RetainedGraph};
+/// fn retain(graph: InternedGraph<'_>) -> Result<RetainedGraph, EvalError> {
+///     graph.retain()
+/// }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct InternedGraph<'a> {
+    graph: &'a purrdf_core::DatasetHandle,
+    workspace: &'a crate::WorkspaceCapability,
+}
+
+impl<'a> InternedGraph<'a> {
+    pub(crate) const fn new(
+        graph: &'a purrdf_core::DatasetHandle,
+        workspace: &'a crate::WorkspaceCapability,
+    ) -> Self {
+        Self { graph, workspace }
+    }
+
+    /// Share the frozen dataset with its original physical admission owner.
+    /// This shallow clone allocates no graph or shared control.
+    #[must_use]
+    pub fn dataset_handle(self) -> purrdf_core::DatasetHandle {
+        self.graph.clone()
+    }
+
+    /// Retain the existing frozen graph and its original account without
+    /// copying the dataset. The new shared control is admitted before allocation.
+    ///
+    /// # Errors
+    /// Returns physical admission, overflow or native allocator refusal.
+    pub fn retain(self) -> Result<crate::RetainedGraph, crate::EvalError> {
+        let result = crate::RetainedSparqlResult::new(
+            purrdf_core::SparqlResult::Graph(self.graph.clone()),
+            self.workspace.clone(),
+            self.workspace,
+        )?;
+        Ok(crate::RetainedGraph::from_result(result))
+    }
+}
+
+impl std::ops::Deref for InternedGraph<'_> {
+    type Target = RdfDataset;
+    fn deref(&self) -> &Self::Target {
+        self.graph
     }
 }
 
@@ -247,8 +528,8 @@ pub enum InternedOutcome<'a, 'd, D: DatasetView + Sync> {
     /// nothing was materialized to produce it.
     Boolean(bool),
     /// A CONSTRUCT/DESCRIBE result. The frozen graph is already built and shared
-    /// by `Arc`; a visitor that keeps it clones the handle, not the data.
-    Graph(&'a Arc<RdfDataset>),
+    /// by its original owner; a visitor retaining it keeps the admission too.
+    Graph(InternedGraph<'a>),
 }
 
 /// The outcome of a governed interned execution.

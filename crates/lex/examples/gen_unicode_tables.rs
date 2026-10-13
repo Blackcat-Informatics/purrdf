@@ -12,11 +12,13 @@
 //! | Table set | Committed file | What it holds |
 //! |---|---|---|
 //! | `normalization` | `crates/lex/src/unicode_tables.rs` | `Canonical_Combining_Class`, the full decompositions, the primary composites (UAX 15) |
+//! | `case-context` | `crates/lex/src/unicode/case_tables.rs` | `Cased` and `Case_Ignorable`, for the context-sensitive full lowercase writer |
 //! | `text` | `crates/text/src/unicode_tables.rs` | full case folding (`C` + `F`), UAX 29 segmentation, analysis properties and scripts |
 //! | `idna` | `crates/iri/src/idna_tables.rs` | the RFC 5892 derived property, Joining_Type, Bidi_Class, the Appendix A scripts, the combining marks, NFKC_Casefold |
 //! | `ecma-properties` | `crates/jsonschema/src/ecma/property_tables.rs` | the property names and values an ECMA-262 `\p{…}` escape may spell |
 //! | `ecma-ranges` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | the code point ranges of each of those properties, and simple case folding |
 //! | `xpath` | `crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs` | XPath categories, blocks and the direct full-case-variant relation |
+//! | `xpath-compatibility` | `crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs` | frozen Unicode 16 categories and simple folds for the unselected evaluator law |
 //! | `xpath-dated-names` | `crates/rdf-core/src/xsd_regex/xpath/dated_names.rs` | the XML 1.0 Second Edition name classes behind both dated XPath laws' `\i` and `\c` |
 //! | `xpath-dated-blocks` | `crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs` | the XML Schema Part 2 Second Edition block-name table both dated XPath laws recognize |
 //!
@@ -29,7 +31,8 @@
 //! set carries that version as `purrdf_lex::unicode::UNICODE_VERSION`; every
 //! other set asserts at compile time that it is the version it was generated
 //! from, so no table in the workspace can trail another. (The XSD block-escape
-//! table of `purrdf-core` is the one deliberate exception: it is pinned to the
+//! table and native unselected compatibility categories/folds are deliberate
+//! exceptions: they are pinned to the
 //! Unicode version of the locked `regex-syntax`, and
 //! `scripts/check-generated.sh` holds that pin.)
 //!
@@ -160,6 +163,8 @@ fn assert_one_version() {
         "Scripts.txt",
         "SpecialCasing.txt",
         "WordBreakProperty.txt",
+        "SentenceBreakProperty.txt",
+        "SentenceBreakTest.txt",
         "GraphemeBreakProperty.txt",
         "GraphemeBreakTest.txt",
     ] {
@@ -424,13 +429,17 @@ fn emit_licensed_header(out: &mut String, spdx: &str, set: &str, doc: &[&str]) {
 /// The compile-time assertion a consumer's table file makes: it was generated
 /// from the Unicode version of the workspace's normalization tables.
 fn emit_version_assertion(out: &mut String) {
+    emit_version_assertion_for(out, "purrdf_lex");
+}
+
+fn emit_version_assertion_for(out: &mut String, root: &str) {
     let (major, minor, patch) = UNICODE_VERSION;
     let _ = write!(
         out,
         "// Generated from Unicode {major}.{minor}.{patch}, the version of every Unicode table in the\n\
          // workspace: `purrdf_lex::unicode::UNICODE_VERSION`.\n\
          const _: () = assert!(\n    \
-             matches!(purrdf_lex::unicode::UNICODE_VERSION, ({major}, {minor}, {patch})),\n    \
+             matches!({root}::unicode::UNICODE_VERSION, ({major}, {minor}, {patch})),\n    \
              \"generated from another Unicode version than purrdf_lex::unicode::UNICODE_VERSION\"\n\
          );\n\n"
     );
@@ -686,6 +695,49 @@ fn normalization() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Context properties for the native full lowercase writer.
+
+fn case_context() -> String {
+    let rows = records("DerivedCoreProperties.txt");
+    let properties = ["Case_Ignorable", "Cased"]
+        .map(|property| {
+            let spans = merge(
+                rows.iter()
+                    .filter(|(_, _, fields)| fields.first().is_some_and(|field| field == property))
+                    .map(|&(low, high, _)| (low, high)),
+            );
+            assert!(
+                !spans.is_empty(),
+                "{property} must be present in the selected UCD"
+            );
+            (property.to_owned(), spans)
+        })
+        .into_iter()
+        .collect();
+    let mut out = String::new();
+    let (major, minor, patch) = UNICODE_VERSION;
+    let source =
+        format!("Source: the Unicode Character Database {major}.{minor}.{patch} vendored under");
+    let files = format!(
+        "`crates/iri/unicode/{major}.{minor}.{patch}/` — `DerivedCoreProperties.txt`. The data is"
+    );
+    emit_header(
+        &mut out,
+        "case-context",
+        &[
+            "Context properties for the Unicode full lowercase writer (core specification §3.13).",
+            "",
+            &source,
+            &files,
+            "Unicode's, under the Unicode-3.0 licence.",
+        ],
+    );
+    emit_version_assertion_for(&mut out, "crate");
+    emit_named_spans(&mut out, "CONTEXT_PROPERTIES", &properties);
+    out
+}
+
+// ---------------------------------------------------------------------------
 // `text`: purrdf_text::unicode.
 
 /// `Word_Break` values, in the numbering the runtime uses.
@@ -877,11 +929,12 @@ fn text() -> String {
     let mut out = String::new();
     let source = source_line(
         "`UnicodeData.txt`, `DerivedCoreProperties.txt`, `CaseFolding.txt`, \
-         `WordBreakProperty.txt`, `emoji-data.txt`, `Scripts.txt`, \
+         `WordBreakProperty.txt`, `SentenceBreakProperty.txt`, `emoji-data.txt`, `Scripts.txt`, \
          `ScriptExtensions.txt`, `PropList.txt`, `DerivedJoiningType.txt`, `GraphemeBreakProperty.txt`, `emoji-test.txt` and `emoji-variation-sequences.txt`",
     );
     let mut doc = vec![
-        "The full case folding and word-boundary data of `purrdf_text::unicode`,".to_owned(),
+        "The full case folding, word- and sentence-boundary data of `purrdf_text::unicode`,"
+            .to_owned(),
         "read through `purrdf_lex::unicode::lookup_two_stage`.".to_owned(),
         String::new(),
     ];
@@ -989,10 +1042,71 @@ fn text() -> String {
         "u32",
         &text_properties(&entries),
     );
+    emit_sentence_break(&mut out);
     emit_grapheme_and_emoji(&mut out);
     out.truncate(out.trim_end().len());
     out.push('\n');
     out
+}
+
+/// The complete default Sentence_Break property, emitted by the text table set.
+/// Its separate data identity does not change the existing analyzer token law.
+fn emit_sentence_break(out: &mut String) {
+    let values = [
+        "Other",
+        "CR",
+        "LF",
+        "Extend",
+        "Sep",
+        "Format",
+        "Sp",
+        "Lower",
+        "Upper",
+        "OLetter",
+        "Numeric",
+        "ATerm",
+        "STerm",
+        "Close",
+        "SContinue",
+    ];
+    let data = read("SentenceBreakProperty.txt");
+    let mut properties = vec![0u8; CODE_SPACE as usize];
+    for fields in data_lines(&data) {
+        let value = values
+            .iter()
+            .position(|name| *name == fields[1])
+            .unwrap_or_else(|| panic!("unknown Sentence_Break value {:?}", fields[1]));
+        let (low, high) = range(fields[0]);
+        for point in low..=high {
+            assert_eq!(
+                properties[point as usize], 0,
+                "{point:04X} has two Sentence_Break values"
+            );
+            properties[point as usize] = u8::try_from(value).expect("fifteen sentence classes");
+        }
+    }
+    for (value, name) in values.iter().enumerate().skip(1) {
+        let constant = name.to_uppercase();
+        let _ = writeln!(
+            out,
+            "/// `Sentence_Break={name}`.\npub(crate) const SB_{constant}: u8 = {value};"
+        );
+    }
+    emit_two_stage(
+        out,
+        "SENTENCE",
+        "Default Sentence_Break values (0: Other)",
+        "u8",
+        &two_stage(&properties),
+    );
+    let mut input = Vec::new();
+    purrdf_hash::frame::frame_le(&mut input, b"SentenceBreakProperty.txt");
+    purrdf_hash::frame::frame_le(&mut input, data.as_bytes());
+    let _ = writeln!(
+        out,
+        "/// Content identity of the pinned Sentence_Break property input.\npub(crate) const SENTENCE_DATA_DIGEST: [u8; 32] = {:?};",
+        purrdf_hash::blake3::hash(&input).as_bytes()
+    );
 }
 
 /// UAX 29 extended-grapheme properties and the finite Emoji 17 recognition set.
@@ -2065,9 +2179,13 @@ fn grouped_hex(number: u32) -> String {
 
 /// Every General_Category value's spans, `Cn` the complement of the assigned.
 fn category_spans() -> BTreeMap<String, Spans> {
+    category_spans_from(&read("UnicodeData.txt"))
+}
+
+fn category_spans_from(text: &str) -> BTreeMap<String, Spans> {
     let mut categories: BTreeMap<String, Spans> = BTreeMap::new();
     let mut first: Option<(u32, String)> = None;
-    for line in read("UnicodeData.txt").lines() {
+    for line in text.lines() {
         let f: Vec<&str> = line.split(';').collect();
         let point = hex(f[0]);
         let (name, category) = (f[1], f[2]);
@@ -2367,19 +2485,7 @@ fn xpath_case_variants(mappings: &FullCaseMappings) -> BTreeMap<u32, BTreeSet<u3
 }
 
 fn xpath() -> String {
-    let mut categories = category_spans();
-    for kind in ["L", "M", "N", "P", "Z", "S", "C"] {
-        let spans = merge(
-            categories
-                .iter()
-                .filter(|(name, _)| name.len() == 2 && name.starts_with(kind))
-                .flat_map(|(_, spans)| spans.iter().copied()),
-        );
-        categories.insert(kind.to_owned(), spans);
-    }
-    // XML Schema Second Edition Appendix F's closed IsCategory grammar excludes
-    // Cs. Keep its ranges in the major C union before removing the named escape.
-    categories.remove("Cs");
+    let categories = xpath_categories(category_spans());
     let blocks: BTreeMap<String, Spans> = records("Blocks.txt")
         .into_iter()
         .map(|(low, high, f)| {
@@ -2407,6 +2513,97 @@ fn xpath() -> String {
     emit_version_assertion(&mut out);
     emit_named_spans(&mut out, "CATEGORIES", &categories);
     emit_named_spans(&mut out, "BLOCKS", &blocks);
+    out.push_str("pub(super) const CASE_VARIANTS: &[(u32, &[u32])] = &[\n");
+    for (point, neighbors) in variants {
+        let _ = write!(out, "    ({}, &[", grouped_hex(point));
+        for neighbor in neighbors {
+            let _ = write!(out, "{},", grouped_hex(neighbor));
+        }
+        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+    out
+}
+
+const COMPATIBILITY_VERSION: (u8, u8, u8) = (16, 0, 0);
+
+fn compatibility_read(name: &str, identity: &str) -> String {
+    let (major, minor, patch) = COMPATIBILITY_VERSION;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../iri/unicode/{major}.{minor}.{patch}/{name}"));
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let actual = purrdf_hash::blake3::hash(text.as_bytes());
+    let expected = purrdf_hash::hex::decode_32(identity).expect("frozen input identity");
+    assert_eq!(
+        actual.as_bytes(),
+        &expected,
+        "{} changed identity",
+        path.display()
+    );
+    text
+}
+
+fn xpath_categories(mut categories: BTreeMap<String, Spans>) -> BTreeMap<String, Spans> {
+    for kind in ["L", "M", "N", "P", "Z", "S", "C"] {
+        let spans = merge(
+            categories
+                .iter()
+                .filter(|(name, _)| name.len() == 2 && name.starts_with(kind))
+                .flat_map(|(_, spans)| spans.iter().copied()),
+        );
+        categories.insert(kind.to_owned(), spans);
+    }
+    // Keep Cs inside C before removing the named escape, as in the dated set.
+    categories.remove("Cs");
+    categories
+}
+
+fn xpath_compatibility() -> String {
+    let data = compatibility_read(
+        "UnicodeData.txt",
+        "24dd932e1b587f076f3895081f4eb2fd41c77881b3d84a2f743157f6b3f96c40",
+    );
+    let folding = compatibility_read(
+        "CaseFolding.txt",
+        "a9e649104f7da0ed7263e3b62543711a279ed4762409abc7bbe221a2afca4d5a",
+    );
+    assert!(folding.starts_with("# CaseFolding-16.0.0.txt\n"));
+    let categories = xpath_categories(category_spans_from(&data));
+    let mut simple = BTreeMap::new();
+    for fields in data_lines(&folding) {
+        if matches!(fields[1], "C" | "S") {
+            let target = hex_list(fields[2]);
+            assert_eq!(target.len(), 1, "simple fold has exactly one scalar");
+            set_case_mapping(&mut simple, hex(fields[0]), target);
+        }
+    }
+    // C/S mappings are idempotent. The existing partition emitter therefore
+    // produces the complete simple-fold equivalence class in one pass.
+    for image in simple.values() {
+        assert!(
+            !simple.contains_key(&image[0]),
+            "simple fold is not idempotent"
+        );
+    }
+    let variants = xpath_case_variants(&[simple, BTreeMap::new()]);
+    let mut out = String::new();
+    emit_header(
+        &mut out,
+        "xpath-compatibility",
+        &[
+            "Frozen Unicode 16 categories and simple-fold equivalence classes.",
+            "The evaluator's unselected law matches regex-syntax 0.8.11; it is",
+            "distinct from the dated XPath laws' Unicode 17 full-case relation.",
+            "Inputs: crates/iri/unicode/16.0.0/{UnicodeData,CaseFolding}.txt.",
+            "The generator checks each original input's exact BLAKE3 identity.",
+        ],
+    );
+    out.push_str(
+        "const _: () = assert!(matches!(super::super::blocks::unicode_version(), (16, 0, 0)),\n",
+    );
+    out.push_str("    \"compatibility categories/folding and block tables differ\");\n\n");
+    emit_named_spans(&mut out, "CATEGORIES", &categories);
     out.push_str("pub(super) const CASE_VARIANTS: &[(u32, &[u32])] = &[\n");
     for (point, neighbors) in variants {
         let _ = write!(out, "    ({}, &[", grouped_hex(point));
@@ -2795,16 +2992,18 @@ fn main() {
     assert_one_version();
     let out = match set.as_str() {
         "normalization" => normalization(),
+        "case-context" => case_context(),
         "text" => text(),
         "idna" => idna(),
         "ecma-properties" => ecma_properties(),
         "ecma-ranges" => ecma_ranges(),
         "xpath" => xpath(),
+        "xpath-compatibility" => xpath_compatibility(),
         "xpath-dated-names" => xpath_dated_names(),
         "xpath-dated-blocks" => xpath_dated_blocks(),
         other => panic!(
-            "unknown table set {other:?}: expected normalization, text, idna, ecma-properties, \
-             ecma-ranges, xpath, xpath-dated-names or xpath-dated-blocks"
+            "unknown table set {other:?}: expected normalization, case-context, text, idna, ecma-properties, \
+             ecma-ranges, xpath, xpath-compatibility, xpath-dated-names or xpath-dated-blocks"
         ),
     };
     print!("{out}");

@@ -169,9 +169,9 @@ fn describe_reports_the_declaration_against_its_own_iri() {
             .find(|d| d.iri == iri)
             .expect("described")
             .ranked
-            .clone()
+            .as_deref()
     };
-    assert_eq!(ranked_for(EX_REL), Some(declaration()));
+    assert_eq!(ranked_for(EX_REL), Some(&declaration()));
     assert_eq!(ranked_for(EX_OTHER), None);
 }
 
@@ -440,7 +440,7 @@ fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
             EX_REL,
             relation(),
             RankedDeclaration {
-                domains: CandidateDomains::Within(std::collections::BTreeSet::new()),
+                domains: CandidateDomains::within([]),
                 ..declaration()
             },
         );
@@ -459,7 +459,7 @@ fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
                 EX_REL,
                 relation(),
                 RankedDeclaration {
-                    domains: CandidateDomains::Within(std::collections::BTreeSet::new()),
+                    domains: CandidateDomains::within([]),
                     ..declaration()
                 },
             );

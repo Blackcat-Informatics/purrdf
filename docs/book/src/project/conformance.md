@@ -49,10 +49,10 @@ committed block is stale).
 
 At the time of writing every suite is green — for example 1,105/1,105
 attempted shexTest validation cases, 129/129 W3C SHACL, 264/264 codec
-round-trips, 70/70 W3C SPARQL entailment-regime cases, and 258/262 agreeing
-verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the remaining
-non-passes strictly ledgered (4 typed OWL 2 divergences; no SPARQL case is
-ledgered). Two of those numbers
+round-trips, 70/70 W3C SPARQL entailment-regime cases, and 262/262 agreeing
+verdicts on the vendored W3C OWL 2 DL-consistency corpus, with 0 typed OWL 2 divergences;
+0 SPARQL ledger entries. Other suites' non-passes remain strictly ledgered.
+Two of those numbers
 need their scope stated: the OWL 2 DL corpus is a *subset*, 262 of the 482
 consistency-shaped cases W3C published, and rule-table coverage is not
 entailment conformance — on this vendored W3C corpus of OWL 2 RL entailment

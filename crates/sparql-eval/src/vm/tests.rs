@@ -185,11 +185,21 @@ impl Walker {
             }
             Expression::UnaryPlus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric_unary_plus).unwrap())
+                Ok(helpers::unary_numeric_term(
+                    ctx,
+                    ta,
+                    purrdf_xsd::numeric::NumericUnaryOperator::Plus,
+                )
+                .unwrap())
             }
             Expression::UnaryMinus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::value_unary_minus).unwrap())
+                Ok(helpers::unary_numeric_term(
+                    ctx,
+                    ta,
+                    purrdf_xsd::numeric::NumericUnaryOperator::Minus,
+                )
+                .unwrap())
             }
             Expression::FunctionCall(function, args) => {
                 self.function(function, args, row, schema, ctx)
@@ -268,7 +278,7 @@ impl Walker {
                 else {
                     return Ok(None);
                 };
-                return Ok(helpers::cached_regex(ctx, &pattern, &flags).map(|re| {
+                return Ok(helpers::build_regex(&pattern, &flags).map(|re| {
                     helpers::intern_boolean(ctx, re.as_regex().is_match(&text)).unwrap()
                 }));
             }
@@ -354,7 +364,8 @@ impl Walker {
                     Expression::Literal(lit) => Some(lit.value().to_owned()),
                     other => self
                         .term(other, row, schema, ctx)?
-                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap()),
+                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap())
+                        .map(|value| value.parts().0.to_owned()),
                 };
                 Ok(lexical.map(|s| (s, None, None)))
             }
@@ -366,7 +377,8 @@ impl Walker {
                     ),
                     other => self
                         .term(other, row, schema, ctx)?
-                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap()),
+                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap())
+                        .map(|value| value.parts().0.to_owned()),
                 };
                 Ok(lexical.map(|s| (s, None, None)))
             }
@@ -374,7 +386,12 @@ impl Walker {
                 let Some(term) = self.term(expr, row, schema, ctx)? else {
                     return Ok(None);
                 };
-                Ok(helpers::string_arg_of_term(ctx, term).unwrap())
+                Ok(helpers::string_arg_of_term(ctx, term)
+                    .unwrap()
+                    .map(|value| {
+                        let (lexical, language, direction) = value.parts();
+                        (lexical.to_owned(), language.map(str::to_owned), direction)
+                    }))
             }
         }
     }
@@ -1326,8 +1343,14 @@ fn a_plan_site_compiles_once_and_every_call_shares_it() {
     let tree = crate::plan::Tree::build(&filter);
     let mut ctx = EvalCtx::new(&ds);
     ctx.install_plan(&tree);
-    let first = super::program_at(&ctx, &filter, expr);
-    let second = super::program_at(&ctx, &filter, expr);
+    let first = super::program_at(&ctx, &filter, expr)
+        .unwrap()
+        .caller_arc()
+        .unwrap();
+    let second = super::program_at(&ctx, &filter, expr)
+        .unwrap()
+        .caller_arc()
+        .unwrap();
     assert!(
         Arc::ptr_eq(&first, &second),
         "the site's program is kept on the plan"
@@ -1335,6 +1358,9 @@ fn a_plan_site_compiles_once_and_every_call_shares_it() {
 
     // A structurally equal expression that is not the node's own is compiled apart.
     let copy = expr.clone();
-    let apart = super::program_at(&ctx, &filter, &copy);
+    let apart = super::program_at(&ctx, &filter, &copy)
+        .unwrap()
+        .caller_arc()
+        .unwrap();
     assert!(!Arc::ptr_eq(&first, &apart));
 }

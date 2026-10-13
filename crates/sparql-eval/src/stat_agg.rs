@@ -291,30 +291,23 @@
 //! runs (see `crate::modifier::eval_custom_aggregate`'s phase-1 tuple dedup)
 //! — nothing in this module special-cases it.
 
+use crate::agg_fn::{
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate, ScalarvalKind,
+    ScalarvalSpec, WorkspaceAccumulator, downcast_combine_partial_admitted,
+};
+use crate::error::EvalError;
+use crate::modifier::{ValueClass, project_admitted, total_order_admitted};
+use crate::user_fn::{Arity, Volatility};
+use purrdf_core::TermValue;
+use purrdf_xsd::datatype::XSD_STRING;
+use purrdf_xsd::exact::Cost;
+use purrdf_xsd::exact::cost::{Shape, compare_chain, sort_rounds, sum_chain};
+#[cfg(test)]
+use purrdf_xsd::value_total_cmp;
+use purrdf_xsd::{XsdDatatype, XsdValue};
 use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
-
-use purrdf_core::TermValue;
-use purrdf_xsd::numeric::{numeric_cmp, numeric_div_with_policy};
-use purrdf_xsd::{
-    XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_floor, numeric_mul, numeric_sub,
-    value_add, value_mul, value_sub, value_total_cmp,
-};
-
-use crate::agg_fn::{
-    AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate, ScalarvalKind,
-    ScalarvalSpec, downcast_combine_partial,
-};
-use crate::error::EvalError;
-use crate::expr::xsd_of;
-use crate::modifier::{ValueClass, lexical_of, project, total_order};
-use crate::user_fn::{Arity, Volatility};
-
-// ---------------------------------------------------------------------------
-// Local names (the closed set) and shared constants
-// ---------------------------------------------------------------------------
-
 const MEDIAN: &str = "MEDIAN";
 const PERCENTILE: &str = "PERCENTILE";
 const STDDEV: &str = "STDDEV";
@@ -326,9 +319,6 @@ const FIRST: &str = "FIRST";
 const LAST: &str = "LAST";
 const TOPK: &str = "TOPK";
 
-use purrdf_xsd::datatype::XSD_DOUBLE;
-use purrdf_xsd::datatype::XSD_STRING;
-
 /// `PERCENTILE`'s named scalarval: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`.
 const PERCENTILE_P: &str = "P";
 
@@ -339,46 +329,6 @@ const ONE_EXPRESSION: Arity = Arity::Exact(1);
 /// `TOPK`'s named scalarval: `AGG(<{NS}TOPK>, ?v; K=3)`.
 const TOPK_K: &str = "K";
 
-/// Look up a named scalarval by (already upper-cased) key in the resolved
-/// `(name, value)` slice [`CustomAggregate::init`] receives, filtered to the
-/// SPARQL numeric tower. `None` covers BOTH "absent" and "present but
-/// non-numeric" — both poison the fold the same way (see each member's `init`),
-/// which is the correct behavior even though prepare-time validation
-/// (`crate::property_fn_plan::plan_aggregate`) should already have refused a
-/// non-numeric value or a missing required name before evaluation is ever
-/// reached; this is the same defense-in-depth `eval_custom_aggregate`'s own
-/// doc comment describes for a caller that bypasses that walk.
-fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<XsdValue> {
-    scalarvals
-        .iter()
-        .find(|(k, _)| k == name)
-        .and_then(|(_, v)| xsd_of(v))
-        .filter(XsdValue::is_numeric)
-}
-
-/// `MEDIAN`/`PERCENTILE`'s widened gate — see the module docs' "The
-/// `xsd:duration` extension" section: the SPARQL numeric tower OR the
-/// `xsd:duration` value space, never judged relative to anything else
-/// already in the group (that check is [`same_value_family`]'s job, applied
-/// separately in `step`/`combine`).
-fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
-    v.is_numeric() || matches!(v, XsdValue::Duration(_))
-}
-
-/// Whether two values already passed through [`is_numeric_or_duration_xsd`]
-/// are in the SAME family — both numeric or both duration. `MEDIAN`/
-/// `PERCENTILE` commit to the first folded value's family; any later value
-/// whose family disagrees poisons the group (see the module docs) — mixed
-/// SUBTYPE duration values (`yearMonthDuration` beside `dayTimeDuration`)
-/// are the SAME family and never poison here.
-fn same_value_family(a: &XsdValue, b: &XsdValue) -> bool {
-    a.is_numeric() == b.is_numeric()
-}
-
-/// The running-moments (`(n, Σx, Σx²)`, deliberately NOT Welford — see the
-/// module docs and this family's own section comment below for why) accumulators'
-/// declared [`CustomAggregate::state_bound`]: genuinely `O(1)` — see the module
-/// docs.
 const MOMENTS_STATE_BOUND: u64 = 64;
 /// `MEDIAN`/`PERCENTILE`/`MODE`'s declared [`CustomAggregate::state_bound`]: a
 /// nominal, documented estimate — see the module docs' "`state_bound` honesty"
@@ -391,54 +341,25 @@ const TOPK_STATE_BOUND: u64 = 512;
 /// [`TermValue`] clone.
 const SCALAR_STATE_BOUND: u64 = 64;
 
-/// The exact decimal `0.5`, used as `MEDIAN`'s fixed percentile parameter so its
-/// whole computation stays in the exact tower (see the module docs).
+fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
+    v.is_numeric() || matches!(v, XsdValue::Duration(_))
+}
+
+fn same_value_family(a: &XsdValue, b: &XsdValue) -> bool {
+    a.is_numeric() == b.is_numeric()
+}
+
 fn half() -> XsdValue {
     purrdf_xsd::parse("0.5", XsdDatatype::Decimal)
         .expect("the literal \"0.5\" always parses as xsd:decimal")
 }
 
-/// Convert a numeric [`XsdValue`] to `f64` — used only by `STDDEV`/`STDDEV_POP`'s
-/// final (necessarily inexact) `sqrt` step.
-fn to_f64(v: &XsdValue) -> Option<f64> {
-    match v {
-        XsdValue::Integer { value, .. } => Some(*value as f64),
-        XsdValue::Decimal(d) => Some(d.to_f64()),
-        XsdValue::Float(f) => Some(f64::from(*f)),
-        XsdValue::Double(d) => Some(*d),
-        XsdValue::BigInteger { value, .. } => Some(value.to_f64()),
-        XsdValue::BigDecimal(d) => Some(d.to_f64()),
-        _ => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pricing the exact arithmetic before a fold runs
-// ---------------------------------------------------------------------------
-
-use purrdf_xsd::exact::Cost;
-use purrdf_xsd::exact::cost::{Shape, compare_chain, sort_rounds, sum_chain};
-
-/// The sizes of the `xsd:integer`/`xsd:decimal` operands among `survivors`' first
-/// arguments, in fold order, read off their lexical forms.
-fn operand_shapes(survivors: &[Vec<TermValue>]) -> Vec<Shape> {
-    survivors
-        .iter()
-        .filter_map(|tuple| tuple.first().and_then(crate::expr::literal_shape))
-        .collect()
-}
-
-/// Whether every operand among `survivors` spells a machine-word number at most
-/// ([`crate::expr::machine_word_lexical`]): a group of only those is priced by this
-/// length check alone, without reading a shape.
 fn machine_word_operands(survivors: &[Vec<TermValue>]) -> bool {
     survivors
         .iter()
         .all(|tuple| tuple.first().is_none_or(crate::expr::machine_word_lexical))
 }
 
-/// `cost`, unless every shape involved fits the bounded variants, where the
-/// operation is machine arithmetic and costs nothing here.
 fn tower_step(cost: Cost, shapes: &[Shape]) -> Cost {
     if shapes.iter().all(|shape| shape.is_bounded()) {
         Cost::ZERO
@@ -447,8 +368,6 @@ fn tower_step(cost: Cost, shapes: &[Shape]) -> Cost {
     }
 }
 
-/// The largest of `shapes` by length and scale: the operand every bound below
-/// prices the finishing arithmetic against.
 fn largest(shapes: &[Shape]) -> Option<Shape> {
     shapes
         .iter()
@@ -456,7 +375,6 @@ fn largest(shapes: &[Shape]) -> Option<Shape> {
         .max_by_key(|shape| (shape.limbs(), shape.scale()))
 }
 
-/// The shape of a row count, an integer.
 fn count_shape(n: usize) -> Shape {
     Shape::of_value(&XsdValue::Integer {
         value: i128::try_from(n).unwrap_or(i128::MAX),
@@ -464,17 +382,30 @@ fn count_shape(n: usize) -> Shape {
     })
     .expect("an integer has a shape")
 }
-
-/// `MEDIAN`/`PERCENTILE`: the sort, then the interpolation between two neighbours
-/// (`lo + (hi − lo) × fraction`, the fraction a product of `p` and the count) and
-/// its rendering, priced against the largest operand.
-fn percentile_cost(survivors: &[Vec<TermValue>], p: Option<&XsdValue>) -> Cost {
-    if machine_word_operands(survivors) {
-        return Cost::ZERO;
+fn operand_shapes(
+    survivors: &[Vec<TermValue>],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::AdmittedVec<Shape>, EvalError> {
+    let mut shapes = crate::AdmittedVec::new(workspace);
+    for tuple in survivors {
+        if let Some(shape) = tuple.first().and_then(crate::expr::literal_shape) {
+            shapes.push(shape)?;
+        }
     }
-    let shapes = operand_shapes(survivors);
+    Ok(shapes)
+}
+
+fn percentile_cost(
+    survivors: &[Vec<TermValue>],
+    p: Option<&XsdValue>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Cost, EvalError> {
+    if machine_word_operands(survivors) {
+        return Ok(Cost::ZERO);
+    }
+    let shapes = operand_shapes(survivors, workspace)?;
     let Some(m) = largest(&shapes) else {
-        return Cost::ZERO;
+        return Ok(Cost::ZERO);
     };
     let sort = compare_chain(&shapes, sort_rounds(shapes.len()));
     let p = p
@@ -492,32 +423,32 @@ fn percentile_cost(survivors: &[Vec<TermValue>], p: Option<&XsdValue>) -> Cost {
         .then(diff.mul_cost(rank))
         .then(m.add_cost(scaled))
         .then(result.render_cost());
-    sort.then(tower_step(finish, &[m, p, rank, diff, scaled, result]))
+    Ok(sort.then(tower_step(finish, &[m, p, rank, diff, scaled, result])))
 }
-
-/// The running moments `(n, Σx, Σx²)` and the variance recovered from them:
-/// each square, the two chains of additions, and `(Σx² − (Σx)²/n) / denominator`,
-/// rendered — or converted to a double, for a standard deviation.
 fn moments_cost(
     survivors: &[Vec<TermValue>],
     deviation: bool,
     policy: purrdf_xsd::exact::DivisionPolicy,
-) -> Cost {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Cost, EvalError> {
     if machine_word_operands(survivors) {
-        return Cost::ZERO;
+        return Ok(Cost::ZERO);
     }
-    let shapes = operand_shapes(survivors);
-    let squares: Vec<Shape> = shapes.iter().map(|x| x.product(*x)).collect();
+    let shapes = operand_shapes(survivors, workspace)?;
+    let mut squares = crate::AdmittedVec::with_capacity(shapes.len(), workspace)?;
+    for x in &shapes {
+        squares.push(x.product(*x))?;
+    }
     let squaring = shapes
         .iter()
-        .zip(&squares)
+        .zip(squares.iter())
         .fold(Cost::ZERO, |cost, (x, square)| {
             cost.then(tower_step(x.mul_cost(*x), &[*x, *square]))
         });
     let (sum_cost, sum) = sum_chain(shapes.iter().copied());
-    let (sumsq_cost, sumsq) = sum_chain(squares);
+    let (sumsq_cost, sumsq) = sum_chain(squares.iter().copied());
     let (Some(sum), Some(sumsq)) = (sum, sumsq) else {
-        return squaring.then(sum_cost).then(sumsq_cost);
+        return Ok(squaring.then(sum_cost).then(sumsq_cost));
     };
     // variance = (n·Σx² − (Σx)²) / (n·d), one quotient under the query's policy;
     // d ≤ n, so n·n bounds the divisor.
@@ -538,99 +469,156 @@ fn moments_cost(
         } else {
             variance.render_cost()
         });
-    squaring.then(sum_cost).then(sumsq_cost).then(tower_step(
+    Ok(squaring.then(sum_cost).then(sumsq_cost).then(tower_step(
         finish,
         &[sum, sumsq, sum_sq, scaled, numerator, divisor, variance],
-    ))
+    )))
 }
 
-/// Wrap a computed [`XsdValue`] into its canonical typed-literal [`TermValue`].
-fn xsd_value_to_term(v: &XsdValue) -> TermValue {
-    TermValue::typed_literal(v.canonical_lexical(), v.datatype().iri())
+fn parse_stat_value(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    let TermValue::Literal {
+        lexical_form,
+        datatype,
+        ..
+    } = value
+    else {
+        return Ok(None);
+    };
+    let Some(datatype) = XsdDatatype::from_iri(datatype) else {
+        return Ok(None);
+    };
+    crate::parsed_value::ParsedValue::parse(lexical_form, datatype, false, workspace)
 }
 
-/// The floor of a numeric [`XsdValue`] (already passed through
-/// [`numeric_floor`]) as an index-usable `i128`.
-fn xsd_floor_index(v: &XsdValue) -> Option<i128> {
-    match v {
+fn scalarval_native(
+    scalarvals: &[(String, TermValue)],
+    name: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    let Some((_, term)) = scalarvals.iter().find(|(key, _)| key == name) else {
+        return Ok(None);
+    };
+    Ok(parse_stat_value(term, workspace)?.filter(|value| value.is_numeric()))
+}
+
+fn inline_stat_value(value: XsdValue) -> Result<crate::parsed_value::ParsedValue, EvalError> {
+    crate::parsed_value::ParsedValue::from_admitted(value, None, 0)
+}
+
+fn stat_compare(
+    a: &XsdValue,
+    b: &XsdValue,
+    total: bool,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<Ordering>, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let answer = if total && a.is_numeric() && b.is_numeric() {
+        purrdf_xsd::numeric::numeric_total_cmp_admitted(a, b, &mut |layout| frame.admit(layout))
+    } else {
+        purrdf_xsd::ops::value_cmp_admitted(a, b, &mut |layout| frame.admit(layout))
+    };
+    frame.finish_scalar(answer)
+}
+
+fn floor_stat_value(
+    value: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let answer = purrdf_xsd::numeric::numeric_unary_admitted(
+        value,
+        purrdf_xsd::numeric::NumericUnaryOperator::Floor,
+        &mut |layout| frame.admit(layout),
+    );
+    frame.finish_value(answer).map(Result::ok)
+}
+
+fn native_floor_index(
+    value: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<i128>, EvalError> {
+    Ok(match value {
         XsdValue::Integer { value, .. } => Some(*value),
-        XsdValue::Decimal(d) => Some(d.whole_part()),
-        XsdValue::Float(f) => Some(*f as i128),
-        XsdValue::Double(d) => Some(*d as i128),
-        // Past `i128` an index is past every slice.
+        XsdValue::Decimal(value) => Some(value.whole_part()),
+        XsdValue::Float(value) => Some(*value as i128),
+        XsdValue::Double(value) => Some(*value as i128),
         XsdValue::BigInteger { value, .. } => Some(if value.is_negative() {
             i128::MIN
         } else {
             i128::MAX
         }),
-        XsdValue::BigDecimal(d) => Some(d.to_integer_truncated().as_i128().unwrap_or_else(|| {
-            if d.is_negative() {
-                i128::MIN
-            } else {
-                i128::MAX
+        XsdValue::BigDecimal(decimal) => {
+            let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+            let answer = purrdf_xsd::numeric::numeric_cast_admitted(
+                value,
+                XsdDatatype::Integer,
+                &mut |layout| frame.admit(layout),
+            );
+            match frame.finish_cast(answer)? {
+                Some(integer) => match &*integer {
+                    XsdValue::Integer { value, .. } => Some(*value),
+                    XsdValue::BigInteger { value, .. } => {
+                        Some(value.as_i128().unwrap_or_else(|| {
+                            if decimal.is_negative() {
+                                i128::MIN
+                            } else {
+                                i128::MAX
+                            }
+                        }))
+                    }
+                    _ => None,
+                },
+                None => None,
             }
-        })),
+        }
         _ => None,
+    })
+}
+
+fn series_order<V: std::borrow::Borrow<XsdValue>>(
+    values: &[V],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::AdmittedVec<usize>, EvalError> {
+    let mut classes = crate::AdmittedVec::with_capacity(values.len(), workspace)?;
+    for value in values {
+        classes.push(ValueClass::of_value(value.borrow()))?;
     }
+    crate::modifier::order_permutation(values.len(), workspace, |left, right| {
+        let class = classes[left].cmp(&classes[right]);
+        if class != Ordering::Equal {
+            return Ok(class);
+        }
+        Ok(stat_compare(
+            values[left].borrow(),
+            values[right].borrow(),
+            true,
+            workspace,
+        )?
+        .unwrap_or(Ordering::Equal))
+    })
 }
 
-/// The `p`-th percentile of an already value-order-sorted, non-empty
-/// numeric-OR-duration series (never mixed — see [`same_value_family`]),
-/// under linear interpolation between the two closest ranks (see the module
-/// docs). `None` (poison) when `p` is outside `[0, 1]` or any step of the
-/// arithmetic fails. `rank`/`floor_v`/`fraction` are always computed on the
-/// numeric tower (`p` is a proportion of a COUNT, never of the series'
-/// element type); only the final interpolation (`diff`/`scaled`/the result)
-/// goes through [`value_sub`]/[`value_mul`]/[`value_add`], which accept
-/// BOTH the numeric tower (dispatching straight to `numeric_sub`/
-/// `numeric_mul`/`numeric_add`, so numeric behavior is unchanged) and the
-/// `xsd:duration` group (see the module docs' "The `xsd:duration`
-/// extension" section).
-/// Sort a `MEDIAN`/`PERCENTILE` series into the order `percentile_of` reads,
-/// with a comparator that is a **total order** rather than merely a plausible one.
-///
-/// # Why this is not a `sort_by(value_cmp(..).unwrap_or(Equal))`
-///
-/// It used to be, and that comparator can make `slice::sort_by` PANIC — Rust's
-/// sorts are allowed to, and do, when handed a comparator that is not a total
-/// order. Two independent cycles are reachable from ordinary data, and neither
-/// needs a mixed series to appear, because both live INSIDE one admitted family:
-///
-/// * numeric: `value_cmp` is §17.3's promotion lattice, which compares
-///   `integer`/`decimal` exactly but routes anything touching a `float`/`double`
-///   through IEEE. Mixing an exact sub-relation with a lossy one is not
-///   transitive — see [`purrdf_xsd::numeric_total_cmp`]. A `NaN` compares to
-///   nothing, so `unwrap_or(Equal)` seats it between every pair of unequal
-///   numbers.
-/// * duration: the general `xsd:duration` is partially ordered on
-///   `(months, seconds)`, and a `yearMonthDuration` compares to no
-///   `dayTimeDuration` — yet the two are the SAME family here and never poison
-///   the group, so one series holds both. `P1M ≈ P1D ≈ P2M` while `P1M < P2M`.
-///
-/// Both are fixed the way `ORDER BY` fixes them, through the same two pieces:
-/// rank the comparability [`ValueClass`] FIRST, so the fallback tie only ever
-/// runs between two values whose class does order them, and compare inside the
-/// class with [`value_total_cmp`] — identical to `value_cmp` everywhere except
-/// the numeric tower, where it is exact. Nothing about the documented policy for
-/// genuinely incomparable operands changes: they still tie. They now tie only
-/// with each other.
-///
-/// The class is computed ONCE per element rather than inside the comparator, so
-/// the `O(n log n)` comparisons pay no repeated classification.
+#[cfg(test)]
 fn sort_series(values: Vec<XsdValue>) -> Vec<XsdValue> {
-    let mut keyed: Vec<(ValueClass, XsdValue)> = values
-        .into_iter()
-        .map(|value| (ValueClass::of_value(&value), value))
-        .collect();
-    keyed.sort_by(|(class_a, a), (class_b, b)| {
-        class_a
-            .cmp(class_b)
-            .then_with(|| value_total_cmp(a, b).unwrap_or(Ordering::Equal))
-    });
-    keyed.into_iter().map(|(_, value)| value).collect()
+    let order = series_order(&values, &crate::WorkspaceCapability::resident())
+        .expect("resident series ordering");
+    let mut original: Vec<_> = values.into_iter().map(Some).collect();
+    order
+        .iter()
+        .map(|index| original[*index].take().expect("one original ordinal"))
+        .collect()
 }
 
-fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
+fn percentile_native(
+    values: &[crate::parsed_value::ParsedValue],
+    order: &[usize],
+    p: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    use purrdf_xsd::numeric::NumericBinaryOperator::{Add, Multiply, Subtract};
     let zero = XsdValue::Integer {
         value: 0,
         datatype: XsdDatatype::Integer,
@@ -639,98 +627,772 @@ fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
         value: 1,
         datatype: XsdDatatype::Integer,
     };
-    if numeric_cmp(p, &zero)? == Ordering::Less || numeric_cmp(p, &one)? == Ordering::Greater {
-        return None;
+    let (Some(lower), Some(upper)) = (
+        stat_compare(p, &zero, false, workspace)?,
+        stat_compare(p, &one, false, workspace)?,
+    ) else {
+        return Ok(None);
+    };
+    if lower == Ordering::Less || upper == Ordering::Greater || order.is_empty() {
+        return Ok(None);
     }
-    let n = sorted.len();
-    if n == 0 {
-        return None;
+    if order.len() == 1 {
+        return Ok(Some(values[order[0]].clone()));
     }
-    if n == 1 {
-        return Some(sorted[0].clone());
-    }
-    let n_minus_1 = XsdValue::Integer {
-        value: i128::try_from(n - 1).ok()?,
+    let n = order.len();
+    let Some(count) = i128::try_from(n - 1).ok() else {
+        return Ok(None);
+    };
+    let count_value = XsdValue::Integer {
+        value: count,
         datatype: XsdDatatype::Integer,
     };
-    let rank = numeric_mul(p, &n_minus_1).ok()?;
-    let floor_v = numeric_floor(&rank).ok()?;
-    let lo = xsd_floor_index(&floor_v)?.clamp(0, i128::try_from(n - 1).ok()?);
-    let lo_idx = usize::try_from(lo).ok()?;
-    let hi_idx = (lo_idx + 1).min(n - 1);
-    if lo_idx == hi_idx {
-        return Some(sorted[lo_idx].clone());
+    let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+    let Ok(rank) =
+        crate::modifier::numeric_fold_binary(p, &count_value, Multiply, policy, workspace)?
+    else {
+        return Ok(None);
+    };
+    let Some(floor) = floor_stat_value(&rank, workspace)? else {
+        return Ok(None);
+    };
+    let Some(index) = native_floor_index(&floor, workspace)? else {
+        return Ok(None);
+    };
+    let Some(lo) = usize::try_from(index.clamp(0, count)).ok() else {
+        return Ok(None);
+    };
+    let hi = (lo + 1).min(n - 1);
+    if lo == hi {
+        return Ok(Some(values[order[lo]].clone()));
     }
-    let fraction = numeric_sub(&rank, &floor_v).ok()?;
-    let diff = value_sub(&sorted[hi_idx], &sorted[lo_idx]).ok()?;
-    let scaled = value_mul(&diff, &fraction).ok()?;
-    value_add(&sorted[lo_idx], &scaled).ok()
+    let Ok(fraction) =
+        crate::modifier::numeric_fold_binary(&rank, &floor, Subtract, policy, workspace)?
+    else {
+        return Ok(None);
+    };
+    let Ok(diff) = crate::modifier::numeric_fold_binary(
+        &values[order[hi]],
+        &values[order[lo]],
+        Subtract,
+        policy,
+        workspace,
+    )?
+    else {
+        return Ok(None);
+    };
+    let Ok(scaled) =
+        crate::modifier::numeric_fold_binary(&diff, &fraction, Multiply, policy, workspace)?
+    else {
+        return Ok(None);
+    };
+    Ok(
+        crate::modifier::numeric_fold_binary(&values[order[lo]], &scaled, Add, policy, workspace)?
+            .ok(),
+    )
 }
 
-// ---------------------------------------------------------------------------
-// MEDIAN
-// ---------------------------------------------------------------------------
+fn native_term_order(
+    left: &TermValue,
+    right: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Ordering, EvalError> {
+    let left_key = project_admitted(Some(left), workspace)?;
+    let right_key = project_admitted(Some(right), workspace)?;
+    let order = total_order_admitted(&left_key.key, &right_key.key, workspace)?;
+    if order == Ordering::Equal {
+        workspace.terms_cmp(left, right)
+    } else {
+        Ok(order)
+    }
+}
 
-/// `MEDIAN`/`PERCENTILE`'s running (unsorted) value list — either the
-/// numeric tower OR the `xsd:duration` group, NEVER mixed (see
-/// [`is_numeric_or_duration_xsd`]/[`same_value_family`] and the module
-/// docs' "The `xsd:duration` extension" section).
+fn insert_bounded(
+    values: &mut crate::AdmittedVec<crate::WorkspaceTerm>,
+    k: usize,
+    value: crate::WorkspaceTerm,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    if k == 0 {
+        return Ok(());
+    }
+    values.push(value)?;
+    if values.len() > k {
+        let mut smallest = 0;
+        for index in 1..values.len() {
+            if native_term_order(&values[index], &values[smallest], workspace)? == Ordering::Less {
+                smallest = index;
+            }
+        }
+        drop(values.remove(smallest));
+    }
+    Ok(())
+}
+
+fn borrowed_lexical(value: &TermValue) -> Option<&str> {
+    match value {
+        TermValue::Iri(text) => Some(text),
+        TermValue::Literal { lexical_form, .. } => Some(lexical_form),
+        _ => None,
+    }
+}
+
+struct TopKText<'a> {
+    values: &'a [crate::WorkspaceTerm],
+    order: &'a [usize],
+}
+impl std::fmt::Display for TopKText<'_> {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (position, index) in self.order.iter().enumerate() {
+            if position > 0 {
+                out.write_str(" ")?;
+            }
+            out.write_str(borrowed_lexical(&self.values[*index]).ok_or(std::fmt::Error)?)?;
+        }
+        Ok(())
+    }
+}
+
+fn native_resident_answer(
+    answer: Result<Option<crate::WorkspaceTerm>, EvalError>,
+) -> Result<Option<TermValue>, EvalError> {
+    answer?
+        .map(|value| {
+            value.into_resident().map_err(|_| {
+                EvalError::WorkspaceUnpriced(
+                    "a resident statistical call cannot detach bounded output",
+                )
+            })
+        })
+        .transpose()
+}
+
 enum ValueSeries {
     Empty,
-    Ok(Vec<XsdValue>),
+    Ok(crate::AdmittedVec<crate::parsed_value::ParsedValue>),
     Poisoned,
 }
-
 impl ValueSeries {
-    /// Fold one row's argument in: a value outside the numeric tower and the
-    /// duration group, or of the other family than the values already held,
-    /// poisons the series, and a poisoned series stays poisoned.
-    fn step(&mut self, args: &[TermValue]) {
+    fn step(
+        &mut self,
+        args: &[TermValue],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
         if matches!(self, Self::Poisoned) {
-            return;
+            return Ok(());
         }
-        let Some(x) = args
+        let value = args
             .first()
-            .and_then(xsd_of)
-            .filter(is_numeric_or_duration_xsd)
-        else {
+            .map(|value| parse_stat_value(value, workspace))
+            .transpose()?
+            .flatten()
+            .filter(|value| is_numeric_or_duration_xsd(value));
+        let Some(value) = value else {
             *self = Self::Poisoned;
-            return;
+            return Ok(());
         };
         *self = match mem::replace(self, Self::Empty) {
-            Self::Empty => Self::Ok(vec![x]),
-            Self::Ok(mut values) if same_value_family(&values[0], &x) => {
-                values.push(x);
+            Self::Empty => {
+                let mut values = crate::AdmittedVec::new(workspace);
+                values.push(value)?;
+                Self::Ok(values)
+            }
+            Self::Ok(mut values) if same_value_family(&values[0], &value) => {
+                values.push(value)?;
                 Self::Ok(values)
             }
             Self::Ok(_) | Self::Poisoned => Self::Poisoned,
         };
+        Ok(())
     }
-
-    /// Merge a partial series in by concatenating the two (still-unsorted)
-    /// value lists. Merge order never matters, because `finish` sorts the
-    /// whole multiset before computing a rank — see the module docs' "Real
-    /// merges" section. A family mismatch between the two partials (numeric
-    /// vs duration) poisons, the same as a within-series mismatch in
-    /// [`Self::step`].
-    fn combine(&mut self, other: Self) {
+    fn combine(&mut self, other: Self) -> Result<(), EvalError> {
         *self = match (mem::replace(self, Self::Empty), other) {
             (Self::Poisoned, _) | (_, Self::Poisoned) => Self::Poisoned,
-            (Self::Empty, s) | (s, Self::Empty) => s,
-            (Self::Ok(mut values), Self::Ok(other_values)) => {
-                if same_value_family(&values[0], &other_values[0]) {
-                    values.extend(other_values);
+            (Self::Empty, other) | (other, Self::Empty) => other,
+            (Self::Ok(mut values), Self::Ok(other)) => {
+                if same_value_family(&values[0], &other[0]) {
+                    values.try_extend(other)?;
                     Self::Ok(values)
                 } else {
                     Self::Poisoned
                 }
             }
         };
+        Ok(())
     }
 }
 
-struct MedianAggregate;
+struct PercentileAccumulator {
+    p: Option<crate::parsed_value::ParsedValue>,
+    state: ValueSeries,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for PercentileAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        Some(&self.workspace)
+    }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if self.p.is_none() {
+            self.state = ValueSeries::Poisoned;
+            return Ok(());
+        }
+        self.state.step(args, &self.workspace)
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = downcast_combine_partial_admitted::<Self>(other, &self.workspace)?;
+        self.state.combine(other.state)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(
+        self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self {
+            p,
+            state,
+            workspace: original,
+        } = *self;
+        let (Some(p), ValueSeries::Ok(values)) = (p, state) else {
+            return Ok(None);
+        };
+        let order = series_order(&values, &original)?;
+        percentile_native(&values, &order, &p, &original)?
+            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .transpose()
+    }
+}
 
+#[derive(Clone, Copy)]
+enum MomentsKind {
+    Stddev,
+    StddevPop,
+    Variance,
+    VarPop,
+}
+enum MomentsState {
+    Empty,
+    Ok {
+        n: u64,
+        sum: crate::parsed_value::ParsedValue,
+        sumsq: crate::parsed_value::ParsedValue,
+    },
+    Poisoned,
+}
+
+fn moments_step(
+    n: u64,
+    sum: &XsdValue,
+    sumsq: &XsdValue,
+    x: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<
+    Option<(
+        u64,
+        crate::parsed_value::ParsedValue,
+        crate::parsed_value::ParsedValue,
+    )>,
+    EvalError,
+> {
+    use purrdf_xsd::numeric::NumericBinaryOperator::{Add, Multiply};
+    let Some(n) = n.checked_add(1) else {
+        return Ok(None);
+    };
+    let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+    let Ok(sum) = crate::modifier::numeric_fold_binary(sum, x, Add, policy, workspace)? else {
+        return Ok(None);
+    };
+    let Ok(square) = crate::modifier::numeric_fold_binary(x, x, Multiply, policy, workspace)?
+    else {
+        return Ok(None);
+    };
+    let Ok(sumsq) = crate::modifier::numeric_fold_binary(sumsq, &square, Add, policy, workspace)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((n, sum, sumsq)))
+}
+
+struct MomentsAccumulator {
+    kind: MomentsKind,
+    state: MomentsState,
+    division: purrdf_xsd::exact::DivisionPolicy,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for MomentsAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        Some(&self.workspace)
+    }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Subtract;
+        if matches!(self.state, MomentsState::Poisoned) {
+            return Ok(());
+        }
+        let value = args
+            .first()
+            .map(|value| parse_stat_value(value, &self.workspace))
+            .transpose()?
+            .flatten()
+            .filter(|value| value.is_numeric());
+        let Some(value) = value else {
+            self.state = MomentsState::Poisoned;
+            return Ok(());
+        };
+        let next = match &self.state {
+            MomentsState::Empty => match crate::modifier::numeric_fold_binary(
+                &value,
+                &value,
+                Subtract,
+                purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+                &self.workspace,
+            )? {
+                Ok(zero) => moments_step(0, &zero, &zero, &value, &self.workspace)?,
+                Err(_) => None,
+            },
+            MomentsState::Ok { n, sum, sumsq } => {
+                moments_step(*n, sum, sumsq, &value, &self.workspace)?
+            }
+            MomentsState::Poisoned => None,
+        };
+        self.state = match next {
+            Some((n, sum, sumsq)) => MomentsState::Ok { n, sum, sumsq },
+            None => MomentsState::Poisoned,
+        };
+        Ok(())
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Add;
+        let other = downcast_combine_partial_admitted::<Self>(other, &self.workspace)?;
+        self.state = match (
+            mem::replace(&mut self.state, MomentsState::Empty),
+            other.state,
+        ) {
+            (MomentsState::Poisoned, _) | (_, MomentsState::Poisoned) => MomentsState::Poisoned,
+            (MomentsState::Empty, other) | (other, MomentsState::Empty) => other,
+            (
+                MomentsState::Ok { n, sum, sumsq },
+                MomentsState::Ok {
+                    n: other_n,
+                    sum: other_sum,
+                    sumsq: other_sumsq,
+                },
+            ) => {
+                let Some(n) = n.checked_add(other_n) else {
+                    self.state = MomentsState::Poisoned;
+                    return Ok(());
+                };
+                let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+                match (
+                    crate::modifier::numeric_fold_binary(
+                        &sum,
+                        &other_sum,
+                        Add,
+                        policy,
+                        &self.workspace,
+                    )?,
+                    crate::modifier::numeric_fold_binary(
+                        &sumsq,
+                        &other_sumsq,
+                        Add,
+                        policy,
+                        &self.workspace,
+                    )?,
+                ) {
+                    (Ok(sum), Ok(sumsq)) => MomentsState::Ok { n, sum, sumsq },
+                    _ => MomentsState::Poisoned,
+                }
+            }
+        };
+        Ok(())
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        self.finish_absorbing(&mut |_| {})
+    }
+    fn finish_absorbing(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_absorbing_admitted(absorb, &workspace))
+    }
+    fn finish_admitted(
+        self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        self.finish_absorbing_admitted(&mut |_| {}, workspace)
+    }
+    fn finish_absorbing_admitted(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::{Divide, Multiply, Subtract};
+        let Self {
+            kind,
+            state,
+            division,
+            workspace: original,
+        } = *self;
+        let MomentsState::Ok { n, sum, sumsq } = state else {
+            return Ok(None);
+        };
+        let population = matches!(kind, MomentsKind::StddevPop | MomentsKind::VarPop);
+        let denominator = if population {
+            Some(n)
+        } else {
+            n.checked_sub(1).filter(|value| *value > 0)
+        };
+        let Some(denominator) = denominator else {
+            return Ok(None);
+        };
+        let n_value = XsdValue::Integer {
+            value: i128::from(n),
+            datatype: XsdDatatype::Integer,
+        };
+        let denominator_value = XsdValue::Integer {
+            value: i128::from(denominator),
+            datatype: XsdDatatype::Integer,
+        };
+        let ordinary = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+        let variance = if sum.is_exact_numeric() && sumsq.is_exact_numeric() {
+            let Ok(scaled) = crate::modifier::numeric_fold_binary(
+                &n_value, &sumsq, Multiply, ordinary, &original,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Ok(square) =
+                crate::modifier::numeric_fold_binary(&sum, &sum, Multiply, ordinary, &original)?
+            else {
+                return Ok(None);
+            };
+            let Ok(numerator) = crate::modifier::numeric_fold_binary(
+                &scaled, &square, Subtract, ordinary, &original,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Ok(divisor) = crate::modifier::numeric_fold_binary(
+                &n_value,
+                &denominator_value,
+                Multiply,
+                ordinary,
+                &original,
+            )?
+            else {
+                return Ok(None);
+            };
+            match crate::modifier::numeric_fold_binary(
+                &numerator, &divisor, Divide, division, &original,
+            )? {
+                Ok(value) => value,
+                Err(code) => {
+                    if let Some(code) = code {
+                        absorb(code);
+                    }
+                    return Ok(None);
+                }
+            }
+        } else {
+            let Ok(square) =
+                crate::modifier::numeric_fold_binary(&sum, &sum, Multiply, ordinary, &original)?
+            else {
+                return Ok(None);
+            };
+            let Ok(correction) = crate::modifier::numeric_fold_binary(
+                &square, &n_value, Divide, ordinary, &original,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Ok(numerator) = crate::modifier::numeric_fold_binary(
+                &sumsq,
+                &correction,
+                Subtract,
+                ordinary,
+                &original,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Ok(variance) = crate::modifier::numeric_fold_binary(
+                &numerator,
+                &denominator_value,
+                Divide,
+                ordinary,
+                &original,
+            )?
+            else {
+                return Ok(None);
+            };
+            variance
+        };
+        match kind {
+            MomentsKind::Variance | MomentsKind::VarPop => {
+                crate::expr::xsd_workspace_value(&variance, workspace).map(Some)
+            }
+            MomentsKind::Stddev | MomentsKind::StddevPop => {
+                let mut frame = crate::native_numeric::NumericFrame::new(&original);
+                let number =
+                    purrdf_xsd::numeric::numeric_to_f64_admitted(&variance, &mut |layout| {
+                        frame.admit(layout)
+                    });
+                let Some(number) = frame.finish_scalar(number)? else {
+                    return Ok(None);
+                };
+                let root = purrdf_xsd::ieee::f64_sqrt(number.max(0.0));
+                crate::expr::xsd_workspace_value(&XsdValue::Double(root), workspace).map(Some)
+            }
+        }
+    }
+}
+
+struct ModeAccumulator {
+    values: crate::AdmittedVec<crate::WorkspaceTerm>,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for ModeAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        Some(&self.workspace)
+    }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(value) = args.first() {
+            self.values.push(self.workspace.clone_term(value)?)?;
+        }
+        Ok(())
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = downcast_combine_partial_admitted::<Self>(other, &self.workspace)?;
+        self.values.try_extend(other.values)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(
+        self: Box<Self>,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self {
+            mut values,
+            workspace,
+        } = *self;
+        if values.is_empty() {
+            return Ok(None);
+        }
+        let order = crate::modifier::order_permutation(values.len(), &workspace, |left, right| {
+            workspace.terms_cmp(&values[left], &values[right])
+        })?;
+        let mut best: Option<(usize, u64)> = None;
+        let mut begin = 0;
+        while begin < order.len() {
+            let mut end = begin + 1;
+            while end < order.len()
+                && workspace.terms_equal(&values[order[begin]], &values[order[end]])?
+            {
+                end += 1;
+            }
+            let count = u64::try_from(end - begin).unwrap_or(u64::MAX);
+            let index = order[begin];
+            let better = match best {
+                None => true,
+                Some((winner, largest)) => {
+                    count > largest
+                        || (count == largest
+                            && native_term_order(&values[index], &values[winner], &workspace)?
+                                == Ordering::Less)
+                }
+            };
+            if better {
+                best = Some((index, count));
+            }
+            begin = end;
+        }
+        Ok(best.map(|(index, _)| values.remove(index)))
+    }
+}
+
+struct EdgeAccumulator {
+    value: Option<crate::WorkspaceTerm>,
+    last: bool,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for EdgeAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        Some(&self.workspace)
+    }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if self.last || self.value.is_none() {
+            self.value = args
+                .first()
+                .map(|value| self.workspace.clone_term(value))
+                .transpose()?;
+        }
+        Ok(())
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if (self.last || self.value.is_none())
+            && let Some(value) = other.finish_admitted(&self.workspace)?
+        {
+            self.value = Some(value);
+        }
+        Ok(())
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(
+        self: Box<Self>,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        Ok(self.value)
+    }
+}
+
+enum TopKState {
+    Valid {
+        k: usize,
+        values: crate::AdmittedVec<crate::WorkspaceTerm>,
+    },
+    Poisoned,
+}
+struct TopKAccumulator {
+    state: TopKState,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for TopKAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        Some(&self.workspace)
+    }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        let TopKState::Valid { k, values } = &mut self.state else {
+            return Ok(());
+        };
+        let Some(value) = args.first() else {
+            self.state = TopKState::Poisoned;
+            return Ok(());
+        };
+        insert_bounded(
+            values,
+            *k,
+            self.workspace.clone_term(value)?,
+            &self.workspace,
+        )
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = downcast_combine_partial_admitted::<Self>(other, &self.workspace)?;
+        self.state = match (
+            mem::replace(&mut self.state, TopKState::Poisoned),
+            other.state,
+        ) {
+            (TopKState::Poisoned, _) | (_, TopKState::Poisoned) => TopKState::Poisoned,
+            (TopKState::Valid { k, mut values }, TopKState::Valid { values: other, .. }) => {
+                for value in other {
+                    insert_bounded(&mut values, k, value, &self.workspace)?;
+                }
+                TopKState::Valid { k, values }
+            }
+        };
+        Ok(())
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(
+        self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self {
+            state,
+            workspace: original,
+        } = *self;
+        let TopKState::Valid { values, .. } = state else {
+            return Ok(None);
+        };
+        if values.is_empty() || values.iter().any(|value| borrowed_lexical(value).is_none()) {
+            return Ok(None);
+        }
+        let order = crate::modifier::order_permutation(values.len(), &original, |left, right| {
+            native_term_order(&values[right], &values[left], &original)
+        })?;
+        workspace
+            .literal(
+                TopKText {
+                    values: &values,
+                    order: &order,
+                },
+                XSD_STRING,
+            )
+            .map(Some)
+    }
+}
+
+// The seven native statistical factories expose the same resident trait doors.
+// Keep their publication law in one source body; admitted implementations stay typed.
+macro_rules! resident_statistic_doors {
+    () => {
+        fn exact_numeric_cost(
+            &self,
+            survivors: &[Vec<TermValue>],
+            scalarvals: &[(String, TermValue)],
+        ) -> Cost {
+            self.exact_numeric_cost_under(
+                survivors,
+                scalarvals,
+                purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+            )
+        }
+        fn exact_numeric_cost_under(
+            &self,
+            survivors: &[Vec<TermValue>],
+            scalarvals: &[(String, TermValue)],
+            division: purrdf_xsd::exact::DivisionPolicy,
+        ) -> Cost {
+            self.exact_numeric_cost_admitted(
+                survivors,
+                scalarvals,
+                division,
+                &crate::WorkspaceCapability::resident(),
+            )
+            .expect("resident statistical cost")
+        }
+        fn init_under(
+            &self,
+            scalarvals: &[(String, TermValue)],
+            division: purrdf_xsd::exact::DivisionPolicy,
+        ) -> Box<dyn AggregateAccumulator> {
+            self.init_admitted(
+                scalarvals,
+                division,
+                &crate::WorkspaceCapability::resident(),
+            )
+            .expect("resident statistical factory")
+            .into_resident()
+            .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+        }
+    };
+}
+
+struct MedianAggregate;
 impl CustomAggregate for MedianAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -744,85 +1406,40 @@ impl CustomAggregate for MedianAggregate {
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
-    fn exact_numeric_cost(
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
         &self,
         survivors: &[Vec<TermValue>],
         _scalarvals: &[(String, TermValue)],
-    ) -> Cost {
-        percentile_cost(survivors, Some(&half()))
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
+        percentile_cost(survivors, Some(&half()), workspace)
     }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        // MEDIAN is PERCENTILE at one half: one accumulator, so the two
-        // cannot drift in how they fold, merge, sort or rank.
-        Box::new(PercentileAccumulator {
-            p: Some(half()),
-            state: ValueSeries::Empty,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PERCENTILE
-// ---------------------------------------------------------------------------
-
-struct PercentileAccumulator {
-    /// `None` when `P` was missing or non-numeric at `init` time — a
-    /// defense-in-depth poison for a caller that bypassed prepare-time
-    /// validation (see `numeric_scalarval`'s docs); the ordinary path always
-    /// has `Some` here, because `crate::property_fn_plan::plan_aggregate`
-    /// already refused any call this accumulator would otherwise see with `P`
-    /// missing or wrong-typed.
-    p: Option<XsdValue>,
-    state: ValueSeries,
-}
-
-impl AggregateAccumulator for PercentileAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if self.p.is_none() {
-            self.state = ValueSeries::Poisoned;
-            return Ok(());
-        }
-        self.state.step(args);
-        Ok(())
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // `p` is identical on both sides BY CONSTRUCTION — every partial
-        // accumulator a single `combine` chain merges was created by the SAME
-        // `CustomAggregate::init` factory call, with the SAME resolved
-        // scalarvals (see the module docs' "Real merges" section and
-        // `crate::agg_fn`'s "Merging structural state" section) — so, unlike
-        // the old per-row positional-argument design, there is no cross-chunk
-        // `p`-mismatch to detect here: merging the two series is always
-        // correct (see `ValueSeries::combine`).
-        let other = downcast_combine_partial::<Self>(other)?;
-        self.state.combine(other.state);
-        Ok(())
-    }
-
-    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
-    /// body is this same one line.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { p, state } = *self;
-        let (Some(p), ValueSeries::Ok(values)) = (p, state) else {
-            return Ok(None);
-        };
-        // The sort must also order durations, and it must be a TOTAL order or
-        // `sort_by` may panic. An incomparable pair (e.g. `P1M` vs `P30D`)
-        // still sorts as EQUAL, but only against another member of its own
-        // comparability class; see `sort_series` and the module docs'
-        // "Ordering policy for incomparable duration pairs".
-        let values = sort_series(values);
-        Ok(percentile_of(&values, &p).as_ref().map(xsd_value_to_term))
+    fn init_admitted(
+        &self,
+        _scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            PercentileAccumulator {
+                p: Some(inline_stat_value(half())?),
+                state: ValueSeries::Empty,
+                workspace: workspace.clone(),
+            },
+            workspace,
+        )
     }
 }
 
 struct PercentileAggregate;
-
 impl CustomAggregate for PercentileAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -840,257 +1457,45 @@ impl CustomAggregate for PercentileAggregate {
         const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new(PERCENTILE_P, ScalarvalKind::Numeric)];
         &SPEC
     }
-    fn exact_numeric_cost(
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
         &self,
         survivors: &[Vec<TermValue>],
         scalarvals: &[(String, TermValue)],
-    ) -> Cost {
-        percentile_cost(
-            survivors,
-            numeric_scalarval(scalarvals, PERCENTILE_P).as_ref(),
-        )
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
+        {
+            let p = scalarval_native(scalarvals, PERCENTILE_P, workspace)?;
+            percentile_cost(survivors, p.as_deref(), workspace)
+        }
     }
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(PercentileAccumulator {
-            p: numeric_scalarval(scalarvals, PERCENTILE_P),
-            state: ValueSeries::Empty,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// STDDEV / STDDEV_POP / VARIANCE / VAR_POP
-// ---------------------------------------------------------------------------
-//
-// Implemented as a running `(n, sum, sum-of-squares)` fold — not Welford's
-// incremental `(n, mean, M2)` recurrence — and the variance is recovered at
-// `finish` via the identity `Var = (Σx² − (Σx)²/n) / denom`. This is a
-// deliberate refinement of the plan's "Welford-style" starting point: Welford
-// exists to solve TWO problems, and this representation gets BOTH without
-// Welford's cost. First, avoiding catastrophic cancellation under
-// FLOATING-POINT re-association — irrelevant to this crate's EXACT
-// decimal/integer tower, where `Σx²` and `(Σx)²` are exact integers/decimals
-// with no cancellation error to avoid. Second, being incrementally mergeable
-// across parallel partial folds — needed, since this family IS
-// `Volatility::Stable` and folds across `crate::parallel::par_chunk_reduce_init`
-// chunks (see the module docs' "Real merges" section) — but `(n, Σx, Σx²)`
-// merges through PLAIN componentwise addition (`MomentsAccumulator::combine`),
-// simpler and cheaper than Welford's own pairwise-merge formula, and exactly
-// as exact as the sequential fold. What Welford's per-row division WOULD cost
-// here, with no benefit over the sum/sum-of-squares form's simpler merge, is
-// precision: `mean = mean + delta/n` rounds once PER ROW at this crate's
-// 18-fractional-digit decimal-division ceiling
-// (`purrdf_xsd::numeric::MAX_DECIMAL_SCALE`), so an all-integer group's
-// population variance can drift off its exact integer answer by a few units
-// in the 18th digit. The sum/sum-of-squares form divides exactly ONCE (twice,
-// for the final `Σx²ᵢ − (Σx)²/n` and once more for `/ denom`), so an
-// all-integer or all-decimal group's variance stays EXACTLY the textbook
-// answer regardless of how many chunks it was folded across — see this
-// module's `var_pop_matches_the_known_dataset` test, which pins the exact
-// `"4"` this form produces, and
-// `stat_agg_moments_chunked_fold_forced_parallel_and_sequential_agree` in
-// `crate::modifier`'s tests, which pins that a chunked fold reproduces it
-// exactly.
-
-#[derive(Clone, Copy)]
-enum MomentsKind {
-    Stddev,
-    StddevPop,
-    Variance,
-    VarPop,
-}
-
-enum MomentsState {
-    Empty,
-    Ok {
-        n: u64,
-        sum: XsdValue,
-        sumsq: XsdValue,
-    },
-    Poisoned,
-}
-
-/// One running-moments update: fold `x` into `(n, Σx, Σx²)`, returning the
-/// next triple or `None` on arithmetic failure (poison).
-fn moments_step(
-    n: u64,
-    sum: &XsdValue,
-    sumsq: &XsdValue,
-    x: &XsdValue,
-) -> Option<(u64, XsdValue, XsdValue)> {
-    let n1 = n.checked_add(1)?;
-    let new_sum = numeric_add(sum, x).ok()?;
-    let xsq = numeric_mul(x, x).ok()?;
-    let new_sumsq = numeric_add(sumsq, &xsq).ok()?;
-    Some((n1, new_sum, new_sumsq))
-}
-
-struct MomentsAccumulator {
-    kind: MomentsKind,
-    state: MomentsState,
-    /// The query's division policy, which the variance's quotient takes.
-    division: purrdf_xsd::exact::DivisionPolicy,
-}
-
-impl AggregateAccumulator for MomentsAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if matches!(self.state, MomentsState::Poisoned) {
-            return Ok(());
-        }
-        let Some(x) = args.first().and_then(xsd_of).filter(XsdValue::is_numeric) else {
-            self.state = MomentsState::Poisoned;
-            return Ok(());
-        };
-        let next = match &self.state {
-            MomentsState::Empty => {
-                let zero = numeric_sub(&x, &x).ok();
-                zero.and_then(|zero| moments_step(0, &zero, &zero, &x))
-            }
-            MomentsState::Ok { n, sum, sumsq } => moments_step(*n, sum, sumsq, &x),
-            MomentsState::Poisoned => None,
-        };
-        let Some((n, sum, sumsq)) = next else {
-            self.state = MomentsState::Poisoned;
-            return Ok(());
-        };
-        self.state = MomentsState::Ok { n, sum, sumsq };
-        Ok(())
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // Componentwise moment merge: `(n, Σx, Σx²) + (n', Σx', Σx'²)` —
-        // exact, no precision loss, for the same reason the running fold
-        // itself is exact (see this family's own doc comment above). `other`'s
-        // `kind` is discarded: it is the SAME variant as `self.kind` by
-        // construction (one `MomentsAggregate::init` per accumulator).
-        let other = downcast_combine_partial::<Self>(other)?;
-        self.state = match (
-            mem::replace(&mut self.state, MomentsState::Empty),
-            other.state,
-        ) {
-            (MomentsState::Poisoned, _) | (_, MomentsState::Poisoned) => MomentsState::Poisoned,
-            (MomentsState::Empty, s) | (s, MomentsState::Empty) => s,
-            (
-                MomentsState::Ok { n, sum, sumsq },
-                MomentsState::Ok {
-                    n: other_n,
-                    sum: other_sum,
-                    sumsq: other_sumsq,
-                },
-            ) => {
-                let merged = n.checked_add(other_n).and_then(|n| {
-                    let sum = numeric_add(&sum, &other_sum).ok()?;
-                    let sumsq = numeric_add(&sumsq, &other_sumsq).ok()?;
-                    Some((n, sum, sumsq))
-                });
-                match merged {
-                    Some((n, sum, sumsq)) => MomentsState::Ok { n, sum, sumsq },
-                    None => MomentsState::Poisoned,
-                }
-            }
-        };
-        Ok(())
-    }
-
-    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
-    /// body is this same one line.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        self.finish_absorbing(&mut |_| {})
-    }
-
-    /// The variance is `(n·Σx² − (Σx)²) / (n·d)`, `d` being `n` for the population
-    /// forms and `n − 1` for the sample ones. Over integers and decimals that is ONE
-    /// quotient under the query's division policy, so the answer is rounded once, and
-    /// a variance with no finite expansion under `exact` is an expression error —
-    /// unbound, its `err:FOAR0002` handed to `absorb` — as `AVG`'s mean is. A float or
-    /// double operand keeps IEEE arithmetic and the mean-correction form.
-    fn finish_absorbing(
-        self: Box<Self>,
-        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
-    ) -> Result<Option<TermValue>, EvalError> {
-        let Self {
-            kind,
-            state,
-            division,
-        } = *self;
-        let MomentsState::Ok { n, sum, sumsq } = state else {
-            return Ok(None);
-        };
-        let population = matches!(kind, MomentsKind::StddevPop | MomentsKind::VarPop);
-        let denom = if population {
-            Some(n)
-        } else {
-            n.checked_sub(1).filter(|&d| d > 0)
-        };
-        let Some(denom) = denom else {
-            return Ok(None);
-        };
-        let n_val = XsdValue::Integer {
-            value: i128::from(n),
-            datatype: XsdDatatype::Integer,
-        };
-        let denom_val = XsdValue::Integer {
-            value: i128::from(denom),
-            datatype: XsdDatatype::Integer,
-        };
-        let exact = sum.is_exact_numeric() && sumsq.is_exact_numeric();
-        let variance = if exact {
-            let quotient = (|| {
-                let scaled = numeric_mul(&n_val, &sumsq).ok()?;
-                let numerator = numeric_sub(&scaled, &numeric_mul(&sum, &sum).ok()?).ok()?;
-                let divisor = numeric_mul(&n_val, &denom_val).ok()?;
-                Some(numeric_div_with_policy(&numerator, &divisor, division))
-            })();
-            match quotient {
-                Some(Ok(variance)) => variance,
-                Some(Err(error)) => {
-                    if let Some(code) = error.code() {
-                        absorb(code);
-                    }
-                    return Ok(None);
-                }
-                None => return Ok(None),
-            }
-        } else {
-            let Ok(sum_sq) = numeric_mul(&sum, &sum) else {
-                return Ok(None);
-            };
-            let Ok(mean_correction) = numeric_div(&sum_sq, &n_val) else {
-                return Ok(None);
-            };
-            let Ok(numerator) = numeric_sub(&sumsq, &mean_correction) else {
-                return Ok(None);
-            };
-            let Ok(variance) = numeric_div(&numerator, &denom_val) else {
-                return Ok(None);
-            };
-            variance
-        };
-        match kind {
-            MomentsKind::Variance | MomentsKind::VarPop => Ok(Some(xsd_value_to_term(&variance))),
-            MomentsKind::Stddev | MomentsKind::StddevPop => {
-                let Some(v) = to_f64(&variance) else {
-                    return Ok(None);
-                };
-                // Correctly rounded on every target, the x87 included.
-                let root = purrdf_xsd::ieee::f64_sqrt(v.max(0.0));
-                Ok(Some(TermValue::typed_literal(
-                    XsdValue::Double(root).canonical_lexical(),
-                    XSD_DOUBLE,
-                )))
-            }
-        }
+    fn init_admitted(
+        &self,
+        scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            PercentileAccumulator {
+                p: scalarval_native(scalarvals, PERCENTILE_P, workspace)?,
+                state: ValueSeries::Empty,
+                workspace: workspace.clone(),
+            },
+            workspace,
+        )
     }
 }
 
 struct MomentsAggregate {
     kind: MomentsKind,
 }
-
 impl CustomAggregate for MomentsAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -1104,122 +1509,46 @@ impl CustomAggregate for MomentsAggregate {
     fn state_bound(&self) -> u64 {
         MOMENTS_STATE_BOUND
     }
-    fn exact_numeric_cost(
-        &self,
-        survivors: &[Vec<TermValue>],
-        scalarvals: &[(String, TermValue)],
-    ) -> Cost {
-        self.exact_numeric_cost_under(
-            survivors,
-            scalarvals,
-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
-        )
-    }
-    fn exact_numeric_cost_under(
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
         &self,
         survivors: &[Vec<TermValue>],
         _scalarvals: &[(String, TermValue)],
         division: purrdf_xsd::exact::DivisionPolicy,
-    ) -> Cost {
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
         moments_cost(
             survivors,
             matches!(self.kind, MomentsKind::Stddev | MomentsKind::StddevPop),
             division,
+            workspace,
         )
     }
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
     }
-    fn init_under(
+
+    fn init_admitted(
         &self,
         _scalarvals: &[(String, TermValue)],
         division: purrdf_xsd::exact::DivisionPolicy,
-    ) -> Box<dyn AggregateAccumulator> {
-        Box::new(MomentsAccumulator {
-            kind: self.kind,
-            state: MomentsState::Empty,
-            division,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MODE
-// ---------------------------------------------------------------------------
-
-struct ModeAccumulator {
-    values: Vec<TermValue>,
-}
-
-impl AggregateAccumulator for ModeAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(v) = args.first() {
-            self.values.push(v.clone());
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // A count-map merge specialized to this accumulator's own
-        // representation: `finish` recovers each value's count via a sort +
-        // run-length scan over the WHOLE multiset, so appending the two
-        // partials' raw value lists is exactly "sum the counts per value" —
-        // no separate map is needed to get that effect.
-        let mut other = downcast_combine_partial::<Self>(other)?;
-        self.values.append(&mut other.values);
-        Ok(())
-    }
-
-    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
-    /// body is this same one line.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { mut values } = *self;
-        if values.is_empty() {
-            return Ok(None);
-        }
-        // Natural structural `Ord` (see `purrdf_core::TermValue`'s hand-written
-        // impl) — used only to group exact-identity duplicates via a run-length
-        // scan; the WINNER among equal-count runs is picked below by the SPARQL
-        // value order, per the module docs.
-        values.sort();
-        let mut best: Option<(TermValue, u64)> = None;
-        let mut i = 0;
-        while i < values.len() {
-            let mut j = i + 1;
-            while j < values.len() && values[j] == values[i] {
-                j += 1;
-            }
-            let count = u64::try_from(j - i).unwrap_or(u64::MAX);
-            let better = match &best {
-                None => true,
-                Some((best_value, best_count)) => {
-                    count > *best_count
-                        || (count == *best_count
-                            && match total_order(
-                                &project(Some(&values[i])),
-                                &project(Some(best_value)),
-                            ) {
-                                Ordering::Less => true,
-                                Ordering::Greater => false,
-                                Ordering::Equal => values[i] < *best_value,
-                            })
-                }
-            };
-            if better {
-                best = Some((values[i].clone(), count));
-            }
-            i = j;
-        }
-        Ok(best.map(|(value, _)| value))
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            MomentsAccumulator {
+                kind: self.kind,
+                state: MomentsState::Empty,
+                division,
+                workspace: workspace.clone(),
+            },
+            workspace,
+        )
     }
 }
 
 struct ModeAggregate;
-
 impl CustomAggregate for ModeAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -1233,81 +1562,45 @@ impl CustomAggregate for ModeAggregate {
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
-    fn exact_numeric_cost(
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
         &self,
         survivors: &[Vec<TermValue>],
         _scalarvals: &[(String, TermValue)],
-    ) -> Cost {
-        // The winner among equal-count runs is chosen by value order, one
-        // comparison per run.
-        if machine_word_operands(survivors) {
-            return Cost::ZERO;
-        }
-        compare_chain(&operand_shapes(survivors), 1)
-    }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(ModeAccumulator { values: Vec::new() })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// FIRST / LAST
-// ---------------------------------------------------------------------------
-
-struct FirstAccumulator {
-    value: Option<TermValue>,
-}
-
-impl AggregateAccumulator for FirstAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if self.value.is_none() {
-            self.value = args.first().cloned();
-        }
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // `self` is the earlier chunk: if it already saw a row, its value IS the
-        // group's first value regardless of what a later chunk holds. Only an
-        // empty earlier chunk defers to the later one.
-        //
-        // This relies on [`AggregateAccumulator::combine`]'s documented contract
-        // ("`self` holds the earlier ... partial fold and `other` the later
-        // one"), which `crate::parallel::par_chunk_reduce_init` upholds by
-        // construction: it reduces `items.par_chunks(..)`'s per-chunk results
-        // with a strictly sequential `for chunk_result in iter { combine(&mut
-        // acc, chunk_result?)?; }` in CHUNK-INDEX order — never a tree/pairwise
-        // reduction, and never reordered by which worker finishes first — so
-        // `acc` (this `self`) is always chunk `i` and `chunk_result` (`other`)
-        // is always chunk `i+1`, regardless of thread count or scheduling. A
-        // flip of that order, or a switch to a non-sequential reduction shape,
-        // would silently return the WRONG row's value with no local symptom —
-        // see the module docs' "FIRST/LAST" section — which is why
-        // `crate::modifier`'s `stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`
-        // pins the exact answer (not just sequential/parallel agreement) over a
-        // many-chunk forced-parallel fold.
-        if self.value.is_none()
-            && let Some(v) = other.finish()?
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
         {
-            self.value = Some(v);
+            if machine_word_operands(survivors) {
+                return Ok(Cost::ZERO);
+            }
+            let shapes = operand_shapes(survivors, workspace)?;
+            Ok(compare_chain(&shapes, 1))
         }
-        Ok(())
+    }
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
     }
 
-    /// Unused (this accumulator merges through `finish()`, which is already
-    /// sufficient state) — see [`AggregateAccumulator::into_any`]'s trait docs
-    /// for why every implementor still supplies the one-line body.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(self.value)
+    fn init_admitted(
+        &self,
+        _scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            ModeAccumulator {
+                values: crate::AdmittedVec::new(workspace),
+                workspace: workspace.clone(),
+            },
+            workspace,
+        )
     }
 }
 
 struct FirstAggregate;
-
 impl CustomAggregate for FirstAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -1321,54 +1614,40 @@ impl CustomAggregate for FirstAggregate {
     fn state_bound(&self) -> u64 {
         SCALAR_STATE_BOUND
     }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(FirstAccumulator { value: None })
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
+        &self,
+        _survivors: &[Vec<TermValue>],
+        _scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
+        Ok(Cost::ZERO)
     }
-}
-
-struct LastAccumulator {
-    value: Option<TermValue>,
-}
-
-impl AggregateAccumulator for LastAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        self.value = args.first().cloned();
-        Ok(())
-    }
-
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // `other` is the later chunk: whatever it holds is later in row order
-        // than anything `self` holds, so it always wins when present.
-        //
-        // Same reliance as [`FirstAccumulator::combine`] on
-        // [`AggregateAccumulator::combine`]'s documented earlier-`self`/later-
-        // `other` contract, upheld by `crate::parallel::par_chunk_reduce_init`'s
-        // fixed, strictly sequential chunk-index-order reduce (see that
-        // `combine`'s comment for the exact mechanism) — pinned by
-        // `crate::modifier`'s
-        // `stat_agg_last_chunked_fold_forced_parallel_and_sequential_agree`,
-        // which would fail on the group's FIRST value instead of its last if
-        // that order ever flipped.
-        if let Some(v) = other.finish()? {
-            self.value = Some(v);
-        }
-        Ok(())
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
     }
 
-    /// Unused (this accumulator merges through `finish()`, which is already
-    /// sufficient state) — see [`AggregateAccumulator::into_any`]'s trait docs
-    /// for why every implementor still supplies the one-line body.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(self.value)
+    fn init_admitted(
+        &self,
+        _scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            EdgeAccumulator {
+                value: None,
+                last: false,
+                workspace: workspace.clone(),
+            },
+            workspace,
+        )
     }
 }
 
 struct LastAggregate;
-
 impl CustomAggregate for LastAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -1382,135 +1661,40 @@ impl CustomAggregate for LastAggregate {
     fn state_bound(&self) -> u64 {
         SCALAR_STATE_BOUND
     }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        Box::new(LastAccumulator { value: None })
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
+        &self,
+        _survivors: &[Vec<TermValue>],
+        _scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
+        Ok(Cost::ZERO)
     }
-}
-
-// ---------------------------------------------------------------------------
-// TOPK
-// ---------------------------------------------------------------------------
-
-enum TopKState {
-    /// `k` resolved to a valid positive integer at `init` time (see
-    /// `TopKAggregate::init`); `values` is the accumulator's live bounded
-    /// top-`k` set, empty until the first row is folded. An empty `values` at
-    /// `finish` — no row ever folded — is exactly the "empty group" case: see
-    /// `finish`'s own `is_empty` check.
-    Valid {
-        k: usize,
-        values: Vec<TermValue>,
-    },
-    Poisoned,
-}
-
-/// Insert `value` into the bounded top-`k` set, evicting the current smallest
-/// (under [`total_order`], natural [`TermValue`] `Ord` as final tie-break)
-/// once the set exceeds `k` — keeps the accumulator's live state at `O(k)`
-/// elements at all times, never `O(group size)`.
-fn insert_bounded(values: &mut Vec<TermValue>, k: usize, value: TermValue) {
-    if k == 0 {
-        return;
-    }
-    values.push(value);
-    if values.len() > k {
-        let min_idx = (0..values.len())
-            .min_by(|&a, &b| {
-                total_order(&project(Some(&values[a])), &project(Some(&values[b])))
-                    .then_with(|| values[a].cmp(&values[b]))
-            })
-            .expect("values is non-empty: just pushed one");
-        values.remove(min_idx);
-    }
-}
-
-struct TopKAccumulator {
-    state: TopKState,
-}
-
-impl AggregateAccumulator for TopKAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        let TopKState::Valid { k, values } = &mut self.state else {
-            return Ok(());
-        };
-        let Some(value) = args.first() else {
-            self.state = TopKState::Poisoned;
-            return Ok(());
-        };
-        insert_bounded(values, *k, value.clone());
-        Ok(())
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
     }
 
-    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        // A bounded-structure merge: insert every one of `other`'s retained
-        // values into `self`'s top-`k` set via the SAME `insert_bounded`
-        // primitive `step` uses, truncating back down to `k` as it goes — the
-        // merged state never exceeds `O(k)` elements, matching `step`'s own
-        // bound. `k` is identical on both sides BY CONSTRUCTION (see
-        // `PercentileAccumulator::combine`'s identical note on `p`), so there
-        // is no cross-chunk `k`-mismatch left to detect, unlike the old
-        // per-row positional-argument design.
-        let other = downcast_combine_partial::<Self>(other)?;
-        self.state = match (
-            mem::replace(&mut self.state, TopKState::Poisoned),
-            other.state,
-        ) {
-            (TopKState::Poisoned, _) | (_, TopKState::Poisoned) => TopKState::Poisoned,
-            (
-                TopKState::Valid { k, mut values },
-                TopKState::Valid {
-                    values: other_values,
-                    ..
-                },
-            ) => {
-                for value in other_values {
-                    insert_bounded(&mut values, k, value);
-                }
-                TopKState::Valid { k, values }
-            }
-        };
-        Ok(())
-    }
-
-    /// See [`AggregateAccumulator::into_any`]'s trait docs — every implementor's
-    /// body is this same one line.
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { state } = *self;
-        let TopKState::Valid { values, .. } = state else {
-            return Ok(None);
-        };
-        if values.is_empty() {
-            // No row was ever folded: the empty group answers unbound, like
-            // every other member here.
-            return Ok(None);
-        }
-        let mut sorted = values;
-        // Descending: largest first — reverse-argument `total_order`/`Ord`.
-        sorted.sort_by(|a, b| {
-            total_order(&project(Some(b)), &project(Some(a))).then_with(|| b.cmp(a))
-        });
-        let mut joined = String::new();
-        for (i, v) in sorted.iter().enumerate() {
-            let Some(lex) = lexical_of(v) else {
-                // A blank node or a triple term has no lexical form — poison,
-                // exactly as GROUP_CONCAT poisons on the same case.
-                return Ok(None);
-            };
-            if i > 0 {
-                joined.push(' ');
-            }
-            joined.push_str(&lex);
-        }
-        Ok(Some(TermValue::typed_literal(joined, XSD_STRING)))
+    fn init_admitted(
+        &self,
+        _scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            EdgeAccumulator {
+                value: None,
+                last: true,
+                workspace: workspace.clone(),
+            },
+            workspace,
+        )
     }
 }
 
 struct TopKAggregate;
-
 impl CustomAggregate for TopKAggregate {
     fn arity(&self) -> Arity {
         ONE_EXPRESSION
@@ -1528,54 +1712,67 @@ impl CustomAggregate for TopKAggregate {
         const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new(TOPK_K, ScalarvalKind::Numeric)];
         &SPEC
     }
-    fn exact_numeric_cost(
+
+    resident_statistic_doors!();
+
+    fn exact_numeric_cost_admitted(
         &self,
         survivors: &[Vec<TermValue>],
         scalarvals: &[(String, TermValue)],
-    ) -> Cost {
-        // Each insert finds the least of `k + 1` retained values, and the finish
-        // sorts the `k` survivors.
-        let k = numeric_scalarval(scalarvals, TOPK_K)
-            .and_then(|v| match v {
-                XsdValue::Integer { value, .. } if value > 0 => u64::try_from(value).ok(),
-                _ => None,
-            })
-            .unwrap_or(1);
-        if machine_word_operands(survivors) {
-            return Cost::ZERO;
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Cost, EvalError> {
+        {
+            let k = scalarval_native(scalarvals, TOPK_K, workspace)?
+                .as_deref()
+                .and_then(|value| match value {
+                    XsdValue::Integer { value, .. } if *value > 0 => u64::try_from(*value).ok(),
+                    _ => None,
+                })
+                .unwrap_or(1);
+            if machine_word_operands(survivors) {
+                return Ok(Cost::ZERO);
+            }
+            let shapes = operand_shapes(survivors, workspace)?;
+            let rounds = k
+                .min(shapes.len() as u64)
+                .saturating_add(1)
+                .saturating_add(sort_rounds(shapes.len()));
+            Ok(compare_chain(&shapes, rounds))
         }
-        let shapes = operand_shapes(survivors);
-        let rounds = k
-            .min(shapes.len() as u64)
-            .saturating_add(1)
-            .saturating_add(sort_rounds(shapes.len()));
-        compare_chain(&shapes, rounds)
     }
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
-        // `K` must be a positive `xsd:integer`, constant across the group — a
-        // non-integer or non-positive `K` poisons the fold to unbound (never a
-        // hard error), the same "poison, don't abort" discipline every other
-        // numeric member here uses.
-        let k = numeric_scalarval(scalarvals, TOPK_K).and_then(|v| match v {
-            XsdValue::Integer { value, .. } if value > 0 => usize::try_from(value).ok(),
-            _ => None,
-        });
-        Box::new(TopKAccumulator {
-            state: match k {
-                Some(k) => TopKState::Valid {
-                    k,
-                    values: Vec::new(),
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+    }
+
+    fn init_admitted(
+        &self,
+        scalarvals: &[(String, TermValue)],
+        _division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        WorkspaceAccumulator::new(
+            TopKAccumulator {
+                state: match scalarval_native(scalarvals, TOPK_K, workspace)?
+                    .as_deref()
+                    .and_then(|value| match value {
+                        XsdValue::Integer { value, .. } if *value > 0 => {
+                            usize::try_from(*value).ok()
+                        }
+                        _ => None,
+                    }) {
+                    Some(k) => TopKState::Valid {
+                        k,
+                        values: crate::AdmittedVec::new(workspace),
+                    },
+                    None => TopKState::Poisoned,
                 },
-                None => TopKState::Poisoned,
+                workspace: workspace.clone(),
             },
-        })
+            workspace,
+        )
     }
 }
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 impl AggregateRegistry {
     /// Register the crate's first-party statistical aggregate set —
     /// `MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`,

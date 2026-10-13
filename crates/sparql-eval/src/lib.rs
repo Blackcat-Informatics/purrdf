@@ -83,6 +83,7 @@ mod cdt_agg;
 mod cdt_fn;
 mod cdt_unfold;
 mod clock;
+mod composite_value;
 mod construct;
 mod contain;
 pub mod convert;
@@ -98,6 +99,8 @@ mod exists_admission_gate;
 mod expr;
 pub mod extension_env;
 mod fallible;
+/// Standard GeoSPARQL scalar and property-function adapters over the shared kernel.
+pub mod geo;
 mod governed;
 pub mod governor;
 pub mod interned;
@@ -107,6 +110,7 @@ mod join_plan;
 pub mod knn;
 mod list_fn;
 mod modifier;
+mod native_numeric;
 #[cfg(test)]
 mod nested_exists_gate;
 #[cfg(test)]
@@ -114,6 +118,7 @@ mod nested_lateral_gate;
 #[cfg(test)]
 mod op_count;
 pub(crate) mod parallel;
+mod parsed_value;
 mod xpath_regex;
 pub use parallel::chunk_len_for_threads;
 #[cfg(test)]
@@ -131,6 +136,11 @@ mod property_fn_plan;
 mod rdflib;
 pub use rdflib::select_query_dataset;
 mod registry_id;
+mod retained;
+pub use retained::{
+    RetainedDiagnostic, RetainedEvidence, RetainedGraph, RetainedPartialSparqlResult,
+    RetainedQueryExplanation, RetainedSolutions, RetainedSparqlResult,
+};
 // The SPARQL 1.1 Protocol request surface: HTTP request → operation, dataset
 // parameters applied as text, and response-format negotiation. No I/O.
 pub mod protocol;
@@ -149,11 +159,18 @@ mod row_ingest;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
+mod candidate_scope;
+pub mod evidence_exec;
+pub use candidate_scope::{CandidateConstraint, NativeCandidateScope};
+pub use evidence_exec::{
+    AcceptedPayloadRows, EvidenceScope, EvidenceSource, QueryEvidence, RowEvidence,
+};
 pub mod execution;
 #[doc(hidden)]
 pub mod fixture;
 pub mod service;
 mod service_endpoints;
+pub mod shapes;
 pub mod solution;
 // The guard every recursive evaluator entry passes through, over `purrdf-stack`'s
 // measurement (a host that switches the stack pointer onto a stack of its own installs
@@ -166,6 +183,12 @@ mod template;
 pub mod update;
 pub mod user_fn;
 mod vm;
+mod workspace;
+pub use workspace::{
+    AdmittedHeap, AdmittedMap, AdmittedOrderedMap, AdmittedOrderedSet, AdmittedVec,
+    AdmittedVecIntoIter, OwnedIri, WorkspaceAllocation, WorkspaceArray, WorkspaceBox,
+    WorkspaceCapability, WorkspaceIri, WorkspaceTerm,
+};
 // The per-query record of what the relations a query invoked attested about the
 // indexes behind them — which generation answered, and whether it was whole.
 pub mod witness;
@@ -200,6 +223,7 @@ pub use execution::set_memo_verification_enabled;
 pub use extension_env::ExtensionEnv;
 pub use fallible::{
     CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError, FallibleSparqlResult,
+    QueryControlFailure,
 };
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
@@ -215,7 +239,8 @@ pub use governor::{
 // caller that reads two columns of a wide row does not pay for the other twenty.
 // Additive beside `SparqlResult`, never a replacement for it.
 pub use interned::{
-    InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
+    InternedGoverned, InternedGraph, InternedOutcome, InternedRequest, InternedSolutions,
+    Prebinding,
 };
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
@@ -254,12 +279,13 @@ pub use purrdf_xsd::exact::{DivisionPolicy, Rounding};
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, KnnObservations, Ranked};
 pub use property_fn::{
-    AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement, DomainTag,
-    DuplicatePolicy, ExclusionBasis, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs,
-    PfArity, PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet,
-    ServiceLevel, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
-    generation_contained, service_level_contained,
+    AcceptedTerm, AdmittedPfRow, CandidateDomains, CandidateMembership, CandidateScope,
+    Completeness, DeclaredArithmetic, DepthPlacement, DomainTag, DuplicatePolicy, ExclusionBasis,
+    IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity, PfAttestation, PfCursor,
+    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic,
+    RankFidelity, RankedDeclaration, RequestFacet, ServiceLevel, TermKind, TermPattern,
+    TermPlacement, WorkspaceCursor, composed_order_fidelity, generation_contained,
+    service_level_contained,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private
 // planning module beside the instance-bearing fingerprint, which renders it rather
@@ -273,7 +299,9 @@ pub use property_fn_plan::content_fingerprint as property_function_content_finge
 // The on-demand read of one property-function call, returned by
 // `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
 // ranked relation as soon as it has what it needs holds one of these.
-pub use property_fn_eval::CallCursor;
+pub use engine::{AdmittedInternedGoverned, EvaluationFailure};
+pub use property_fn_eval::{AdmittedPropertyRow, CallCursor, EvidencedPropertyRow};
+pub use workspace::SharedWorkspace;
 // The one shape description behind every question asked of a query's calls: which
 // of them each projected column's values come from, and whether the query is one call
 // read on demand. Returned by
@@ -296,8 +324,12 @@ pub use path_relation::{
     PathDirection, PathGraph, PathLimits, PathSnapshotFingerprint, PathStep, PathWitnessRelation,
     ShortestPathWitnessRelation,
 };
-pub use remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
-pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
+pub use remote::{
+    AdmittedRemoteError, AdmittedResolvedBindings, RemoteError, ResolvedBindings,
+    RetainedServiceFailure, ServiceBuildError, ServiceRequest, ServiceResolutionError,
+    ServiceResolver, ServiceWorkspaceCertificate,
+};
+pub use remote_http::{AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport};
 // The per-service policy surface: what a resolver may do for one endpoint, what it
 // sends, and the two resolvers that consume it. Re-exported so a host configures
 // federation without naming the module path.
@@ -306,17 +338,20 @@ pub use service::{
     InProcessServiceResolver, ServiceCapabilities, ServiceCapability, ServiceCatalog,
     ServiceCredential, ServiceDenial, ServiceProfile, ServiceRouter,
 };
-pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
+pub use solution::{
+    RetainedRow, RowBag, RowBagIntoIter, SharedSchema, Solution, SolutionSeq, VarSchema, compatible,
+};
 pub use update::{GraphResolveRequest, GraphResolver, LoadError};
 pub use user_fn::{
-    Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
-    NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
-    UserFunctionAdmission, UserFunctionRefusal, UserFunctionRegistry, Volatility,
+    AdmittedExprFnBody, AdmittedNativeFnBody, Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall,
+    ExprFunction, MeteredNativeFnBody, NativeFnBody, NativeFnCall, NativeFnContext, NativeFunction,
+    NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionAdmission,
+    UserFunctionRefusal, UserFunctionRegistry, Volatility,
 };
 // The evidence channel the relation seam feeds: what each invoked relation attested,
 // carried out on the governed receipt's `RelationIdentity`. Re-exported beside the
 // receipt itself, because a field a caller cannot name is a field it cannot read.
-pub use witness::{RelationAttestations, RelationWitness};
+pub use witness::{RelationAttestations, RelationWitness, WitnessSet, WitnessSetIter};
 
 /// A deterministic, seed-free hasher builder: the workspace's fixed-key `FixedHasher`.
 ///
@@ -339,3 +374,6 @@ pub(crate) type DetHashMap<K, V> = std::collections::HashMap<K, V, DetHasher>;
 
 /// A deterministic, seed-free [`HashSet`](std::collections::HashSet). See [`DetHasher`].
 pub(crate) type DetHashSet<K> = std::collections::HashSet<K, DetHasher>;
+
+/// Immutable admission-carrying native producer diagnostics.
+pub use error::{NativeDiagnostic, NativeDiagnosticKind};

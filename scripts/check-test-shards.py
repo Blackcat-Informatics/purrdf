@@ -102,4 +102,4 @@ if __name__ == "__main__":
         errors = wiring_problems((ROOT / "Makefile").read_text(), (ROOT / ".github/workflows/ci.yaml").read_text()) + target_problems(metadata)
         if errors:
             raise SystemExit("FAIL: " + "\n".join(errors))
-        print(f"OK: six feature-unified shards cover {len(metadata['workspace_members'])} workspace members")
+        print(f"OK: {len(SHARDS.SHARDS)} feature-unified shards cover {len(metadata['workspace_members'])} workspace members")

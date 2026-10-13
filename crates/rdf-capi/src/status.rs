@@ -63,6 +63,9 @@ pub enum PurrdfStatus {
     /// SPARQL request's presentation record carries the same code. No result, answer
     /// or report is returned: a refusal is never an empty or non-matching result.
     RegexResourceError = 13,
+    /// A geographic reference, geometry, numerical or resource refusal. A
+    /// session call also returns the unchanged typed response record.
+    GeoError = 14,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

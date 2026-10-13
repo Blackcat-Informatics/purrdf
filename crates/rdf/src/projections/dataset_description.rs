@@ -8,7 +8,7 @@ use purrdf_core::dataset_view::TermGuard as _;
 use crate::projections::util::validate_portable_bound;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
+use purrdf_core::{DatasetHandle, DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
 use purrdf_lex::json::Value;
 use purrdf_sparql_algebra::{
     AggregateFunction, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
@@ -217,7 +217,7 @@ pub(super) fn format_to_json(format: NativeRdfFormat) -> Value {
 #[derive(Debug, Clone)]
 pub struct ConstructViewProjection {
     /// Frozen CONSTRUCT result graph.
-    pub dataset: Arc<RdfDataset>,
+    pub dataset: DatasetHandle,
     /// Combined source record count charged to the input limit.
     pub input_records: usize,
     /// Combined result record count charged to the output limit.
@@ -731,7 +731,7 @@ fn term_contains_blank<D: DatasetView>(
 #[derive(Debug, Clone)]
 pub struct RdfDescriptionProjection {
     /// Frozen caller-vocabulary RDF 1.2 description graph.
-    pub dataset: Arc<RdfDataset>,
+    pub dataset: DatasetHandle,
     /// Canonical package member path derived from the selected syntax registry row.
     pub artifact_path: String,
     /// One-member deterministic projection package.
@@ -782,13 +782,14 @@ pub fn serialize_rdf_description(
 /// syntax can write a base directive). This projection lane deliberately does not
 /// re-decide either half.
 pub(crate) fn serialize_description(
-    dataset: Arc<RdfDataset>,
+    dataset: impl Into<DatasetHandle>,
     loss_ledger: LossLedger,
     format: NativeRdfFormat,
     artifact_stem: &str,
     document_base_iri: Option<&str>,
     limits: ProjectionLimits,
 ) -> Result<RdfDescriptionProjection, ProjectionError> {
+    let dataset = dataset.into();
     validate_artifact_stem(artifact_stem)?;
     ensure_blank_free(dataset.as_ref(), limits)?;
     if dataset.named_graphs().next().is_some() {
@@ -1211,12 +1212,18 @@ mod tests {
         let reversed = project_construct_view(reordered.as_ref(), &config).expect("reordered");
         assert_eq!(resident.input_records, 3);
         assert_eq!(resident.output_records, 2);
-        assert!(datasets_isomorphic(&resident.dataset, &reversed.dataset));
+        assert!(datasets_isomorphic(
+            resident.dataset.as_ref(),
+            reversed.dataset.as_ref()
+        ));
 
         let bytes = PackBuilder::build_bytes(&source).expect("pack");
         let view = PackView::from_bytes(&bytes).expect("pack view");
         let packed = project_construct_view(&view, &config).expect("packed");
-        assert!(datasets_isomorphic(&resident.dataset, &packed.dataset));
+        assert!(datasets_isomorphic(
+            resident.dataset.as_ref(),
+            packed.dataset.as_ref()
+        ));
         assert_eq!(resident.input_records, packed.input_records);
         assert_eq!(resident.output_records, packed.output_records);
     }

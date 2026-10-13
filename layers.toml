@@ -184,6 +184,10 @@ name = "purrdf-markdown"
 deps = ["purrdf-core", "purrdf-hash"]
 
 [[crate]]
+name = "purrdf-mime"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex", "purrdf-xsd"]
+
+[[crate]]
 name = "purrdf-shex"
 deps = [
     "purrdf-core",
@@ -212,6 +216,7 @@ name = "purrdf-sparql-eval"
 deps = [
     "purrdf-cdt",
     "purrdf-core",
+    "purrdf-geo-kernel",
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
@@ -223,12 +228,15 @@ deps = [
 
 [[crate]]
 name = "purrdf-geo"
+deps = ["purrdf-geo-kernel", "purrdf-sparql-eval"]
+
+[[crate]]
+name = "purrdf-geo-kernel"
 deps = [
     "purrdf-core",
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
-    "purrdf-sparql-eval",
     "purrdf-xsd",
 ]
 
@@ -323,6 +331,7 @@ deps = [
     "purrdf-core",
     "purrdf-datalog",
     "purrdf-entail",
+    "purrdf-geo-kernel",
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
@@ -330,6 +339,7 @@ deps = [
     "purrdf-shapes",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
+    "purrdf-xsd",
 ]
 
 [[crate]]
@@ -346,6 +356,7 @@ deps = [
     "purrdf-json",
     "purrdf-lex",
     "purrdf-markdown",
+    "purrdf-mime",
     "purrdf-rdf",
     "purrdf-retrieval",
     "purrdf-shapes",
@@ -390,6 +401,7 @@ deps = [
     "purrdf-core",
     "purrdf-columnar",
     "purrdf-gts",
+    "purrdf-lex",
     "purrdf-shapes",
     "purrdf-shex",
     "purrdf-slice",

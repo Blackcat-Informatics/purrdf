@@ -231,10 +231,24 @@ pub(crate) struct StrRange {
 /// The builder and the frozen lookup both key literals through this one function, so
 /// their notions of "the same literal" cannot drift.
 pub(crate) fn interned_language(tag: &str) -> std::borrow::Cow<'_, str> {
+    interned_language_with_memory(
+        tag,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident language fold allocation failed")
+}
+
+/// The shared identity fold, with its actual destination admitted at birth.
+pub(crate) fn interned_language_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+    tag: &'a str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<std::borrow::Cow<'a, str>, purrdf_lex::allocation::StorageError> {
     if purrdf_iri::langtag::is_identity_folded(tag) {
-        std::borrow::Cow::Borrowed(tag)
+        Ok(std::borrow::Cow::Borrowed(tag))
     } else {
-        std::borrow::Cow::Owned(purrdf_iri::langtag::identity_fold(tag))
+        Ok(std::borrow::Cow::Owned(
+            purrdf_iri::langtag::identity_fold_with_memory(tag, memory)?,
+        ))
     }
 }
 
@@ -249,13 +263,25 @@ pub(crate) fn interned_language(tag: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// When the arena would pass `u32::MAX` bytes.
 pub(crate) fn push_arena_str(arena: &mut Vec<u8>, s: &str) -> StrRange {
-    let offset = u32::try_from(arena.len()).expect("term arena exceeds u32::MAX bytes");
-    let len = u32::try_from(s.len()).expect("term string exceeds u32::MAX bytes");
-    offset
-        .checked_add(len)
-        .expect("term arena exceeds u32::MAX bytes");
-    arena.extend_from_slice(s.as_bytes());
-    StrRange { offset, len }
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut resident = Resident;
+    let mut memory = Memory::resume(&mut resident, arena.capacity());
+    push_arena_str_with_memory(arena, s, &mut memory)
+        .expect("resident term arena allocation failed")
+}
+
+/// The original arena producer, admitting growth before any allocation.
+pub(crate) fn push_arena_str_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    arena: &mut Vec<u8>,
+    s: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<StrRange, purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::StorageError;
+    let offset = u32::try_from(arena.len()).map_err(|_| StorageError::SizeOverflow)?;
+    let len = u32::try_from(s.len()).map_err(|_| StorageError::SizeOverflow)?;
+    offset.checked_add(len).ok_or(StorageError::SizeOverflow)?;
+    memory.extend(arena, s.bytes())?;
+    Ok(StrRange { offset, len })
 }
 
 /// Borrow an arena range as `&str`. The arena only ever receives validated UTF-8
@@ -379,6 +405,47 @@ purrdf_lex::constructors! {
 }
 
 impl TermValue {
+    /// Heap capacities owned directly by this node, excluding descendants.
+    /// Triple nodes include their three concrete child-box layouts; leaves
+    /// include each original string's capacity. This observes caller-owned
+    /// storage and does not certify a fresh clone or allocate a work list.
+    #[must_use]
+    pub fn owned_heap_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Iri(text) | Self::Blank { label: text, .. } => Some(text.capacity()),
+            Self::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => lexical_form
+                .capacity()
+                .checked_add(datatype.capacity())?
+                .checked_add(language.as_ref().map_or(0, String::capacity)),
+            Self::Triple { .. } => core::alloc::Layout::new::<Self>().size().checked_mul(3),
+        }
+    }
+
+    /// Authored UTF-8 bytes held directly by this node, excluding descendants.
+    /// This is a source-work measure; allocation capacity is reported separately
+    /// by [`Self::owned_heap_bytes`]. Neither accessor walks or allocates.
+    #[must_use]
+    pub fn text_payload_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Iri(text) | Self::Blank { label: text, .. } => Some(text.len()),
+            Self::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => lexical_form
+                .len()
+                .checked_add(datatype.len())?
+                .checked_add(language.as_ref().map_or(0, String::len)),
+            Self::Triple { .. } => Some(0),
+        }
+    }
+
     /// A blank node in the default scope, from its bare label.
     #[inline]
     pub fn blank(label: impl Into<String>) -> Self {
@@ -458,6 +525,19 @@ impl TermValue {
         matches!(self, Self::Blank { .. })
     }
 
+    /// A borrowed, allocation-free description of this RDF term's kind.
+    /// Native diagnostics use it when the value's contents are unnecessary to
+    /// explain a type refusal, avoiding recursive Debug's two spill work lists.
+    #[must_use]
+    pub const fn kind_description(&self) -> &'static str {
+        match self {
+            Self::Iri(_) => "an IRI",
+            Self::Blank { .. } => "a blank node",
+            Self::Literal { .. } => "a literal",
+            Self::Triple { .. } => "a triple term",
+        }
+    }
+
     /// The canonical kind tag used to order terms of DIFFERENT kinds (see
     /// [`canonical_kind_tag!`]).
     #[inline]
@@ -490,6 +570,31 @@ impl TermValue {
 
     /// The value of an owned [`RdfTerm`], its blank nodes decoded at the default scope.
     ///
+    /// Copy one original RDF literal through the shared native string and
+    /// language-identity homes. The returned term retains the caller's account;
+    /// no intermediate RDF term or independent heap work list is constructed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first original layout, allocation or admission refusal.
+    pub fn from_literal_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        literal: &RdfLiteral,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        memory.scope(|memory| {
+            Ok(Self::Literal {
+                lexical_form: memory.string(&literal.lexical_form)?,
+                datatype: memory.string(literal.datatype_iri())?,
+                language: literal
+                    .language
+                    .as_deref()
+                    .map(|tag| purrdf_iri::langtag::identity_fold_with_memory(tag, memory))
+                    .transpose()?,
+                direction: literal.direction,
+            })
+        })
+    }
+
     /// Exactly [`from_rdf_term_in_scope`](Self::from_rdf_term_in_scope) with
     /// [`BlankScope::DEFAULT`]; see there for the conversion.
     #[must_use]
@@ -530,15 +635,13 @@ impl TermValue {
                         label: label.clone(),
                         scope,
                     },
-                    RdfTerm::Literal(literal) => Self::Literal {
-                        lexical_form: literal.lexical_form.clone(),
-                        datatype: literal.datatype_iri().to_owned(),
-                        language: literal
-                            .language
-                            .as_deref()
-                            .map(purrdf_iri::langtag::identity_fold),
-                        direction: literal.direction,
-                    },
+                    RdfTerm::Literal(literal) => Self::from_literal_with_memory(
+                        literal,
+                        &mut purrdf_lex::allocation::Memory::new(
+                            &mut purrdf_lex::allocation::Resident,
+                        ),
+                    )
+                    .expect("resident literal term allocation"),
                     RdfTerm::Triple(_) => unreachable!("a triple term is folded from its parts"),
                 })
             },
@@ -721,11 +824,79 @@ impl TermValue {
     /// reuse one allocation. Note that appended encodings are themselves
     /// self-delimiting and therefore concatenate unambiguously.
     pub fn canonical_bytes(&self, out: &mut Vec<u8>) {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut resident, out.capacity());
+        self.canonical_bytes_with_memory(out, &mut memory)
+            .expect("resident canonical term storage");
+    }
+
+    /// Append the same canonical encoding under original physical admission.
+    ///
+    /// # Errors
+    /// Returns storage refusal before growing output or traversal buffers.
+    pub fn canonical_bytes_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        out: &mut Vec<u8>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
         let mut pending = Vec::new();
-        self.canonical_bytes_shallow(out, &mut pending);
+        memory.push(&mut pending, self)?;
         while let Some(term) = pending.pop() {
+            let mut bytes = 1usize;
+            let mut field = |length: usize| -> Result<(), StorageError> {
+                bytes = bytes
+                    .checked_add(8)
+                    .and_then(|bytes| bytes.checked_add(length))
+                    .ok_or(StorageError::SizeOverflow)?;
+                Ok(())
+            };
+            match term {
+                Self::Iri(iri) => field(iri.len())?,
+                Self::Blank { label, .. } => {
+                    field(label.len())?;
+                    bytes = bytes.checked_add(4).ok_or(StorageError::SizeOverflow)?;
+                }
+                Self::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    field(lexical_form.len())?;
+                    field(datatype.len())?;
+                    if let Some(language) = language {
+                        field(language.len())?;
+                    }
+                    bytes = bytes
+                        .checked_add(2 + usize::from(direction.is_some()))
+                        .ok_or(StorageError::SizeOverflow)?;
+                }
+                Self::Triple { .. } => {
+                    let required = pending
+                        .len()
+                        .checked_add(3)
+                        .ok_or(StorageError::SizeOverflow)?;
+                    memory.reserve(&mut pending, required)?;
+                }
+            }
+            let required = out
+                .len()
+                .checked_add(bytes)
+                .ok_or(StorageError::SizeOverflow)?;
+            if required > out.capacity() {
+                memory.reserve(
+                    out,
+                    required.max(
+                        out.capacity()
+                            .checked_mul(2)
+                            .ok_or(StorageError::SizeOverflow)?,
+                    ),
+                )?;
+            }
             term.canonical_bytes_shallow(out, &mut pending);
         }
+        memory.release_vec(pending)
     }
 
     /// Append this term's own part of the canonical encoding — its tag and fields —

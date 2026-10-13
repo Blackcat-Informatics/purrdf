@@ -82,10 +82,212 @@ impl UnsupportedKind {
     }
 }
 
+/// Existing request/error meanings with immutable, admission-carrying text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NativeDiagnosticKind {
+    /// The relation received an invalid invocation.
+    Function,
+    /// The relation failed operationally while executing its invocation.
+    FunctionOperational,
+    /// The requested data violated the native producer's input contract.
+    Data,
+    /// An original source-read refusal, retaining its native message and grant.
+    SourceRead,
+    /// The supplied native configuration was invalid.
+    Config,
+    /// A native evaluator invariant failed.
+    Internal,
+    /// A classified unsupported construct, preserving its stable diagnostic code.
+    Unsupported(UnsupportedKind),
+    /// An unclassified request refusal, preserving the original Unsupported code.
+    UnclassifiedUnsupported,
+    /// A SEP-0009 semantic construction bound, with its original diagnostic code.
+    CompositeBound,
+    /// Caller declarations intercept an immutable standard scalar function.
+    StandardFunctionConflict,
+}
+
+#[derive(Debug)]
+struct NativeDiagnosticPayload {
+    // Payload dies before its string+Shared-header admission is released.
+    text: String,
+    _allocation: crate::WorkspaceAllocation,
+}
+
+/// An engine-supplied diagnostic clones its immutable allocation and lease.
+#[derive(Debug, Clone)]
+pub struct NativeDiagnostic {
+    kind: NativeDiagnosticKind,
+    payload: purrdf_core::small::Shared<NativeDiagnosticPayload>,
+}
+
+impl NativeDiagnostic {
+    /// Stable, allocation-free sizing followed by fallible admitted rendering.
+    /// `message` must render borrowed fields without private heap allocation;
+    /// a term Debug walker must acquire its own actual work-list grant first.
+    /// # Errors
+    /// Returns typed admission, allocator or inconsistent-rendering failure.
+    pub fn render(
+        kind: NativeDiagnosticKind,
+        message: impl core::fmt::Display,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let preserve_failure = |error| {
+            if workspace.has_failed() {
+                EvalError::WorkspaceStopped
+            } else {
+                error
+            }
+        };
+        let length = crate::workspace::display_len(&message).map_err(preserve_failure)?;
+        let control =
+            purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size();
+        let bytes = length
+            .checked_add(control)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let allocation = workspace
+            .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let text = crate::workspace::format_exact(&message, length, "native diagnostic text")
+            .map_err(preserve_failure)?;
+        let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload {
+            text,
+            _allocation: allocation,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "native diagnostic owner",
+        })?;
+        Ok(Self { kind, payload })
+    }
+
+    /// Publish the original native diagnostic buffer without a text copy.
+    /// The buffer's birth must already be covered by `frame`; construction
+    /// scratch has died, leaving exactly this String capacity. Every fallible
+    /// control admission precedes moving either original owner.
+    pub(crate) fn from_original_text(
+        kind: NativeDiagnosticKind,
+        text: &mut Option<String>,
+        frame: &mut crate::workspace::LexicalFrame,
+    ) -> Result<Self, EvalError> {
+        if let Some(error) = frame.take_failure() {
+            return Err(error);
+        }
+        let Some(capacity) = text.as_ref().map(String::capacity) else {
+            return Err(Self::error(
+                NativeDiagnosticKind::Internal,
+                "native diagnostic publication has no original text",
+                frame.workspace(),
+            ));
+        };
+        if capacity != frame.admitted_bytes() {
+            return Err(Self::error(
+                NativeDiagnosticKind::Internal,
+                "native diagnostic publication retains unmatched construction storage",
+                frame.workspace(),
+            ));
+        }
+        let bytes = capacity
+            .checked_add(
+                purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size(),
+            )
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        frame.resize_live(bytes)?;
+        let payload = purrdf_core::small::Shared::try_new_with(|| {
+            let empty = crate::workspace::LexicalFrame::new(frame.workspace());
+            let original = core::mem::replace(frame, empty);
+            let allocation = original
+                .into_allocation()
+                .expect("positive native diagnostic control keeps its original grant");
+            let text = text
+                .take()
+                .expect("native diagnostic text checked before transfer");
+            NativeDiagnosticPayload {
+                text,
+                _allocation: allocation,
+            }
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "native diagnostic owner",
+        })?;
+        Ok(Self { kind, payload })
+    }
+
+    /// Stable typed classification, independent of its English message.
+    #[must_use]
+    pub const fn kind(&self) -> NativeDiagnosticKind {
+        self.kind
+    }
+    /// Borrow the immutable body while retaining its shared owner.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.payload.text
+    }
+    /// One native diagnostic adaptation for `ok_or_else` and `map_err` callers.
+    /// A refused render returns its original static operational failure.
+    #[must_use]
+    pub fn error(
+        kind: NativeDiagnosticKind,
+        message: impl core::fmt::Display,
+        workspace: &crate::WorkspaceCapability,
+    ) -> EvalError {
+        match Self::render(kind, message, workspace) {
+            Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
+            Err(error) => error,
+        }
+    }
+    fn preserve_function_failure(mut self) -> Self {
+        if self.kind == NativeDiagnosticKind::Function {
+            self.kind = NativeDiagnosticKind::FunctionOperational;
+        }
+        self
+    }
+}
+
+impl PartialEq for NativeDiagnostic {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.message() == other.message()
+    }
+}
+impl Eq for NativeDiagnostic {}
+impl core::hash::Hash for NativeDiagnostic {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.kind, state);
+        core::hash::Hash::hash(self.message(), state);
+    }
+}
+impl core::fmt::Display for NativeDiagnostic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let prefix = match self.kind {
+            NativeDiagnosticKind::Function | NativeDiagnosticKind::FunctionOperational => {
+                "host function error"
+            }
+            NativeDiagnosticKind::Data => "malformed RDF input",
+            NativeDiagnosticKind::SourceRead => "dataset read failed",
+            NativeDiagnosticKind::Config => "invalid evaluation configuration",
+            NativeDiagnosticKind::Internal => "internal evaluator error",
+            NativeDiagnosticKind::Unsupported(_)
+            | NativeDiagnosticKind::UnclassifiedUnsupported => "unsupported",
+            NativeDiagnosticKind::StandardFunctionConflict => "standard scalar function conflict",
+            NativeDiagnosticKind::CompositeBound => {
+                "the composite value this query asked for exceeds a SEP-0009 resource bound"
+            }
+        };
+        write!(f, "{prefix}: {}", self.message())
+    }
+}
+impl std::error::Error for NativeDiagnostic {}
+
 /// An error raised while evaluating a SPARQL query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError {
+    /// An immutable native diagnostic retaining its exact allocation grant.
+    NativeDiagnostic(NativeDiagnostic),
+    /// Original RDF diagnostic and immutable allocation owner.
+    RetainedDiagnostic(crate::RetainedDiagnostic),
+    /// Federation failure retaining its original producer payload and physical grant.
+    RetainedServiceFailure(crate::remote::RetainedServiceFailure),
+    /// A native formatter violated its certified stable output length.
+    UnstableNativeDiagnostic,
     /// A query failed to parse in [`purrdf_sparql_algebra`]. Carries the rendered
     /// parse error.
     Parse(String),
@@ -93,6 +295,11 @@ pub enum EvalError {
     /// The backing dataset failed to read a term or index. No partial answer is
     /// valid; fallible engine entry points retain the view's typed root cause.
     SourceRead(String),
+    /// Internal allocation-free stop after the shared account refuses growth.
+    /// The account retains the exact typed backend cause for final publication.
+    /// This signal is an operational failure, never an expression type error or
+    /// an invocation that SERVICE SILENT may absorb.
+    WorkspaceStopped,
     /// A selected native XPath compiler, matcher or replacement operation was
     /// refused. This carries the typed resource/allocation cause and aborts the
     /// query; it never becomes an unbound expression or a negative match.
@@ -284,7 +491,7 @@ pub enum EvalError {
     /// this variant's sole constructor's caller.
     ExistsScopeCollision {
         /// The colliding variable's name, WITHOUT a leading `?`.
-        variable: String,
+        variable: purrdf_lex::allocation::SharedText,
         /// `"BIND target"` or `"VALUES variable"` — matches the parser's own
         /// `ScopeIntro` wording exactly, so the message reads identically
         /// whether the collision was caught at parse time or here.
@@ -347,9 +554,9 @@ pub enum EvalError {
     /// `<iri>`" is.
     RelationIncomplete {
         /// The registered IRI of the relation that declared the incompleteness.
-        iri: String,
+        iri: purrdf_lex::allocation::SharedText,
         /// The relation's own description of what was missing, verbatim.
-        reason: String,
+        reason: purrdf_lex::allocation::SharedText,
     },
 
     /// The calling thread's floating-point environment is not the IEEE-754 one a
@@ -422,21 +629,36 @@ purrdf_lex::constructors! {
         /// diagnostic.
         pub(crate) fn composite_bound(what) -> Self::CompositeBound;
 
-        /// Construct an [`EvalError::ExistsScopeCollision`] naming the colliding
-        /// variable (no leading `?`) and which construct introduced it (`"BIND
-        /// target"` or `"VALUES variable"` — pass
-        /// `crate::governor::soundness::RowCollisionIntro::as_str`'s result).
-        pub(crate) fn exists_scope_collision(variable, intro: &'static str) -> Self::ExistsScopeCollision { .. };
+
     }
 }
 
 impl EvalError {
+    /// A native storage/source refusal invalidates every producer sharing the
+    /// execution. An invocation's data or function failure remains that
+    /// invocation's refusal at a composition boundary.
+    pub const fn is_native_storage_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::AllocationFailed { .. }
+                | Self::WorkspaceStopped
+                | Self::WorkspaceUnpriced(_)
+                | Self::WorkspaceBoundOverflow
+                | Self::SourceRead(_)
+                | Self::UnstableNativeDiagnostic
+                | Self::ExchangeIdExhausted
+        )
+    }
+
     /// A caller-returned `Function` contains no typed request classification.
     /// Retain it as an execution failure while preserving every more specific
     /// typed cause (including XPath, source and governor-adjacent refusals).
     pub(crate) fn preserve_function_failure(self) -> Self {
         match self {
             Self::Function(message) => Self::FunctionOperational(message),
+            Self::NativeDiagnostic(message) => {
+                Self::NativeDiagnostic(message.preserve_function_failure())
+            }
             other => other,
         }
     }
@@ -496,7 +718,33 @@ impl EvalError {
     #[must_use]
     pub fn diagnostic_code(&self) -> Option<&'static str> {
         match self {
-            Self::SourceRead(_) => Some("native-sparql-source-read"),
+            Self::RetainedDiagnostic(_) => None,
+            Self::RetainedServiceFailure(error) => {
+                if matches!(
+                    error.remote_error().error(),
+                    crate::remote::RemoteError::SourceRead(_)
+                ) {
+                    Some("native-sparql-source-read")
+                } else {
+                    None
+                }
+            }
+            Self::NativeDiagnostic(message) => match message.kind() {
+                NativeDiagnosticKind::SourceRead => Some("native-sparql-source-read"),
+                NativeDiagnosticKind::Internal => Some(Self::INTERNAL_CODE),
+                NativeDiagnosticKind::FunctionOperational => Some(Self::FUNCTION_OPERATIONAL_CODE),
+                NativeDiagnosticKind::Unsupported(kind) => Some(kind.code()),
+                NativeDiagnosticKind::CompositeBound => Some(Self::COMPOSITE_BOUND_CODE),
+                NativeDiagnosticKind::StandardFunctionConflict => {
+                    Some("native-sparql-standard-function-conflict")
+                }
+                NativeDiagnosticKind::Function
+                | NativeDiagnosticKind::Data
+                | NativeDiagnosticKind::Config
+                | NativeDiagnosticKind::UnclassifiedUnsupported => None,
+            },
+            Self::UnstableNativeDiagnostic => Some("native-sparql-unstable-native-diagnostic"),
+            Self::SourceRead(_) | Self::WorkspaceStopped => Some("native-sparql-source-read"),
             Self::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Resource(refusal)) => {
                 Some(refusal.resource.code())
             }
@@ -543,8 +791,15 @@ impl EvalError {
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         match self {
+            Self::RetainedDiagnostic(message) => Some(&message.diagnostic().code),
+            Self::RetainedServiceFailure(error) => Some(error.code()),
             Self::Dataset(diagnostic) => Some(&diagnostic.code),
             Self::Unsupported { kind: None, .. } => Some(Self::UNSUPPORTED_CODE),
+            Self::NativeDiagnostic(message)
+                if message.kind() == NativeDiagnosticKind::UnclassifiedUnsupported =>
+            {
+                Some(Self::UNSUPPORTED_CODE)
+            }
             Self::ServiceDenied(_) => Some(Self::SERVICE_DENIED_CODE),
             Self::ServiceHostDenied { .. } => Some(Self::SERVICE_HOST_DENIED_CODE),
             Self::ServiceHostFault { .. } => Some(Self::HOST_FAULT_CODE),
@@ -656,19 +911,34 @@ impl EvalError {
 
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
     /// own reason.
-    pub(crate) fn relation_incomplete(iri: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::RelationIncomplete {
-            iri: iri.into(),
-            reason: reason.into(),
-        }
+    pub(crate) fn relation_incomplete_admitted(
+        iri: &str,
+        reason: &str,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Self {
+        let result = (|| {
+            let iri = workspace.authored_text(&iri)?;
+            let reason = workspace.authored_text(&reason)?;
+            Ok::<_, Self>(Self::RelationIncomplete { iri, reason })
+        })();
+        result.unwrap_or_else(|error| error)
     }
 }
 
 impl core::fmt::Display for EvalError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::RetainedDiagnostic(message) => core::fmt::Display::fmt(message.diagnostic(), f),
+            Self::RetainedServiceFailure(error) => core::fmt::Display::fmt(error, f),
+            Self::NativeDiagnostic(message) => core::fmt::Display::fmt(message, f),
+            Self::UnstableNativeDiagnostic => {
+                f.write_str("native diagnostic formatter violated its certified output length")
+            }
             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
             Self::SourceRead(msg) => write!(f, "dataset read failed: {msg}"),
+            Self::WorkspaceStopped => {
+                f.write_str("operational workspace admission stopped evaluation")
+            }
             Self::XPathRegex(error) => write!(f, "XPath operation refused: {error}"),
             Self::ExchangeIdExhausted => {
                 f.write_str("asynchronous exchange identifier space is exhausted")
@@ -713,8 +983,9 @@ impl core::fmt::Display for EvalError {
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
             Self::ExistsScopeCollision { variable, intro } => write!(
                 f,
-                "{intro} ?{variable} inside EXISTS is already in scope on the row being \
-                 filtered: the substitution semantics define no answer for a rebinding"
+                "{intro} ?{} inside EXISTS is already in scope on the row being \
+                 filtered: the substitution semantics define no answer for a rebinding",
+                variable.as_str()
             ),
             Self::Function(msg) | Self::FunctionOperational(msg) => {
                 write!(f, "host function error: {msg}")

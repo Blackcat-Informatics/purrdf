@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The analyzer's Unicode layer: full case folding, the four normalization
-//! forms, and word boundaries, over tables generated from the vendored Unicode
+//! forms, and word and sentence boundaries, over tables generated from the vendored Unicode
 //! Character Database.
 //!
 //! * [`case_fold`] — full default case folding, the `C` and `F` mappings of
@@ -16,6 +16,11 @@
 //! * [`word_bounds`], [`word_indices`] — the default word boundaries of
 //!   `UAX #29` (rules WB1 to WB999); [`word_indices`] keeps only segments that
 //!   hold an [`is_alphanumeric`] character.
+//! * [`sentence_bounds`], [`sentence_indices`] — UAX 29 revision 47's default
+//!   sentence boundaries over pinned Unicode data, borrowed with UTF-8 byte
+//!   offsets; the indices apply the same alphanumeric filter as word indices.
+//!   Record [`SENTENCE_BOUNDARY_LAW`], [`SENTENCE_DATA_DIGEST`] and
+//!   [`UNICODE_VERSION`] when boundaries contribute to a caller's identity.
 //!
 //! Every table is a pure function of the vendored database, generated with
 //! every other Unicode table in the workspace at one version, so the answers
@@ -37,10 +42,15 @@ use crate::unicode_tables as tables;
 pub use purrdf_lex::unicode::{Compare, Sink, nfc, nfd, nfkc, nfkd};
 
 mod grapheme;
+mod sentence;
 pub(crate) use grapheme::emoji_scalars;
 pub use grapheme::{
     EmojiStatus, GraphemeBounds, emoji_status, grapheme_bounds, is_conjunct_consonant,
     is_emoji_grapheme,
+};
+pub use sentence::{
+    SENTENCE_BOUNDARY_LAW, SENTENCE_DATA_DIGEST, SentenceBounds, SentenceIndices, sentence_bounds,
+    sentence_indices,
 };
 
 /// Largest recognized emoji atom, calculated from the pinned Unicode data.
@@ -48,7 +58,7 @@ pub const MAX_EMOJI_SCALARS: usize = tables::MAX_EMOJI_SCALARS;
 /// Identity of all semantic Unicode analysis inputs, independent of compiler.
 pub const TEXT_DATA_DIGEST: [u8; 32] = tables::TEXT_DATA_DIGEST;
 
-/// The Unicode version of the normalization, word-break and alphanumeric
+/// The Unicode version of the normalization, word/sentence-break and alphanumeric
 /// tables: the workspace's one, [`purrdf_lex::unicode::UNICODE_VERSION`].
 pub const UNICODE_VERSION: (u8, u8, u8) = purrdf_lex::unicode::UNICODE_VERSION;
 
@@ -359,6 +369,29 @@ pub fn analysis_form<O: ?Sized + Sink>(input: &str, out: &mut O) {
 // ---------------------------------------------------------------------------
 // Word boundaries, UAX 29.
 
+/// The borrowed UTF-8 cursor shared by the word and sentence rules.
+/// The first scalar is accepted unconditionally; subsequent calls decide the
+/// boundary before their scalar. The callback retains each law's own state.
+fn next_borrowed_segment(
+    text: &str,
+    start: usize,
+    mut step: impl FnMut(char, usize, &str, bool) -> bool,
+) -> Option<(usize, &str)> {
+    let rest = &text[start..];
+    let mut chars = rest.char_indices();
+    let (_, first) = chars.next()?;
+    step(first, start, &rest[first.len_utf8()..], true);
+    let mut end = text.len();
+    for (offset, c) in chars {
+        let at = start + offset;
+        if step(c, at, &rest[offset + c.len_utf8()..], false) {
+            end = at;
+            break;
+        }
+    }
+    Some((end, &text[start..end]))
+}
+
 /// Before the first character (`sot`), and after the last (`eot`).
 const SOT: u8 = 0xFE;
 const EOT: u8 = 0xFF;
@@ -509,28 +542,19 @@ impl<'a> Boundaries<'a> {
         !joins
     }
 
-    /// The next segment and its byte offset.
+    /// The next segment and its byte offset, through the shared borrowed cursor.
     fn next_segment(&mut self) -> Option<(usize, &'a str)> {
-        let text = self.text;
         let start = self.start;
-        let rest = &text[start..];
-        let mut chars = rest.char_indices();
-        // WB1: the boundary before the first character, and the boundary
-        // before this segment, are already decided.
-        let (_, first) = chars.next()?;
-        self.accept(segmentation(first) & tables::WB_MASK);
-        let mut end = rest.len();
-        for (offset, c) in chars {
+        let (end, segment) = next_borrowed_segment(self.text, start, |c, _, rest, first| {
             let byte = segmentation(c);
-            if self.breaks_before(byte, &rest[offset + c.len_utf8()..]) {
-                end = offset;
-                break;
+            if !first && self.breaks_before(byte, rest) {
+                return true;
             }
             self.accept(byte & tables::WB_MASK);
-        }
-        // WB2: the end of text is a boundary.
-        self.start = start + end;
-        Some((start, &rest[..end]))
+            false
+        })?;
+        self.start = end;
+        Some((start, segment))
     }
 }
 
@@ -568,11 +592,18 @@ impl<'a> Iterator for WordIndices<'a> {
     type Item = (usize, &'a str);
 
     fn next(&mut self) -> Option<(usize, &'a str)> {
-        loop {
-            let (start, segment) = self.0.next_segment()?;
-            if segment.chars().any(is_alphanumeric) {
-                return Some((start, segment));
-            }
+        next_alphanumeric_segment(|| self.0.next_segment())
+    }
+}
+
+/// The shared word/sentence index filter, retaining borrowed byte offsets.
+fn next_alphanumeric_segment<'a>(
+    mut next: impl FnMut() -> Option<(usize, &'a str)>,
+) -> Option<(usize, &'a str)> {
+    loop {
+        let (start, segment) = next()?;
+        if segment.chars().any(is_alphanumeric) {
+            return Some((start, segment));
         }
     }
 }

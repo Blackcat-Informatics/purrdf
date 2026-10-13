@@ -38,7 +38,7 @@
 //! A blank node inside the composite is a real blank node scoped to the literal
 //! and shared within it, so two occurrences of one label bind the SAME node
 //! (`unfold-list-1var-08`) and two labels bind two (`-07`). Nothing here does that
-//! on purpose: it falls out of [`crate::cdt_fn::from_cdt_term`]'s `(label, scope)`
+//! on purpose: it falls out of [`crate::cdt_fn::from_cdt_term_admitted`]'s `(label, scope)`
 //! round trip, which is also why an unfolded element is `sameTerm` with what
 //! `cdt:get` returns for the same position (all ten `unfold-get-*` cases).
 //!
@@ -89,12 +89,10 @@
 //!
 //! An element that is itself a composite comes back as a `cdt:`-typed literal in
 //! canonical form — the same term `cdt:get` returns for that position — because
-//! [`crate::cdt_fn::from_cdt_term`] re-renders a nested value rather than
+//! [`crate::cdt_fn::from_cdt_term_admitted`] re-renders a nested value rather than
 //! flattening it. A second `UNFOLD` over the bound element therefore expands the
 //! inner composite with no further ceremony, which is what makes the operator
 //! compose with itself.
-
-use std::sync::Arc;
 
 use purrdf_cdt::{CdtContents, CdtValue};
 use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
@@ -124,20 +122,20 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     companion: Option<&Variable>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross, but the COLUMNS still do — this node's output schema is
         // syntactic (the inner's columns plus its own targets), exactly as
         // `Extend`'s is.
-        let mut schema = lift.absorbed_schema().map_or_else(
-            || (*crate::eval::syntactic_schema(inner)).clone(),
-            |s| (*s).clone(),
-        );
-        schema.push(element.clone());
+        let mut schema = match lift.absorbed_schema() {
+            Some(schema) => (*schema).clone(),
+            None => (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone(),
+        };
+        schema.push_admitted(element.clone(), &ctx.growth)?;
         if let Some(companion) = companion {
-            schema.push(companion.clone());
+            schema.push_admitted(companion.clone(), &ctx.growth)?;
         }
-        return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
+        return Ok(lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)));
     };
     // The `row-expression-evaluation` charge point, paid per INPUT row: one
     // expression evaluation per input row is what this operator spends before it
@@ -157,10 +155,12 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
 
     let in_width = seq.schema.len();
     let mut schema = (*seq.schema).clone();
-    let element_col = schema.push(element.clone());
-    let companion_col = companion.map(|companion| schema.push(companion.clone()));
+    let element_col = schema.push_admitted(element.clone(), &ctx.growth)?;
+    let companion_col = companion
+        .map(|companion| schema.push_admitted(companion.clone(), &ctx.growth))
+        .transpose()?;
     let width = schema.len();
-    let schema = Arc::new(schema);
+    let schema = schema.shared_admitted(&ctx.growth)?;
 
     // No dedicated per-row charge point: the rows this operator emits come from a
     // composite literal the dataset or the query text already carried, not from an
@@ -170,9 +170,9 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     // actually bounds the expansion, since one literal can hold up to
     // `purrdf_cdt::MAX_ELEMENTS` elements.
     let ingest = GovernedRowIngest::new(ctx, width, None);
-    let program = crate::vm::program_at(ctx, node, expression);
-    let mut linked = crate::vm::Linked::link(program, expression, &seq.schema, ctx);
-    let mut rows: Vec<Solution<D::Id>> = Vec::new();
+    let program = crate::vm::program_at(ctx, node, expression)?;
+    let mut linked = crate::vm::Linked::link_admitted(program, expression, &seq.schema, ctx)?;
+    let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
     let mut tripped: Option<TrippedGovernor> = None;
 
     'input: for (idx, mu) in seq.rows.iter().enumerate() {
@@ -212,12 +212,17 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 }
                 IngestVerdict::Admitted => {}
             }
-            let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
-            row[..in_width].copy_from_slice(mu);
-            rows.push(row);
+            rows.push_cells(
+                width,
+                (0..width).map(|column| mu.get(column).copied().flatten()),
+            )?;
             continue;
         };
-        for (element_term, companion_term) in expansion(&value) {
+        let count = match value.contents() {
+            CdtContents::List(items) => items.len(),
+            CdtContents::Map(entries) => entries.len(),
+        };
+        for position in 0..count {
             if let Some(governor) = ctx.stop_check() {
                 tripped = Some(governor);
                 break 'input;
@@ -229,17 +234,22 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 }
                 IngestVerdict::Admitted => {}
             }
-            let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
-            row[..in_width].copy_from_slice(mu);
-            if !bind(&mut row, Some(element_col), element_term, ctx)?
-                || !bind(&mut row, companion_col, companion_term, ctx)?
-            {
+            let growth = ctx.growth.clone();
+            let (element_term, companion_term) = expansion_at(&value, position, &growth)?;
+            let mut compatible = true;
+            let row = crate::solution::RetainedRow::try_build(width, &growth, |row| {
+                row[..in_width].copy_from_slice(mu);
+                compatible = bind_admitted(row, Some(element_col), element_term, ctx)?
+                    && bind_admitted(row, companion_col, companion_term, ctx)?;
+                Ok(())
+            })?;
+            if !compatible {
                 // A target this row already bound incompatibly — see the module
                 // docs' note on a pre-bound target. Not reachable from query text,
                 // which the parser refuses, and an ordinary non-match when it is.
                 continue;
             }
-            rows.push(row);
+            rows.push_row(row)?;
         }
     }
 
@@ -255,7 +265,10 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
             node, tripped, schema,
         )));
     }
-    let seq = SolutionSeq { schema, rows };
+    let seq = SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    };
     Ok(match tripped {
         // This node stopped its own expansion, and nothing below it had already
         // truncated: the bag is exactly the prefix it committed before the
@@ -287,52 +300,46 @@ fn composite_of<D: DatasetView + Sync>(
     mu: &Solution<D::Id>,
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<CdtValue>, EvalError> {
+) -> Result<Option<crate::composite_value::CompositeValue>, EvalError> {
     let Some(term) = expression.term(mu, schema, ctx)? else {
         return Ok(None);
     };
-    let value = ctx
-        .scratch
-        .try_value_of(ctx.dataset, term)
-        .map_err(EvalError::source_read)?;
-    Ok(crate::cdt_fn::as_composite(&value))
+    let value = crate::expr::owned_value_of(ctx, term)?;
+    let TermValue::Literal {
+        lexical_form,
+        datatype,
+        language: None,
+        ..
+    } = &*value
+    else {
+        return Ok(None);
+    };
+    crate::composite_value::CompositeValue::parse(lexical_form, datatype, &ctx.growth)
 }
 
-/// One composite's expansion: `(element, companion)` per output row, in the
-/// composite's own order.
-///
-/// The two readings the module docs tabulate, and the ONE place the choice
-/// between them is made. Both positions are `Option<TermValue>` because a
-/// SEP-0009 `null` has no term to bind — `from_cdt_term` answers `None` for it —
-/// and the row is still produced.
-fn expansion(value: &CdtValue) -> Vec<(Option<TermValue>, Option<TermValue>)> {
+fn expansion_at(
+    value: &CdtValue,
+    position: usize,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(Option<crate::WorkspaceTerm>, Option<crate::WorkspaceTerm>), EvalError> {
     match value.contents() {
-        CdtContents::List(items) => items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                // 1-BASED, matching `cdt:get`'s own index space: the corpus asserts
-                // `SAMETERM(?elmt, cdt:get(?list, ?idx))` for the index this binds
-                // (`unfold-get-list-2vars-05.rq`, `-06.rq`), which a 0-based index
-                // would fail on every element.
-                (
-                    crate::cdt_fn::from_cdt_term(item),
-                    Some(TermValue::integer((i + 1) as u64)),
-                )
-            })
-            .collect(),
-        CdtContents::Map(entries) => entries
-            .iter()
-            .map(|entry| {
-                // A key is an IRI or a literal and never `null` (production `[7]
-                // MapKey` admits nothing else), so the key position is always
-                // bound; the VALUE may be `null`, and then binds nothing.
-                (
-                    crate::cdt_fn::from_cdt_term(&entry.key.to_term()),
-                    crate::cdt_fn::from_cdt_term(&entry.value),
-                )
-            })
-            .collect(),
+        CdtContents::List(items) => Ok((
+            crate::cdt_fn::from_cdt_term_admitted(&items[position], workspace)?,
+            Some(workspace.literal(position + 1, purrdf_xsd::datatype::XSD_INTEGER)?),
+        )),
+        CdtContents::Map(entries) => {
+            let entry = &entries[position];
+            let key = match &entry.key {
+                purrdf_cdt::CdtKey::Iri(iri) => workspace.iri(iri)?,
+                purrdf_cdt::CdtKey::Literal(literal) => {
+                    crate::cdt_fn::cdt_literal_admitted(literal, workspace)?
+                }
+            };
+            Ok((
+                Some(key),
+                crate::cdt_fn::from_cdt_term_admitted(&entry.value, workspace)?,
+            ))
+        }
     }
 }
 
@@ -350,10 +357,10 @@ fn expansion(value: &CdtValue) -> Vec<(Option<TermValue>, Option<TermValue>)> {
 /// gets. See the comment at the [`ScratchInterner::intern_checked`] call.
 ///
 /// [`ScratchInterner::intern_checked`]: crate::scratch::ScratchInterner::intern_checked
-fn bind<D: DatasetView + Sync>(
+fn bind_admitted<D: DatasetView + Sync>(
     row: &mut Solution<D::Id>,
     column: Option<usize>,
-    value: Option<TermValue>,
+    value: Option<crate::WorkspaceTerm>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
     let (Some(column), Some(value)) = (column, value) else {
@@ -381,11 +388,7 @@ fn bind<D: DatasetView + Sync>(
     // nested to any depth costs no machine stack. A nested composite comes back as a
     // single `cdt:`-typed literal, so the only nesting a member carries is that of the
     // triple terms inside it; `purrdf-cdt` bounds that depth by its byte bound alone.
-    let Some(term) = ctx
-        .scratch
-        .try_intern_checked(ctx.dataset, value)
-        .map_err(EvalError::source_read)?
-    else {
+    let Some(term) = ctx.intern_workspace_term(value)? else {
         return Ok(true);
     };
     Ok(match row[column] {
@@ -395,6 +398,19 @@ fn bind<D: DatasetView + Sync>(
         }
         Some(existing) => existing == term,
     })
+}
+
+#[cfg(test)]
+fn bind<D: DatasetView + Sync>(
+    row: &mut Solution<D::Id>,
+    column: Option<usize>,
+    value: Option<&TermValue>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    let value = value
+        .map(|value| ctx.growth.clone_term(value))
+        .transpose()?;
+    bind_admitted(row, column, value, ctx)
 }
 
 #[cfg(test)]
@@ -434,13 +450,13 @@ mod tests {
             bind(
                 &mut row,
                 Some(0),
-                Some(TermValue::iri("https://example.org/k")),
+                Some(&TermValue::iri("https://example.org/k")),
                 &mut ctx
             )
             .unwrap()
         );
         assert!(
-            bind(&mut row, Some(1), Some(tagged("en us")), &mut ctx).unwrap(),
+            bind(&mut row, Some(1), Some(&tagged("en us")), &mut ctx).unwrap(),
             "a refused tag must not drop the row — `false` here erases the key"
         );
         assert!(row[0].is_some(), "the key keeps its binding");
@@ -466,7 +482,7 @@ mod tests {
             "en-x-cantbethislong",
         ] {
             let mut row: Solution<_> = purrdf_core::smallvec![None; 1];
-            assert!(bind(&mut row, Some(0), Some(tagged(tag)), &mut ctx).unwrap());
+            assert!(bind(&mut row, Some(0), Some(&tagged(tag)), &mut ctx).unwrap());
             assert!(row[0].is_some(), "{tag} must still bind");
         }
     }
@@ -483,7 +499,7 @@ mod tests {
             bind(
                 &mut row,
                 Some(0),
-                Some(TermValue::iri("https://example.org/a")),
+                Some(&TermValue::iri("https://example.org/a")),
                 &mut ctx
             )
             .unwrap()
@@ -492,7 +508,7 @@ mod tests {
             !bind(
                 &mut row,
                 Some(0),
-                Some(TermValue::iri("https://example.org/b")),
+                Some(&TermValue::iri("https://example.org/b")),
                 &mut ctx
             )
             .unwrap(),

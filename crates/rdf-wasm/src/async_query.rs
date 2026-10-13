@@ -4401,6 +4401,7 @@ fn begin_job(
         xpath_regex: options.xpath_regex,
         division: engine.division(),
         graph_existence: dataset.graph_existence(),
+        geo: engine.geo_profile(),
     };
     register_operation(
         kind,

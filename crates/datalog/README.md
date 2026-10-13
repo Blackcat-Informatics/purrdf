@@ -124,3 +124,29 @@ Licensed under any one of the following, at your option:
 - [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
+
+## Assessor-only predicates
+
+`admission::NeverDeriveDeclarations` is a caller-supplied union of predicate
+IRIs and ontology, store-profile and rule-set sources. Repeated declarations
+retain every source. Its API adds obligations and cannot remove another
+authority's contribution. PurRDF supplies no ontology namespace or policy.
+
+Use `seminaive::compile_with_declarations`,
+`schedule::compile_scheduled_with_declarations`,
+`chase::chase_with_declarations`, or `plan::Parsed::with_declarations` at
+registration or execution. Admission inspects every head atom in the full
+DL-clause IR before an executor's ordinary fragment restrictions. Protected
+heads produce a typed refusal with the predicate, sources and deterministic
+authored rule chain. A predicate-variable head that cannot be proved safe
+produces an explicit undecidable refusal; guards are never invoked to supply
+a safety proof. Reading an asserted protected predicate is allowed. An empty
+head derives no predicate.
+
+Compiled and scheduled programs retain immutable certificates. Their
+`admit_declarations` method unions additional profile obligations with the
+original sources before reusing a program; an empty later profile cannot
+withdraw prior obligations. `PlanCache::get_or_compile_with_declarations`
+binds successes and refusals to the rules, planner, caller contract and
+complete declaration/source identity. An empty effective set preserves the
+ordinary execution and cache identity.

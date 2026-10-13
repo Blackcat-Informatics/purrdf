@@ -1839,7 +1839,7 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("    Finished `dev` profile [unoptimized + debuginfo] target(s)"),
             _noise("     Running `target/debug/examples/geo_digest`"),
-            _board("digest=9667c2ee2cd3ad4b"),
+            _board("digest=cae63e406267a3d7"),
             _board("corpus_len=20"),
         ),
     ),

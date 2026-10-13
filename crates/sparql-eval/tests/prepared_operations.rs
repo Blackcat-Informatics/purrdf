@@ -14,7 +14,7 @@ use std::sync::{Arc, Barrier};
 
 use purrdf_core::{
     InMemoryPageProvider, PageGeneration, PagedDataset, PagedQueryEvidence, PagedQueryLimits,
-    ResourceDimension, SparqlRequest, SparqlResult, StopCause, TermValue, TrippedGovernor,
+    ResourceDimension, SparqlRequest, StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_algebra::{
     Child, GraphPattern, NamedNode, NamedNodePattern, Query, QueryDataset, TermPattern,
@@ -45,30 +45,25 @@ fn metered() -> Arc<GovernorState> {
 }
 
 /// Compare ordered answers and graph contents without requiring dataset-carrier equality.
-fn equal_results(left: SparqlResult, right: SparqlResult) {
-    match (left, right) {
-        (SparqlResult::Boolean(a), SparqlResult::Boolean(b)) => assert_eq!(a, b),
-        (
-            SparqlResult::Solutions {
-                variables: av,
-                rows: ar,
-                ..
-            },
-            SparqlResult::Solutions {
-                variables: bv,
-                rows: br,
-                ..
-            },
-        ) => {
-            assert_eq!(av, bv);
-            assert_eq!(ar, br);
-        }
-        (SparqlResult::Graph(a), SparqlResult::Graph(b)) => {
+fn equal_results(left: impl support::ResultView, right: impl support::ResultView) {
+    match (
+        left.boolean_view(),
+        right.boolean_view(),
+        left.solutions_view(),
+        right.solutions_view(),
+        left.graph_view(),
+        right.graph_view(),
+    ) {
+        (Some(a), Some(b), ..) => assert_eq!(a, b),
+        (_, _, Some(a), Some(b), ..) => assert_eq!(a, b),
+        (_, _, _, _, Some(a), Some(b)) => {
             assert_eq!(a.quads().collect::<Vec<_>>(), b.quads().collect::<Vec<_>>());
             assert_eq!(a.term_count(), b.term_count());
         }
-        (a, b) => panic!("query form changed: {a:?} versus {b:?}"),
+        _ => panic!("query form changed: {left:?} versus {right:?}"),
     }
+    drop(left);
+    drop(right);
 }
 
 /// Preparation must preserve answers and charges for matching and absent SHACL focus bindings.
@@ -257,7 +252,10 @@ fn repeated_prepared_calls_own_independent_budgets_and_certified_answers() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(SELECT, None).unwrap();
     let governors = QueryGovernors::METERED.with_max_answers(2);
-    let mut prior: Option<(SparqlResult, GovernedEvidence<PagedQueryEvidence>)> = None;
+    let mut prior: Option<(
+        purrdf_sparql_eval::RetainedSparqlResult,
+        GovernedEvidence<PagedQueryEvidence>,
+    )> = None;
     for _ in 0..2 {
         let error = engine
             .query_prepared_governed_fallible_view(
@@ -326,7 +324,7 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
                 &state,
             )
             .unwrap();
-        assert!(matches!(result.result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
+        assert_eq!(result.result.solutions().expect("SELECT shape").1.len(), 1);
         assert_eq!(result.evidence.view.consumed_bytes, 101);
         assert_eq!(result.evidence.view.consumed_pages, 1);
         assert!(result.evidence.governors.is_complete());
@@ -345,7 +343,7 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
                 "shared operation consumption cannot regress in {dimension:?}"
             );
         }
-        prior = result.evidence.governors;
+        prior = result.evidence.governors.clone();
     }
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let limited = Arc::new(GovernorState::new(
@@ -376,8 +374,16 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
             consumed: 3
         }
     );
-    assert!(
-        matches!(partial.result().unwrap().result(), SparqlResult::Solutions { rows, .. } if rows.len() == 2)
+    assert_eq!(
+        partial
+            .result()
+            .unwrap()
+            .result()
+            .solutions()
+            .expect("SELECT shape")
+            .1
+            .len(),
+        2
     );
     assert_eq!(evidence.view.consumed_pages, 1);
     assert_eq!(evidence.governors, limited.evidence());

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use purrdf_lex::json::Value;
 use purrdf_rdf::RdfDataset;
 use purrdf_shapes::json_schema::{
-    Namespaces, SchemaCompileRequest, SchemaCoveragePrecision, SchemaCoverageStatus,
-    SchemaSurfaceMode, compile_schema,
+    Namespaces, SchemaClassPropertyCoverage, SchemaCompileRequest, SchemaCoveragePrecision,
+    SchemaCoverageStatus, SchemaSurfaceMode, compile_schema,
 };
 use purrdf_shapes::shapes::{Shapes, from_dataset};
 use purrdf_shapes::{
@@ -332,11 +332,20 @@ fn compile_both(
     let shapes = shapes(shapes_turtle);
     let ontology = parse(ontology);
     let namespaces = namespaces();
+    compile_shapes(&shapes, &ontology, &namespaces, mode)
+}
+
+fn compile_shapes(
+    shapes: &Shapes,
+    ontology: &RdfDataset,
+    namespaces: &Namespaces,
+    mode: SchemaSurfaceMode,
+) -> (
+    purrdf_shapes::SchemaCompilation,
+    SchemaClassExpressionReport,
+) {
     compile_schema_with_class_expressions(&SchemaCompileRequest::new(
-        &shapes,
-        &namespaces,
-        ontology.as_ref(),
-        mode,
+        shapes, namespaces, ontology, mode,
     ))
     .expect("anonymous class expressions are modelled, not refused")
 }
@@ -664,8 +673,18 @@ fn relation_carries_restriction_provenance_and_precision() {
 /// Whether the projected node `subject` of `data` validates against
 /// `#/$defs/{class}` of the compiled schema.
 fn accepts(schema_json: &str, class: &str, data: &str, subject: &str) -> bool {
+    accepts_with_namespaces(schema_json, &namespaces(), class, data, subject)
+}
+
+fn accepts_with_namespaces(
+    schema_json: &str,
+    namespaces: &Namespaces,
+    class: &str,
+    data: &str,
+    subject: &str,
+) -> bool {
     let data = parse(data);
-    let projected = purrdf_shapes::instance::project_graph(&data, &namespaces());
+    let projected = purrdf_shapes::instance::project_graph(&data, namespaces);
     let node = projected["@graph"]
         .as_array()
         .expect("@graph")
@@ -1957,4 +1976,271 @@ fn graphql_names_literal_enumerations_beside_their_array_form() {
         .expect("an sh:in enumeration is a GraphQL enum");
     let sdl = std::str::from_utf8(&graphql.artifacts[GRAPHQL_SCHEMA_PATH]).expect("UTF-8");
     assert!(sdl.contains("enum "), "{sdl}");
+}
+
+fn coverage_cell<'a>(
+    compilation: &'a purrdf_shapes::SchemaCompilation,
+    property_iri: &str,
+    class_iri: &str,
+) -> &'a SchemaClassPropertyCoverage {
+    compilation
+        .coverage
+        .properties
+        .iter()
+        .find(|property| property.property_iri == property_iri)
+        .expect("property coverage")
+        .classes
+        .iter()
+        .find(|class| class.class_iri == class_iri)
+        .expect("class coverage")
+}
+
+#[test]
+fn every_schema_cell_that_admits_xml_reports_unchecked_representation() {
+    let ontology = "ex:C a owl:Class . ex:p a owl:DatatypeProperty .";
+    for (why, shape, source, mode) in [
+        (
+            "unconstrained OWL",
+            "",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "XML range",
+            "",
+            "ex:C a owl:Class . ex:p a owl:DatatypeProperty ; rdfs:range rdf:XMLLiteral .",
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "literal range",
+            "",
+            "ex:C a owl:Class . ex:p a owl:DatatypeProperty ; rdfs:range rdfs:Literal .",
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "shape-owned unconstrained",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "shape-owned XML",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype rdf:XMLLiteral ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "shaped-only XML",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype rdf:XMLLiteral ] .",
+            ontology,
+            SchemaSurfaceMode::ShapedOnly,
+        ),
+        (
+            "one XML alternative",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:or ( [ sh:datatype xsd:string ] [ sh:datatype rdf:XMLLiteral ] ) ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "custom-severity exclusion is dropped",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype xsd:string ; sh:severity ex:Advisory ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "member custom-severity exclusion is dropped",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:node [ sh:datatype xsd:string ; sh:severity ex:Advisory ] ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "annotated exclusion is dropped",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype xsd:string {| sh:severity ex:Advisory |} ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "computed-default exclusion is dropped",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype xsd:string ; sh:defaultValue \"computed\" ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        (
+            "deactivated exclusion",
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype xsd:string ; sh:deactivated true ] .",
+            ontology,
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+    ] {
+        let (compilation, _) = compile_both(shape, source, mode);
+        let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
+        assert_eq!(
+            cell.precision,
+            SchemaCoveragePrecision::RepresentationApproximation,
+            "{why}"
+        );
+        for lexical in ["<p>balanced</p>", "<p>unclosed"] {
+            let data = format!("ex:node a ex:C ; ex:p \"{lexical}\"^^rdf:XMLLiteral .");
+            assert!(
+                accepts(&compilation.compiled.schema_json, "C", &data, "node"),
+                "{why}: the actual validator admits {lexical}, so the cell cannot promise exact XML lexical judgement"
+            );
+        }
+    }
+}
+
+#[test]
+fn public_member_count_shapes_do_not_claim_an_xml_exclusion() {
+    use purrdf_shapes::shapes::Constraint;
+
+    for (legal, malformed) in [
+        ("sh:node [ ]", "sh:node [ sh:maxCount 0 ]"),
+        ("sh:and ( [ ] )", "sh:and ( [ sh:maxCount 0 ] )"),
+        ("sh:or ( [ ] )", "sh:or ( [ sh:maxCount 0 ] )"),
+    ] {
+        let declaration = |constraint: &str| {
+            format!(
+                "ex:S a sh:NodeShape ; sh:targetClass ex:C ; \
+                 sh:property [ sh:path ex:p ; {constraint} ] ."
+            )
+        };
+        assert!(
+            from_dataset(&parse(&declaration(malformed))).is_err(),
+            "the SHACL 1.2 parser must retain its malformed-node-count refusal"
+        );
+        // The public Shapes API can construct this value directly. Its compiler
+        // drops the member count, so the original typed producer must not use
+        // that dropped field to claim an exact XML exclusion.
+        let mut typed = shapes(&declaration(legal));
+        let root = typed
+            .node_shapes
+            .iter_mut()
+            .find(|shape| !shape.targets.is_empty())
+            .expect("targeted node shape");
+        let member = match root.property_shapes[0].constraints.first_mut() {
+            Some(Constraint::Node(member)) => member.as_mut(),
+            Some(Constraint::And(members) | Constraint::Or(members)) => &mut members[0],
+            other => panic!("expected the actual member constraint: {other:?}"),
+        };
+        member.constraints.push(Constraint::MaxCount(0));
+        let ontology = parse("ex:C a owl:Class . ex:p a owl:DatatypeProperty .");
+        let (compilation, _) = compile_shapes(
+            &typed,
+            &ontology,
+            &namespaces(),
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
+        assert_eq!(
+            cell.precision,
+            SchemaCoveragePrecision::RepresentationApproximation,
+            "the public member count has no emitted exclusion"
+        );
+        for lexical in ["<p>balanced</p>", "<p>unclosed"] {
+            let data = format!("ex:node a ex:C ; ex:p \"{lexical}\"^^rdf:XMLLiteral .");
+            assert!(
+                accepts(&compilation.compiled.schema_json, "C", &data, "node"),
+                "the actual emitted member schema admits unchecked XML"
+            );
+        }
+    }
+}
+
+#[test]
+fn xml_exclusion_controls_keep_their_exact_shape_coverage() {
+    for constraint in [
+        "sh:datatype xsd:string",
+        "sh:nodeKind sh:IRI",
+        "sh:maxCount 0",
+        "sh:in ( \"allowed\" )",
+        "sh:languageIn ( \"en\" )",
+        "sh:node [ sh:datatype xsd:string ]",
+        "sh:severity ex:Advisory ; sh:datatype xsd:string {| sh:severity sh:Violation |}",
+    ] {
+        let shape = format!(
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; {constraint} ] ."
+        );
+        let (compilation, _) = compile_both(
+            &shape,
+            "ex:C a owl:Class . ex:p a owl:DatatypeProperty .",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
+        assert_eq!(
+            cell.precision,
+            SchemaCoveragePrecision::Exact,
+            "{constraint}: this cell excludes XML"
+        );
+        for lexical in ["<p>balanced</p>", "<p>unclosed"] {
+            let data = format!("ex:node a ex:C ; ex:p \"{lexical}\"^^rdf:XMLLiteral .");
+            assert!(
+                !accepts(&compilation.compiled.schema_json, "C", &data, "node"),
+                "{constraint}: XML is excluded"
+            );
+        }
+        if constraint == "sh:maxCount 0" {
+            assert!(
+                accepts(
+                    &compilation.compiled.schema_json,
+                    "C",
+                    "ex:node a ex:C .",
+                    "node"
+                ),
+                "the actual zero-value neighbor conforms"
+            );
+            for data in [
+                "ex:node a ex:C ; ex:p \"allowed\" .",
+                "ex:node a ex:C ; ex:p \"first\", \"second\" .",
+            ] {
+                assert!(
+                    !accepts(&compilation.compiled.schema_json, "C", data, "node"),
+                    "maxCount=0 rejects ordinary single and multiple values too"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn an_external_shape_cell_reports_xml_approximation_at_its_actual_validator() {
+    let class = "https://example.org/external/External";
+    let namespaces = Namespaces::new(
+        "ex",
+        &[
+            ("ex".to_owned(), EX.to_owned()),
+            ("ext".to_owned(), "https://example.org/external/".to_owned()),
+        ],
+    )
+    .expect("both class vocabularies are explicitly caller supplied");
+    let shape = format!(
+        "ex:S a sh:NodeShape ; sh:targetClass <{class}> ; \
+         sh:property [ sh:path ex:p ; sh:datatype rdf:XMLLiteral ] ."
+    );
+    let (compilation, _) = compile_shapes(
+        &shapes(&shape),
+        &parse(""),
+        &namespaces,
+        SchemaSurfaceMode::ShapedOnly,
+    );
+    let cell = coverage_cell(&compilation, &iri("p"), class);
+    assert_eq!(cell.status, SchemaCoverageStatus::HasShape);
+    assert_eq!(
+        cell.precision,
+        SchemaCoveragePrecision::RepresentationApproximation
+    );
+    let definition_key = namespaces.def_key(class);
+    let definition = purrdf_lex::json_pointer::escape_token(&definition_key);
+    for lexical in ["<p>balanced</p>", "<p>unclosed"] {
+        let data = format!("ex:node a <{class}> ; ex:p \"{lexical}\"^^rdf:XMLLiteral .");
+        assert!(
+            accepts_with_namespaces(
+                &compilation.compiled.schema_json,
+                &namespaces,
+                &definition,
+                &data,
+                "node"
+            ),
+            "the emitted external definition admits unchecked XML, so its precision cannot be exact"
+        );
+    }
 }

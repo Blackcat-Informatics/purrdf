@@ -408,43 +408,201 @@ pub fn walk_pre_post<'a>(
     root: NodeRef<'a>,
     mut visit: impl FnMut(Visit, NodeRef<'a>) -> Flow,
 ) -> bool {
-    enum Step<'a> {
-        Enter(NodeRef<'a>),
-        Exit(NodeRef<'a>),
-    }
-    let mut stack: WorkList<Step<'a>, 32> = WorkList::with(Step::Enter(root));
-    while let Some(step) = stack.pop() {
-        match step {
-            Step::Enter(node) => match visit(Visit::Enter, node) {
-                Flow::Stop => return false,
-                Flow::Skip => stack.push(Step::Exit(node)),
-                Flow::Descend => {
-                    stack.push(Step::Exit(node));
-                    let first = stack.len();
-                    node.for_each_child(|child| stack.push(Step::Enter(child)));
-                    stack.reverse_top(stack.len() - first);
+    try_walk_pre_post(
+        root,
+        |phase, node| Ok::<_, std::convert::Infallible>(visit(phase, node)),
+        |_| Ok(()),
+    )
+    .expect("a resident algebra walk can allocate its work list")
+}
+
+/// Why an admitted algebra walk could not proceed.
+#[derive(Debug)]
+pub enum WalkError<E> {
+    /// The visitor or its owner refused admission.
+    Visitor(E),
+    /// The work list's actual fallible allocation failed.
+    Allocation(std::collections::TryReserveError),
+    /// A work-list layout exceeded the local address space.
+    LayoutOverflow,
+}
+
+/// The shared pre/post traversal with before-growth work-list admission.
+/// `admit` receives the complete replacement spill allocation in bytes and
+/// returns its lifetime owner. The old owner remains live through replacement;
+/// the work list dies before its final owner. This traverses the same exhaustive
+/// [`NodeRef::for_each_child`] law as [`walk_pre_post`].
+///
+/// # Errors
+/// Reports admission, visitor, layout and actual allocation failures before a
+/// refused work-list growth occurs.
+enum WalkStep<'a> {
+    Enter(NodeRef<'a>),
+    Exit(NodeRef<'a>),
+}
+
+/// One traversal law; the caller supplies only physical storage and visitor effects.
+fn pre_post<'a, C, E>(
+    root: NodeRef<'a>,
+    context: &mut C,
+    mut visit: impl FnMut(Visit, NodeRef<'a>, &mut C) -> Result<Flow, E>,
+    mut grow: impl FnMut(&mut WorkList<WalkStep<'a>, 32>, usize, &mut C) -> Result<(), E>,
+    mut release: impl FnMut(WorkList<WalkStep<'a>, 32>, &mut C) -> Result<(), E>,
+    overflow: impl Fn() -> E,
+) -> Result<bool, E> {
+    let mut stack = WorkList::with(WalkStep::Enter(root));
+    let result = (|| {
+        while let Some(step) = stack.pop() {
+            match step {
+                WalkStep::Enter(node) => {
+                    let flow = visit(Visit::Enter, node, context)?;
+                    if flow == Flow::Stop {
+                        return Ok(false);
+                    }
+                    let mut children = Some(0usize);
+                    if flow == Flow::Descend {
+                        node.for_each_child(|_| children = children.and_then(|n| n.checked_add(1)));
+                    }
+                    let total = stack
+                        .len()
+                        .checked_add(children.ok_or_else(&overflow)?)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(&overflow)?;
+                    let needed = total.saturating_sub(32);
+                    if needed > stack.heap_capacity() {
+                        let capacity = stack
+                            .heap_capacity()
+                            .checked_mul(2)
+                            .ok_or_else(&overflow)?
+                            .max(needed);
+                        grow(&mut stack, capacity, context)?;
+                    }
+                    stack.push(WalkStep::Exit(node));
+                    if flow == Flow::Descend {
+                        let first = stack.len();
+                        node.for_each_child(|child| stack.push(WalkStep::Enter(child)));
+                        stack.reverse_top(stack.len() - first);
+                    }
                 }
-            },
-            Step::Exit(node) => {
-                if visit(Visit::Exit, node) == Flow::Stop {
-                    return false;
+                WalkStep::Exit(node) => {
+                    if visit(Visit::Exit, node, context)? == Flow::Stop {
+                        return Ok(false);
+                    }
                 }
             }
         }
+        Ok(true)
+    })();
+    let released = release(stack, context);
+    match result {
+        Ok(complete) => {
+            released?;
+            Ok(complete)
+        }
+        Err(error) => Err(error),
     }
-    true
 }
 
-/// Compute one value per node under `root`, each from the node and its children's
-/// values, and return the root's.
+/// Traverse the original tree with an admitted physical spill owner.
+/// Returns false when the visitor stops traversal.
 ///
-/// `combine` is called once per node, after every child's value exists, with those
-/// values in declaration order. The walk keeps its own work list and its own stack
-/// of computed values, so it needs no more machine stack for a taller tree.
+/// # Errors
+/// Preserves visitor, storage, and depth failures as their typed variants.
+pub fn try_walk_pre_post<'a, E: std::fmt::Debug, A>(
+    root: NodeRef<'a>,
+    mut visit: impl FnMut(Visit, NodeRef<'a>) -> Result<Flow, E>,
+    mut admit: impl FnMut(usize) -> Result<A, E>,
+) -> Result<bool, WalkError<E>> {
+    let mut admission = None;
+    pre_post(
+        root,
+        &mut admission,
+        |phase, node, _| visit(phase, node).map_err(WalkError::Visitor),
+        |stack, capacity, admission| {
+            let bytes = capacity
+                .checked_mul(size_of::<WalkStep<'a>>())
+                .ok_or(WalkError::LayoutOverflow)?;
+            let next = admit(bytes).map_err(WalkError::Visitor)?;
+            stack
+                .try_reserve_heap_exact(capacity)
+                .map_err(WalkError::Allocation)?;
+            *admission = Some(next);
+            Ok(())
+        },
+        |stack, admission| {
+            drop(stack);
+            *admission = None;
+            Ok(())
+        },
+        || WalkError::LayoutOverflow,
+    )
+}
+
+/// Traverse the same pre/post law with original native storage admission.
+///
+/// The visitor may construct native payloads in the same memory. Walk spill
+/// is destroyed and released before any successful return, including a stop.
+///
+/// # Errors
+/// Returns the visitor's original failure or checked physical storage refusal.
+pub fn walk_pre_post_with_memory<'a, S, E>(
+    root: NodeRef<'a>,
+    mut visit: impl FnMut(
+        Visit,
+        NodeRef<'a>,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Flow, E>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<bool, E>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E: From<purrdf_lex::allocation::StorageError>,
+{
+    pre_post(
+        root,
+        memory,
+        |phase, node, memory| visit(phase, node, memory),
+        |stack, capacity, memory| {
+            stack
+                .try_reserve_heap_admitted(capacity, memory)
+                .map_err(E::from)
+        },
+        |stack, memory| stack.release_admitted(memory).map_err(E::from),
+        || purrdf_lex::allocation::StorageError::SizeOverflow.into(),
+    )
+}
+
+/// Compute one value per node, children in declaration order.
 pub fn fold_post_order<'a, R>(
     root: NodeRef<'a>,
     mut combine: impl FnMut(NodeRef<'a>, &mut dyn Iterator<Item = R>) -> R,
 ) -> R {
+    let mut resident = purrdf_lex::allocation::Resident;
+    fold_post_order_with_memory(
+        root,
+        |node, children, _| Ok::<_, purrdf_lex::allocation::StorageError>(combine(node, children)),
+        &mut purrdf_lex::allocation::Memory::new(&mut resident),
+    )
+    .expect("resident postorder storage")
+}
+
+/// The original bottom-up fold with physical admission for both work lists.
+///
+/// # Errors
+/// Returns original visitor errors or checked native storage refusal.
+pub fn fold_post_order_with_memory<'a, R, S, E>(
+    root: NodeRef<'a>,
+    mut combine: impl FnMut(
+        NodeRef<'a>,
+        &mut dyn Iterator<Item = R>,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<R, E>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<R, E>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E: From<purrdf_lex::allocation::StorageError>,
+{
     enum Step<'a> {
         Enter(NodeRef<'a>),
         Exit(NodeRef<'a>, usize),
@@ -455,15 +613,23 @@ pub fn fold_post_order<'a, R>(
         match step {
             Step::Enter(node) => {
                 let exit = stack.len();
-                stack.push(Step::Exit(node, 0));
-                node.for_each_child(|child| stack.push(Step::Enter(child)));
+                stack.try_push_admitted(Step::Exit(node, 0), memory)?;
+                let mut failure = None;
+                node.for_each_child(|child| {
+                    if failure.is_none()
+                        && let Err(error) = stack.try_push_admitted(Step::Enter(child), memory)
+                    {
+                        failure = Some(error);
+                    }
+                });
+                if let Some(error) = failure {
+                    return Err(error.into());
+                }
                 let count = stack.len() - exit - 1;
                 stack.set(exit, Step::Exit(node, count));
                 stack.reverse_top(count);
             }
             Step::Exit(node, count) => {
-                // The children's values are the top `count` entries, the last
-                // child's on top; reversed, they pop in declaration order.
                 values.reverse_top(count);
                 let mut left = count;
                 let mut kids = core::iter::from_fn(|| {
@@ -472,16 +638,16 @@ pub fn fold_post_order<'a, R>(
                         values.pop().expect("a child's value is computed")
                     })
                 });
-                let value = combine(node, &mut kids);
-                // Values `combine` left unread are dropped here, before the next.
+                let value = combine(node, &mut kids, memory)?;
                 kids.for_each(drop);
-                values.push(value);
+                values.try_push_admitted(value, memory)?;
             }
         }
     }
-    values
-        .pop()
-        .expect("the root's value is the last one computed")
+    let value = values.pop().expect("the root's value is computed last");
+    stack.release_admitted(memory)?;
+    values.release_admitted(memory)?;
+    Ok(value)
 }
 
 /// Visit each expression for rewriting, without entering `EXISTS` bodies. `visit`
@@ -491,16 +657,61 @@ pub fn for_each_expression_mut<'e>(
     roots: impl IntoIterator<Item = &'e mut Expression>,
     mut visit: impl FnMut(&mut Expression),
 ) {
-    let mut pending: Vec<&'e mut Expression> = roots.into_iter().collect();
-    pending.reverse();
-    while let Some(expr) = pending.pop() {
-        visit(expr);
-        push_operands_mut(expr, &mut pending);
+    let mut storage = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    for_each_expression_mut_with_memory(roots, &mut memory, |expression, _| {
+        visit(expression);
+        Ok::<(), core::convert::Infallible>(())
+    })
+    .expect("resident mutable expression walk allocation failed");
+}
+
+/// A mutable visitor failure remains separate from physical native walk refusal.
+#[derive(Debug)]
+pub enum MutationError<E> {
+    /// The original visitor failure, retained unchanged.
+    Visitor(E),
+    /// Checked layout, original admission or allocator refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+
+/// Visit the same native expression slots with fallible working-list storage.
+/// The visitor runs before reading the possibly rewritten operands. EXISTS bodies
+/// remain graph-pattern boundaries and are never traversed as expressions.
+///
+/// # Errors
+/// Returns the first visitor failure or physical work-list refusal unchanged.
+pub fn for_each_expression_mut_with_memory<'e, S, E>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+) -> Result<(), MutationError<E>>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+{
+    let mut pending: WorkList<&'e mut Expression, 16> = WorkList::new();
+    for root in roots {
+        pending
+            .try_push_admitted(root, memory)
+            .map_err(MutationError::Storage)?;
     }
+    pending.reverse_top(pending.len());
+    while let Some(expression) = pending.pop() {
+        visit(expression, memory).map_err(MutationError::Visitor)?;
+        push_operands_mut_with_memory(expression, &mut pending, memory)
+            .map_err(MutationError::Storage)?;
+    }
+    pending
+        .release_admitted(memory)
+        .map_err(MutationError::Storage)
 }
 
 /// Push the rewritten expression operands in reverse source order.
-fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Expression>) {
+fn push_operands_mut_with_memory<'e, S: purrdf_lex::allocation::Admission + ?Sized>(
+    expr: &'e mut Expression,
+    pending: &mut WorkList<&'e mut Expression, 16>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
     match expr {
         Expression::Variable(_)
         | Expression::Bound(_)
@@ -508,11 +719,15 @@ fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Exp
         | Expression::Literal(_)
         | Expression::Exists(_) => {}
         Expression::Or(operands) | Expression::And(operands) => {
-            pending.extend(operands.iter_mut().rev());
+            for operand in operands.iter_mut().rev() {
+                pending.try_push_admitted(operand, memory)?;
+            }
         }
         Expression::Arithmetic(first, steps) => {
-            pending.extend(steps.iter_mut().rev().map(|(_, operand)| operand));
-            pending.push(first);
+            for (_, operand) in steps.iter_mut().rev() {
+                pending.try_push_admitted(operand, memory)?;
+            }
+            pending.try_push_admitted(first, memory)?;
         }
         Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
@@ -520,23 +735,29 @@ fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Exp
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
         | Expression::LessOrEqual(left, right) => {
-            pending.push(right);
-            pending.push(left);
+            pending.try_push_admitted(right, memory)?;
+            pending.try_push_admitted(left, memory)?;
         }
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            pending.push(inner);
+            pending.try_push_admitted(inner, memory)?;
         }
         Expression::In(target, list) => {
-            pending.extend(list.iter_mut().rev());
-            pending.push(target);
+            for operand in list.iter_mut().rev() {
+                pending.try_push_admitted(operand, memory)?;
+            }
+            pending.try_push_admitted(target, memory)?;
         }
         Expression::If(cond, then_expr, else_expr) => {
-            pending.push(else_expr);
-            pending.push(then_expr);
-            pending.push(cond);
+            pending.try_push_admitted(else_expr, memory)?;
+            pending.try_push_admitted(then_expr, memory)?;
+            pending.try_push_admitted(cond, memory)?;
         }
         Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            pending.extend(list.iter_mut().rev());
+            for operand in list.iter_mut().rev() {
+                pending.try_push_admitted(operand, memory)?;
+            }
         }
     }
+
+    Ok(())
 }

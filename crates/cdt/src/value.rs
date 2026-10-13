@@ -54,7 +54,8 @@ pub enum CdtContents<'a> {
 /// of its container, so a value is never deeper than its element count plus one, and
 /// every walk over the tree — the scanner, the renderer, equality, ordering, and this
 /// type's own `Drop`, `Clone` and `Debug` — is iterative over a heap worklist, so a
-/// level costs heap and never stack (see [`crate::tree`]).
+/// level costs heap and never stack (see [`crate::tree`]). Destruction reuses
+/// the existing tree slots and needs neither a worklist allocation nor more stack.
 ///
 /// Every value also carries the measure it was built with — its element count at every
 /// level and the byte length of its canonical form — so a composite that holds it is
@@ -82,7 +83,6 @@ pub enum CdtContents<'a> {
 ///   entry sequences and render byte-identically, on every host and in every process.
 ///
 /// [`CdtValue::map`] establishes the invariant for programmatically built maps.
-#[derive(Clone)]
 pub struct CdtValue {
     /// Private: the only way to put contents here is through a bounded constructor.
     parts: CdtParts,
@@ -145,12 +145,11 @@ impl CdtValue {
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
     pub fn list(items: Vec<CdtTerm>) -> Result<Self, CdtError> {
-        let extent = crate::limits::list_extent(items.iter());
-        crate::limits::check_extent(&extent)?;
-        Ok(Self {
-            parts: CdtParts::List(items),
-            extent,
-        })
+        Self::list_with_memory(
+            items,
+            &mut crate::memory::Memory::new(&mut crate::memory::Resident),
+        )
+        .expect("resident CDT list capacity")
     }
 
     /// Build a map from entries in any order, establishing the key-order invariant.
@@ -191,30 +190,12 @@ impl CdtValue {
     /// assert_eq!(key, "\"a\"^^<http://www.w3.org/2001/XMLSchema#string>");
     /// # Ok::<(), purrdf_cdt::CdtError>(())
     /// ```
-    pub fn map(mut entries: Vec<CdtEntry>) -> Result<Self, CdtError> {
-        entries.sort_by(|x, y| crate::ops::total_key_cmp(&x.key, &y.key));
-        // `{`, then each preceding entry as `key` `:` `value` `,`.
-        let mut offset = 1usize;
-        for window in entries.windows(2) {
-            // `key` `:` `value` `,` — the two punctuation bytes are the `+ 2`.
-            offset = offset
-                .saturating_add(crate::render::key_lexical_len(&window[0].key))
-                .saturating_add(crate::render::term_lexical_len(&window[0].value))
-                .saturating_add(2);
-            if crate::ops::total_key_cmp(&window[0].key, &window[1].key) == Ordering::Equal {
-                return Err(CdtError::DuplicateMapKey {
-                    offset,
-                    key: crate::render::canonical_key_lexical(&window[0].key),
-                });
-            }
-        }
-        let extent =
-            crate::limits::map_extent(entries.iter().map(|entry| (&entry.key, &entry.value)));
-        crate::limits::check_extent(&extent)?;
-        Ok(Self {
-            parts: CdtParts::Map(entries),
-            extent,
-        })
+    pub fn map(entries: Vec<CdtEntry>) -> Result<Self, CdtError> {
+        Self::map_with_memory(
+            entries,
+            &mut crate::memory::Memory::new(&mut crate::memory::Resident),
+        )
+        .expect("resident CDT map capacity")
     }
 
     /// Build a list whose bounds the caller has **just** checked against `extent`,
@@ -256,6 +237,17 @@ impl CdtValue {
     pub(crate) fn take_parts(&mut self) -> CdtParts {
         self.extent = Extent::EMPTY;
         core::mem::replace(&mut self.parts, CdtParts::List(Vec::new()))
+    }
+
+    /// Destruction-only layout observation; never a producer certificate.
+    pub(crate) const fn parts_for_release(&self) -> &CdtParts {
+        &self.parts
+    }
+
+    /// Destruction-only mutable slots. No borrowed public value is mutated;
+    /// the shared dismantling loop drains the contents before normal drop.
+    pub(crate) fn dismantling_parts(&mut self) -> &mut CdtParts {
+        &mut self.parts
     }
 
     /// A borrowed view of the contents, for matching on which datatype this is.
@@ -571,3 +563,72 @@ impl PartialEq for CdtTripleTerm {
 }
 
 impl Eq for CdtTripleTerm {}
+
+impl CdtValue {
+    /// Move an original admitted array into a checked list without copying it.
+    /// The caller retains the input array/payload account. The returned byte count
+    /// covers only additional surviving constructor storage.
+    ///
+    /// # Errors
+    /// Returns the original bound diagnostic or checked physical failure.
+    pub fn list_admitted(
+        items: Vec<CdtTerm>,
+        storage: &mut dyn crate::memory::Storage,
+    ) -> Result<(Self, usize), crate::memory::ReadError> {
+        let mut memory = crate::memory::Memory::new(storage);
+        let value = memory.scope(|memory| Self::list_with_memory(items, memory))??;
+        Ok((value, memory.admitted_bytes()))
+    }
+    pub(crate) fn list_with_memory(
+        items: Vec<CdtTerm>,
+        memory: &mut crate::memory::Memory<'_>,
+    ) -> Result<Result<Self, CdtError>, crate::memory::StorageError> {
+        let extent = crate::limits::try_list_extent(items.iter(), memory)?;
+        Ok(crate::limits::check_extent(&extent).map(|()| Self::from_checked_items(items, extent)))
+    }
+
+    /// Move an original admitted array into a checked, stably ordered map.
+    /// The original input account remains with the caller; duplicate-key text is
+    /// authored under the native callback before the diagnostic escapes.
+    ///
+    /// # Errors
+    /// Preserves duplicate-key offsets/wording and bounds separately from storage.
+    pub fn map_admitted(
+        entries: Vec<CdtEntry>,
+        storage: &mut dyn crate::memory::Storage,
+    ) -> Result<(Self, usize), crate::memory::ReadError> {
+        let mut memory = crate::memory::Memory::new(storage);
+        let value = memory.scope(|memory| Self::map_with_memory(entries, memory))??;
+        Ok((value, memory.admitted_bytes()))
+    }
+    pub(crate) fn map_with_memory(
+        mut entries: Vec<CdtEntry>,
+        memory: &mut crate::memory::Memory<'_>,
+    ) -> Result<Result<Self, CdtError>, crate::memory::StorageError> {
+        memory.sort_by(&mut entries, |x, y| {
+            crate::ops::total_key_cmp(&x.key, &y.key)
+        })?;
+        let mut offset = 1usize;
+        for window in entries.windows(2) {
+            offset = offset
+                .saturating_add(crate::render::key_lexical_len(&window[0].key))
+                .saturating_add(crate::render::try_term_lexical_len(
+                    &window[0].value,
+                    memory,
+                )?)
+                .saturating_add(2);
+            if crate::ops::total_key_cmp(&window[0].key, &window[1].key) == Ordering::Equal {
+                return Ok(Err(CdtError::DuplicateMapKey {
+                    offset,
+                    key: crate::render::try_canonical_key_lexical(&window[0].key, memory)?,
+                }));
+            }
+        }
+        let extent = crate::limits::try_map_extent(
+            entries.iter().map(|entry| (&entry.key, &entry.value)),
+            memory,
+        )?;
+        Ok(crate::limits::check_extent(&extent)
+            .map(|()| Self::from_checked_entries(entries, extent)))
+    }
+}

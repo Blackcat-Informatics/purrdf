@@ -224,10 +224,16 @@ the IRI failure without parsing English. The error message and the record's
   appended `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (see
   [Dated regular-expression laws](#dated-regular-expression-laws)); every existing
   entry point keeps its prototype and behaviour.
+  The same unshipped bump adds the eleven geo session, point-index and explicit
+  `*_with_geo` query/update entry points, and appends `PURRDF_STATUS_GEO_ERROR`.
+  Existing query/update functions keep their prototypes and caller policy;
+  the new entry points carry the caller's selected geo session into the same
+  native evaluator.
 
-  `0.10.0` → `0.11.0` changes three prototypes: `purrdf_graph_from_dataset`
+  `0.10.0` → `0.11.0` changes four prototypes: `purrdf_graph_from_dataset`
   takes `int32_t graph_existence` before `out_graph`; `purrdf_update_governed`
-  and `purrdf_update_governed_xpath_regex` take it before `governors`. Recompile
+  and `purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo`
+  take it before `governors`. Recompile
   callers and choose `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` (0) to preserve
   named slots through CLEAR and last-row deletion until DROP, or explicitly
   select `PURRDF_GRAPH_EXISTENCE_IMPLICIT` (1) for row-driven lifetime. C has no

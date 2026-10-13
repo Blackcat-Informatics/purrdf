@@ -27,8 +27,20 @@ use crate::error::PlanError;
 /// and write it as a string. Construction is fallible and validates through
 /// `purrdf_core::parse_iri`; equality, ordering and hashing are all over the
 /// IRI's textual content, which is what a plan's identity needs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Iri(purrdf_core::Iri);
+#[derive(Clone)]
+pub struct Iri(purrdf_sparql_eval::OwnedIri);
+
+impl PartialEq for Iri {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+impl Eq for Iri {}
+impl fmt::Debug for Iri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Iri").field(self.as_kernel_iri()).finish()
+    }
+}
 
 impl Iri {
     /// Parse and validate an IRI (RFC 3987).
@@ -40,7 +52,7 @@ impl Iri {
     /// is supplied.
     pub fn parse(text: &str) -> Result<Self, PlanError> {
         purrdf_core::parse_iri(text)
-            .map(Self)
+            .map(Self::from)
             .map_err(|source| PlanError::InvalidIri {
                 text: text.to_owned(),
                 source,
@@ -50,31 +62,40 @@ impl Iri {
     /// The IRI's full text, verbatim.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.as_kernel_iri().as_str()
     }
 
     /// The underlying kernel IRI.
     #[must_use]
-    pub const fn as_kernel_iri(&self) -> &purrdf_core::Iri {
-        &self.0
+    pub fn as_kernel_iri(&self) -> &purrdf_core::Iri {
+        self.0.as_iri()
+    }
+
+    /// Copy caller-owned configuration once under native authority; later
+    /// clones share that same payload and original control without allocation.
+    pub(crate) fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        self.0.clone_admitted(workspace).map(Self)
     }
 }
 
 impl From<purrdf_core::Iri> for Iri {
     fn from(iri: purrdf_core::Iri) -> Self {
-        Self(iri)
+        Self(purrdf_sparql_eval::OwnedIri::caller(iri))
     }
 }
 
 impl fmt::Display for Iri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0.as_str())
+        f.write_str(self.as_str())
     }
 }
 
 impl Hash for Iri {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_str().hash(state);
+        self.as_str().hash(state);
     }
 }
 
@@ -86,7 +107,7 @@ impl PartialOrd for Iri {
 
 impl Ord for Iri {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.0.as_str().cmp(other.0.as_str())
+        self.as_str().cmp(other.as_str())
     }
 }
 
@@ -97,17 +118,29 @@ impl Ord for Iri {
 /// carries it verbatim. It never names a dataset-local `TermId`, so a plan is
 /// valid against any dataset.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Term(String);
+pub struct Term(purrdf_lex::allocation::OwnedText);
 
 purrdf_lex::constructors! {
     impl Term {
         /// Carry `text` as a term.
         #[must_use]
         pub fn new(text) -> Self;
+
+        /// Retain a native lexical payload and its original admission together.
+        pub(crate) fn from_admitted(text: purrdf_lex::allocation::SharedText) -> Self;
     }
 }
 
 impl Term {
+    pub(crate) fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        self.0
+            .try_clone_with(|text| workspace.authored_text(text))
+            .map(Self)
+    }
+
     /// The term's canonical text.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -130,7 +163,7 @@ impl fmt::Display for Term {
 
 impl From<String> for Term {
     fn from(value: String) -> Self {
-        Self(value)
+        Self(value.into())
     }
 }
 

@@ -7,7 +7,7 @@
 //! Every spelling decision is [`purrdf_lex::term_syntax`]'s — the escaped
 //! `IRIREF`, the canonical literal with `xsd:string` elided, the `<<( … )>>`
 //! delimiters — and every blank-node label is made legal (and injective over
-//! blank-node scopes) by [`encode_blank_label`]. What this adds is the one
+//! blank-node scopes) by [`crate::blank_label::encode_blank_label`]. What this adds is the one
 //! thing the lexical layer cannot know: the shape of a [`TermValue`], a triple
 //! term nesting other terms. It walks that nesting over an explicit work list,
 //! so a deeply nested triple term costs heap, not call frames.
@@ -16,14 +16,14 @@ use purrdf_lex::term_syntax::{
     TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
 };
 
-use crate::blank_label::{LabelAlphabet, encode_blank_label};
+use crate::blank_label::LabelAlphabet;
 use crate::ir::TermValue;
 use crate::sink::TextOut;
 
 /// Append `term` in the RDF 1.2 canonical term syntax.
 ///
 /// * An IRI is `<…>`, escaped by [`purrdf_lex::iri_escape`].
-/// * A blank node is `_:` and its label under [`encode_blank_label`]'s
+/// * A blank node is `_:` and its label under [`crate::blank_label::encode_blank_label`]'s
 ///   `BLANK_NODE_LABEL` alphabet, so a label from any scope re-parses to the
 ///   same `(label, scope)` pair.
 /// * A literal is its canonical form ([`purrdf_lex::term_syntax::write_literal`]):
@@ -43,53 +43,95 @@ use crate::sink::TextOut;
 /// assert_eq!(out, "<<( <http://example.org/s> <http://example.org/p> \"o\" )>>");
 /// ```
 pub fn write_term_value<W: TextOut + ?Sized>(term: &TermValue, out: &mut W) {
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    write_term_value_with_memory(term, out, &mut memory).expect("resident RDF term spelling");
+}
+
+/// Append the same canonical RDF 1.2 term under original native working admission.
+///
+/// The destination keeps its own physical owner. This memory covers the actual
+/// nested-term work list and temporary canonical blank label; each is destroyed
+/// before its grant is released. Destination failure stops the same emitter.
+///
+/// # Errors
+/// Returns the first working-layout, admission or allocator failure.
+pub fn write_term_value_with_memory<
+    W: TextOut + ?Sized,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    term: &TermValue,
+    out: &mut W,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
     enum Step<'t> {
         Term(&'t TermValue),
         Text(&'static str),
     }
-    let mut held: Vec<Step<'_>> = Vec::new();
-    let mut next = Some(Step::Term(term));
-    while let Some(step) = next.take().or_else(|| held.pop()) {
-        let term = match step {
-            Step::Text(text) => {
-                out.push_str(text);
-                continue;
-            }
-            Step::Term(term) => term,
-        };
-        match term {
-            TermValue::Iri(iri) => write_iri(iri, out),
-            TermValue::Blank { label, scope } => write_blank(
-                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
-                out,
-            ),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => write_literal(
-                lexical_form,
-                datatype,
-                language.as_deref(),
-                direction.map(crate::RdfTextDirection::as_str),
-                out,
-            ),
-            TermValue::Triple { s, p, o } => {
-                out.push_str(TRIPLE_TERM_OPEN);
-                out.push(' ');
-                held.extend([
-                    Step::Text(TRIPLE_TERM_CLOSE),
-                    Step::Text(" "),
-                    Step::Term(o),
-                    Step::Text(" "),
-                    Step::Term(p),
-                    Step::Text(" "),
-                ]);
-                next = Some(Step::Term(s));
+    memory.scope(|memory| {
+        let mut held = Vec::new();
+        let mut next = Some(Step::Term(term));
+        while !out.failed() {
+            let Some(step) = next.take().or_else(|| held.pop()) else {
+                break;
+            };
+            let term = match step {
+                Step::Text(text) => {
+                    out.push_str(text);
+                    continue;
+                }
+                Step::Term(term) => term,
+            };
+            match term {
+                TermValue::Iri(iri) => write_iri(iri, out),
+                TermValue::Blank { label, scope } => {
+                    let encoded = crate::blank_label::encode_blank_label_with_memory(
+                        label,
+                        *scope,
+                        LabelAlphabet::BlankNodeLabel,
+                        memory,
+                    )?;
+                    write_blank(&encoded, out);
+                    if let std::borrow::Cow::Owned(encoded) = encoded {
+                        memory.release_string(encoded)?;
+                    }
+                }
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    write_literal(
+                        lexical_form,
+                        datatype,
+                        language.as_deref(),
+                        direction.map(crate::RdfTextDirection::as_str),
+                        out,
+                    );
+                }
+                TermValue::Triple { s, p, o } => {
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
+                    if out.failed() {
+                        break;
+                    }
+                    for step in [
+                        Step::Text(TRIPLE_TERM_CLOSE),
+                        Step::Text(" "),
+                        Step::Term(o),
+                        Step::Text(" "),
+                        Step::Term(p),
+                        Step::Text(" "),
+                    ] {
+                        memory.push(&mut held, step)?;
+                    }
+                    next = Some(Step::Term(s));
+                }
             }
         }
-    }
+        memory.release_vec(held)
+    })
 }
 
 #[cfg(test)]

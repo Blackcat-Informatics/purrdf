@@ -122,7 +122,7 @@
 use core::borrow::Borrow;
 use core::fmt;
 use core::ops::Bound;
-use std::collections::{BTreeMap, BTreeSet, HashMap, btree_map};
+use purrdf_sparql_eval::{AdmittedMap, AdmittedOrderedSet};
 
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, IndexGeneration, PfAttestation,
@@ -366,11 +366,34 @@ pub enum ProducerStatus {
     /// The producer could not run.
     ExecutionFailed {
         /// A human-readable reason, carried verbatim.
-        reason: String,
+        reason: purrdf_lex::allocation::OwnedText,
     },
     /// The producer declined the request terms it was handed. Declared by the
     /// producer itself; see this type's header.
     TermsRejected,
+}
+
+impl ProducerStatus {
+    fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        match self {
+            Self::ExecutionFailed { reason } => Ok(Self::ExecutionFailed {
+                reason: reason.try_clone_with(|text| workspace.authored_text(text))?,
+            }),
+            _ => Ok(self.clone()),
+        }
+    }
+    /// Preserve a native-authored failure spelling with its original grant.
+    pub(crate) fn failed_admitted(
+        reason: &(impl fmt::Display + ?Sized),
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        Ok(Self::ExecutionFailed {
+            reason: workspace.authored_text(reason)?.into(),
+        })
+    }
 }
 
 impl From<ProducerReceipt> for ProducerStatus {
@@ -468,7 +491,8 @@ pub struct FusedRow {
     /// summands were all the summands there were.
     pub score: Fixed,
     /// Per-stratum provenance: `(stratum, rank, contribution)`.
-    pub contributions: Vec<(Iri, u64, Fixed)>,
+    pub contributions:
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<(Iri, u64, Fixed)>>,
     /// Where this row's **true** score lies, given what its producers declared.
     ///
     /// [`Self::score`] is the exact sum of the contributions that arrived;
@@ -769,7 +793,7 @@ pub enum ScoreInterval {
     Unbounded {
         /// The strata that named this row and declared a perturbed order, in
         /// canonical stratum order.
-        perturbed: BTreeSet<Iri>,
+        perturbed: purrdf_sparql_eval::SharedWorkspace<AdmittedOrderedSet<Iri>>,
     },
 }
 
@@ -857,7 +881,7 @@ pub enum ScoreExactness {
         /// short index is rebuilt, an approximate search is not — which is why
         /// they stay separately readable under their own keys rather than being
         /// merged into one cause here.
-        deficit: BTreeSet<Iri>,
+        deficit: purrdf_sparql_eval::SharedWorkspace<AdmittedOrderedSet<Iri>>,
         /// Strata that may have over-contributed, so a candidate's true score
         /// could be **lower** than the one reported.
         ///
@@ -869,7 +893,7 @@ pub enum ScoreExactness {
         /// two sets are carried separately because a future cause need not
         /// produce both: a stratum stopped early withholds without promoting,
         /// and would belong in one set alone.
-        inflation: BTreeSet<Iri>,
+        inflation: purrdf_sparql_eval::SharedWorkspace<AdmittedOrderedSet<Iri>>,
         /// Strata whose declared order is [`OrderFidelity::Perturbed`](crate::OrderFidelity::Perturbed), for
         /// which **no finite bound on the error exists at all**.
         ///
@@ -884,7 +908,7 @@ pub enum ScoreExactness {
         /// Empty for every producer this workspace ships today: an HNSW graph
         /// compares exact distances and fails only to visit, which is lossy but
         /// faithful. A quantized index would populate it.
-        unbounded: BTreeSet<Iri>,
+        unbounded: purrdf_sparql_eval::SharedWorkspace<AdmittedOrderedSet<Iri>>,
     },
 }
 
@@ -897,7 +921,9 @@ pub enum ScoreExactness {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusionTrailer {
     /// Every producer's own status, keyed by its stratum.
-    pub statuses: BTreeMap<Iri, ProducerStatus>,
+    pub statuses: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
+    >,
     /// What each handed stream's index attested, keyed by its stratum: which
     /// generation answered, and whether that generation was whole.
     ///
@@ -929,7 +955,9 @@ pub struct FusionTrailer {
     /// [`PfAttestation::UNDECLARED`]: `Undeclared` means a producer was asked
     /// and said nothing, and fabricating it here would report a producer that
     /// was never asked as one that declined to answer.
-    pub attestations: BTreeMap<Iri, PfAttestation>,
+    pub attestations: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, PfAttestation>,
+    >,
     /// What each handed stream declared about the rows it can name, keyed by its
     /// stratum: whether its search finds every row that was due, and whether a
     /// row it does name arrives at a rank no better than the one it earned.
@@ -967,7 +995,9 @@ pub struct FusionTrailer {
     /// [`RankFidelity::EXACT`], for the reason its attestation is absent: no
     /// producer was asked, and filling in the top of the lattice would report a
     /// producer that never answered as one that promised everything.
-    pub fidelities: BTreeMap<Iri, RankFidelity>,
+    pub fidelities: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, RankFidelity>,
+    >,
     /// Whether the fused scores are exact, or estimates whose error this answer
     /// bounds.
     ///
@@ -1070,7 +1100,9 @@ pub struct FusionTrailer {
     /// [`FusionTrailer::completed_with`] adds; this one answers "what did fusion
     /// read from this stream", and a producer that never became a stream was
     /// never read from.
-    pub resolution: BTreeMap<Iri, StratumResolution>,
+    pub resolution: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, StratumResolution>,
+    >,
     /// The candidate-domain declaration each handed stream fused under, keyed
     /// by its stratum.
     ///
@@ -1098,7 +1130,9 @@ pub struct FusionTrailer {
     /// because it was never read, and filling it with `Unrestricted` would
     /// report a producer that was never asked as one that promised to name
     /// anything.
-    pub domains: BTreeMap<Iri, CandidateDomains>,
+    pub domains: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, CandidateDomains>,
+    >,
     /// What each handed stream declared its exclusion answers would be a fact
     /// about, keyed by its stratum.
     ///
@@ -1120,7 +1154,9 @@ pub struct FusionTrailer {
     /// difference is.
     ///
     /// The key set matches [`Self::domains`]' for the reason given there.
-    pub exclusion_bases: BTreeMap<Iri, ExclusionBasis>,
+    pub exclusion_bases: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, ExclusionBasis>,
+    >,
     /// Whether the last row in the answer ties on score with a *settled* rival
     /// left outside it.
     ///
@@ -1269,14 +1305,27 @@ const SERVICE_INCOMPLETE: u8 = 1;
 /// The lookup *count* is deliberately absent, for the reason the invocation
 /// count is absent from the attestations: how many lookups a fusion asked
 /// follows how its frontier was scheduled, not what any index said.
+#[cfg(test)]
 pub(crate) fn evidence_canonical_bytes(
-    attestations: &BTreeMap<Iri, PfAttestation>,
-    resolution: &BTreeMap<Iri, StratumResolution>,
+    attestations: &std::collections::BTreeMap<Iri, PfAttestation>,
+    resolution: &std::collections::BTreeMap<Iri, StratumResolution>,
 ) -> Vec<u8> {
     let mut writer = Writer::new();
+    write_evidence(&mut writer, || attestations.iter(), || resolution.iter());
+    writer.into_bytes()
+}
+
+pub(crate) fn write_evidence<'a, B: crate::canonical::CanonicalSink, A, R>(
+    writer: &mut Writer<B>,
+    attestations: impl Fn() -> A,
+    resolution: impl Fn() -> R,
+) where
+    A: ExactSizeIterator<Item = (&'a Iri, &'a PfAttestation)>,
+    R: Iterator<Item = (&'a Iri, &'a StratumResolution)>,
+{
     writer.u16(EVIDENCE_VERSION);
-    writer.u64(attestations.len() as u64);
-    for (stratum, attestation) in attestations {
+    writer.u64(attestations().len() as u64);
+    for (stratum, attestation) in attestations() {
         writer.string(stratum.as_str());
         match &attestation.generation {
             IndexGeneration::Undeclared => writer.u8(GENERATION_UNDECLARED),
@@ -1298,8 +1347,7 @@ pub(crate) fn evidence_canonical_bytes(
         }
     }
     let looked_up = || {
-        resolution
-            .iter()
+        resolution()
             .filter(|(_, resolution)| resolution.exclusion_lookups > 0)
             .map(|(stratum, _)| stratum)
     };
@@ -1310,7 +1358,6 @@ pub(crate) fn evidence_canonical_bytes(
             writer.string(stratum.as_str());
         }
     }
-    writer.into_bytes()
 }
 
 impl FusionTrailer {
@@ -1322,7 +1369,7 @@ impl FusionTrailer {
     /// canonical stratum order, each variable-length part framed by its own
     /// length and every integer little-endian — followed, only when some
     /// stratum's lookups were asked, by the count and names of those strata (see
-    /// [`Self::evidence_id`]). Sorting comes free from the `BTreeMap` and
+    /// [`Self::evidence_id`]). Sorting comes free from the admitted ordered map and
     /// is relied on, so no iteration order can reach the digest; the framing is
     /// what makes the encoding injective, so no two different maps can share
     /// bytes by running their fields together; the little-endian integers are
@@ -1334,9 +1381,21 @@ impl FusionTrailer {
     /// was handed, or archive the bytes beside an answer so a later run can be
     /// compared against the evidence this one actually had — the same reason
     /// [`Plan::canonical_bytes`](crate::Plan::canonical_bytes) is public.
-    #[must_use]
-    pub fn evidence_canonical_bytes(&self) -> Vec<u8> {
-        evidence_canonical_bytes(&self.attestations, &self.resolution)
+    ///
+    /// # Errors
+    /// Returns the original layout, admission or allocation refusal; a failed
+    /// export never publishes a partial encoding.
+    pub fn evidence_canonical_bytes(
+        &self,
+    ) -> Result<purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<u8>>, FusionError>
+    {
+        let mut writer = Writer::admitted(self.attestations.workspace());
+        write_evidence(
+            &mut writer,
+            || self.attestations.iter(),
+            || self.resolution.iter(),
+        );
+        writer.into_admitted().map_err(FusionError::from)
     }
 
     /// Add the status of every producer that never became a stream, and return
@@ -1369,15 +1428,34 @@ impl FusionTrailer {
     /// This is a terminal operation on a terminal value — the trailer exists
     /// only after every stream reached its receipt — so nothing here makes a
     /// status readable mid-stream.
-    #[must_use]
-    pub fn completed_with<I>(mut self, statuses: I) -> Self
+    ///
+    /// # Errors
+    /// Returns the original layout, admission or allocation refusal while
+    /// constructing the complete immutable report. No partial report is returned.
+    pub fn completed_with<I>(mut self, statuses: I) -> Result<Self, FusionError>
     where
         I: IntoIterator<Item = (Iri, ProducerStatus)>,
     {
+        let workspace = self.statuses.workspace().clone();
+        let mut completed = purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+            self.statuses.iter().map(|(stratum, status)| {
+                Ok((
+                    stratum.clone_admitted(&workspace)?,
+                    status.clone_admitted(&workspace)?,
+                ))
+            }),
+            &workspace,
+        )?;
         for (stratum, status) in statuses {
-            self.statuses.entry(stratum).or_insert(status);
+            if !completed.contains_key(&stratum) {
+                completed.insert(
+                    stratum.clone_admitted(&workspace)?,
+                    status.clone_admitted(&workspace)?,
+                )?;
+            }
         }
-        self
+        self.statuses = purrdf_sparql_eval::SharedWorkspace::new_admitted(completed, &workspace)?;
+        Ok(self)
     }
 
     /// How many leading rows of `rows` are **certainly** in the answer.
@@ -1604,10 +1682,10 @@ struct BlockWitness {
 }
 
 /// A candidate's accumulated NRA state.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct CandidateState {
     lower_bound: Fixed,
-    contributions: Vec<(Iri, u64, Fixed)>,
+    contributions: purrdf_sparql_eval::AdmittedVec<(Iri, u64, Fixed)>,
     /// The streams that have named this candidate.
     ///
     /// It answers two questions, and the second is why no separate field holds
@@ -1620,7 +1698,7 @@ struct CandidateState {
     /// and no allocation at all; a stored copy would cost one heap-allocated
     /// tag set **per candidate**, in the one structure whose size the frontier
     /// argument is about.
-    seen_streams: BTreeSet<usize>,
+    seen_streams: AdmittedOrderedSet<usize>,
     /// The block this candidate has been placed in, and by which stream, once
     /// some row has named one.
     ///
@@ -1659,7 +1737,7 @@ struct CandidateState {
     /// A superset of [`Self::excluded`] rather than a partition with it: the
     /// answer and the fact that an answer was received are different questions,
     /// and the second is what stops a second ask.
-    asked: BTreeSet<usize>,
+    asked: AdmittedOrderedSet<usize>,
     /// The streams observed to exclude this candidate.
     ///
     /// The *observational* half of [`FusionStream::may_still_name`], beside the
@@ -1676,13 +1754,11 @@ struct CandidateState {
     ///
     /// # What both sets cost, and when
     ///
-    /// Nothing, for a fusion no producer declared a basis in: an empty
-    /// [`BTreeSet`] allocates on first insert and never before, and nothing
-    /// inserts into either where no stream is ever asked. The two pointers'
-    /// worth of inline width is paid per frontier candidate either way, which is
-    /// the same trade [`Self::block`] already makes and is measured by
-    /// `tests/fusion_frontier_alloc.rs`.
-    excluded: BTreeSet<usize>,
+    /// No arena storage, for a fusion no producer declared a basis in: the
+    /// empty admitted sets acquire storage only on insertion, and nothing
+    /// inserts where no stream is ever asked. Their inline owners retain the
+    /// original authority; every actual arena growth is admitted before birth.
+    excluded: AdmittedOrderedSet<usize>,
 }
 
 impl CandidateState {
@@ -1692,14 +1768,14 @@ impl CandidateState {
     /// A zero lower bound is the honest starting point rather than a placeholder:
     /// before any contribution is summed, zero is exactly what this candidate is
     /// known to score.
-    fn new() -> Self {
+    fn new(workspace: &purrdf_sparql_eval::WorkspaceCapability) -> Self {
         Self {
             lower_bound: Fixed::ZERO,
-            contributions: Vec::new(),
-            seen_streams: BTreeSet::new(),
+            contributions: purrdf_sparql_eval::AdmittedVec::new(workspace),
+            seen_streams: AdmittedOrderedSet::new(workspace),
             block: None,
-            asked: BTreeSet::new(),
-            excluded: BTreeSet::new(),
+            asked: AdmittedOrderedSet::new(workspace),
+            excluded: AdmittedOrderedSet::new(workspace),
         }
     }
 
@@ -1722,28 +1798,36 @@ impl CandidateState {
 /// is every fusion a profile of distinct strata describes in practice, fit one
 /// word inline; a wider fusion pays one small allocation per set and is ordered
 /// word by word, which is still a fixed order independent of any hashing.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug)]
 enum StreamSet {
     /// At most sixty-four streams: bit `i` is stream `i`.
     Narrow(u64),
     /// More than sixty-four: word `i / 64`, bit `i % 64`.
-    Wide(Box<[u64]>),
+    Wide(purrdf_sparql_eval::AdmittedVec<u64>),
 }
 
 impl StreamSet {
     /// The empty set over `width` streams.
-    fn empty(width: usize) -> Self {
+    fn empty(
+        width: usize,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, FusionError> {
         if width <= 64 {
-            Self::Narrow(0)
+            Ok(Self::Narrow(0))
         } else {
-            Self::Wide(vec![0; width.div_ceil(64)].into_boxed_slice())
+            let count = width.div_ceil(64);
+            let mut words = purrdf_sparql_eval::AdmittedVec::with_capacity(count, workspace)?;
+            for _ in 0..count {
+                words.push(0)?;
+            }
+            Ok(Self::Wide(words))
         }
     }
 
     fn insert(&mut self, index: usize) {
         match self {
             Self::Narrow(word) => *word |= 1 << index,
-            Self::Wide(words) => words[index / 64] |= 1 << (index % 64),
+            Self::Wide(words) => words.as_mut_slice()[index / 64] |= 1 << (index % 64),
         }
     }
 
@@ -1776,6 +1860,28 @@ impl StreamSet {
     }
 }
 
+impl PartialEq for StreamSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+impl Eq for StreamSet {}
+impl PartialOrd for StreamSet {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for StreamSet {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match (self, other) {
+            (Self::Narrow(left), Self::Narrow(right)) => left.cmp(right),
+            (Self::Wide(left), Self::Wide(right)) => left.iter().cmp(right.iter()),
+            (Self::Narrow(_), Self::Wide(_)) => core::cmp::Ordering::Less,
+            (Self::Wide(_), Self::Narrow(_)) => core::cmp::Ordering::Greater,
+        }
+    }
+}
+
 /// Which streams a frontier candidate is still waiting on, as a pure function
 /// of its own state and the declarations — the key [`SelectionIndex`] groups
 /// candidates under.
@@ -1785,7 +1891,7 @@ impl StreamSet {
 /// would have to re-file the whole frontier. Open-ness is instead intersected
 /// in at the moment a question is asked, once per group rather than once per
 /// candidate.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Signature {
     /// The streams that have not named this candidate and are still licensed
     /// to ([`FusionStream::may_still_name`]).
@@ -1936,21 +2042,37 @@ impl Ord for dyn RankOrder + '_ {
 /// every later re-filing. The number of groups is bounded by the number of
 /// distinct (`reach`, `pending`) pairs, which is at most the frontier's size and
 /// at most `3^streams`, and is a handful for every fixture this crate carries.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SelectionIndex {
-    groups: BTreeMap<Signature, BTreeSet<RankKey>>,
+    groups: purrdf_sparql_eval::AdmittedOrderedMap<
+        Signature,
+        purrdf_sparql_eval::AdmittedOrderedMap<RankKey, ()>,
+    >,
 }
 
 impl SelectionIndex {
-    fn insert(&mut self, signature: Signature, key: RankKey) {
-        self.groups.entry(signature).or_default().insert(key);
+    fn new(workspace: &purrdf_sparql_eval::WorkspaceCapability) -> Self {
+        Self {
+            groups: purrdf_sparql_eval::AdmittedOrderedMap::new(workspace),
+        }
+    }
+
+    fn insert(&mut self, signature: Signature, key: RankKey) -> Result<(), FusionError> {
+        if let Some(members) = self.groups.get_mut(&signature) {
+            members.insert(key, ())?;
+        } else {
+            let mut members = purrdf_sparql_eval::AdmittedOrderedMap::new(self.groups.workspace());
+            members.insert(key, ())?;
+            self.groups.insert(signature, members)?;
+        }
+        Ok(())
     }
 
     /// Take the key `probe` names out of the `signature` group, dropping the
     /// group once it is empty so a pass never visits a group with no members.
     fn take(&mut self, signature: &Signature, probe: &RankProbe<'_>) -> Option<RankKey> {
         let members = self.groups.get_mut(signature)?;
-        let key = members.take(probe as &dyn RankOrder)?;
+        let (key, ()) = members.remove_entry(probe as &dyn RankOrder)?;
         if members.is_empty() {
             self.groups.remove(signature);
         }
@@ -1966,7 +2088,7 @@ impl SelectionIndex {
 /// question anyone can still ask about it is the one this answers: *which
 /// streams already named it*. Keeping anything more would be keeping a copy of
 /// the answer, which is the caller's to hold and not this engine's.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct EmittedRecord {
     /// The stream indexes that contributed to the candidate before it
     /// certified — [`CandidateState::seen_streams`], moved out of the state
@@ -1981,7 +2103,7 @@ struct EmittedRecord {
     /// depending on how deep the caller happened to read, the identical failure
     /// the [`DuplicatePolicy::Unique`] promise is kept past the frontier to
     /// avoid.
-    named_by: BTreeSet<usize>,
+    named_by: AdmittedOrderedSet<usize>,
     /// The block the candidate was placed in before it certified, moved out of
     /// the state being dropped rather than rebuilt.
     ///
@@ -2005,54 +2127,18 @@ struct EmittedRecord {
     /// record of that observation and would report the row as an invariant
     /// violation of its own ([`FusionError::MalformedProfile`]) — blaming the
     /// engine for a producer's self-contradiction, and naming no witness.
-    excluded: BTreeSet<usize>,
+    excluded: AdmittedOrderedSet<usize>,
 }
 
-/// The lookup policy for [`FusionStream`]'s emitted map: the workspace's
-/// fixed-key, seed-free `FixedHasher` ([`purrdf_core::FastHasher`]).
-///
-/// # Why a hasher at all, in a crate that is otherwise byte-deterministic
-///
-/// Because this is the one structure here whose *order* is provably unobserved.
-/// It is consulted by key and never iterated — no `for` loop, no `values()`, no
-/// `keys()` — so its iteration order reaches no output, no identity and no
-/// ordering decision. Every ordered structure in this engine is ordered because
-/// something reads it in order: the frontier is scanned to pick an emittable
-/// candidate, `statuses` and `attestations` are serialized into the trailer and
-/// digested into [`EvidenceId`], and `seen_streams` is both scanned and moved
-/// into [`EmittedRecord`]. Those are `BTree`s and must stay `BTree`s. This one
-/// answers `contains` and nothing else, so the repo's hot-map rule applies and
-/// the lookup is paid at hash speed rather than at `log n` comparisons over
-/// whole candidate terms.
-///
-/// Fixed-key rather than std's randomly keyed default for the reason every interner in this
-/// workspace is: `wasm32-unknown-unknown` has no random source to seed one
-/// from, and a per-process seed would put nondeterminism into a crate whose
-/// entire claim is the same answer on every target. See `purrdf-core`'s
-/// `hash` module for the workspace policy this follows.
-type EmittedHasher = purrdf_core::FastHasher;
-
-/// The emitted-candidate table, wrapping the one hash map in this crate so that
-/// **the type enforces what the argument above claims**.
-///
-/// The claim is that this map's iteration order reaches no answer, and it is
-/// true because the map is consulted by key and never walked. Left as a bare
-/// [`HashMap`] that would be a property of today's call sites: `.iter()`,
-/// `.values()`, `.keys()`, `.drain()` and `.retain()` are all one keystroke
-/// away, each of them a way for a hash order to become part of a row order, a
-/// status map or an [`EvidenceId`] — and nothing about the field would object.
-///
-/// So the operations the engine actually needs are the only operations that
-/// exist: record a certification, and ask about one candidate. There is no
-/// iterator, no `len`, and no accessor that hands the inner map out, which
-/// means a future edit that wanted to walk this table would have to add the
-/// method here — beside the reason it must not — rather than reach for one that
-/// was already there.
+/// Certified-candidate membership over the shared admitted fixed-hash table.
+/// Its iteration order is unobserved: this wrapper exposes only recording and
+/// lookup. Ordered selection uses the ordered arena, while this lookup pays
+/// fixed-hash cost and retains its original native capacity and payload owners.
 #[derive(Debug, Default)]
 struct EmittedTable {
     /// The certified candidates, keyed by canonical term. Private with no
     /// escape hatch: see this type's own docs for why that is the point.
-    entries: HashMap<Term, EmittedRecord, EmittedHasher>,
+    entries: AdmittedMap<Term, EmittedRecord>,
 }
 
 impl EmittedTable {
@@ -2063,8 +2149,14 @@ impl EmittedTable {
     /// leaves the frontier exactly once, so a second insertion under one key
     /// cannot happen, and returning a value no caller may read would only
     /// invite one to start reading it.
-    fn record(&mut self, item: Term, record: EmittedRecord) {
-        self.entries.insert(item, record);
+    fn record(
+        &mut self,
+        item: Term,
+        record: EmittedRecord,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<(), FusionError> {
+        self.entries.insert_admitted(item, record, workspace)?;
+        Ok(())
     }
 
     /// What `item` carried when it certified, or `None` if it never has.
@@ -2090,7 +2182,7 @@ struct Degradation {
     /// Indexed by stream, like `heads` and `domains`, because that is how it is
     /// asked. At least one entry is `true` — a fusion with none holds no
     /// [`Degradation`] at all.
-    degraded: Vec<bool>,
+    degraded: purrdf_sparql_eval::AdmittedVec<bool>,
     /// Whether the index behind each stream attested it was short
     /// ([`ServiceLevel::Incomplete`]) — the half of `degraded` an exclusion
     /// lookup cannot discharge.
@@ -2102,7 +2194,7 @@ struct Degradation {
     /// documents it does not hold, and "I hold no entry for it" is exactly the
     /// statement those documents make — so it settles nothing about them. See
     /// [`FusionStream::score_interval`].
-    short: Vec<bool>,
+    short: purrdf_sparql_eval::AdmittedVec<bool>,
     /// The contribution each stream would award a rank-one row, or `None` where
     /// the profile's arithmetic refused to produce one.
     ///
@@ -2113,13 +2205,13 @@ struct Degradation {
     /// asked — so [`FusionStream::rank_one_contribution`] re-derives on that
     /// arm, and a caller sees the same error, from the same operands, at the
     /// same point in the read as it always has.
-    rank_one: Vec<Option<Fixed>>,
+    rank_one: purrdf_sparql_eval::AdmittedVec<Option<Fixed>>,
     /// The stream index serving each stratum.
     ///
     /// First entry wins, exactly as the linear scan it replaces did: a caller
     /// driving [`FusionStream`] directly may hand it two streams tagged with one
     /// stratum, and no answer may move because a lookup changed shape.
-    stratum_index: BTreeMap<Iri, usize>,
+    stratum_index: purrdf_sparql_eval::AdmittedOrderedMap<Iri, usize>,
 }
 
 impl Degradation {
@@ -2134,23 +2226,30 @@ impl Degradation {
 /// `FusionStream` is generic over the stream type and produces [`FusedRow`]s on
 /// demand. Call [`next`](FusionStream::next) until it returns `Ok(None)`, then
 /// [`trailer`](FusionStream::trailer) for the producers' statuses.
-pub struct FusionStream<S: RankedStream> {
-    streams: Vec<(Iri, S)>,
-    profile: FusionProfile,
+pub struct FusionStream<'p, S: RankedStream> {
+    workspace: purrdf_sparql_eval::WorkspaceCapability,
+    // A refused mutation cannot be resumed or reported as successful. Retain
+    // the first native cause without rendering or acquiring another buffer.
+    terminal_failure: Option<purrdf_sparql_eval::EvalError>,
+    // Constructed only for explicitly scoped composition. Ordinary fusion pays
+    // no dictionary, row observation or native metadata arena allocation.
+    scoped: Option<ScopedFusion>,
+    streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
+    profile: ProfileInput<'p>,
     plan_id: Option<PlanId>,
     initialized: bool,
-    heads: Vec<Option<Head>>,
-    exhausted: Vec<bool>,
-    next_ranks: Vec<u64>,
-    rows_pulled: Vec<u64>,
-    last_contribution: Vec<Option<Fixed>>,
+    heads: purrdf_sparql_eval::AdmittedVec<Option<Head>>,
+    exhausted: purrdf_sparql_eval::AdmittedVec<bool>,
+    next_ranks: purrdf_sparql_eval::AdmittedVec<u64>,
+    rows_pulled: purrdf_sparql_eval::AdmittedVec<u64>,
+    last_contribution: purrdf_sparql_eval::AdmittedVec<Option<Fixed>>,
     /// Per-stream count of adjacent ranks whose contributions were equal.
     ///
     /// Counted by [`Self::count_collision`] against the previous row's
     /// contribution, one equality compare per row. It is the exact number of
     /// ranks this run could not separate — an observation, not the profile's
     /// a-priori bound.
-    collisions_observed: Vec<u64>,
+    collisions_observed: purrdf_sparql_eval::AdmittedVec<u64>,
     /// What every handed stream declared its exclusion answers would be a fact
     /// about, read in [`Self::new`] before a single row was pulled.
     ///
@@ -2160,7 +2259,7 @@ pub struct FusionStream<S: RankedStream> {
     /// from registration, unchanged by how deep this fusion reads — and asking
     /// again later would be asking a stream a bounded stop may have left in a
     /// state with nothing to say.
-    exclusion_bases: Vec<ExclusionBasis>,
+    exclusion_bases: purrdf_sparql_eval::AdmittedVec<ExclusionBasis>,
     /// Whether **any** stream declared a basis at all.
     ///
     /// The whole cost of this mechanism to a fusion that does not use it: one
@@ -2176,14 +2275,14 @@ pub struct FusionStream<S: RankedStream> {
     /// that asked, rather than read back off a producer: a producer's own count
     /// would measure whatever that producer chose to count, and this number's
     /// whole use is comparing what the engine spent against the read it saved.
-    exclusion_lookups: Vec<u64>,
+    exclusion_lookups: purrdf_sparql_eval::AdmittedVec<u64>,
     /// What each handed stream's read attested before its first row, held per
     /// stream so its settlement is measured against the announcement it made
     /// rather than against whatever another stream of the same stratum said.
     ///
     /// The same values [`Self::attestations`] reports by stratum, read in the
     /// same one pass over the streams.
-    announced: Vec<PfAttestation>,
+    announced: purrdf_sparql_eval::AdmittedVec<PfAttestation>,
     /// The identity set of every stream that declared
     /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
     /// [`DuplicatePolicy::Unique`].
@@ -2193,7 +2292,7 @@ pub struct FusionStream<S: RankedStream> {
     /// that promised no repeats has nothing for it to hold. `None` also makes
     /// the promise structural — there is no set for a later edit to start
     /// filling on a stream that declined to pay for one.
-    seen_items: Vec<Option<BTreeSet<Term>>>,
+    seen_items: purrdf_sparql_eval::AdmittedVec<Option<AdmittedOrderedSet<Term>>>,
     /// What every handed stream declared about the blocks of the candidate
     /// universe it may name, read in [`Self::new`] before a single row was
     /// pulled, and held for the whole fusion.
@@ -2205,7 +2304,7 @@ pub struct FusionStream<S: RankedStream> {
     /// structural in `seen_items` and is never asked again — because the answer
     /// is needed on every finality test, every upper bound, every threshold and
     /// every pull.
-    domains: Vec<CandidateDomains>,
+    domains: purrdf_sparql_eval::AdmittedVec<CandidateDomains>,
     /// What every handed stream attested about the index behind it, read in
     /// [`Self::new`] before a single row was pulled and never read again.
     ///
@@ -2213,7 +2312,9 @@ pub struct FusionStream<S: RankedStream> {
     /// generation is pinned when the index opens, so one read is the truth for
     /// the whole fusion, and a second read at the end would be a read of
     /// whatever state a bounded stop left the stream in.
-    attestations: BTreeMap<Iri, PfAttestation>,
+    attestations: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, PfAttestation>,
+    >,
     /// What every handed stream declared about the rows it can name, read in
     /// [`Self::new`] before a single row was pulled and never read again.
     ///
@@ -2225,7 +2326,7 @@ pub struct FusionStream<S: RankedStream> {
     /// [`TopK`](crate::TopK) stopped never reports again at all, so the answer
     /// would go missing in exactly the runs where the bound made the
     /// approximation matter most.
-    fidelities: Vec<RankFidelity>,
+    fidelities: purrdf_sparql_eval::AdmittedVec<RankFidelity>,
     /// The per-stream invariants the interval arithmetic reads, or `None` for a
     /// fusion in which **no** stream declared itself degraded.
     ///
@@ -2242,9 +2343,9 @@ pub struct FusionStream<S: RankedStream> {
     /// held across an `await`, so carrying them inline would widen every
     /// fusion's state by the width of three collections whether or not any of
     /// them exists.
-    degradation: Option<Box<Degradation>>,
-    statuses: BTreeMap<Iri, ProducerStatus>,
-    frontier: BTreeMap<CandidateId, CandidateState>,
+    degradation: Option<purrdf_sparql_eval::SharedWorkspace<Degradation>>,
+    statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
+    frontier: purrdf_sparql_eval::AdmittedOrderedMap<CandidateId, CandidateState>,
     /// The frontier filed by what selection asks of it, so a pass of the row
     /// loop reads one key per group rather than one state per candidate. See
     /// [`SelectionIndex`].
@@ -2292,11 +2393,34 @@ pub struct FusionStream<S: RankedStream> {
     last_row_won_a_tie: bool,
 }
 
-impl<S: RankedStream> fmt::Debug for FusionStream<S> {
+/// A caller-owned profile moves or borrows without copying its configuration.
+#[derive(Debug)]
+enum ProfileInput<'p> {
+    Owned(FusionProfile),
+    Borrowed(&'p FusionProfile),
+}
+impl std::ops::Deref for ProfileInput<'_> {
+    type Target = FusionProfile;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(value) => value,
+            Self::Borrowed(value) => value,
+        }
+    }
+}
+
+impl<S: RankedStream> fmt::Debug for FusionStream<'_, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let strata: Vec<&str> = self.streams.iter().map(|(iri, _)| iri.as_str()).collect();
+        struct Strata<'a, S>(&'a [(Iri, S)]);
+        impl<S> fmt::Debug for Strata<'_, S> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_list()
+                    .entries(self.0.iter().map(|(iri, _)| iri.as_str()))
+                    .finish()
+            }
+        }
         f.debug_struct("FusionStream")
-            .field("strata", &strata)
+            .field("strata", &Strata(&self.streams))
             .field("profile", &self.profile)
             .field("frontier_len", &self.frontier.len())
             .field("selection_visits", &self.selection_visits)
@@ -2305,7 +2429,7 @@ impl<S: RankedStream> fmt::Debug for FusionStream<S> {
     }
 }
 
-impl<S: RankedStream> FusionStream<S> {
+impl<S: RankedStream> FusionStream<'static, S> {
     /// Build a fusion engine over `streams` under `profile`.
     ///
     /// Every stream's declared contract is read here, before any row is pulled,
@@ -2346,48 +2470,76 @@ impl<S: RankedStream> FusionStream<S> {
     /// that for its caller, reading the identity off the streams themselves
     /// through [`RankedStream::plan_id`]. No stream is pulled until the first
     /// [`next`](Self::next) call.
-    pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
+    ///
+    /// # Errors
+    /// Returns the original native admission, layout or allocation refusal
+    /// before any row is pulled.
+    pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Result<Self, FusionError> {
+        Self::with_profile(
+            crate::fuse::admit_streams(streams)?,
+            ProfileInput::Owned(profile),
+        )
+    }
+}
+
+impl<'p, S: RankedStream> FusionStream<'p, S> {
+    pub(crate) fn borrowed(
+        streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
+        profile: &'p FusionProfile,
+    ) -> Result<Self, FusionError> {
+        Self::with_profile(streams, ProfileInput::Borrowed(profile))
+    }
+
+    pub(crate) fn workspace(&self) -> &purrdf_sparql_eval::WorkspaceCapability {
+        &self.workspace
+    }
+
+    fn with_profile(
+        streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
+        profile: ProfileInput<'p>,
+    ) -> Result<Self, FusionError> {
+        let workspace = streams.workspace().clone();
         let count = streams.len();
         // One read of each contract, both terms taken from it. Asking twice
         // would let a stream answer differently the second time and leave the
         // engine holding two halves of two declarations.
-        let contracts: Vec<_> = streams
-            .iter()
-            .map(|(_, stream)| stream.contract())
-            .collect();
-        let seen_items = contracts
-            .iter()
-            .map(|contract| match contract.duplicates {
+        let contracts = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            streams.iter().map(|(_, stream)| stream.contract()),
+            &workspace,
+        )?;
+        let seen_items = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            contracts.iter().map(|contract| match contract.duplicates {
                 DuplicatePolicy::Unique => None,
-                DuplicatePolicy::Allowed => Some(BTreeSet::new()),
-            })
-            .collect();
+                DuplicatePolicy::Allowed => Some(AdmittedOrderedSet::new(&workspace)),
+            }),
+            &workspace,
+        )?;
         // Indexed by stream, exactly as `domains` below is, and for the same
         // reason: every question asked of it during the read is shaped *per
         // stream* -- can stream `s` still withhold from this candidate, did
         // stream `s` over-contribute to it. The trailer re-keys it by stratum
         // at the end, where a caller reads it by name instead.
-        let fidelities: Vec<RankFidelity> = contracts
-            .iter()
-            .map(|contract| contract.fidelity.clone())
-            .collect();
+        let fidelities = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            contracts.iter().map(|contract| contract.fidelity.clone()),
+            &workspace,
+        )?;
         // Read off the same one contract read the two above came from. The basis
         // is the fourth term of that declaration and is taken here, before the
         // first row, for the reason the domains are: it governs row one, and a
         // declaration consulted later would be one that had not applied to the
         // rows already merged under it.
-        let exclusion_bases: Vec<ExclusionBasis> = contracts
-            .iter()
-            .map(|contract| contract.exclusion)
-            .collect();
+        let exclusion_bases = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            contracts.iter().map(|contract| contract.exclusion),
+            &workspace,
+        )?;
         let exclusion_declared = exclusion_bases
             .iter()
             .copied()
             .any(ExclusionBasis::is_declared);
-        let domains: Vec<CandidateDomains> = contracts
-            .into_iter()
-            .map(|contract| contract.domains)
-            .collect();
+        let domains = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            contracts.into_iter().map(|contract| contract.domains),
+            &workspace,
+        )?;
         // Keyed by stratum, exactly as `statuses` is, so the two maps are read
         // under one key. A caller driving this type directly may hand it two
         // streams tagged with one stratum — `fuse` refuses that before pulling
@@ -2396,15 +2548,21 @@ impl<S: RankedStream> FusionStream<S> {
         // Read once per stream and kept twice: by stream, so each read's
         // settlement is held to its own announcement, and by stratum, which is
         // how the trailer reports it.
-        let announced: Vec<PfAttestation> = streams
-            .iter()
-            .map(|(_, stream)| stream.attestation())
-            .collect();
-        let attestations: BTreeMap<Iri, PfAttestation> = streams
-            .iter()
-            .zip(&announced)
-            .map(|((stratum, _), attestation)| (stratum.clone(), attestation.clone()))
-            .collect();
+        let announced = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            streams.iter().map(|(_, stream)| stream.attestation()),
+            &workspace,
+        )?;
+        let attestations = purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+            streams
+                .iter()
+                .zip(&announced)
+                .map(|((stratum, _), attestation)| {
+                    Ok((stratum.clone_admitted(&workspace)?, attestation.clone()))
+                }),
+            &workspace,
+        )?;
+        let attestations =
+            purrdf_sparql_eval::SharedWorkspace::new_admitted(attestations, &workspace)?;
         // The three per-stream invariants the interval arithmetic reads,
         // derived here because they are decided here. Each is a pure function of
         // facts this constructor has already pinned -- the declarations, the
@@ -2416,65 +2574,96 @@ impl<S: RankedStream> FusionStream<S> {
         // undegraded streams every term they feed is zero, so an ordinary
         // exhaustive fusion carries none of this rather than a table of
         // falsehoods and unread numbers.
-        let short: Vec<bool> = streams
-            .iter()
-            .map(|(stratum, _)| {
+        let short = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            streams.iter().map(|(stratum, _)| {
                 attestations
                     .get(stratum)
                     .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
-            })
-            .collect();
-        let degraded: Vec<bool> = (0..count)
-            .map(|index| fidelities[index].may_omit() || short[index])
-            .collect();
-        let degradation = degraded.contains(&true).then(|| {
-            // First entry wins, which is what the `position` scan this replaces
-            // did.
-            let mut stratum_index: BTreeMap<Iri, usize> = BTreeMap::new();
+            }),
+            &workspace,
+        )?;
+        let degraded = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+            (0..count).map(|index| fidelities[index].may_omit() || short[index]),
+            &workspace,
+        )?;
+        let degradation = if degraded.contains(&true) {
+            let mut stratum_index = purrdf_sparql_eval::AdmittedOrderedMap::new(&workspace);
             for (index, (stratum, _)) in streams.iter().enumerate() {
-                stratum_index.entry(stratum.clone()).or_insert(index);
+                // Preserve first-entry ownership for repeated caller strata.
+                if !stratum_index.contains_key(stratum) {
+                    stratum_index.insert(stratum.clone_admitted(&workspace)?, index)?;
+                }
             }
-            Box::new(Degradation {
-                degraded,
-                short,
-                // The refusal is *recorded* rather than carried: see
-                // `Degradation::rank_one` for why a stored error would be the
-                // wrong error.
-                rank_one: streams
+            let rank_one = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                streams
                     .iter()
-                    .map(|(stratum, _)| Self::rank_one_under(&profile, stratum).ok())
-                    .collect(),
-                stratum_index,
-            })
-        });
-        Self {
+                    .map(|(stratum, _)| Self::rank_one_under(&profile, stratum).ok()),
+                &workspace,
+            )?;
+            Some(purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                Degradation {
+                    degraded,
+                    short,
+                    rank_one,
+                    stratum_index,
+                },
+                &workspace,
+            )?)
+        } else {
+            None
+        };
+        Ok(Self {
             streams,
             profile,
             plan_id: None,
             initialized: false,
-            heads: (0..count).map(|_| None).collect(),
-            exhausted: vec![false; count],
-            next_ranks: vec![1; count],
-            rows_pulled: vec![0; count],
-            last_contribution: vec![None; count],
-            collisions_observed: vec![0; count],
+            heads: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| None),
+                &workspace,
+            )?,
+            exhausted: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| false),
+                &workspace,
+            )?,
+            next_ranks: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| 1),
+                &workspace,
+            )?,
+            rows_pulled: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| 0),
+                &workspace,
+            )?,
+            last_contribution: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| None),
+                &workspace,
+            )?,
+            collisions_observed: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| 0),
+                &workspace,
+            )?,
             exclusion_bases,
             exclusion_declared,
-            exclusion_lookups: vec![0; count],
+            exclusion_lookups: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                (0..count).map(|_| 0),
+                &workspace,
+            )?,
             announced,
             seen_items,
             domains,
             fidelities,
             attestations,
             degradation,
-            statuses: BTreeMap::new(),
-            frontier: BTreeMap::new(),
-            selection: SelectionIndex::default(),
+            statuses: purrdf_sparql_eval::AdmittedOrderedMap::new(&workspace),
+            frontier: purrdf_sparql_eval::AdmittedOrderedMap::new(&workspace),
+            selection: SelectionIndex::new(&workspace),
             selection_visits: 0,
             emitted: EmittedTable::default(),
             threshold: Fixed::ZERO,
             last_row_won_a_tie: false,
-        }
+            workspace,
+            terminal_failure: None,
+            scoped: None,
+        })
     }
 
     /// Attach the pinned plan identity these streams came from.
@@ -2482,6 +2671,122 @@ impl<S: RankedStream> FusionStream<S> {
     pub fn with_plan_id(mut self, plan_id: PlanId) -> Self {
         self.plan_id = Some(plan_id);
         self
+    }
+
+    /// Admit all original uncertain observations before certifying any row.
+    /// They share the original frontier/aggregation law, but never masquerade
+    /// as contiguous established ranks or threshold heads.
+    pub(crate) fn retain_scoped(
+        &mut self,
+        scopes: &[crate::ScopedStratum],
+    ) -> Result<purrdf_sparql_eval::QueryEvidence, FusionError> {
+        let owner = purrdf_sparql_eval::QueryEvidence::new(&self.workspace)?;
+        let mut records: purrdf_sparql_eval::AdmittedOrderedMap<
+            (usize, Term),
+            purrdf_sparql_eval::RowEvidence,
+        > = purrdf_sparql_eval::AdmittedOrderedMap::new(&self.workspace);
+        let mut observations = purrdf_sparql_eval::AdmittedVec::new(&self.workspace);
+        for scope in scopes {
+            let Some(index) = self
+                .streams
+                .iter()
+                .position(|(stratum, _)| stratum.as_str() == scope.stratum.as_ref())
+            else {
+                continue;
+            };
+            if !scope.rows.complete()? {
+                return Err(purrdf_sparql_eval::NativeDiagnostic::error(
+                    purrdf_sparql_eval::NativeDiagnosticKind::Internal,
+                    "scoped fusion requires the original complete candidate receipt",
+                    &self.workspace,
+                )
+                .into());
+            }
+            let columns =
+                crate::execute::CandidateColumns::locate(&scope.variables, &self.domains[index])
+                    .map_err(|error| {
+                        purrdf_sparql_eval::NativeDiagnostic::error(
+                            purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                            error,
+                            &self.workspace,
+                        )
+                    })?;
+            scope.rows.with_rows(|rows| {
+                for row in rows {
+                    let evidence = owner.import(&row.evidence)?;
+                    let rank = if evidence.is_undecided() {
+                        evidence.original_rank().ok_or_else(|| purrdf_sparql_eval::NativeDiagnostic::error(
+                            purrdf_sparql_eval::NativeDiagnosticKind::Config,
+                            "undecided ranked candidate has no original producer rank",
+                            &self.workspace,
+                        ))?.get()
+                    } else {
+                        // Established ranks are supplied by the original stream.
+                        1
+                    };
+                    let (_, item, block) = columns.rank_admitted(&row.cells, rank, &self.workspace)?;
+                    let key = (index, item.clone_admitted(&self.workspace)?);
+                    let evidence = if let Some(previous) = records.get(&key) {
+                        if previous.is_undecided() != evidence.is_undecided() {
+                            return Err(purrdf_sparql_eval::NativeDiagnostic::error(
+                                purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                                "one scoped producer assigned incompatible membership to the same candidate",
+                                &self.workspace,
+                            ).into());
+                        }
+                        owner.combine(previous, &evidence, purrdf_core::evidence::EvidenceCombination::Alternatives)?
+                    } else {
+                        evidence
+                    };
+                    records.insert(key, evidence.clone())?;
+                    if evidence.is_undecided() {
+                        self.check_declared_block(index, &block, rank, &item)?;
+                        let weight = self.profile.weight(&self.streams[index].0).ok_or_else(|| FusionError::UnknownStratum {
+                            stratum: self.streams[index].0.as_str().to_owned(),
+                        })?;
+                        let contribution = crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?;
+                        observations.push((index, Head { rank, contribution, item, block }))?;
+                    }
+                }
+                Ok::<_, FusionError>(())
+            })??;
+        }
+        self.scoped = Some(ScopedFusion {
+            owner: owner.clone(),
+            records,
+            output: purrdf_sparql_eval::AdmittedOrderedMap::new(&self.workspace),
+        });
+        for (index, head) in observations {
+            if let Some(seen) = self.seen_items[index].as_mut()
+                && !seen.insert(head.item.clone_admitted(&self.workspace)?)?
+            {
+                let placed = self
+                    .frontier
+                    .get(&head.item)
+                    .and_then(|state| state.block.as_deref());
+                self.check_candidate_block(&head.item, index, &head.block, placed)?;
+                continue;
+            }
+            self.merge_head(index, head)?;
+        }
+        Ok(owner)
+    }
+
+    pub(crate) fn row_evidence(
+        &self,
+        row: &FusedRow,
+    ) -> Result<purrdf_sparql_eval::RowEvidence, FusionError> {
+        let Some(scoped) = &self.scoped else {
+            return Ok(purrdf_sparql_eval::RowEvidence::default());
+        };
+        scoped.output.get(&row.entity).cloned().ok_or_else(|| {
+            purrdf_sparql_eval::NativeDiagnostic::error(
+                purrdf_sparql_eval::NativeDiagnosticKind::Internal,
+                "certified scoped fused row has no original evidence record",
+                &self.workspace,
+            )
+            .into()
+        })
     }
 
     /// The next certified fused row, or `Ok(None)` when the frontier is empty.
@@ -2495,6 +2800,17 @@ impl<S: RankedStream> FusionStream<S> {
     /// violation, reachable only from a hand-built stream set that repeats a
     /// stratum.
     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
+        if let Some(error) = &self.terminal_failure {
+            return Err(FusionError::NativeFailure(error.clone()));
+        }
+        let result = self.next_inner().await;
+        if let Err(FusionError::NativeFailure(error)) = &result {
+            self.terminal_failure = Some(error.clone());
+        }
+        result
+    }
+
+    async fn next_inner(&mut self) -> Result<Option<FusedRow>, FusionError> {
         self.ensure_initialized().await?;
         loop {
             self.threshold = self.compute_threshold()?;
@@ -2524,7 +2840,8 @@ impl<S: RankedStream> FusionStream<S> {
                 // contender: one that can still gain rank is not yet tied with
                 // anything.
                 let mut visits = 0;
-                self.last_row_won_a_tie = self.has_final_rival_at(state.lower_bound, &mut visits);
+                self.last_row_won_a_tie =
+                    self.has_final_rival_at(state.lower_bound, &mut visits)?;
                 self.selection_visits += visits;
                 // The candidate leaves the frontier here and nowhere else, so
                 // this is the only place the record of its emission can be
@@ -2559,17 +2876,23 @@ impl<S: RankedStream> FusionStream<S> {
                         block,
                         excluded,
                     },
-                );
-                contributions.sort_by(|left, right| {
-                    left.0
-                        .as_str()
-                        .cmp(right.0.as_str())
-                        .then(left.1.cmp(&right.1))
-                });
+                    &self.workspace,
+                )?;
+                contributions
+                    .as_mut_slice()
+                    .sort_unstable_by(|left, right| {
+                        left.0
+                            .as_str()
+                            .cmp(right.0.as_str())
+                            .then(left.1.cmp(&right.1))
+                    });
                 return Ok(Some(FusedRow {
                     entity: id,
                     score: lower_bound,
-                    contributions,
+                    contributions: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                        contributions,
+                        &self.workspace,
+                    )?,
                     interval,
                     threshold_witness: self.threshold,
                 }));
@@ -2627,13 +2950,25 @@ impl<S: RankedStream> FusionStream<S> {
     /// yet, because a bound of zero rows must still report a status per
     /// producer.
     pub async fn trailer(&mut self) -> Result<FusionTrailer, FusionError> {
+        if let Some(error) = &self.terminal_failure {
+            return Err(FusionError::NativeFailure(error.clone()));
+        }
+        let result = self.trailer_inner().await;
+        if let Err(FusionError::NativeFailure(error)) = &result {
+            self.terminal_failure = Some(error.clone());
+        }
+        result
+    }
+
+    async fn trailer_inner(&mut self) -> Result<FusionTrailer, FusionError> {
         self.ensure_initialized().await?;
         // Every stream settles here, the one that ran out and the one this fusion
         // stopped alike: this is the instant each read's extent is final, and for
         // a read produced on demand the first instant its receipt can be whole.
         // Each settlement is held to what its stream announced before its first
         // row, because every row was certified under that announcement.
-        let mut rows_materialised = Vec::with_capacity(self.streams.len());
+        let mut rows_materialised =
+            purrdf_sparql_eval::AdmittedVec::with_capacity(self.streams.len(), &self.workspace)?;
         for index in 0..self.streams.len() {
             let settlement = {
                 let (_, stream) = &mut self.streams[index];
@@ -2659,7 +2994,7 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
-            rows_materialised.push(settlement.rows_materialised);
+            rows_materialised.push(settlement.rows_materialised)?;
         }
         for index in 0..self.streams.len() {
             // A head is a row already pulled and not yet merged, so its
@@ -2670,41 +3005,42 @@ impl<S: RankedStream> FusionStream<S> {
             let Some(bound) = self.heads[index].as_ref().map(|head| head.contribution) else {
                 continue;
             };
-            let stratum = self.streams[index].0.clone();
+            let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
             self.statuses
-                .insert(stratum, ProducerStatus::CeilingReached { bound });
+                .insert(stratum, ProducerStatus::CeilingReached { bound })?;
         }
         // Derived per stratum at trailer time, from counters the row loop
         // already maintains. Nothing here runs per row: `separation` is a map
         // lookup on a value the profile derived once at construction, and the
         // other two are reads.
-        let resolution = (0..self.streams.len())
-            .filter_map(|index| {
-                let stratum = &self.streams[index].0;
-                self.profile.monotone_depth(stratum).map(|separation| {
-                    (
-                        stratum.clone(),
-                        StratumResolution {
-                            separation,
-                            // `next_ranks` starts at one and advances once per
-                            // row pulled, so this is the highest rank read and
-                            // cannot underflow.
-                            ranks_pulled: self.next_ranks[index] - 1,
-                            collisions_observed: self.collisions_observed[index],
-                            // A separate counter, never added into the rank
-                            // above: a lookup is a point query and not a step
-                            // down the ranking, and the receipt this stratum is
-                            // held to counts only the rows it emitted in rank
-                            // order.
-                            exclusion_lookups: self.exclusion_lookups[index],
-                            // Settled above, at the instant the read's extent
-                            // became final.
-                            rows_materialised: rows_materialised[index],
-                        },
-                    )
-                })
-            })
-            .collect();
+        let mut resolution = purrdf_sparql_eval::AdmittedOrderedMap::new(&self.workspace);
+        for index in 0..self.streams.len() {
+            let stratum = &self.streams[index].0;
+            if let Some(separation) = self.profile.monotone_depth(stratum) {
+                resolution.insert(
+                    stratum.clone_admitted(&self.workspace)?,
+                    StratumResolution {
+                        separation,
+                        // `next_ranks` starts at one and advances once per
+                        // row pulled, so this is the highest rank read and
+                        // cannot underflow.
+                        ranks_pulled: self.next_ranks[index] - 1,
+                        collisions_observed: self.collisions_observed[index],
+                        // A separate counter, never added into the rank
+                        // above: a lookup is a point query and not a step
+                        // down the ranking, and the receipt this stratum is
+                        // held to counts only the rows it emitted in rank
+                        // order.
+                        exclusion_lookups: self.exclusion_lookups[index],
+                        // Settled above, at the instant the read's extent
+                        // became final.
+                        rows_materialised: rows_materialised[index],
+                    },
+                )?;
+            }
+        }
+        let resolution =
+            purrdf_sparql_eval::SharedWorkspace::new_admitted(resolution, &self.workspace)?;
 
         // Derived from the two facts pinned at construction -- what each index
         // attested and what each producer declared -- and never from the
@@ -2723,15 +3059,15 @@ impl<S: RankedStream> FusionStream<S> {
                 .get(stratum)
                 .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
         };
-        let mut deficit = BTreeSet::new();
-        let mut unbounded = BTreeSet::new();
+        let mut deficit = AdmittedOrderedSet::new(&self.workspace);
+        let mut unbounded = AdmittedOrderedSet::new(&self.workspace);
         for (index, (stratum, _)) in self.streams.iter().enumerate() {
             let fidelity = &self.fidelities[index];
             if fidelity.may_omit() || attested_short(stratum) {
-                deficit.insert(stratum.clone());
+                deficit.insert(stratum.clone_admitted(&self.workspace)?)?;
             }
             if fidelity.order_is_unbounded() {
-                unbounded.insert(stratum.clone());
+                unbounded.insert(stratum.clone_admitted(&self.workspace)?)?;
             }
         }
         // An index attested short by a stratum that never declared a fidelity --
@@ -2740,7 +3076,7 @@ impl<S: RankedStream> FusionStream<S> {
         // than trusted to be a subset of the declarations.
         for (stratum, attestation) in &self.attestations {
             if matches!(attestation.service, ServiceLevel::Incomplete { .. }) {
-                deficit.insert(stratum.clone());
+                deficit.insert(stratum.clone_admitted(&self.workspace)?)?;
             }
         }
         // The same strata, by construction: a stratum that omits a row promotes
@@ -2748,10 +3084,14 @@ impl<S: RankedStream> FusionStream<S> {
         // carried as two sets because a later cause need not -- a stratum
         // stopped early withholds without promoting -- and a consumer that read
         // one set as the whole story would then be wrong in one direction.
-        let inflation = deficit.clone();
         let exactness = if deficit.is_empty() && unbounded.is_empty() {
             ScoreExactness::Exact
         } else {
+            let deficit =
+                purrdf_sparql_eval::SharedWorkspace::new_admitted(deficit, &self.workspace)?;
+            let inflation = deficit.clone();
+            let unbounded =
+                purrdf_sparql_eval::SharedWorkspace::new_admitted(unbounded, &self.workspace)?;
             ScoreExactness::Estimated {
                 deficit,
                 inflation,
@@ -2760,22 +3100,45 @@ impl<S: RankedStream> FusionStream<S> {
         };
 
         Ok(FusionTrailer {
-            statuses: self.statuses.clone(),
+            statuses: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    self.statuses.iter().map(|(stratum, status)| {
+                        Ok((
+                            stratum.clone_admitted(&self.workspace)?,
+                            status.clone_admitted(&self.workspace)?,
+                        ))
+                    }),
+                    &self.workspace,
+                )?,
+                &self.workspace,
+            )?,
             // Digested through the one encoder the trailer's own
             // `evidence_canonical_bytes` calls, so the identity in an answer
             // and the identity a holder of that answer re-derives cannot come
             // from two encodings that drifted apart.
-            evidence_id: EvidenceId::from_canonical(&evidence_canonical_bytes(
-                &self.attestations,
-                &resolution,
-            )),
+            evidence_id: EvidenceId::from_record(|hasher| {
+                write_evidence(
+                    &mut Writer::digest(hasher),
+                    || self.attestations.iter(),
+                    || resolution.iter(),
+                );
+            }),
             attestations: self.attestations.clone(),
-            fidelities: self
-                .streams
-                .iter()
-                .enumerate()
-                .map(|(index, (stratum, _))| (stratum.clone(), self.fidelities[index].clone()))
-                .collect(),
+            fidelities: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    self.streams
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (stratum, _))| {
+                            Ok((
+                                stratum.clone_admitted(&self.workspace)?,
+                                self.fidelities[index].clone(),
+                            ))
+                        }),
+                    &self.workspace,
+                )?,
+                &self.workspace,
+            )?,
             exactness,
             plan_id: self.plan_id,
             profile_id: self.profile.id(),
@@ -2784,21 +3147,39 @@ impl<S: RankedStream> FusionStream<S> {
             // of streams a caller tagged with one stratum collapses the same
             // way in both maps rather than making them disagree about how many
             // producers there were.
-            domains: self
-                .streams
-                .iter()
-                .enumerate()
-                .map(|(index, (stratum, _))| (stratum.clone(), self.domains[index].clone()))
-                .collect(),
+            domains: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    self.streams
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (stratum, _))| {
+                            Ok((
+                                stratum.clone_admitted(&self.workspace)?,
+                                self.domains[index].clone(),
+                            ))
+                        }),
+                    &self.workspace,
+                )?,
+                &self.workspace,
+            )?,
             // The same pre-pull read, keyed the same way, for the reason the map
             // above is: the two declarations answer one question by two means
             // and a reader auditing a shortened read needs both.
-            exclusion_bases: self
-                .streams
-                .iter()
-                .enumerate()
-                .map(|(index, (stratum, _))| (stratum.clone(), self.exclusion_bases[index]))
-                .collect(),
+            exclusion_bases: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+                    self.streams
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (stratum, _))| {
+                            Ok((
+                                stratum.clone_admitted(&self.workspace)?,
+                                self.exclusion_bases[index],
+                            ))
+                        }),
+                    &self.workspace,
+                )?,
+                &self.workspace,
+            )?,
             cut_on_a_tie: self.last_row_won_a_tie,
             // Computed here because every term of it is a fact of the fusion --
             // the open heads, the profile's rank-one awards, the frontier -- and
@@ -2953,19 +3334,7 @@ impl<S: RankedStream> FusionStream<S> {
             };
 
             let expected_rank = self.next_ranks[index];
-            if rank < expected_rank {
-                return Err(ProtocolError::OutOfOrderRanks {
-                    expected: expected_rank,
-                    got: rank,
-                }
-                .into());
-            }
-            if rank > expected_rank {
-                return Err(ProtocolError::NonContiguousRanks {
-                    gap: rank - expected_rank,
-                }
-                .into());
-            }
+            crate::ranked_stream::validate_rank(expected_rank, rank)?;
             // The stratum is read by reference, not cloned: an `Iri` owns its
             // text, so cloning one here would be a heap allocation on every row
             // every stream emits, to serve a lookup that only borrows and an
@@ -3032,7 +3401,7 @@ impl<S: RankedStream> FusionStream<S> {
                 // must de-duplicate, so the consumer de-duplicates. The insert's
                 // own answer is the test, so the repeat costs one set operation
                 // rather than a lookup and an insert.
-                Some(seen) => !seen.insert(item.clone()),
+                Some(seen) => !seen.insert(item.clone())?,
             };
             if !repeated {
                 return Ok(Some(Head {
@@ -3101,40 +3470,12 @@ impl<S: RankedStream> FusionStream<S> {
     /// endings are not `Exhausted`.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
         let actual = self.rows_pulled[index];
-        match &receipt {
-            ProducerReceipt::Exhausted { rows_emitted } if *rows_emitted != actual => {
-                return Err(ProtocolError::ForgedReceipt {
-                    declared: *rows_emitted,
-                    actual,
-                }
-                .into());
-            }
-            ProducerReceipt::DepthReached { rank }
-            | ProducerReceipt::RowBoundReached { rank }
-            | ProducerReceipt::SuppliedQueryEnded { rank }
-                if *rank != actual =>
-            {
-                return Err(ProtocolError::ForgedReceipt {
-                    declared: *rank,
-                    actual,
-                }
-                .into());
-            }
-            ProducerReceipt::TermsRejected | ProducerReceipt::ExecutionFailed { .. }
-                if actual > 0 =>
-            {
-                return Err(ProtocolError::ForgedReceipt {
-                    declared: 0,
-                    actual,
-                }
-                .into());
-            }
-            _ => {}
-        }
-        let stratum = self.streams[index].0.clone();
+        crate::ranked_stream::validate_receipt(&receipt, actual)?;
+        let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
         self.exhausted[index] = true;
         self.heads[index] = None;
-        self.statuses.insert(stratum, ProducerStatus::from(receipt));
+        let status = ProducerStatus::from(receipt).clone_admitted(&self.workspace)?;
+        self.statuses.insert(stratum, status)?;
         Ok(())
     }
 
@@ -3234,16 +3575,18 @@ impl<S: RankedStream> FusionStream<S> {
         // item could be in, and no other block can beat the floor above.
         // Collected into an ordered set so the scan is over distinct tags and
         // is identical on every target.
-        let mut blocks: BTreeSet<&DomainTag> = BTreeSet::new();
+        let mut blocks = AdmittedOrderedSet::new(&self.workspace);
         for (index, head) in self.heads.iter().enumerate() {
             if head.is_none() {
                 continue;
             }
             if let Some(tags) = self.domains[index].tags() {
-                blocks.extend(tags);
+                for tag in tags {
+                    blocks.insert(tag)?;
+                }
             }
         }
-        for block in blocks {
+        for &block in blocks.iter() {
             let mut sum = unrestricted;
             for (index, head) in self.heads.iter().enumerate() {
                 let Some(head) = head else { continue };
@@ -3514,7 +3857,11 @@ impl<S: RankedStream> FusionStream<S> {
             self.check_verdict_against_declaration(index, &id, verdict)?;
             // The signature the candidate is filed under before the answer is
             // recorded, so it can be re-filed under the one the answer leaves.
-            let before = self.frontier.get(&id).map(|state| self.signature(state));
+            let before = self
+                .frontier
+                .get(&id)
+                .map(|state| self.signature(state))
+                .transpose()?;
             let Some(state) = self.frontier.get_mut(&id) else {
                 // Unreachable on this pass: nothing between the collection above
                 // and here removes a frontier entry. Answered as a no-op rather
@@ -3522,9 +3869,9 @@ impl<S: RankedStream> FusionStream<S> {
                 // answer about a candidate nobody is waiting for is to drop it.
                 continue;
             };
-            state.asked.insert(index);
+            state.asked.insert(index)?;
             if verdict == ExclusionVerdict::Excluded {
-                state.excluded.insert(index);
+                state.excluded.insert(index)?;
             }
             self.exclusion_lookups[index] += 1;
             if let Some(before) = before {
@@ -3560,16 +3907,16 @@ impl<S: RankedStream> FusionStream<S> {
     fn wanted_exclusions(
         &self,
         visits: &mut u64,
-    ) -> Result<Vec<(CandidateId, usize)>, FusionError> {
-        let open = self.open_streams();
-        let mut wanted: Vec<(CandidateId, usize)> = Vec::new();
+    ) -> Result<purrdf_sparql_eval::AdmittedVec<(CandidateId, usize)>, FusionError> {
+        let open = self.open_streams()?;
+        let mut wanted = purrdf_sparql_eval::AdmittedVec::new(&self.workspace);
         for (signature, members) in &self.selection.groups {
             *visits += 1;
             if !signature.reach.intersects(&open) {
                 continue;
             }
             let heads = self.heads_within(&signature.reach)?;
-            let Some(first) = members.first() else {
+            let Some(first) = members.first_key_value().map(|(key, ())| key) else {
                 continue;
             };
             first
@@ -3579,7 +3926,7 @@ impl<S: RankedStream> FusionStream<S> {
             if !signature.pending.intersects(&open) {
                 continue;
             }
-            for member in members {
+            for member in members.keys() {
                 *visits += 1;
                 let reach = member
                     .score
@@ -3590,12 +3937,12 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 for index in 0..self.streams.len() {
                     if signature.pending.contains(index) && open.contains(index) {
-                        wanted.push((member.id.clone(), index));
+                        wanted.push((member.id.clone(), index))?;
                     }
                 }
             }
         }
-        wanted.sort_unstable();
+        wanted.as_mut_slice().sort_unstable();
         Ok(wanted)
     }
 
@@ -3673,7 +4020,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// and on an empty set the answer is `true` for every stream, which is the
     /// right answer anyway: nothing has been declared about a candidate nobody
     /// has named.
-    fn could_name(&self, index: usize, named_by: &BTreeSet<usize>) -> bool {
+    fn could_name(&self, index: usize, named_by: &AdmittedOrderedSet<usize>) -> bool {
         match &self.domains[index] {
             CandidateDomains::Unrestricted => true,
             CandidateDomains::Within(tags) => tags.iter().any(|tag| {
@@ -3713,13 +4060,15 @@ impl<S: RankedStream> FusionStream<S> {
     fn score_interval(&self, state: &CandidateState) -> Result<ScoreInterval, FusionError> {
         // A perturbed order breaks the inequality every term below rests on, so
         // it is checked first and short-circuits: there is no number to report.
-        let perturbed: BTreeSet<Iri> = state
-            .seen_streams
-            .iter()
-            .filter(|index| self.fidelities[**index].order_is_unbounded())
-            .map(|index| self.streams[*index].0.clone())
-            .collect();
+        let mut perturbed = AdmittedOrderedSet::new(&self.workspace);
+        for &index in state.seen_streams.iter() {
+            if self.fidelities[index].order_is_unbounded() {
+                perturbed.insert(self.streams[index].0.clone_admitted(&self.workspace)?)?;
+            }
+        }
         if !perturbed.is_empty() {
+            let perturbed =
+                purrdf_sparql_eval::SharedWorkspace::new_admitted(perturbed, &self.workspace)?;
             return Ok(ScoreInterval::Unbounded { perturbed });
         }
 
@@ -3996,14 +4345,14 @@ impl<S: RankedStream> FusionStream<S> {
         if self.frontier.is_empty() {
             return Ok(None);
         }
-        let open = self.open_streams();
+        let open = self.open_streams()?;
         let mut best: Option<&RankKey> = None;
         for (signature, members) in &self.selection.groups {
             *visits += 1;
             if signature.reach.intersects(&open) {
                 continue;
             }
-            if let Some(first) = members.first()
+            if let Some(first) = members.first_key_value().map(|(key, ())| key)
                 && best.is_none_or(|incumbent| first < incumbent)
             {
                 best = Some(first);
@@ -4024,7 +4373,7 @@ impl<S: RankedStream> FusionStream<S> {
             if !signature.reach.intersects(&open) {
                 continue;
             }
-            let Some(first) = members.first() else {
+            let Some(first) = members.first_key_value().map(|(key, ())| key) else {
                 continue;
             };
             let reach = self.heads_within(&signature.reach).and_then(|heads| {
@@ -4091,7 +4440,10 @@ impl<S: RankedStream> FusionStream<S> {
             match &best {
                 None => best = Some(id.clone()),
                 Some(best_id) => {
-                    let best_state = &self.frontier[best_id];
+                    let best_state = self
+                        .frontier
+                        .get(best_id)
+                        .ok_or_else(|| Self::unfiled(best_id))?;
                     if Self::is_better(id, state, best_id, best_state) {
                         best = Some(id.clone());
                     }
@@ -4108,33 +4460,33 @@ impl<S: RankedStream> FusionStream<S> {
     /// stream, and within a group the first key at or after `score` is the
     /// best-placed one scoring at most `score`, so one ordered lookup per final
     /// group answers it.
-    fn has_final_rival_at(&self, score: Fixed, visits: &mut u64) -> bool {
-        let open = self.open_streams();
+    fn has_final_rival_at(&self, score: Fixed, visits: &mut u64) -> Result<bool, FusionError> {
+        let open = self.open_streams()?;
         let probe = RankProbe {
             score,
             best_rank: 0,
             term: "",
         };
         let from: &dyn RankOrder = &probe;
-        self.selection.groups.iter().any(|(signature, members)| {
+        Ok(self.selection.groups.iter().any(|(signature, members)| {
             *visits += 1;
             !signature.reach.intersects(&open)
                 && members
                     .range::<dyn RankOrder, _>((Bound::Included(from), Bound::Unbounded))
                     .next()
-                    .is_some_and(|rival| rival.score == score)
-        })
+                    .is_some_and(|(rival, ())| rival.score == score)
+        }))
     }
 
     /// The streams whose head is still open.
-    fn open_streams(&self) -> StreamSet {
-        let mut open = StreamSet::empty(self.streams.len());
+    fn open_streams(&self) -> Result<StreamSet, FusionError> {
+        let mut open = StreamSet::empty(self.streams.len(), &self.workspace)?;
         for (index, head) in self.heads.iter().enumerate() {
             if head.is_some() {
                 open.insert(index);
             }
         }
-        open
+        Ok(open)
     }
 
     /// The summed contribution of the open heads of the streams in `reach`:
@@ -4161,10 +4513,10 @@ impl<S: RankedStream> FusionStream<S> {
     /// Spelled with [`Self::may_still_name`], the one licence
     /// [`Self::is_final`] and [`Self::upper_bound`] ask, so the index and the
     /// definitions it replaces cannot disagree about a candidate.
-    fn signature(&self, state: &CandidateState) -> Signature {
+    fn signature(&self, state: &CandidateState) -> Result<Signature, FusionError> {
         let width = self.streams.len();
-        let mut reach = StreamSet::empty(width);
-        let mut pending = StreamSet::empty(width);
+        let mut reach = StreamSet::empty(width, &self.workspace)?;
+        let mut pending = StreamSet::empty(width, &self.workspace)?;
         for index in 0..width {
             if state.seen_streams.contains(&index) || !self.may_still_name(index, state) {
                 continue;
@@ -4174,7 +4526,7 @@ impl<S: RankedStream> FusionStream<S> {
                 pending.insert(index);
             }
         }
-        Signature { reach, pending }
+        Ok(Signature { reach, pending })
     }
 
     /// The refusal for an index that has lost track of a frontier candidate.
@@ -4192,7 +4544,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// Take the candidate `state` describes out of [`SelectionIndex`], as it
     /// leaves the frontier.
     fn unfile(&mut self, id: &CandidateId, state: &CandidateState) -> Result<(), FusionError> {
-        let signature = self.signature(state);
+        let signature = self.signature(state)?;
         let probe = RankProbe {
             score: state.lower_bound,
             best_rank: state.best_rank(),
@@ -4211,7 +4563,7 @@ impl<S: RankedStream> FusionStream<S> {
         let Some(state) = self.frontier.get(id) else {
             return Ok(());
         };
-        let after = self.signature(state);
+        let after = self.signature(state)?;
         if after == *before {
             return Ok(());
         }
@@ -4224,19 +4576,8 @@ impl<S: RankedStream> FusionStream<S> {
             .selection
             .take(before, &probe)
             .ok_or_else(|| Self::unfiled(id))?;
-        self.selection.insert(after, key);
+        self.selection.insert(after, key)?;
         Ok(())
-    }
-
-    /// The blocks stream `index` declared, rendered in canonical order for a
-    /// refusal to carry.
-    ///
-    /// Empty for an unrestricted stream, which declared none. Allocated only on
-    /// a refusal path: nothing on the row loop calls this.
-    fn declared_blocks(&self, index: usize) -> Vec<String> {
-        self.domains[index].tags().map_or_else(Vec::new, |tags| {
-            tags.iter().map(|tag| tag.as_str().to_owned()).collect()
-        })
     }
 
     /// Hold one row's block against the promise its own stream made.
@@ -4265,38 +4606,21 @@ impl<S: RankedStream> FusionStream<S> {
     ///
     /// The item is cloned only to render a refusal. On the conforming path this
     /// function allocates nothing and touches no state.
-    fn check_declared_block(
+    fn check_declared_block<I: Clone + Into<Term>>(
         &self,
         index: usize,
         block: &RowBlock,
         rank: u64,
-        item: &S::Item,
+        item: &I,
     ) -> Result<(), FusionError> {
-        match block {
-            RowBlock::Undeclared => {
-                if self.domains[index].tags().is_some() {
-                    return Err(ProtocolError::UnbackedDomainDeclaration {
-                        stratum: self.streams[index].0.as_str().to_owned(),
-                        declared: self.declared_blocks(index),
-                        rank,
-                    }
-                    .into());
-                }
-            }
-            RowBlock::Declared(tag) => {
-                if !self.domains[index].admits(tag) {
-                    let named: Term = item.clone().into();
-                    return Err(ProtocolError::BlockOutsideDeclaredDomain {
-                        item: named.as_str().to_owned(),
-                        stratum: self.streams[index].0.as_str().to_owned(),
-                        block: tag.as_str().to_owned(),
-                        declared: self.declared_blocks(index),
-                    }
-                    .into());
-                }
-            }
-        }
-        Ok(())
+        crate::ranked_stream::validate_declared_block(
+            &self.streams[index].0,
+            &self.domains[index],
+            block,
+            rank,
+            || item.clone().into(),
+        )
+        .map_err(Into::into)
     }
 
     /// Hold one row's block against the block this candidate has already been
@@ -4321,20 +4645,13 @@ impl<S: RankedStream> FusionStream<S> {
         block: &RowBlock,
         placed: Option<&BlockWitness>,
     ) -> Result<(), FusionError> {
-        let (Some(tag), Some(witness)) = (block.tag(), placed) else {
-            return Ok(());
-        };
-        if *tag == witness.block {
-            return Ok(());
-        }
-        Err(ProtocolError::CandidateInTwoBlocks {
-            item: item.as_str().to_owned(),
-            stratum: self.streams[index].0.as_str().to_owned(),
-            block: tag.as_str().to_owned(),
-            named_by: self.streams[witness.stream].0.as_str().to_owned(),
-            named_by_block: witness.block.as_str().to_owned(),
-        }
-        .into())
+        crate::ranked_stream::validate_candidate_block(
+            item,
+            &self.streams[index].0,
+            block,
+            placed.map(|witness| (&self.streams[witness.stream].0, &witness.block)),
+        )
+        .map_err(Into::into)
     }
 
     /// The block some row has already placed `item` in, wherever that candidate
@@ -4393,7 +4710,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// Deterministic either way: `named_by` is an ordered set of stream
     /// indexes, and the streams are in the order the caller handed them over,
     /// so two runs of the same fusion name the same stratum.
-    fn domain_witness(&self, named_by: &BTreeSet<usize>, offender: usize) -> String {
+    fn domain_witness(&self, named_by: &AdmittedOrderedSet<usize>, offender: usize) -> String {
         let disjoint = named_by
             .iter()
             .find(|namer| !self.domains[**namer].intersects(&self.domains[offender]));
@@ -4450,7 +4767,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// The first is the frontier itself, and it is free: `seen_streams` must
     /// already mean "this stream has contributed, once" at the point
     /// [`Self::is_final`] reads it, so the insert's own return value is the
-    /// test and the check costs one `BTreeSet` operation and no extra memory at
+    /// test and the check costs one admitted membership operation and no extra memory at
     /// all. It catches every repeat whose earlier occurrence is still
     /// un-emitted — that is, every repeat that could corrupt a candidate's
     /// score or its best rank before the caller ever sees the row.
@@ -4547,7 +4864,15 @@ impl<S: RankedStream> FusionStream<S> {
         let Some(head) = self.heads[index].take() else {
             return Ok(());
         };
-        let stratum = self.streams[index].0.clone();
+        self.merge_head(index, head)?;
+        self.heads[index] = self.fetch(index).await?;
+        Ok(())
+    }
+
+    // Both ordinary heads and original uncertain observations accumulate here.
+    // There is one contribution sum, domain/duplicate law and selection index.
+    fn merge_head(&mut self, index: usize, head: Head) -> Result<(), FusionError> {
+        let stratum = self.streams[index].0.clone_admitted(&self.workspace)?;
 
         // Asked before the frontier is consulted, let alone touched, and before
         // the two profile bounds below — the same discipline the rest of this
@@ -4706,7 +5031,7 @@ impl<S: RankedStream> FusionStream<S> {
         // for its whole stay, because the index and the frontier each hold one.
         let indexed = match existing {
             Some(state) => {
-                let signature = self.signature(state);
+                let signature = self.signature(state)?;
                 let probe = RankProbe {
                     score: state.lower_bound,
                     best_rank: state.best_rank(),
@@ -4719,55 +5044,73 @@ impl<S: RankedStream> FusionStream<S> {
             }
             None => head.item.clone(),
         };
-        match self.frontier.entry(head.item) {
-            btree_map::Entry::Vacant(vacant) => {
-                // A candidate nobody has contributed to yet cannot collide, so
-                // the insert's answer here is `true` by construction.
-                let state = vacant.insert(CandidateState::new());
-                state.lower_bound = lower_bound;
-                state
-                    .contributions
-                    .push((stratum, head.rank, head.contribution));
-                state.seen_streams.insert(index);
-                // The candidate's placement, where this row named one. A
-                // candidate nobody has placed keeps `None`, which constrains
-                // nothing and is what every candidate only unrestricted streams
-                // name looks like.
-                state.block = placement;
+        if let Some(state) = self.frontier.get_mut(&head.item) {
+            // Reuse the original stored key and payload for repeated namers.
+            state.seen_streams.insert(index)?;
+            state.lower_bound = lower_bound;
+            state
+                .contributions
+                .push((stratum, head.rank, head.contribution))?;
+            if let Some(witness) = placement {
+                state.block = Some(witness);
             }
-            btree_map::Entry::Occupied(mut occupied) => {
-                let state = occupied.get_mut();
-                // A new namer by construction: the repeat was refused above,
-                // before the index was touched.
-                state.seen_streams.insert(index);
-                state.lower_bound = lower_bound;
-                state
-                    .contributions
-                    .push((stratum, head.rank, head.contribution));
-                // Only a candidate no row had placed can gain a placement here,
-                // and `placement_for` has already decided that: a placement is
-                // established once and afterwards only compared against, so this
-                // never overwrites the witness a refusal would name.
-                if let Some(witness) = placement {
-                    state.block = Some(witness);
-                }
-            }
+        } else {
+            let mut state = CandidateState::new(&self.workspace);
+            state.lower_bound = lower_bound;
+            state
+                .contributions
+                .push((stratum, head.rank, head.contribution))?;
+            state.seen_streams.insert(index)?;
+            state.block = placement;
+            self.frontier.insert(head.item, state)?;
         }
         let state = self
             .frontier
             .get(&indexed)
             .ok_or_else(|| Self::unfiled(&indexed))?;
-        let signature = self.signature(state);
+        let signature = self.signature(state)?;
+        let scoped_key = self
+            .scoped
+            .as_ref()
+            .map(|_| indexed.clone_admitted(&self.workspace))
+            .transpose()?;
         let key = RankKey {
             score: state.lower_bound,
             best_rank: state.best_rank(),
             id: indexed,
         };
-        self.selection.insert(signature, key);
+        self.selection.insert(signature, key)?;
 
-        self.heads[index] = self.fetch(index).await?;
+        if let (Some(scoped), Some(indexed)) = (&mut self.scoped, scoped_key) {
+            let evidence = scoped
+                .records
+                .get(&(index, indexed.clone_admitted(&self.workspace)?))
+                .cloned()
+                .ok_or_else(|| {
+                    purrdf_sparql_eval::NativeDiagnostic::error(
+                        purrdf_sparql_eval::NativeDiagnosticKind::Internal,
+                        "scoped fusion head lost its original row evidence",
+                        &self.workspace,
+                    )
+                })?;
+            let evidence = match scoped.output.get(&indexed) {
+                Some(previous) => scoped.owner.combine(
+                    previous,
+                    &evidence,
+                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+                )?,
+                None => evidence,
+            };
+            scoped.output.insert(indexed, evidence)?;
+        }
         Ok(())
     }
+}
+
+struct ScopedFusion {
+    owner: purrdf_sparql_eval::QueryEvidence,
+    records: purrdf_sparql_eval::AdmittedOrderedMap<(usize, Term), purrdf_sparql_eval::RowEvidence>,
+    output: purrdf_sparql_eval::AdmittedOrderedMap<Term, purrdf_sparql_eval::RowEvidence>,
 }
 
 #[cfg(test)]
@@ -4801,6 +5144,41 @@ mod tests {
     /// plateau regime, and past rank 940 one plateau as long as the streams.
     const COLLIDING: Fixed = Fixed::from_raw(1_000);
 
+    #[test]
+    fn native_stream_sets_match_independent_membership_and_word_order() {
+        let workspace = purrdf_sparql_eval::WorkspaceCapability::resident();
+        for width in [0, 1, 63, 64, 65, 127, 128, 129, 257] {
+            let mut left = super::StreamSet::empty(width, &workspace).expect("left bitset");
+            let mut right = super::StreamSet::empty(width, &workspace).expect("right bitset");
+            let mut left_oracle = BTreeSet::new();
+            let mut right_oracle = BTreeSet::new();
+            let mut left_words = vec![0_u64; width.div_ceil(64)];
+            let mut right_words = vec![0_u64; width.div_ceil(64)];
+            for index in 0..width {
+                if index % 3 == 0 {
+                    left.insert(index);
+                    left_oracle.insert(index);
+                    left_words[index / 64] |= 1 << (index % 64);
+                }
+                if index % 5 == 1 {
+                    right.insert(index);
+                    right_oracle.insert(index);
+                    right_words[index / 64] |= 1 << (index % 64);
+                }
+            }
+            for index in 0..width {
+                assert_eq!(left.contains(index), left_oracle.contains(&index));
+                assert_eq!(right.contains(index), right_oracle.contains(&index));
+            }
+            assert_eq!(left.is_empty(), left_oracle.is_empty());
+            assert_eq!(
+                left.intersects(&right),
+                !left_oracle.is_disjoint(&right_oracle)
+            );
+            assert_eq!(left.cmp(&right), left_words.cmp(&right_words));
+        }
+    }
+
     /// Poll `future` exactly once and return its output, failing the test if it
     /// pends: an assertion that the fixture streams are synchronous, not an executor.
     fn poll_once_expect_ready<F: Future>(future: F) -> F::Output {
@@ -4827,6 +5205,8 @@ mod tests {
         items: Vec<Term>,
         holds: BTreeSet<Term>,
         emitted: usize,
+        next_attempts: usize,
+        native_refusal: bool,
         weight: Fixed,
         k: u32,
         domains: CandidateDomains,
@@ -4842,6 +5222,8 @@ mod tests {
                 items,
                 holds,
                 emitted: 0,
+                next_attempts: 0,
+                native_refusal: false,
                 weight,
                 k: K,
                 domains: CandidateDomains::Unrestricted,
@@ -4872,6 +5254,14 @@ mod tests {
         type Item = Term;
 
         async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
+            self.next_attempts += 1;
+            if self.native_refusal {
+                return Err(ProtocolError::NativeFailure(
+                    purrdf_sparql_eval::EvalError::AllocationFailed {
+                        construct: "fixture native producer",
+                    },
+                ));
+            }
             let Some(item) = self.items.get(self.emitted).cloned() else {
                 return Ok(None);
             };
@@ -4916,10 +5306,33 @@ mod tests {
         Term::new(format!("http://example.org/candidate/{index:08}"))
     }
 
+    #[test]
+    fn original_native_refusal_stops_repeated_pulls_and_successful_trailers() {
+        let mut producer = Listed::new(vec![candidate(0)], Fixed::ONE);
+        producer.native_refusal = true;
+        let mut run = fusion(vec![(stratum(0), producer)], Fixed::ONE);
+        let expect_original = |error| {
+            assert!(matches!(
+                error,
+                FusionError::NativeFailure(purrdf_sparql_eval::EvalError::AllocationFailed {
+                    construct: "fixture native producer"
+                })
+            ));
+        };
+        expect_original(poll_once_expect_ready(run.next()).expect_err("first refusal"));
+        expect_original(poll_once_expect_ready(run.next()).expect_err("repeat refusal"));
+        expect_original(poll_once_expect_ready(run.trailer()).expect_err("no successful trailer"));
+        assert_eq!(
+            run.streams[0].1.next_attempts, 1,
+            "a failed fusion cannot re-enter its producer"
+        );
+        assert_eq!(run.streams[0].1.emitted, 0);
+    }
+
     /// Three strata over one universe of `total`, each permuting it within
     /// blocks of four — identity, block reversal, rotation by half a block — so
     /// every candidate is confirmed by every stratum within one block of ranks.
-    fn permuted(total: u64, weight: Fixed) -> FusionStream<Listed> {
+    fn permuted(total: u64, weight: Fixed) -> FusionStream<'static, Listed> {
         let streams = (0..3)
             .map(|stream| {
                 let items = (0..total)
@@ -4942,7 +5355,7 @@ mod tests {
     /// Two strata, the second swapping every adjacent pair, so the candidates of
     /// each pair sit at ranks one and two apart in opposite orders and score
     /// exactly alike: the tie-break decides every row.
-    fn tied(total: u64, weight: Fixed) -> FusionStream<Listed> {
+    fn tied(total: u64, weight: Fixed) -> FusionStream<'static, Listed> {
         let straight = (0..total).map(candidate).collect();
         let swapped = (0..total).map(|index| candidate(index ^ 1)).collect();
         fusion(
@@ -4959,7 +5372,7 @@ mod tests {
     /// answering lookups, plus an unrestricted stratum that answers none. The
     /// shape where finality is settled by answers, both `Excluded` and
     /// `Possible`, and where a signature moves on an answer rather than a row.
-    fn answering(total: u64, weight: Fixed) -> FusionStream<Listed> {
+    fn answering(total: u64, weight: Fixed) -> FusionStream<'static, Listed> {
         let everything: Vec<Term> = (0..total).map(candidate).collect();
         let evens: Vec<Term> = (0..total)
             .rev()
@@ -4985,20 +5398,25 @@ mod tests {
         )
     }
 
-    fn fusion(streams: Vec<(Iri, Listed)>, weight: Fixed) -> FusionStream<Listed> {
+    fn fusion(streams: Vec<(Iri, Listed)>, weight: Fixed) -> FusionStream<'static, Listed> {
         let weights: BTreeMap<Iri, Fixed> = streams
             .iter()
             .map(|(iri, _)| (iri.clone(), weight))
             .collect();
         let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
             .expect("the fixture profile is valid");
-        FusionStream::new(streams, profile)
+        FusionStream::new(streams, profile).expect("resident fusion setup")
     }
 
     /// Every frontier candidate is filed exactly once, under the signature and
     /// the key its state has now.
-    fn assert_filed(fusion: &FusionStream<Listed>) {
-        let filed: usize = fusion.selection.groups.values().map(BTreeSet::len).sum();
+    fn assert_filed(fusion: &FusionStream<'static, Listed>) {
+        let filed: usize = fusion
+            .selection
+            .groups
+            .values()
+            .map(purrdf_sparql_eval::AdmittedOrderedMap::len)
+            .sum();
         assert_eq!(filed, fusion.frontier.len(), "the index holds the frontier");
         for (id, state) in &fusion.frontier {
             let probe = RankProbe {
@@ -5006,13 +5424,13 @@ mod tests {
                 best_rank: state.best_rank(),
                 term: id.as_str(),
             };
-            let signature = fusion.signature(state);
+            let signature = fusion.signature(state).expect("resident signature");
             assert!(
                 fusion
                     .selection
                     .groups
                     .get(&signature)
-                    .is_some_and(|members| members.contains(&probe as &dyn RankOrder)),
+                    .is_some_and(|members| members.contains_key(&probe as &dyn RankOrder)),
                 "{} is not filed under its current signature and key",
                 id.as_str()
             );
@@ -5021,12 +5439,17 @@ mod tests {
 
     /// A differential case: its label, how to build it, and whether it must
     /// see a row settled by the tie-break and a lookup answered.
-    type Case = (&'static str, fn() -> FusionStream<Listed>, bool, bool);
+    type Case = (
+        &'static str,
+        fn() -> FusionStream<'static, Listed>,
+        bool,
+        bool,
+    );
 
     /// Drain `fusion` one pass of the row loop at a time, holding the indexed
     /// selection to the pairwise one before every step, and count the rows that
     /// won their place on the tie-break.
-    fn drain_checked(fusion: &mut FusionStream<Listed>) -> (Vec<FusedRow>, usize) {
+    fn drain_checked(fusion: &mut FusionStream<'static, Listed>) -> (Vec<FusedRow>, usize) {
         let mut rows = Vec::new();
         let mut tie_wins = 0;
         poll_once_expect_ready(fusion.ensure_initialized())
@@ -5079,7 +5502,7 @@ mod tests {
         }
     }
 
-    fn drain(fusion: &mut FusionStream<Listed>) -> Vec<FusedRow> {
+    fn drain(fusion: &mut FusionStream<'static, Listed>) -> Vec<FusedRow> {
         let mut rows = Vec::new();
         while let Some(row) =
             poll_once_expect_ready(fusion.next()).expect("the fixture obeys the protocol")
@@ -5203,7 +5626,7 @@ mod tests {
     /// unfinished candidate's `U` leaves the fixed-point range and another's
     /// merely reaches the tie. `first` and `second` are the terms of those two,
     /// which decide the order the pairwise walk meets them in.
-    fn beyond_the_range(first: &str, second: &str) -> FusionStream<Listed> {
+    fn beyond_the_range(first: &str, second: &str) -> FusionStream<'static, Listed> {
         let huge = Fixed::from_raw(i128::MAX);
         let only = Iri::parse("http://example.org/stratum/only").expect("the fixture IRI is valid");
         let listed = |items: &[&str]| {
@@ -5227,7 +5650,7 @@ mod tests {
             DecayRule::ReciprocalRank { k: 1 },
         )
         .expect("one stratum at the top of the range is a valid profile");
-        let mut fusion = FusionStream::new(streams, profile);
+        let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
         poll_once_expect_ready(fusion.ensure_initialized())
             .expect("the fixture obeys the protocol");
         for _ in 0..5 {

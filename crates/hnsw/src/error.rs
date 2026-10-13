@@ -16,6 +16,9 @@ pub type Result<T> = std::result::Result<T, HnswError>;
 /// Everything that can go wrong building, decoding, or searching an [`crate::HnswIndex`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HnswError {
+    /// Native traversal allocation or admission failed under the query account.
+    Workspace(purrdf_sparql_eval::EvalError),
+
     /// A parameter was outside its admitted range.
     InvalidParameter {
         /// Which parameter (`M`, `M0`, `ef_construction`, `ef_search`).
@@ -199,6 +202,7 @@ pub enum HnswError {
 impl fmt::Display for HnswError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Workspace(error) => error.fmt(f),
             Self::InvalidParameter {
                 name,
                 value,
@@ -311,9 +315,17 @@ impl fmt::Display for HnswError {
     }
 }
 
-impl std::error::Error for HnswError {}
+impl std::error::Error for HnswError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Workspace(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 purrdf_lex::variant_from!(HnswError {
+    Workspace(purrdf_sparql_eval::EvalError),
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
 });
 

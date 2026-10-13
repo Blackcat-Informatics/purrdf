@@ -5,13 +5,18 @@
 //! and property files, read from the vendored database under
 //! `crates/iri/unicode/17.0.0/`.
 //!
-//! * `WordBreakTest.txt` (`UAX #29`): every line, every boundary position.
+//! * `WordBreakTest.txt` and `SentenceBreakTest.txt` (`UAX #29`): every line,
+//!   every boundary position, through the public borrowed iterators.
 //! * `CaseFolding.txt`, `DerivedCoreProperties.txt` and `UnicodeData.txt`:
 //!   the fold and the alphanumeric predicate checked for every scalar value
 //!   against the files that define them.
 //!
 //! The normalization forms are checked against `NormalizationTest.txt` where
 //! they are implemented, in `purrdf-lex`.
+
+mod support {
+    pub(crate) mod sentence_cases;
+}
 
 use purrdf_testkit::ucd::{code_point as hex, scalar, sequence, unicode_data};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,9 +47,14 @@ fn property_ranges(text: &str) -> Vec<(u32, u32, String)> {
         .collect()
 }
 
-#[test]
-fn word_break_test_every_line() {
-    let text = ucd("WordBreakTest.txt");
+/// The shared official break-file decoder, preserving UTF-8 tiling and every
+/// boundary opportunity. Expected positions come only from the frozen corpus.
+fn check_break_file(
+    name: &str,
+    text: &str,
+    expected_count: usize,
+    segments: impl Fn(&str, &mut dyn FnMut(&str)),
+) {
     let mut lines = 0usize;
     let mut failures: Vec<String> = Vec::new();
     for (number, line) in text.lines().enumerate() {
@@ -64,15 +74,22 @@ fn word_break_test_every_line() {
         }
         let mut actual = vec![0usize];
         let mut at = 0usize;
-        for segment in unicode::word_bounds(&input) {
+        segments(&input, &mut |segment| {
             assert_eq!(
                 &input[at..at + segment.len()],
                 segment,
                 "segments must tile the input"
             );
+            assert!(std::ptr::eq(segment.as_ptr(), input[at..].as_ptr()));
             at += segment.len();
             actual.push(at);
-        }
+        });
+        assert_eq!(
+            at,
+            input.len(),
+            "{name} line {} must retain every byte",
+            number + 1
+        );
         if actual != expected {
             failures.push(format!(
                 "line {}: {data}: boundaries {actual:?}, expected {expected:?}",
@@ -80,13 +97,46 @@ fn word_break_test_every_line() {
             ));
         }
     }
-    assert_eq!(lines, 1944, "WordBreakTest.txt line count");
+    assert_eq!(lines, expected_count, "{name} line count");
     assert!(
         failures.is_empty(),
-        "{} of {lines} WordBreakTest.txt lines fail; the first: {:#?}",
+        "{} of {lines} {name} lines fail; the first: {:#?}",
         failures.len(),
         &failures[..failures.len().min(20)]
     );
+}
+
+#[test]
+fn word_break_test_every_line() {
+    check_break_file(
+        "WordBreakTest.txt",
+        &ucd("WordBreakTest.txt"),
+        1944,
+        |input, emit| {
+            unicode::word_bounds(input).for_each(emit);
+        },
+    );
+}
+
+#[test]
+fn sentence_break_test_every_line() {
+    let properties = ucd("SentenceBreakProperty.txt");
+    let text = ucd("SentenceBreakTest.txt");
+    assert_eq!(
+        purrdf_testkit::vectors::sha256_hex(properties.as_bytes()),
+        "871c0c985ad95125e25b302414065a10839d068970bceb383ecec138f22a0a18",
+        "the property input is the frozen Unicode 17 release"
+    );
+    assert_eq!(
+        purrdf_testkit::vectors::sha256_hex(text.as_bytes()),
+        "12cb47d028ded0c1cb8a28558f95479cbcd24559c46977015c82f3b50a1cc6e4",
+        "the complete corpus is the frozen Unicode 17 release"
+    );
+    assert_eq!(text.lines().next(), Some("# SentenceBreakTest-17.0.0.txt"));
+    check_break_file("SentenceBreakTest.txt", &text, 512, |input, emit| {
+        unicode::sentence_bounds(input).for_each(emit);
+    });
+    support::sentence_cases::the_sentence_boundaries_are_reproduced_on_this_target();
 }
 
 #[test]

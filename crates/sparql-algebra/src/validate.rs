@@ -3,6 +3,8 @@
 
 //! Borrowed structural admission for compiler-built query algebra.
 
+use crate::parser::table::ScopeTable;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use std::collections::BTreeSet;
 
 use crate::walk::NodeRef;
@@ -43,20 +45,30 @@ triple_term_slot!(TermPattern, GroundTerm);
 /// triple term, so it needs no more stack however deep the term nests and does
 /// not allocate unless a subject nests.
 fn triple_term_nesting<T: TripleTermSlot>(root: &T) -> usize {
-    let mut deepest = 0;
-    let mut pending: Vec<(&T, usize)> = Vec::new();
-    let mut next = Some((root, 0));
+    let mut admission = Resident;
+    let mut memory = Memory::new(&mut admission);
+    triple_term_nesting_with_memory(root, &mut memory).expect("resident triple nesting census")
+}
+
+fn triple_term_nesting_with_memory<T: TripleTermSlot, S: Admission + ?Sized>(
+    root: &T,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<usize, StorageError> {
+    let mut deepest = 0_usize;
+    let mut pending = purrdf_lex::walk::WorkList::<(&T, usize), 8>::new();
+    let mut next = Some((root, 0_usize));
     while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
         if let Some((subject, object)) = term.subject_and_object() {
-            let depth = above + 1;
+            let depth = above.checked_add(1).ok_or(StorageError::SizeOverflow)?;
             deepest = deepest.max(depth);
             if subject.subject_and_object().is_some() {
-                pending.push((subject, depth));
+                pending.try_push_admitted((subject, depth), memory)?;
             }
             next = Some((object, depth));
         }
     }
-    deepest
+    pending.release_admitted(memory)?;
+    Ok(deepest)
 }
 
 impl TermPattern {
@@ -71,6 +83,16 @@ impl TermPattern {
         triple_term_nesting(self)
     }
 
+    /// Count nesting through the same native body under concrete work-list admission.
+    /// # Errors
+    /// Returns checked depth overflow, admission refusal or native allocator failure.
+    pub fn triple_term_nesting_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<usize, StorageError> {
+        triple_term_nesting_with_memory(self, memory)
+    }
+
     /// Call `visit` on every variable this term mentions, a quoted triple term's own
     /// positions included — subject, predicate and object, at every depth. A
     /// variable mentioned twice is visited twice.
@@ -79,24 +101,57 @@ impl TermPattern {
     /// own work list, so a term nested to any depth needs no more machine stack, and
     /// a term that is not a triple term is answered without allocating.
     pub fn for_each_variable<'a>(&'a self, mut visit: impl FnMut(&'a Variable)) {
-        let mut pending = match self {
-            Self::Variable(variable) => return visit(variable),
-            Self::Triple(_) => vec![self],
-            Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => return,
-        };
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        self.for_each_variable_with_memory(&mut memory, |variable, _| {
+            visit(variable);
+            Ok::<(), core::convert::Infallible>(())
+        })
+        .expect("resident term-variable walk allocation failed");
+    }
+
+    /// Visit the same variable occurrences under native fallible work-list admission.
+    /// Repeated occurrences remain repeated; each quoted predicate is visited before
+    /// its subject and object, exactly as in the resident variable walk.
+    ///
+    /// # Errors
+    /// Returns the original visitor error or physical work-list failure.
+    pub fn for_each_variable_with_memory<'a, S, E>(
+        &'a self,
+        memory: &mut Memory<'_, S>,
+        mut visit: impl FnMut(&'a Variable, &mut Memory<'_, S>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), crate::walk::MutationError<E>>
+    where
+        S: Admission + ?Sized,
+    {
+        use crate::walk::MutationError;
+        let mut pending: purrdf_lex::walk::WorkList<&'a Self, 8> =
+            purrdf_lex::walk::WorkList::new();
+        pending
+            .try_push_admitted(self, memory)
+            .map_err(MutationError::Storage)?;
         while let Some(term) = pending.pop() {
             match term {
-                Self::Variable(variable) => visit(variable),
+                Self::Variable(variable) => {
+                    visit(variable, memory).map_err(MutationError::Visitor)?;
+                }
                 Self::Triple(triple) => {
                     if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                        visit(variable);
+                        visit(variable, memory).map_err(MutationError::Visitor)?;
                     }
-                    pending.push(&triple.object);
-                    pending.push(&triple.subject);
+                    pending
+                        .try_push_admitted(&triple.object, memory)
+                        .map_err(MutationError::Storage)?;
+                    pending
+                        .try_push_admitted(&triple.subject, memory)
+                        .map_err(MutationError::Storage)?;
                 }
                 Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => {}
             }
         }
+        pending
+            .release_admitted(memory)
+            .map_err(MutationError::Storage)
     }
 
     /// Add every variable this term mentions to `out`, a quoted triple term's own
@@ -134,6 +189,16 @@ impl GroundTerm {
     pub fn triple_term_nesting(&self) -> usize {
         triple_term_nesting(self)
     }
+
+    /// Count nesting through the same native body under concrete work-list admission.
+    /// # Errors
+    /// Returns checked depth overflow, admission refusal or native allocator failure.
+    pub fn triple_term_nesting_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<usize, StorageError> {
+        triple_term_nesting_with_memory(self, memory)
+    }
 }
 
 impl GraphPattern {
@@ -147,63 +212,129 @@ impl GraphPattern {
     }
 }
 
+/// Structural validation refusal, preserving the original semantic cause.
+#[derive(Debug)]
+pub enum ValidationError {
+    /// The original syntax message, constructed through original native storage.
+    Invalid(String),
+    /// The original observer violation.
+    Scope(crate::scope::ScopeError),
+    /// Checked native storage refusal.
+    Storage(StorageError),
+}
+purrdf_lex::variant_from!(ValidationError { Storage(StorageError) });
+impl From<crate::scope::ScopeValidationError> for ValidationError {
+    fn from(error: crate::scope::ScopeValidationError) -> Self {
+        match error {
+            crate::scope::ScopeValidationError::Scope(error) => Self::Scope(error),
+            crate::scope::ScopeValidationError::Storage(error) => Self::Storage(error),
+        }
+    }
+}
+purrdf_lex::variant_from!(ValidationError { Scope(crate::scope::ScopeError) });
+impl core::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Invalid(message) => f.write_str(message),
+            Self::Scope(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for ValidationError {}
+
+fn resident_validation<T>(
+    body: impl FnOnce(&mut Memory<'_, Resident>) -> std::result::Result<T, ValidationError>,
+) -> Result<T> {
+    match body(&mut Memory::new(&mut Resident)) {
+        Ok(value) => Ok(value),
+        Err(ValidationError::Invalid(message)) => Err(ParseError::syntax(message, 0)),
+        Err(ValidationError::Scope(error)) => Err(ParseError::from(error)),
+        Err(ValidationError::Storage(error)) => panic!("resident structural validation: {error}"),
+    }
+}
+
 impl Query {
-    /// Check reserved non-distinguished identities at a raw query entry, including
-    /// graph templates and description targets, without re-admitting ordinary terms.
-    ///
+    /// Check hidden observer identities without re-admitting ordinary terms.
     /// # Errors
-    /// Refuses an explicit observation of a hidden match witness.
+    /// Refuses explicit observation of a hidden match witness.
     pub fn validate_hidden_variables(&self) -> Result<()> {
         crate::scope::validate_query(self).map_err(ParseError::from)
     }
 
-    /// Check the structural invariants needed to evaluate compiler-built algebra.
-    ///
-    /// Walks borrowed nodes without rendering or parsing SPARQL. Runtime expression
-    /// errors (including ill-typed datatype lexical forms) remain runtime errors.
-    /// Blank labels remain opaque identifiers, including scope-qualified labels.
-    /// Registry admission belongs to the evaluator, which owns those registries.
-    ///
-    /// Walks the tree over a work list, so a tree of any height is checked without
-    /// recursion; how tall a tree may be to be *evaluated* is the evaluator's to decide.
-    ///
+    /// Check the original structural query invariants.
     /// # Errors
-    /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
-    /// collisions, and malformed typed calls or ranges.
+    /// Returns the original syntax/observer refusal.
     pub fn validate(&self) -> Result<()> {
-        self.walk::<true>(&mut BTreeSet::new())
+        resident_validation(|memory| self.validate_with_memory(memory))
     }
 
-    /// Admit algebra for ordinary parameter and SHACL transformations.
-    /// Contextual application has private input/output identities and is admitted
-    /// only through the typed contextual preparation boundary.
-    ///
+    /// Check ordinary preparation's original structural invariants.
     /// # Errors
-    /// The structural diagnostics of [`Self::validate`], or a contextual application.
+    /// Returns structural or contextual-application refusal.
     pub fn validate_ordinary(&self) -> Result<()> {
-        self.walk::<false>(&mut BTreeSet::new())
+        resident_validation(|memory| self.validate_ordinary_with_memory(memory))
     }
 
-    /// The IRIs of every extension function the query calls: each
-    /// [`Function::Custom`] in an expression anywhere in the algebra — a `FILTER`, a
-    /// `BIND`, a projection, an `ORDER BY`, a `HAVING`, an aggregate's argument, and
-    /// inside `EXISTS` / `NOT EXISTS` and sub-queries — sorted and de-duplicated.
-    ///
-    /// A host that can say which IRIs it cannot evaluate learns, before running the
-    /// query, whether the query would reach one. Custom aggregates
-    /// ([`crate::AggregateFunction::Custom`]) are a separate seam and are not listed.
-    ///
+    /// Validate through the original native account, including temporary tables.
     /// # Errors
-    /// Whatever [`Self::validate`] refuses: the walk is the same one.
-    pub fn custom_function_calls(&self) -> Result<BTreeSet<String>> {
-        let mut calls = BTreeSet::new();
-        self.walk::<true>(&mut calls)?;
-        Ok(calls.into_iter().map(ToOwned::to_owned).collect())
+    /// Returns original structural/observer errors or physical storage refusal.
+    pub fn validate_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), ValidationError> {
+        let mut calls = ScopeTable::default();
+        self.walk_with_memory::<true, S>(&mut calls, memory)?;
+        calls.release(memory)?;
+        Ok(())
     }
 
-    /// [`Self::validate`]'s walk, recording every [`Function::Custom`] IRI it passes
-    /// in `calls`.
-    fn walk<'a, const APPLICATION: bool>(&'a self, calls: &mut BTreeSet<&'a str>) -> Result<()> {
+    /// The ordinary-entry variant of the same native validation body.
+    /// # Errors
+    /// Returns original semantic refusal or native working-storage failure.
+    pub fn validate_ordinary_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), ValidationError> {
+        let mut calls = ScopeTable::default();
+        self.walk_with_memory::<false, S>(&mut calls, memory)?;
+        calls.release(memory)?;
+        Ok(())
+    }
+
+    /// Sorted, de-duplicated extension-function IRIs; custom aggregates are separate.
+    /// # Errors
+    /// Returns the same structural diagnostics as validation.
+    pub fn custom_function_calls(&self) -> Result<BTreeSet<String>> {
+        resident_validation(|memory| self.custom_function_calls_with_memory(memory))
+            .map(|calls| calls.into_iter().collect())
+    }
+
+    /// The same extension census with native output and working-storage admission.
+    /// Returned strings remain in the caller's original account.
+    /// # Errors
+    /// Returns original validation or physical storage refusal.
+    pub fn custom_function_calls_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<Vec<String>, ValidationError> {
+        let mut calls = ScopeTable::default();
+        self.walk_with_memory::<true, S>(&mut calls, memory)?;
+        let mut output = Vec::new();
+        for (name, ()) in calls.iter() {
+            let text = memory.string(name)?;
+            memory.push(&mut output, text)?;
+        }
+        calls.release(memory)?;
+        output.sort_unstable();
+        Ok(output)
+    }
+
+    fn walk_with_memory<'a, const APPLICATION: bool, S: Admission + ?Sized>(
+        &'a self,
+        calls: &mut ScopeTable<&'a str, ()>,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), ValidationError> {
         let (pattern, dataset, base) = match self {
             Self::Select {
                 pattern,
@@ -231,45 +362,70 @@ impl Query {
             } => (pattern, dataset, base_iri),
         };
         for name in dataset.default.iter().chain(&dataset.named) {
-            iri(name.as_str())?;
+            iri(name.as_str(), memory)?;
         }
         if let Some(base) = base {
-            purrdf_iri::BaseIri::parse(base.as_str()).map_err(|e| invalid(e.to_string()))?;
+            let before = memory.admitted_bytes();
+            match purrdf_iri::BaseIri::parse_with_memory(base.as_str(), memory) {
+                Ok(parsed) => {
+                    drop(parsed);
+                    memory.release_bytes(memory.admitted_bytes() - before)?;
+                }
+                Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+                Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                    let temporary_bytes = memory.admitted_bytes() - before;
+                    let failure = invalid(&error, memory);
+                    drop(error);
+                    memory.release_bytes(temporary_bytes)?;
+                    return Err(failure);
+                }
+            }
         }
-        crate::scope::validate_query_head(self).map_err(ParseError::from)?;
-        let mut stack = vec![NodeRef::Pattern(pattern)];
+        crate::scope::validate_query_head_with_memory(self, memory)
+            .map_err(ValidationError::from)?;
+        let mut stack = Vec::new();
+        memory.push(&mut stack, NodeRef::Pattern(pattern))?;
         match self {
             Self::Construct { template, .. } => {
                 for quad in template {
                     if let Some(graph) = &quad.graph {
-                        named(graph)?;
+                        named(graph, memory)?;
                     }
-                    stack.push(NodeRef::Triple(&quad.triple));
+                    memory.push(&mut stack, NodeRef::Triple(&quad.triple))?;
                 }
             }
             Self::Describe { targets, .. } => {
                 for target in targets {
-                    named(target)?;
+                    named(target, memory)?;
                 }
             }
             Self::Select { .. } | Self::Ask { .. } => {}
         }
-        visit_nodes(stack, |node| check::<APPLICATION>(node, calls))
+        visit_nodes_with_memory(
+            stack,
+            |node, memory| check::<APPLICATION, S>(node, calls, memory),
+            memory,
+        )
     }
 }
 
-/// The shared borrowed admission walk, with one check per node and no recursion.
-fn visit_nodes<'a>(
+/// The original root order and numbered observer traversal.
+fn visit_nodes_with_memory<'a, S: Admission + ?Sized>(
     stack: Vec<NodeRef<'a>>,
-    mut check: impl FnMut(NodeRef<'a>) -> Result<()>,
-) -> Result<()> {
-    for root in stack.into_iter().rev() {
-        crate::scope::walk_nodes(root, |node, index| {
-            crate::scope::check_node(node, crate::scope::ScopeSite::pattern(index))
-                .map_err(ParseError::from)?;
-            check(node)
-        })?;
+    mut check: impl FnMut(NodeRef<'a>, &mut Memory<'_, S>) -> std::result::Result<(), ValidationError>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
+    for root in stack.iter().rev().copied() {
+        crate::scope::walk_nodes_with_memory(
+            root,
+            |node, index, memory| {
+                crate::scope::check_node(node, crate::scope::ScopeSite::pattern(index))?;
+                check(node, memory)
+            },
+            memory,
+        )?;
     }
+    memory.release_vec(stack)?;
     Ok(())
 }
 
@@ -280,8 +436,14 @@ pub(crate) fn check_quad_output(quad: &crate::QuadPattern) -> Result<()> {
     crate::scope::validate_quad(quad).map_err(ParseError::from)
 }
 
-fn invalid(message: impl Into<String>) -> ParseError {
-    ParseError::syntax(message, 0)
+fn invalid<S: Admission + ?Sized>(
+    message: impl core::fmt::Display,
+    memory: &mut Memory<'_, S>,
+) -> ValidationError {
+    match memory.format(&message) {
+        Ok(message) => ValidationError::Invalid(message),
+        Err(error) => ValidationError::Storage(error),
+    }
 }
 
 /// Accept `value` iff it is a well-formed **absolute** IRI.
@@ -295,50 +457,81 @@ fn invalid(message: impl Into<String>) -> ParseError {
 /// accepted and what is rejected here is unchanged, which
 /// `tests::absolute_iris_are_still_accepted_and_relative_ones_still_refused` pins
 /// from both sides.
-fn iri(value: &str) -> Result<()> {
-    if purrdf_iri::is_absolute(value).map_err(|e| invalid(e.to_string()))? {
+fn iri<S: Admission + ?Sized>(
+    value: &str,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
+    let absolute = match purrdf_iri::is_absolute_with_memory(value, memory) {
+        Ok(value) => value,
+        Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+        Err(purrdf_iri::IriReadError::Lexical(error)) => {
+            let bytes = error.owned_text_bytes();
+            let failure = invalid(&error, memory);
+            drop(error);
+            memory.release_bytes(bytes)?;
+            return Err(failure);
+        }
+    };
+    if absolute {
         Ok(())
     } else {
-        Err(invalid("relative IRI in query algebra"))
+        Err(invalid("relative IRI in query algebra", memory))
     }
 }
 
-fn variable(value: &Variable) -> Result<()> {
+fn variable<S: Admission + ?Sized>(
+    value: &Variable,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     // `VARNAME` is position-dependent, so this is a whole-string test and not a
     // per-character one: a name may CONTINUE with a combining mark but may not
     // BEGIN with one, and no position admits `'-'`.
     if !value.is_hidden() && !crate::lexer::is_varname(value.as_str()) {
-        return Err(invalid("invalid query variable name"));
+        return Err(invalid("invalid query variable name", memory));
     }
     Ok(())
 }
 
-fn distinct_variables<'a>(values: impl IntoIterator<Item = &'a Variable>) -> Result<()> {
-    let mut seen = BTreeSet::new();
+fn distinct_variables<'a, S: Admission + ?Sized>(
+    values: impl IntoIterator<Item = &'a Variable>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
+    let mut seen = ScopeTable::default();
     for value in values {
-        variable(value)?;
-        if !seen.insert(value) {
-            return Err(invalid("duplicate output variable in query algebra"));
+        variable(value, memory)?;
+        if seen.insert(value, (), memory)?.is_some() {
+            return Err(invalid(
+                "duplicate output variable in query algebra",
+                memory,
+            ));
         }
     }
+    seen.release(memory)?;
     Ok(())
 }
 
-fn named(value: &NamedNodePattern) -> Result<()> {
+fn named<S: Admission + ?Sized>(
+    value: &NamedNodePattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     match value {
-        NamedNodePattern::NamedNode(n) => iri(n.as_str()),
-        NamedNodePattern::Variable(v) => variable(v),
+        NamedNodePattern::NamedNode(n) => iri(n.as_str(), memory),
+        NamedNodePattern::Variable(v) => variable(v, memory),
     }
 }
 
-fn literal(value: &Literal) -> Result<()> {
-    iri(value.datatype().as_str())?;
+fn literal<S: Admission + ?Sized>(
+    value: &Literal,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
+    iri(value.datatype().as_str(), memory)?;
     match value.language() {
         Some(_) => {
             let expected = purrdf_iri::vocab::language_datatype_iri(value.direction().is_some());
             if value.datatype().as_str() != expected {
                 return Err(invalid(
                     "literal datatype disagrees with its language and direction",
+                    memory,
                 ));
             }
         }
@@ -350,6 +543,7 @@ fn literal(value: &Literal) -> Result<()> {
         {
             return Err(invalid(
                 "a language-string datatype or direction requires a language tag",
+                memory,
             ));
         }
         None => {}
@@ -358,57 +552,65 @@ fn literal(value: &Literal) -> Result<()> {
         .language()
         .is_some_and(|tag| !crate::parser::is_langtag(tag))
     {
-        return Err(invalid("invalid language tag in query algebra"));
+        return Err(invalid("invalid language tag in query algebra", memory));
     }
     Ok(())
 }
 
 /// The checks of `node` itself; its children are checked when they are reached.
 /// Every [`Function::Custom`] IRI `node` calls is recorded in `calls`.
-fn check<'a, const APPLICATION: bool>(
+fn check<'a, const APPLICATION: bool, S: Admission + ?Sized>(
     node: NodeRef<'a>,
-    calls: &mut BTreeSet<&'a str>,
-) -> Result<()> {
+    calls: &mut ScopeTable<&'a str, ()>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     match node {
-        NodeRef::Pattern(pattern) => check_pattern::<APPLICATION>(pattern),
-        NodeRef::Expr(expr) => check_expression(expr, calls),
-        NodeRef::Path(path) => check_path(path),
-        NodeRef::Triple(triple) => named(&triple.predicate),
+        NodeRef::Pattern(pattern) => check_pattern::<APPLICATION, S>(pattern, memory),
+        NodeRef::Expr(expr) => check_expression(expr, calls, memory),
+        NodeRef::Path(path) => check_path(path, memory),
+        NodeRef::Triple(triple) => named(&triple.predicate, memory),
         NodeRef::Term(term) => match term {
-            TermPattern::NamedNode(n) => iri(n.as_str()),
-            TermPattern::Variable(v) => variable(v),
-            TermPattern::Literal(l) => literal(l),
+            TermPattern::NamedNode(n) => iri(n.as_str(), memory),
+            TermPattern::Variable(v) => variable(v, memory),
+            TermPattern::Literal(l) => literal(l, memory),
             TermPattern::Triple(_) | TermPattern::BlankNode(_) => Ok(()),
         },
         NodeRef::Ground(term) => match term {
-            GroundTerm::NamedNode(n) => iri(n.as_str()),
-            GroundTerm::Literal(l) => literal(l),
+            GroundTerm::NamedNode(n) => iri(n.as_str(), memory),
+            GroundTerm::Literal(l) => literal(l, memory),
             GroundTerm::BlankNode(_) => Ok(()),
             GroundTerm::Triple(t) => {
                 if matches!(t.subject, GroundTerm::Literal(_) | GroundTerm::Triple(_)) {
                     return Err(invalid(
                         "a ground triple term requires an IRI or blank subject",
+                        memory,
                     ));
                 }
-                iri(t.predicate.as_str())
+                iri(t.predicate.as_str(), memory)
             }
         },
         NodeRef::Order(_) => Ok(()),
-        NodeRef::Aggregate(aggregate) => check_aggregate(aggregate),
+        NodeRef::Aggregate(aggregate) => check_aggregate(aggregate, memory),
     }
 }
 
-fn check_aggregate(value: &AggregateExpression) -> Result<()> {
+fn check_aggregate<S: Admission + ?Sized>(
+    value: &AggregateExpression,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     if let crate::AggregateFunction::Custom(name) = value.function() {
-        iri(name.as_str())?;
+        iri(name.as_str(), memory)?;
     }
     for (_, value) in value.scalarvals() {
-        literal(value)?;
+        literal(value, memory)?;
     }
     Ok(())
 }
 
-fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> {
+fn check_pattern<const APPLICATION: bool, S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     use GraphPattern as G;
     match pattern {
         G::Apply {
@@ -419,6 +621,7 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
             if !APPLICATION {
                 return Err(invalid(
                     "contextual application requires typed contextual preparation",
+                    memory,
                 ));
             }
             if policy.dataset_required
@@ -432,6 +635,7 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
             {
                 return Err(invalid(
                     "dataset-required application requires an uncorrelated Graph operand and empty driver",
+                    memory,
                 ));
             }
             if policy.reduced_adjacent
@@ -444,6 +648,7 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
             {
                 return Err(invalid(
                     "adjacent reduction requires an uncorrelated Reduced operand and empty driver",
+                    memory,
                 ));
             }
             if policy.row_pipeline {
@@ -453,6 +658,7 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
                 {
                     return Err(invalid(
                         "scalar continuation cannot carry group, reduction or retry policies",
+                        memory,
                     ));
                 }
                 let mut row = &**right;
@@ -465,6 +671,7 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
                         _ => {
                             return Err(invalid(
                                 "scalar continuation requires a zero-or-one-row scalar operand",
+                                memory,
                             ));
                         }
                     }
@@ -480,43 +687,51 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
                 {
                     return Err(invalid(
                         "group mapping domain requires an uncorrelated Group operand and empty driver",
+                        memory,
                     ));
                 }
-                let mut seen = BTreeSet::new();
+                let mut seen = ScopeTable::default();
                 for name in domain {
-                    variable(name)?;
-                    if !seen.insert(name) {
-                        return Err(invalid("group mapping domain repeats a column"));
+                    variable(name, memory)?;
+                    if seen.insert(name, (), memory)?.is_some() {
+                        return Err(invalid("group mapping domain repeats a column", memory));
                     }
                 }
+                seen.release(memory)?;
             }
-            let mut inputs = BTreeSet::new();
+            let mut inputs = ScopeTable::default();
             for (input, driver) in &policy.inputs {
-                variable(input)?;
-                variable(driver)?;
-                if !inputs.insert(input) {
-                    return Err(invalid("application input is declared twice"));
+                variable(input, memory)?;
+                variable(driver, memory)?;
+                if inputs.insert(input, (), memory)?.is_some() {
+                    return Err(invalid("application input is declared twice", memory));
                 }
             }
             if let Some(optional) = &policy.optional {
-                variable(&optional.forget_marker)?;
-                if inputs.contains(&optional.forget_marker) {
+                variable(&optional.forget_marker, memory)?;
+                if inputs.get(&&optional.forget_marker).is_some() {
                     return Err(invalid(
                         "optional visibility marker collides with an application input",
+                        memory,
                     ));
                 }
-                let mut retry = BTreeSet::new();
+                let mut retry = ScopeTable::default();
                 for (input, driver) in &optional.retry_inputs {
-                    variable(input)?;
-                    variable(driver)?;
-                    if !inputs.contains(input) {
-                        return Err(invalid("retry refers to an undeclared application input"));
+                    variable(input, memory)?;
+                    variable(driver, memory)?;
+                    if inputs.get(&input).is_none() {
+                        return Err(invalid(
+                            "retry refers to an undeclared application input",
+                            memory,
+                        ));
                     }
-                    if !retry.insert(input) {
-                        return Err(invalid("retry application input is declared twice"));
+                    if retry.insert(input, (), memory)?.is_some() {
+                        return Err(invalid("retry application input is declared twice", memory));
                     }
                 }
+                retry.release(memory)?;
             }
+            inputs.release(memory)?;
         }
         G::Bgp { .. }
         | G::Path { .. }
@@ -530,23 +745,26 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
         | G::Distinct { .. }
         | G::Reduced { .. }
         | G::Slice { .. } => {}
-        G::Graph { name, .. } | G::Service { name, .. } => named(name)?,
+        G::Graph { name, .. } | G::Service { name, .. } => named(name, memory)?,
         G::Extend {
             variable: target, ..
-        } => variable(target)?,
+        } => variable(target, memory)?,
         G::Values {
             variables,
             bindings,
         } => {
-            distinct_variables(variables)?;
+            distinct_variables(variables, memory)?;
             if bindings.iter().any(|row| row.len() != variables.len()) {
-                return Err(invalid("VALUES row width differs from its variables"));
+                return Err(invalid(
+                    "VALUES row width differs from its variables",
+                    memory,
+                ));
             }
         }
         G::Project { variables, .. } => {
             // Repeated projection variables are normalized by the result schema.
             for value in variables {
-                variable(value)?;
+                variable(value, memory)?;
             }
         }
         G::Group {
@@ -554,38 +772,44 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
             aggregates,
             ..
         } => {
-            let mut outputs = BTreeSet::new();
+            let mut outputs = ScopeTable::default();
             for value in variables {
-                variable(value)?;
-                outputs.insert(value);
+                variable(value, memory)?;
+                outputs.insert(value, (), memory)?;
             }
             for (target, _) in aggregates {
-                variable(target)?;
-                if !outputs.insert(target) {
+                variable(target, memory)?;
+                if outputs.insert(target, (), memory)?.is_some() {
                     return Err(invalid(
                         "aggregate output collides with another group output",
+                        memory,
                     ));
                 }
             }
+            outputs.release(memory)?;
         }
-        G::PropertyFunction(call) => iri(&call.iri)?,
+        G::PropertyFunction(call) => iri(&call.iri, memory)?,
         G::Unfold {
             element, companion, ..
-        } => distinct_variables(std::iter::once(element).chain(companion))?,
+        } => distinct_variables(std::iter::once(element).chain(companion), memory)?,
     }
     Ok(())
 }
 
-fn check_expression<'a>(expr: &'a Expression, calls: &mut BTreeSet<&'a str>) -> Result<()> {
+fn check_expression<'a, S: Admission + ?Sized>(
+    expr: &'a Expression,
+    calls: &mut ScopeTable<&'a str, ()>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     use Expression as E;
     match expr {
-        E::NamedNode(n) => iri(n.as_str())?,
-        E::Literal(l) => literal(l)?,
-        E::Variable(v) | E::Bound(v) => variable(v)?,
+        E::NamedNode(n) => iri(n.as_str(), memory)?,
+        E::Literal(l) => literal(l, memory)?,
+        E::Variable(v) | E::Bound(v) => variable(v, memory)?,
         E::FunctionCall(function, args) => match function {
             Function::Custom(n) => {
-                iri(n.as_str())?;
-                calls.insert(n.as_str());
+                iri(n.as_str(), memory)?;
+                calls.insert(n.as_str(), (), memory)?;
             }
             Function::Cdt(call) => {
                 if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
@@ -593,17 +817,21 @@ fn check_expression<'a>(expr: &'a Expression, calls: &mut BTreeSet<&'a str>) -> 
                 {
                     return Err(invalid(
                         "invalid composite datatype function identity or arity",
+                        memory,
                     ));
                 }
             }
             Function::Purrdf(call) => {
-                iri(&call.iri)?;
+                iri(&call.iri, memory)?;
                 if !call.iri.ends_with(call.local_name()) {
-                    return Err(invalid("extension function IRI disagrees with its kind"));
+                    return Err(invalid(
+                        "extension function IRI disagrees with its kind",
+                        memory,
+                    ));
                 }
             }
             Function::Adjust if args.len() != 2 => {
-                return Err(invalid("ADJUST requires two arguments"));
+                return Err(invalid("ADJUST requires two arguments", memory));
             }
             _ => {}
         },
@@ -627,10 +855,13 @@ fn check_expression<'a>(expr: &'a Expression, calls: &mut BTreeSet<&'a str>) -> 
     Ok(())
 }
 
-fn check_path(path: &PropertyPathExpression) -> Result<()> {
+fn check_path<S: Admission + ?Sized>(
+    path: &PropertyPathExpression,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), ValidationError> {
     use PropertyPathExpression as P;
     match path {
-        P::NamedNode(n) => iri(n.as_str())?,
+        P::NamedNode(n) => iri(n.as_str(), memory)?,
         P::Reverse(_)
         | P::ZeroOrMore(_)
         | P::OneOrMore(_)
@@ -639,17 +870,20 @@ fn check_path(path: &PropertyPathExpression) -> Result<()> {
         | P::Alternative(_) => {}
         P::Range { min, max, .. } => {
             if max.is_some_and(|max| *min > max) {
-                return Err(invalid("path range lower bound exceeds upper bound"));
+                return Err(invalid(
+                    "path range lower bound exceeds upper bound",
+                    memory,
+                ));
             }
         }
         P::NegatedPropertySet(values) => {
             for v in values {
-                iri(v.predicate.as_str())?;
+                iri(v.predicate.as_str(), memory)?;
             }
         }
         P::Wildcard { namespace } => {
             if let Some(n) = namespace {
-                iri(n.as_str())?;
+                iri(n.as_str(), memory)?;
             }
         }
     }

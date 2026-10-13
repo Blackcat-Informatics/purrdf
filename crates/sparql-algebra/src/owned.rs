@@ -1,28 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Owned nodes on a work list: the iterative drop, and the iterative clone that
-//! builds a copy bottom-up.
+//! Original owners for allocation-free drop and bottom-up iterative cloning.
 
 use crate::algebra::{
-    AggregateExpression, Expression, GraphPattern, OrderExpression, PropertyFunctionCall,
+    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, PropertyFunctionCall,
     PropertyPathExpression,
 };
 use crate::ast::{GroundTerm, GroundTriple, TermPattern, TriplePattern};
-use crate::tree::{Chain, Child, NonEmpty, Subtree};
+use crate::tree::{Chain, Child, NonEmpty};
 use crate::walk::NodeRef;
 use crate::worklist::WorkList;
-
-/// How many dismantled nodes the drop keeps inline before its work list spills.
-pub(crate) const DROP_INLINE: usize = 8;
-
-/// The drop's work list.
-pub(crate) type DropWork = WorkList<Owned, DROP_INLINE>;
 
 /// An owned node of any of the algebra's recursive kinds: an entry of the work list
 /// the iterative drop dismantles, or a copy the iterative clone has finished.
 #[derive(Debug)]
-pub enum Owned {
+pub(crate) enum Owned {
     /// A graph pattern.
     Pattern(GraphPattern),
     /// An expression.
@@ -41,201 +34,339 @@ pub enum Owned {
     Aggregate(AggregateExpression),
 }
 
-/// Dismantle `work`: take each node's children onto the list before the node itself
-/// is dropped, until nothing is left. Every node dropped here owns nothing by then,
-/// so no drop it runs recurses.
-pub(crate) fn reclaim(work: &mut DropWork) {
-    while let Some(mut node) = work.pop() {
-        take_children(&mut node, work);
+/// Original heap owners threaded through evacuated algebra edges during drop.
+/// The payload is private: continuations cannot be manufactured by callers.
+#[doc(hidden)]
+pub struct DropOwner(DropKind);
+
+enum DropKind {
+    Pattern(Box<GraphPattern>),
+    Expr(Box<Expression>),
+    Path(Box<PropertyPathExpression>),
+    Triple(Box<TriplePattern>),
+    Ground(Box<GroundTriple>),
+    Patterns(Vec<GraphPattern>),
+    Exprs(Vec<Expression>),
+    Paths(Vec<PropertyPathExpression>),
+    Arithmetic(Vec<(crate::ArithmeticOperator, Expression)>),
+    Orders(Vec<OrderExpression>),
+    Aggregates(Vec<(crate::Variable, AggregateExpression)>),
+    Pending,
+    End,
+}
+
+impl core::fmt::Debug for DropOwner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DropOwner").finish_non_exhaustive()
     }
 }
 
-pub(crate) fn release_pattern(node: GraphPattern, work: &mut DropWork) {
-    work.push(Owned::Pattern(node));
+macro_rules! boxed_owner {
+    ($($method:ident => $variant:ident: $ty:ty;)+) => {$(
+        pub(crate) fn $method(node: Box<$ty>) -> Self { Self(DropKind::$variant(node)) }
+    )+};
 }
 
-pub(crate) fn release_expr(node: Expression, work: &mut DropWork) {
-    // The leaf expressions own no node: dropping them here recurses nowhere.
-    if !matches!(
-        node,
-        Expression::NamedNode(_)
-            | Expression::Literal(_)
-            | Expression::Variable(_)
-            | Expression::Bound(_)
-    ) {
-        work.push(Owned::Expr(node));
+impl DropOwner {
+    boxed_owner! {
+        pattern => Pattern: GraphPattern;
+        expression => Expr: Expression;
+        path => Path: PropertyPathExpression;
+        triple => Triple: TriplePattern;
+        ground => Ground: GroundTriple;
+    }
+
+    fn visit(&mut self, visit: &mut DropVisit) -> bool {
+        match &mut self.0 {
+            DropKind::Pattern(node) => visit_pattern(node, visit),
+            DropKind::Expr(node) => visit_expr(node, visit),
+            DropKind::Path(node) => visit_path(node, visit),
+            DropKind::Triple(node) => visit_triple(node, visit),
+            DropKind::Ground(node) => visit_ground_triple(node, visit),
+            DropKind::Patterns(nodes) => visit_vec(nodes, visit, visit_pattern),
+            DropKind::Exprs(nodes) => visit_vec(nodes, visit, visit_expr),
+            DropKind::Paths(nodes) => visit_vec(nodes, visit, visit_path),
+            DropKind::Arithmetic(nodes) => {
+                visit_vec(nodes, visit, |node, walk| visit_expr(&mut node.1, walk))
+            }
+            DropKind::Orders(nodes) => visit_vec(nodes, visit, visit_order),
+            DropKind::Aggregates(nodes) => visit_vec(nodes, visit, |node, walk| {
+                visit_aggregate(&mut node.1, walk)
+            }),
+            DropKind::Pending | DropKind::End => {
+                unreachable!("a continuation marker is never a live tree owner")
+            }
+        }
     }
 }
 
-pub(crate) fn release_path(node: PropertyPathExpression, work: &mut DropWork) {
-    if !matches!(
-        node,
-        PropertyPathExpression::NamedNode(_)
-            | PropertyPathExpression::NegatedPropertySet(_)
-            | PropertyPathExpression::Wildcard { .. }
-    ) {
-        work.push(Owned::Path(node));
+impl purrdf_lex::walk::DismantleOwned for DropOwner {
+    fn take_child(&mut self) -> Option<Self> {
+        let mut visit = DropVisit::child();
+        self.visit(&mut visit);
+        visit.result
+    }
+
+    fn store_parent(&mut self, parent: Option<Self>) {
+        let mut visit = DropVisit::store(parent);
+        assert!(
+            self.visit(&mut visit),
+            "an evacuated edge must hold its ancestor"
+        );
+    }
+
+    fn take_parent(&mut self) -> Option<Self> {
+        let mut visit = DropVisit::parent();
+        assert!(
+            self.visit(&mut visit),
+            "a resumed owner must remove its ancestor"
+        );
+        visit.result
     }
 }
 
-pub(crate) fn release_ground(node: GroundTerm, work: &mut DropWork) {
-    if matches!(node, GroundTerm::Triple(_)) {
-        work.push(Owned::Ground(node));
+enum DropMode {
+    Child,
+    Store(Option<DropOwner>),
+    Parent,
+}
+
+struct DropVisit {
+    mode: DropMode,
+    result: Option<DropOwner>,
+}
+
+impl DropVisit {
+    fn child() -> Self {
+        Self {
+            mode: DropMode::Child,
+            result: None,
+        }
+    }
+    fn store(parent: Option<DropOwner>) -> Self {
+        Self {
+            mode: DropMode::Store(parent),
+            result: None,
+        }
+    }
+    fn parent() -> Self {
+        Self {
+            mode: DropMode::Parent,
+            result: None,
+        }
+    }
+
+    fn slot(&mut self, slot: &mut Option<DropOwner>) -> bool {
+        match &mut self.mode {
+            DropMode::Child => false,
+            DropMode::Store(parent) => {
+                let Some(DropOwner(DropKind::Pending)) = slot else {
+                    return false;
+                };
+                *slot = Some(parent.take().unwrap_or(DropOwner(DropKind::End)));
+                true
+            }
+            DropMode::Parent => {
+                let Some(owner) = slot.take() else {
+                    return false;
+                };
+                match owner.0 {
+                    DropKind::End => {}
+                    DropKind::Pending => {
+                        panic!("an evacuated edge must install its ancestor before resuming")
+                    }
+                    _ => self.result = Some(owner),
+                }
+                true
+            }
+        }
+    }
+
+    fn child_edge<T: purrdf_lex::walk::Dismantle>(
+        &mut self,
+        child: &mut Child<T>,
+        wrap: fn(Box<T>) -> DropOwner,
+    ) -> bool {
+        if matches!(self.mode, DropMode::Child) {
+            let Some(node) = child.take() else {
+                return false;
+            };
+            let slot = child.dismantle_continuation();
+            assert!(slot.is_none(), "a live child cannot also hold an ancestor");
+            *slot = Some(DropOwner(DropKind::Pending));
+            self.result = Some(wrap(node));
+            true
+        } else if child.is_taken() {
+            self.slot(child.dismantle_continuation())
+        } else {
+            false
+        }
+    }
+
+    fn list<T>(
+        &mut self,
+        nodes: &mut Vec<T>,
+        slot: &mut Option<DropOwner>,
+        wrap: fn(Vec<T>) -> DropKind,
+    ) -> bool {
+        if matches!(self.mode, DropMode::Child) {
+            if nodes.is_empty() {
+                return false;
+            }
+            assert!(slot.is_none(), "a live list cannot also hold an ancestor");
+            let owner = DropOwner(wrap(core::mem::take(nodes)));
+            *slot = Some(DropOwner(DropKind::Pending));
+            self.result = Some(owner);
+            true
+        } else {
+            self.slot(slot)
+        }
     }
 }
 
-fn take_child<T: Subtree + purrdf_lex::walk::Dismantle>(child: &mut Child<T>, work: &mut DropWork) {
-    if let Some(node) = child.take() {
-        (*node).release(work);
+/// Remove completed inline entries from the end, preserving the original array
+/// while a child is active. Only the current last entry can hold a continuation.
+fn visit_vec<T>(
+    nodes: &mut Vec<T>,
+    visit: &mut DropVisit,
+    selector: impl Fn(&mut T, &mut DropVisit) -> bool,
+) -> bool {
+    while let Some(node) = nodes.last_mut() {
+        if selector(node, visit) {
+            return true;
+        }
+        if !matches!(visit.mode, DropMode::Child) {
+            return false;
+        }
+        drop(nodes.pop());
+    }
+    false
+}
+
+fn visit_term(term: &mut TermPattern, visit: &mut DropVisit) -> bool {
+    if let TermPattern::Triple(child) = term {
+        visit.child_edge(child, DropOwner::triple)
+    } else {
+        false
     }
 }
 
-/// Release every node a list type (`Chain`, `NonEmpty`, `Args`) hands over
-/// through its `take_nodes`, onto the shared work stack.
-fn release_nodes<T: Subtree>(nodes: Vec<T>, work: &mut DropWork) {
-    for node in nodes {
-        node.release(work);
+fn visit_triple(triple: &mut TriplePattern, visit: &mut DropVisit) -> bool {
+    visit_term(&mut triple.subject, visit) || visit_term(&mut triple.object, visit)
+}
+
+fn visit_ground(term: &mut GroundTerm, visit: &mut DropVisit) -> bool {
+    if let GroundTerm::Triple(child) = term {
+        visit.child_edge(child, DropOwner::ground)
+    } else {
+        false
     }
 }
 
-fn take_term(term: &mut TermPattern, work: &mut DropWork) {
-    if let TermPattern::Triple(triple) = term {
-        take_child(triple, work);
-    }
+fn visit_ground_triple(triple: &mut GroundTriple, visit: &mut DropVisit) -> bool {
+    visit_ground(&mut triple.subject, visit) || visit_ground(&mut triple.object, visit)
 }
 
-fn take_triple(triple: &mut TriplePattern, work: &mut DropWork) {
-    take_term(&mut triple.subject, work);
-    take_term(&mut triple.object, work);
-}
-
-fn take_ground(term: &mut GroundTerm, work: &mut DropWork) {
-    if let GroundTerm::Triple(triple) = term {
-        take_child(triple, work);
-    }
-}
-
-fn take_order(key: &mut OrderExpression, work: &mut DropWork) {
+fn visit_order(key: &mut OrderExpression, visit: &mut DropVisit) -> bool {
     let (OrderExpression::Asc(expr) | OrderExpression::Desc(expr)) = key;
-    take_expr(expr, work);
+    visit_expr(expr, visit)
 }
 
-fn take_aggregate(aggregate: &mut AggregateExpression, work: &mut DropWork) {
-    for arg in core::mem::take(&mut aggregate.args) {
-        release_expr(arg, work);
-    }
-    for key in &mut aggregate.order_by {
-        take_order(key, work);
-    }
+fn visit_aggregate(aggregate: &mut AggregateExpression, visit: &mut DropVisit) -> bool {
+    visit_vec(&mut aggregate.args, visit, visit_expr)
+        || visit_vec(&mut aggregate.order_by, visit, visit_order)
 }
 
-/// Move every node `node` owns onto `work`, leaving `node` owning none. Nodes held
-/// inline (a `FILTER`'s expression, a path pattern's path, a triple's terms) are
-/// emptied in place rather than moved.
-fn take_children(node: &mut Owned, work: &mut DropWork) {
-    match node {
-        Owned::Pattern(pattern) => take_pattern(pattern, work),
-        Owned::Expr(expr) => take_expr(expr, work),
-        Owned::Path(path) => take_path(path, work),
-        Owned::Triple(triple) => take_triple(triple, work),
-        Owned::Term(term) => take_term(term, work),
-        Owned::Ground(term) => take_ground(term, work),
-        Owned::Order(key) => take_order(key, work),
-        Owned::Aggregate(aggregate) => take_aggregate(aggregate, work),
-    }
-}
-
-fn take_pattern(pattern: &mut GraphPattern, work: &mut DropWork) {
+fn visit_pattern(pattern: &mut GraphPattern, visit: &mut DropVisit) -> bool {
     use GraphPattern as G;
     match pattern {
-        G::Bgp { patterns } => patterns.iter_mut().for_each(|t| take_triple(t, work)),
+        G::Bgp { patterns } => visit_vec(patterns, visit, visit_triple),
         G::Path {
             subject,
             path,
             object,
-        } => {
-            take_term(subject, work);
-            take_path(path, work);
-            take_term(object, work);
-        }
-        G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
-            take_child(left, work);
-            take_child(right, work);
+        } => visit_term(subject, visit) || visit_path(path, visit) || visit_term(object, visit),
+        G::Join { left, right }
+        | G::Lateral { left, right }
+        | G::Minus { left, right }
+        | G::Apply { left, right, .. } => {
+            visit.child_edge(left, DropOwner::pattern)
+                || visit.child_edge(right, DropOwner::pattern)
         }
         G::LeftJoin {
             left,
             right,
             expression,
         } => {
-            take_child(left, work);
-            take_child(right, work);
-            if let Some(expression) = expression.take() {
-                release_expr(expression, work);
-            }
-        }
-        G::Apply {
-            left,
-            right,
-            policy: _,
-        } => {
-            take_child(left, work);
-            take_child(right, work);
+            visit.child_edge(left, DropOwner::pattern)
+                || visit.child_edge(right, DropOwner::pattern)
+                || expression
+                    .as_mut()
+                    .is_some_and(|expr| visit_expr(expr, visit))
         }
         G::Filter { expr, inner } => {
-            take_expr(expr, work);
-            take_child(inner, work);
+            visit_expr(expr, visit) || visit.child_edge(inner, DropOwner::pattern)
         }
-        G::Union { arms } => release_nodes(arms.take_nodes(), work),
+        G::Union { arms } => {
+            let (nodes, slot) = arms.dismantle_parts();
+            visit.list(nodes, slot, DropKind::Patterns)
+        }
         G::Extend {
             inner, expression, ..
         }
         | G::Unfold {
             inner, expression, ..
-        } => {
-            take_child(inner, work);
-            take_expr(expression, work);
-        }
-        G::Values { bindings, .. } => bindings
-            .iter_mut()
-            .flatten()
-            .flatten()
-            .for_each(|cell| take_ground(cell, work)),
+        } => visit.child_edge(inner, DropOwner::pattern) || visit_expr(expression, visit),
+        G::Values { bindings, .. } => visit_vec(bindings, visit, |row, walk| {
+            visit_vec(row, walk, |cell, walk| {
+                cell.as_mut().is_some_and(|term| visit_ground(term, walk))
+            })
+        }),
         G::OrderBy { inner, expression } => {
-            take_child(inner, work);
-            for key in expression.iter_mut() {
-                take_order(key, work);
+            if visit.child_edge(inner, DropOwner::pattern) {
+                return true;
             }
+            visit.list(expression, inner.dismantle_continuation(), DropKind::Orders)
         }
         G::Graph { inner, .. }
         | G::Service { inner, .. }
         | G::Project { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
-        | G::Slice { inner, .. } => take_child(inner, work),
+        | G::Slice { inner, .. } => visit.child_edge(inner, DropOwner::pattern),
         G::Group {
             inner, aggregates, ..
         } => {
-            take_child(inner, work);
-            for (_, aggregate) in aggregates.iter_mut() {
-                take_aggregate(aggregate, work);
+            if visit.child_edge(inner, DropOwner::pattern) {
+                return true;
             }
+            visit.list(
+                aggregates,
+                inner.dismantle_continuation(),
+                DropKind::Aggregates,
+            )
         }
-        G::PropertyFunction(call) => call
-            .subject_args
-            .iter_mut()
-            .chain(&mut call.object_args)
-            .for_each(|term| take_term(term, work)),
+        G::PropertyFunction(call) => {
+            visit_vec(&mut call.subject_args, visit, visit_term)
+                || visit_vec(&mut call.object_args, visit, visit_term)
+        }
     }
 }
 
-fn take_expr(expr: &mut Expression, work: &mut DropWork) {
+fn visit_expr(expr: &mut Expression, visit: &mut DropVisit) -> bool {
     use Expression as E;
     match expr {
-        E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => {}
-        E::Or(operands) | E::And(operands) => release_nodes(operands.take_nodes(), work),
+        E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => false,
+        E::Or(operands) | E::And(operands) => {
+            let (nodes, slot) = operands.dismantle_parts();
+            visit.list(nodes, slot, DropKind::Exprs)
+        }
         E::Arithmetic(first, steps) => {
-            take_child(first, work);
-            release_nodes(steps.take_nodes(), work);
+            if visit.child_edge(first, DropOwner::expression) {
+                return true;
+            }
+            let (nodes, slot) = steps.dismantle_parts();
+            visit.list(nodes, slot, DropKind::Arithmetic)
         }
         E::Equal(a, b)
         | E::SameTerm(a, b)
@@ -243,36 +374,72 @@ fn take_expr(expr: &mut Expression, work: &mut DropWork) {
         | E::GreaterOrEqual(a, b)
         | E::Less(a, b)
         | E::LessOrEqual(a, b) => {
-            take_child(a, work);
-            take_child(b, work);
+            visit.child_edge(a, DropOwner::expression) || visit.child_edge(b, DropOwner::expression)
         }
-        E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => take_child(x, work),
+        E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => {
+            visit.child_edge(x, DropOwner::expression)
+        }
         E::In(x, list) => {
-            take_child(x, work);
-            release_nodes(list.take_nodes(), work);
+            if visit.child_edge(x, DropOwner::expression) {
+                return true;
+            }
+            let (nodes, slot) = list.dismantle_parts();
+            visit.list(nodes, slot, DropKind::Exprs)
         }
         E::If(a, b, c) => {
-            take_child(a, work);
-            take_child(b, work);
-            take_child(c, work);
+            visit.child_edge(a, DropOwner::expression)
+                || visit.child_edge(b, DropOwner::expression)
+                || visit.child_edge(c, DropOwner::expression)
         }
-        E::Coalesce(list) | E::FunctionCall(_, list) => release_nodes(list.take_nodes(), work),
-        E::Exists(pattern) => take_child(pattern, work),
+        E::Coalesce(list) | E::FunctionCall(_, list) => {
+            let (nodes, slot) = list.dismantle_parts();
+            visit.list(nodes, slot, DropKind::Exprs)
+        }
+        E::Exists(pattern) => visit.child_edge(pattern, DropOwner::pattern),
     }
 }
 
-fn take_path(path: &mut PropertyPathExpression, work: &mut DropWork) {
+fn visit_path(path: &mut PropertyPathExpression, visit: &mut DropVisit) -> bool {
     use PropertyPathExpression as P;
     match path {
-        P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => {}
+        P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => false,
         P::Reverse(x)
         | P::ZeroOrMore(x)
         | P::OneOrMore(x)
         | P::ZeroOrOne(x)
-        | P::Range { inner: x, .. } => take_child(x, work),
+        | P::Range { inner: x, .. } => visit.child_edge(x, DropOwner::path),
         P::Sequence(elements) | P::Alternative(elements) => {
-            release_nodes(elements.take_nodes(), work);
+            let (nodes, slot) = elements.dismantle_parts();
+            visit.list(nodes, slot, DropKind::Paths)
         }
+    }
+}
+
+fn visit_owned(node: &mut Owned, visit: &mut DropVisit) -> bool {
+    match node {
+        Owned::Pattern(node) => visit_pattern(node, visit),
+        Owned::Expr(node) => visit_expr(node, visit),
+        Owned::Path(node) => visit_path(node, visit),
+        Owned::Triple(node) => visit_triple(node, visit),
+        Owned::Term(node) => visit_term(node, visit),
+        Owned::Ground(node) => visit_ground(node, visit),
+        Owned::Order(node) => visit_order(node, visit),
+        Owned::Aggregate(node) => visit_aggregate(node, visit),
+    }
+}
+
+/// An inline root needs no new box: detach one original child at a time, remove
+/// its vacancy marker, and dismantle that child with the common owner loop.
+pub(crate) fn release_owned(mut node: Owned) {
+    loop {
+        let mut visit = DropVisit::child();
+        if !visit_owned(&mut node, &mut visit) {
+            break;
+        }
+        let child = visit.result.take().expect("selected an owned child");
+        assert!(visit_owned(&mut node, &mut DropVisit::store(None)));
+        assert!(visit_owned(&mut node, &mut DropVisit::parent()));
+        purrdf_lex::walk::dismantle_owned(child);
     }
 }
 
@@ -282,6 +449,8 @@ struct Kids<'k> {
     copies: &'k mut CopyStack,
 }
 
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+
 macro_rules! kid {
     ($($method:ident => $variant:ident: $ty:ty;)+) => {$(
         fn $method(&mut self) -> $ty {
@@ -289,6 +458,23 @@ macro_rules! kid {
                 Some(Owned::$variant(node)) => node,
                 _ => unreachable!("a copy is assembled from its children's copies in order"),
             }
+        }
+    )+};
+}
+
+macro_rules! kid_list {
+    ($($method:ident => $one:ident: $ty:ty;)+) => {$(
+        fn $method<S: Admission + ?Sized>(
+            &mut self,
+            count: usize,
+            memory: &mut Memory<'_, S>,
+        ) -> Result<Vec<$ty>, StorageError> {
+            let mut copies = Vec::new();
+            memory.reserve(&mut copies, count)?;
+            for _ in 0..count {
+                copies.push(self.$one());
+            }
+            Ok(copies)
         }
     )+};
 }
@@ -305,62 +491,98 @@ impl Kids<'_> {
         aggregate => Aggregate: AggregateExpression;
     }
 
-    fn patterns<I: IntoIterator>(&mut self, of: I) -> Vec<GraphPattern> {
-        of.into_iter().map(|_| self.pattern()).collect()
-    }
-
-    fn exprs<I: IntoIterator>(&mut self, of: I) -> Vec<Expression> {
-        of.into_iter().map(|_| self.expr()).collect()
-    }
-
-    fn paths<I: IntoIterator>(&mut self, of: I) -> Vec<PropertyPathExpression> {
-        of.into_iter().map(|_| self.path()).collect()
-    }
-
-    fn terms<I: IntoIterator>(&mut self, of: I) -> Vec<TermPattern> {
-        of.into_iter().map(|_| self.term()).collect()
-    }
-
-    fn orders<I: IntoIterator>(&mut self, of: I) -> Vec<OrderExpression> {
-        of.into_iter().map(|_| self.order()).collect()
+    kid_list! {
+        patterns => pattern: GraphPattern;
+        exprs => expr: Expression;
+        paths => path: PropertyPathExpression;
+        triples => triple: TriplePattern;
+        terms => term: TermPattern;
+        orders => order: OrderExpression;
     }
 }
 
-/// A copy of the tree under `root`, built bottom-up over a work list: each node's
-/// copy is assembled from its shallow fields and its children's finished copies.
+/// Copy a known slice after admitting its exact destination array. The callback
+/// copies intrinsic leaves shallowly or admits each independently owned payload.
+pub(crate) fn clone_vec_with_memory<T, U, S: Admission + ?Sized>(
+    source: &[T],
+    memory: &mut Memory<'_, S>,
+    mut copy: impl FnMut(&T, &mut Memory<'_, S>) -> Result<U, StorageError>,
+) -> Result<Vec<U>, StorageError> {
+    let mut copies = Vec::new();
+    memory.reserve(&mut copies, source.len())?;
+    for value in source {
+        copies.push(copy(value, memory)?);
+    }
+    Ok(copies)
+}
+
+/// Copy an array whose individual values carry only inline or immutable shared
+/// fields; owned strings, vectors and children use their actual producer instead.
+pub(crate) fn clone_shallow_vec_with_memory<T: Clone, S: Admission + ?Sized>(
+    source: &[T],
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<T>, StorageError> {
+    clone_vec_with_memory(source, memory, |value, _| Ok(value.clone()))
+}
+
+/// The resident entry calls the same fallible physical clone as bounded callers.
+/// It supplies no external grant; ordinary callers own the returned tree.
 pub(crate) fn clone_tree<const MAP_EXISTS: bool>(
     root: NodeRef<'_>,
     mut map_exists: impl FnMut(&GraphPattern) -> GraphPattern,
 ) -> Owned {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    clone_tree_with_memory::<MAP_EXISTS, _>(root, |body, _| Ok(map_exists(body)), &mut memory)
+        .expect("resident algebra clone storage")
+}
+
+/// A copy of the tree under root, built bottom-up by the original child order.
+/// Every spill, copied array, box and owned string is admitted before its native
+/// allocation. Construction scratch dies before the surviving total is read.
+/// The caller keeps this memory's original grant with the returned tree.
+pub(crate) fn clone_tree_with_memory<const MAP_EXISTS: bool, S: Admission + ?Sized>(
+    root: NodeRef<'_>,
+    mut map_exists: impl FnMut(&GraphPattern, &mut Memory<'_, S>) -> Result<GraphPattern, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Owned, StorageError> {
     enum Step<'a> {
         Enter(NodeRef<'a>),
         Exit(NodeRef<'a>, usize),
     }
-    let mut stack: WorkList<Step<'_>, 32> = WorkList::with(Step::Enter(root));
+    let mut stack: WorkList<Step<'_>, 32> = WorkList::new();
+    stack.try_push_admitted(Step::Enter(root), memory)?;
     let mut copies = CopyStack::new();
     while let Some(step) = stack.pop() {
         match step {
             Step::Enter(node) => {
                 if MAP_EXISTS && let NodeRef::Expr(Expression::Exists(body)) = node {
-                    copies.push(Owned::Expr(Expression::Exists(Child::new(map_exists(
-                        body,
-                    )))));
+                    let mapped = map_exists(body, memory)?;
+                    let child = Child::try_new(mapped, memory)?;
+                    copies.try_push_admitted(Owned::Expr(Expression::Exists(child)), memory)?;
                     continue;
                 }
                 if let Some(copy) = clone_leaf(node) {
-                    copies.push(copy);
+                    copies.try_push_admitted(copy, memory)?;
                     continue;
                 }
                 let exit = stack.len();
-                stack.push(Step::Exit(node, 0));
-                node.for_each_child(|child| stack.push(Step::Enter(child)));
+                stack.try_push_admitted(Step::Exit(node, 0), memory)?;
+                let mut failure = None;
+                node.for_each_child(|child| {
+                    if failure.is_none() {
+                        failure = stack.try_push_admitted(Step::Enter(child), memory).err();
+                    }
+                });
+                if let Some(failure) = failure {
+                    return Err(failure);
+                }
                 let count = stack.len() - exit - 1;
                 stack.set(exit, Step::Exit(node, count));
                 stack.reverse_top(count);
             }
             Step::Exit(node, count) => {
-                // The children's copies are the top `count` entries, the last child's
-                // on top; reversed, they pop in declaration order.
+                // Reverse the children's copies so they pop in declaration order.
                 copies.reverse_top(count);
                 let before = copies.len();
                 let copy = assemble(
@@ -368,21 +590,25 @@ pub(crate) fn clone_tree<const MAP_EXISTS: bool>(
                     &mut Kids {
                         copies: &mut copies,
                     },
-                );
+                    memory,
+                )?;
                 debug_assert_eq!(before - copies.len(), count, "every child's copy is used");
-                copies.push(copy);
+                copies.try_push_admitted(copy, memory)?;
             }
         }
     }
-    copies
+    let copy = copies
         .pop()
-        .expect("the root's copy is the last one assembled")
+        .expect("the root's copy is the last one assembled");
+    stack.release_admitted(memory)?;
+    copies.release_admitted(memory)?;
+    Ok(copy)
 }
 
 /// The finished copies waiting to be assembled into their parents'.
 type CopyStack = WorkList<Owned, 16>;
 
-/// The copy of a node that owns no other node, made directly; `None` for any other.
+/// The copy of a node that owns no other node, made directly; None for any other.
 fn clone_leaf(node: NodeRef<'_>) -> Option<Owned> {
     Some(match node {
         NodeRef::Expr(
@@ -430,29 +656,35 @@ pub(crate) fn shallow_ground(term: &GroundTerm) -> GroundTerm {
     }
 }
 
-/// The copy of `node`: its shallow fields cloned, its children taken from `kids`
-/// in the order [`NodeRef::for_each_child`] names them. Struct literals below list
-/// their fields in that same order, since that is the order they are evaluated in.
-fn assemble(node: NodeRef<'_>, kids: &mut Kids<'_>) -> Owned {
-    match node {
-        NodeRef::Pattern(pattern) => Owned::Pattern(assemble_pattern(pattern, kids)),
-        NodeRef::Expr(expr) => Owned::Expr(assemble_expr(expr, kids)),
-        NodeRef::Path(path) => Owned::Path(assemble_path(path, kids)),
+/// The copy's shallow fields and finished children, in the order that
+/// NodeRef::for_each_child names them. Each destination is admitted before use.
+fn assemble<S: Admission + ?Sized>(
+    node: NodeRef<'_>,
+    kids: &mut Kids<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Owned, StorageError> {
+    Ok(match node {
+        NodeRef::Pattern(pattern) => Owned::Pattern(assemble_pattern(pattern, kids, memory)?),
+        NodeRef::Expr(expr) => Owned::Expr(assemble_expr(expr, kids, memory)?),
+        NodeRef::Path(path) => Owned::Path(assemble_path(path, kids, memory)?),
         NodeRef::Triple(triple) => Owned::Triple(TriplePattern {
             subject: kids.term(),
             predicate: triple.predicate.clone(),
             object: kids.term(),
         }),
         NodeRef::Term(term) => Owned::Term(match term {
-            TermPattern::Triple(_) => TermPattern::Triple(Child::new(kids.triple())),
+            TermPattern::Triple(_) => TermPattern::Triple(Child::try_new(kids.triple(), memory)?),
             leaf => shallow_term(leaf),
         }),
         NodeRef::Ground(term) => Owned::Ground(match term {
-            GroundTerm::Triple(triple) => GroundTerm::Triple(Child::new(GroundTriple {
-                subject: kids.ground(),
-                predicate: triple.predicate.clone(),
-                object: kids.ground(),
-            })),
+            GroundTerm::Triple(triple) => GroundTerm::Triple(Child::try_new(
+                GroundTriple {
+                    subject: kids.ground(),
+                    predicate: triple.predicate.clone(),
+                    object: kids.ground(),
+                },
+                memory,
+            )?),
             leaf => shallow_ground(leaf),
         }),
         NodeRef::Order(key) => Owned::Order(match key {
@@ -461,19 +693,97 @@ fn assemble(node: NodeRef<'_>, kids: &mut Kids<'_>) -> Owned {
         }),
         NodeRef::Aggregate(aggregate) => Owned::Aggregate(AggregateExpression {
             function: aggregate.function.clone(),
-            args: kids.exprs(&aggregate.args),
-            scalarvals: aggregate.scalarvals.clone(),
-            order_by: kids.orders(&aggregate.order_by),
+            args: kids.exprs(aggregate.args.len(), memory)?,
+            scalarvals: clone_vec_with_memory(
+                &aggregate.scalarvals,
+                memory,
+                |(key, value), memory| Ok((memory.string(key)?, value.clone())),
+            )?,
+            order_by: kids.orders(aggregate.order_by.len(), memory)?,
             distinct: aggregate.distinct,
         }),
+    })
+}
+
+impl AggregateExpression {
+    /// Copy only this aggregate's immutable scalar clauses through native memory.
+    /// # Errors
+    /// Returns physical admission or allocator refusal before allocating.
+    pub fn clone_scalarvals_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<(String, crate::ast::Literal)>, StorageError> {
+        clone_vec_with_memory(self.scalarvals(), memory, |(key, value), memory| {
+            Ok((memory.string(key)?, value.clone()))
+        })
     }
 }
 
-fn assemble_pattern(pattern: &GraphPattern, kids: &mut Kids<'_>) -> GraphPattern {
+impl crate::algebra::ApplicationPolicy {
+    /// Copy the existing policy layout through the original native account.
+    /// # Errors
+    /// Returns checked physical storage refusal before allocation.
+    pub fn clone_box_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Box<Self>, StorageError> {
+        clone_policy(self, memory)
+    }
+}
+
+impl Function {
+    /// Copy the same function leaf, admitting only its actually owned IRI text.
+    /// # Errors
+    /// Returns checked physical storage refusal.
+    pub fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        clone_function(self, memory)
+    }
+}
+
+fn clone_policy<S: Admission + ?Sized>(
+    policy: &crate::algebra::ApplicationPolicy,
+    memory: &mut Memory<'_, S>,
+) -> Result<Box<crate::algebra::ApplicationPolicy>, StorageError> {
+    let group_domain = policy
+        .group_domain
+        .as_deref()
+        .map(|domain| clone_shallow_vec_with_memory(domain, memory).map(Vec::into_boxed_slice))
+        .transpose()?;
+    let inputs = clone_shallow_vec_with_memory(&policy.inputs, memory)?;
+    let optional = policy
+        .optional
+        .as_ref()
+        .map(|optional| -> Result<_, StorageError> {
+            Ok(crate::algebra::OptionalApplication {
+                retry_inputs: clone_shallow_vec_with_memory(&optional.retry_inputs, memory)?,
+                forget_marker: optional.forget_marker.clone(),
+            })
+        })
+        .transpose()?;
+    let copy = crate::algebra::ApplicationPolicy {
+        dataset_required: policy.dataset_required,
+        row_pipeline: policy.row_pipeline,
+        reduced_adjacent: policy.reduced_adjacent,
+        group_domain,
+        inputs,
+        optional,
+    };
+    memory.add_bytes(core::alloc::Layout::new::<crate::algebra::ApplicationPolicy>().size())?;
+    purrdf_lex::allocation::try_boxed(copy).map_err(|_| StorageError::AllocationFailed)
+}
+
+fn assemble_pattern<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    kids: &mut Kids<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<GraphPattern, StorageError> {
     use GraphPattern as G;
-    match pattern {
+    Ok(match pattern {
         G::Bgp { patterns } => G::Bgp {
-            patterns: patterns.iter().map(|_| kids.triple()).collect(),
+            patterns: kids.triples(patterns.len(), memory)?,
         },
         G::Path { .. } => G::Path {
             subject: kids.term(),
@@ -481,90 +791,75 @@ fn assemble_pattern(pattern: &GraphPattern, kids: &mut Kids<'_>) -> GraphPattern
             object: kids.term(),
         },
         G::Join { .. } => G::Join {
-            left: kids.pattern().into(),
-            right: kids.pattern().into(),
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
         },
         G::LeftJoin { expression, .. } => G::LeftJoin {
-            left: kids.pattern().into(),
-            right: kids.pattern().into(),
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
             expression: expression.as_ref().map(|_| kids.expr()),
         },
         G::Lateral { .. } => G::Lateral {
-            left: kids.pattern().into(),
-            right: kids.pattern().into(),
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
         },
         G::Apply { policy, .. } => G::Apply {
-            left: kids.pattern().into(),
-            right: kids.pattern().into(),
-            policy: Box::new(crate::algebra::ApplicationPolicy {
-                dataset_required: policy.dataset_required,
-                row_pipeline: policy.row_pipeline,
-                reduced_adjacent: policy.reduced_adjacent,
-                group_domain: policy.group_domain.clone(),
-                inputs: policy.inputs.clone(),
-                optional: policy.optional.as_ref().map(|optional| {
-                    crate::algebra::OptionalApplication {
-                        retry_inputs: optional.retry_inputs.clone(),
-                        forget_marker: optional.forget_marker.clone(),
-                    }
-                }),
-            }),
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
+            policy: clone_policy(policy, memory)?,
         },
         G::Filter { .. } => G::Filter {
             expr: kids.expr(),
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
         },
         G::Union { arms } => G::Union {
-            arms: Chain::from_vec_unchecked(kids.patterns(arms.iter())),
+            arms: Chain::from_vec_unchecked(kids.patterns(arms.len(), memory)?),
         },
         G::Graph { name, .. } => G::Graph {
             name: name.clone(),
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
         },
         G::Extend { variable, .. } => G::Extend {
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
             variable: variable.clone(),
             expression: kids.expr(),
         },
         G::Minus { .. } => G::Minus {
-            left: kids.pattern().into(),
-            right: kids.pattern().into(),
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
         },
         G::Service { name, silent, .. } => G::Service {
             name: name.clone(),
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
             silent: *silent,
         },
         G::Values {
             variables,
             bindings,
         } => G::Values {
-            variables: variables.clone(),
-            bindings: bindings
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| cell.as_ref().map(|_| kids.ground()))
-                        .collect()
+            variables: clone_shallow_vec_with_memory(variables, memory)?,
+            bindings: clone_vec_with_memory(bindings, memory, |row, memory| {
+                clone_vec_with_memory(row, memory, |cell, _| {
+                    Ok(cell.as_ref().map(|_| kids.ground()))
                 })
-                .collect(),
+            })?,
         },
         G::OrderBy { expression, .. } => G::OrderBy {
-            inner: kids.pattern().into(),
-            expression: kids.orders(expression),
+            inner: Child::try_new(kids.pattern(), memory)?,
+            expression: kids.orders(expression.len(), memory)?,
         },
         G::Project { variables, .. } => G::Project {
-            inner: kids.pattern().into(),
-            variables: variables.clone(),
+            inner: Child::try_new(kids.pattern(), memory)?,
+            variables: clone_shallow_vec_with_memory(variables, memory)?,
         },
         G::Distinct { .. } => G::Distinct {
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
         },
         G::Reduced { .. } => G::Reduced {
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
         },
         G::Slice { start, length, .. } => G::Slice {
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
             start: *start,
             length: *length,
         },
@@ -573,40 +868,130 @@ fn assemble_pattern(pattern: &GraphPattern, kids: &mut Kids<'_>) -> GraphPattern
             aggregates,
             ..
         } => G::Group {
-            inner: kids.pattern().into(),
-            variables: variables.clone(),
-            aggregates: aggregates
-                .iter()
-                .map(|(output, _)| (output.clone(), kids.aggregate()))
-                .collect(),
+            inner: Child::try_new(kids.pattern(), memory)?,
+            variables: clone_shallow_vec_with_memory(variables, memory)?,
+            aggregates: clone_vec_with_memory(aggregates, memory, |(output, _), _| {
+                Ok((output.clone(), kids.aggregate()))
+            })?,
         },
         G::PropertyFunction(call) => G::PropertyFunction(PropertyFunctionCall {
-            iri: call.iri.clone(),
-            subject_args: kids.terms(&call.subject_args),
-            object_args: kids.terms(&call.object_args),
+            iri: memory.string(&call.iri)?,
+            subject_args: kids.terms(call.subject_args.len(), memory)?,
+            object_args: kids.terms(call.object_args.len(), memory)?,
         }),
         G::Unfold {
             element, companion, ..
         } => G::Unfold {
-            inner: kids.pattern().into(),
+            inner: Child::try_new(kids.pattern(), memory)?,
             expression: kids.expr(),
             element: element.clone(),
             companion: companion.clone(),
         },
-    }
+    })
 }
 
-fn assemble_expr(expr: &Expression, kids: &mut Kids<'_>) -> Expression {
+fn clone_function<S: Admission + ?Sized>(
+    function: &Function,
+    memory: &mut Memory<'_, S>,
+) -> Result<Function, StorageError> {
+    use crate::algebra::Function as F;
+    Ok(match function {
+        F::Purrdf(call) => F::Purrdf(crate::algebra::PurrdfCall {
+            fn_kind: call.fn_kind,
+            iri: memory.string(&call.iri)?,
+        }),
+        F::Cdt(call) => F::Cdt(crate::algebra::CdtCall {
+            fn_kind: call.fn_kind,
+            iri: memory.string(&call.iri)?,
+        }),
+        F::Str
+        | F::Lang
+        | F::LangMatches
+        | F::Datatype
+        | F::Iri
+        | F::Uri
+        | F::BNode
+        | F::Rand
+        | F::Abs
+        | F::Ceil
+        | F::Floor
+        | F::Round
+        | F::Concat
+        | F::SubStr
+        | F::StrLen
+        | F::Replace
+        | F::UCase
+        | F::LCase
+        | F::EncodeForUri
+        | F::Contains
+        | F::StrStarts
+        | F::StrEnds
+        | F::StrBefore
+        | F::StrAfter
+        | F::Year
+        | F::Month
+        | F::Day
+        | F::Hours
+        | F::Minutes
+        | F::Seconds
+        | F::Timezone
+        | F::Tz
+        | F::Adjust
+        | F::Now
+        | F::Uuid
+        | F::StrUuid
+        | F::Md5
+        | F::Sha1
+        | F::Sha256
+        | F::Sha384
+        | F::Sha512
+        | F::Sha3_224
+        | F::Sha3_256
+        | F::Sha3_384
+        | F::Sha3_512
+        | F::StrLang
+        | F::StrDt
+        | F::IsIri
+        | F::IsUri
+        | F::IsBlank
+        | F::IsLiteral
+        | F::IsNumeric
+        | F::Regex
+        | F::Triple
+        | F::Subject
+        | F::Predicate
+        | F::Object
+        | F::IsTriple
+        | F::LangDir
+        | F::StrLangDir
+        | F::HasLang
+        | F::HasLangDir
+        | F::Custom(_) => function.clone(),
+    })
+}
+
+fn assemble_expr<S: Admission + ?Sized>(
+    expr: &Expression,
+    kids: &mut Kids<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Expression, StorageError> {
     use Expression as E;
     macro_rules! binary {
         ($variant:ident) => {
-            E::$variant(kids.expr().into(), kids.expr().into())
+            E::$variant(
+                Child::try_new(kids.expr(), memory)?,
+                Child::try_new(kids.expr(), memory)?,
+            )
         };
     }
-    match expr {
+    Ok(match expr {
         E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => shallow_expr(expr),
-        E::Or(operands) => E::Or(Chain::from_vec_unchecked(kids.exprs(operands.iter()))),
-        E::And(operands) => E::And(Chain::from_vec_unchecked(kids.exprs(operands.iter()))),
+        E::Or(operands) => E::Or(Chain::from_vec_unchecked(
+            kids.exprs(operands.len(), memory)?,
+        )),
+        E::And(operands) => E::And(Chain::from_vec_unchecked(
+            kids.exprs(operands.len(), memory)?,
+        )),
         E::Equal(..) => binary!(Equal),
         E::SameTerm(..) => binary!(SameTerm),
         E::Greater(..) => binary!(Greater),
@@ -614,50 +999,98 @@ fn assemble_expr(expr: &Expression, kids: &mut Kids<'_>) -> Expression {
         E::Less(..) => binary!(Less),
         E::LessOrEqual(..) => binary!(LessOrEqual),
         E::Arithmetic(_, steps) => {
-            let first = kids.expr().into();
-            let steps = steps.iter().map(|(op, _)| (*op, kids.expr())).collect();
+            let first = Child::try_new(kids.expr(), memory)?;
+            let steps = clone_vec_with_memory(steps, memory, |(op, _), _| Ok((*op, kids.expr())))?;
             E::Arithmetic(first, NonEmpty::from_vec_unchecked(steps))
         }
-        E::UnaryPlus(_) => E::UnaryPlus(kids.expr().into()),
-        E::UnaryMinus(_) => E::UnaryMinus(kids.expr().into()),
-        E::Not(_) => E::Not(kids.expr().into()),
+        E::UnaryPlus(_) => E::UnaryPlus(Child::try_new(kids.expr(), memory)?),
+        E::UnaryMinus(_) => E::UnaryMinus(Child::try_new(kids.expr(), memory)?),
+        E::Not(_) => E::Not(Child::try_new(kids.expr(), memory)?),
         E::In(_, list) => {
-            let tested = kids.expr().into();
-            E::In(tested, kids.exprs(list.iter()).into())
+            let tested = Child::try_new(kids.expr(), memory)?;
+            E::In(tested, kids.exprs(list.len(), memory)?.into())
         }
-        E::If(..) => E::If(kids.expr().into(), kids.expr().into(), kids.expr().into()),
-        E::Coalesce(list) => E::Coalesce(kids.exprs(list.iter()).into()),
-        E::FunctionCall(function, args) => {
-            E::FunctionCall(function.clone(), kids.exprs(args.iter()).into())
-        }
-        E::Exists(_) => E::Exists(kids.pattern().into()),
-    }
+        E::If(..) => E::If(
+            Child::try_new(kids.expr(), memory)?,
+            Child::try_new(kids.expr(), memory)?,
+            Child::try_new(kids.expr(), memory)?,
+        ),
+        E::Coalesce(list) => E::Coalesce(kids.exprs(list.len(), memory)?.into()),
+        E::FunctionCall(function, args) => E::FunctionCall(
+            clone_function(function, memory)?,
+            kids.exprs(args.len(), memory)?.into(),
+        ),
+        E::Exists(_) => E::Exists(Child::try_new(kids.pattern(), memory)?),
+    })
 }
 
-fn assemble_path(path: &PropertyPathExpression, kids: &mut Kids<'_>) -> PropertyPathExpression {
+fn assemble_path<S: Admission + ?Sized>(
+    path: &PropertyPathExpression,
+    kids: &mut Kids<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<PropertyPathExpression, StorageError> {
     use PropertyPathExpression as P;
-    match path {
+    Ok(match path {
         P::NamedNode(n) => P::NamedNode(n.clone()),
-        P::Reverse(_) => P::Reverse(kids.path().into()),
-        P::Sequence(elements) => {
-            P::Sequence(Chain::from_vec_unchecked(kids.paths(elements.iter())))
+        P::Reverse(_) => P::Reverse(Child::try_new(kids.path(), memory)?),
+        P::Sequence(elements) => P::Sequence(Chain::from_vec_unchecked(
+            kids.paths(elements.len(), memory)?,
+        )),
+        P::Alternative(elements) => P::Alternative(Chain::from_vec_unchecked(
+            kids.paths(elements.len(), memory)?,
+        )),
+        P::ZeroOrMore(_) => P::ZeroOrMore(Child::try_new(kids.path(), memory)?),
+        P::OneOrMore(_) => P::OneOrMore(Child::try_new(kids.path(), memory)?),
+        P::ZeroOrOne(_) => P::ZeroOrOne(Child::try_new(kids.path(), memory)?),
+        P::NegatedPropertySet(elements) => {
+            P::NegatedPropertySet(clone_shallow_vec_with_memory(elements, memory)?)
         }
-        P::Alternative(elements) => {
-            P::Alternative(Chain::from_vec_unchecked(kids.paths(elements.iter())))
-        }
-        P::ZeroOrMore(_) => P::ZeroOrMore(kids.path().into()),
-        P::OneOrMore(_) => P::OneOrMore(kids.path().into()),
-        P::ZeroOrOne(_) => P::ZeroOrOne(kids.path().into()),
-        P::NegatedPropertySet(elements) => P::NegatedPropertySet(elements.clone()),
         P::Range { min, max, .. } => P::Range {
-            inner: kids.path().into(),
+            inner: Child::try_new(kids.path(), memory)?,
             min: *min,
             max: *max,
         },
         P::Wildcard { namespace } => P::Wildcard {
             namespace: namespace.clone(),
         },
-    }
+    })
+}
+
+macro_rules! admitted_clone {
+    ($($ty:ty => $kind:ident;)+) => {$(
+        impl $ty {
+            /// Clone this tree through its original exact native storage account.
+            /// Immutable intrinsic leaves remain shared with their original owner.
+            /// Keep the memory grant alive with the returned structure.
+            ///
+            /// # Errors
+            /// Returns checked layout overflow, admission or allocator refusal.
+            pub fn clone_with_memory<S: Admission + ?Sized>(
+                &self,
+                memory: &mut Memory<'_, S>,
+            ) -> Result<Self, StorageError> {
+                match clone_tree_with_memory::<false, _>(
+                    NodeRef::$kind(self),
+                    |body, memory| body.clone_with_memory(memory),
+                    memory,
+                )? {
+                    Owned::$kind(copy) => Ok(copy),
+                    _ => unreachable!("a copy is of the kind it copies"),
+                }
+            }
+        }
+    )+};
+}
+
+admitted_clone! {
+    GraphPattern => Pattern;
+    Expression => Expr;
+    PropertyPathExpression => Path;
+    TriplePattern => Triple;
+    TermPattern => Term;
+    GroundTerm => Ground;
+    OrderExpression => Order;
+    AggregateExpression => Aggregate;
 }
 
 impl Expression {
@@ -672,5 +1105,71 @@ impl Expression {
             Owned::Expr(expression) => expression,
             _ => unreachable!("an expression clone returns an expression"),
         }
+    }
+
+    /// Replace EXISTS bodies through the same admitted scalar clone. The callback
+    /// must build its replacements under this original memory account.
+    ///
+    /// # Errors
+    /// Returns the first replacement or concrete native storage refusal.
+    pub fn map_exists_bodies_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+        map: impl FnMut(&GraphPattern, &mut Memory<'_, S>) -> Result<GraphPattern, StorageError>,
+    ) -> Result<Self, StorageError> {
+        match clone_tree_with_memory::<true, _>(NodeRef::Expr(self), map, memory)? {
+            Owned::Expr(expression) => Ok(expression),
+            _ => unreachable!("an expression clone returns an expression"),
+        }
+    }
+}
+
+impl PropertyFunctionCall {
+    /// Clone argument trees and IRI under the original native memory account.
+    /// # Errors
+    /// Returns physical layout, allocator or admission refusal.
+    pub fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            iri: memory.string(&self.iri)?,
+            subject_args: clone_vec_with_memory(&self.subject_args, memory, |term, memory| {
+                term.clone_with_memory(memory)
+            })?,
+            object_args: clone_vec_with_memory(&self.object_args, memory, |term, memory| {
+                term.clone_with_memory(memory)
+            })?,
+        })
+    }
+}
+impl AggregateExpression {
+    /// Rebuild rewritten expressions without changing checked aggregate shape.
+    /// The scalar-values array is copied by the original native clone home.
+    /// # Errors
+    /// Returns physical layout, allocator or admission refusal.
+    pub fn rebuild_with_memory<S: Admission + ?Sized>(
+        &self,
+        args: Vec<Expression>,
+        order_by: Vec<OrderExpression>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        assert_eq!(
+            args.len(),
+            self.args.len(),
+            "rewrite preserves checked argument count"
+        );
+        assert_eq!(
+            order_by.len(),
+            self.order_by.len(),
+            "rewrite preserves checked sort-key count"
+        );
+        Ok(Self {
+            function: self.function.clone(),
+            args,
+            scalarvals: self.clone_scalarvals_with_memory(memory)?,
+            order_by,
+            distinct: self.distinct,
+        })
     }
 }

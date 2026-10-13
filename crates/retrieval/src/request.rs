@@ -400,6 +400,11 @@ pub enum ReadBound {
 pub struct RetrievalRequest {
     /// The request's terms, in caller order.
     pub terms: Vec<RequestTerm>,
+    /// Hard membership conditions, in caller order, applied by every selected
+    /// producer before its ranking depth. These are not ranked modalities or
+    /// fusion weights. Missing data produces separately retained undecided
+    /// candidates rather than a rejected membership decision.
+    pub constraints: Vec<RequestTerm>,
     /// How much of the answer is wanted, and therefore how much of each stratum
     /// may have to be read to assemble it.
     pub bound: ReadBound,
@@ -409,7 +414,19 @@ impl RetrievalRequest {
     /// Build a request from explicit terms and an explicit bound.
     #[must_use]
     pub const fn from_terms(terms: Vec<RequestTerm>, bound: ReadBound) -> Self {
-        Self { terms, bound }
+        Self {
+            terms,
+            constraints: Vec::new(),
+            bound,
+        }
+    }
+
+    /// Carry explicit original constraint values alongside the ranked request.
+    /// The planner validates their values and includes them in plan identity.
+    #[must_use]
+    pub fn with_constraints(mut self, constraints: Vec<RequestTerm>) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Build a request for at most `top_k` fused rows.

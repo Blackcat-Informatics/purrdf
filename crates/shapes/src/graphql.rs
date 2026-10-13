@@ -50,7 +50,6 @@ pub const GRAPHQL_NAME_MAP_PATH: &str = "name-map.json";
 const LOSS_FROM: &str = "json-schema";
 const LOSS_CONTEXT: &str = "graphql-emitter";
 const MAX_VALUE_JSON_BYTES: usize = 16 * 1024 * 1024;
-const MAX_DEFINITIONS: usize = 65_536;
 const MAX_FIELDS: usize = 65_536;
 const MAX_ENUM_VALUES: usize = 65_536;
 const MAX_GRAPHQL_NAME_BYTES: usize = 255;
@@ -382,13 +381,6 @@ pub fn emit_graphql(
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| GraphqlError::new(error.to_string()))?;
     let definitions = catalog.definitions();
-    if definitions.len() > MAX_DEFINITIONS {
-        return Err(GraphqlError::new(format!(
-            "CompiledSchema contains {} definitions; GraphQL emission is limited to \
-             {MAX_DEFINITIONS}",
-            definitions.len()
-        )));
-    }
     for (key, definition) in definitions {
         validate_schema_keywords(definition, &definition_path(key), 0)?;
     }

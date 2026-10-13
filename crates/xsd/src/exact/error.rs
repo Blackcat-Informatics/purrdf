@@ -154,3 +154,139 @@ impl fmt::Display for ExactError {
 }
 
 impl std::error::Error for ExactError {}
+
+/// Native parse classification separate from physical destination refusal.
+/// It borrows no owned lexical diagnostic, so failure reporting can remain
+/// allocation-free after an operational workspace refuses storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExactParseError {
+    /// Invalid lexical text; a resident public parser may attach its text.
+    InvalidLexical {
+        /// Value-space lexical kind.
+        kind: ExactKind,
+        /// Stable lexical reason.
+        reason: &'static str,
+    },
+    /// Original decimal lexical scale exceeds its exact representation.
+    ScaleOverflow,
+    /// Native physical destination could not be allocated.
+    Storage(crate::bigint::LimbScratchError),
+}
+
+impl ExactParseError {
+    /// Value-space F&O code; physical storage refusal has none.
+    #[must_use]
+    pub const fn code(&self) -> Option<ErrorCode> {
+        match self {
+            Self::InvalidLexical { .. } => Some(ErrorCode::Forg0001),
+            Self::ScaleOverflow => Some(ErrorCode::Foar0002),
+            Self::Storage(_) => None,
+        }
+    }
+
+    pub(crate) fn into_value_error(
+        self,
+        lexical: &str,
+    ) -> Result<ExactError, crate::bigint::LimbScratchError> {
+        match self {
+            Self::InvalidLexical { kind, reason } => Ok(ExactError::invalid(lexical, kind, reason)),
+            Self::ScaleOverflow => Ok(ExactError::ScaleOverflow),
+            Self::Storage(error) => Err(error),
+        }
+    }
+}
+
+impl fmt::Display for ExactParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidLexical { kind, reason } => {
+                write!(formatter, "invalid {} lexical: {reason}", kind.name())
+            }
+            Self::ScaleOverflow => formatter.write_str("decimal scale exceeds u32::MAX digits"),
+            Self::Storage(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl std::error::Error for ExactParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// A fallible native operation's semantic error or physical destination refusal.
+/// Physical errors do not acquire an F&O code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExactOperationError {
+    /// Existing exact value-space/domain failure.
+    Value(ExactError),
+    /// Checked native destination/allocation refusal.
+    Storage(crate::bigint::LimbScratchError),
+}
+
+impl ExactOperationError {
+    /// Existing F&O code, absent for physical storage failure.
+    #[must_use]
+    pub const fn code(&self) -> Option<ErrorCode> {
+        match self {
+            Self::Value(value) => Some(value.code()),
+            Self::Storage(_) => None,
+        }
+    }
+    pub(crate) fn into_value_error(self) -> Result<ExactError, crate::bigint::LimbScratchError> {
+        match self {
+            Self::Value(value) => Ok(value),
+            Self::Storage(error) => Err(error),
+        }
+    }
+}
+purrdf_lex::variant_from!(ExactOperationError {
+    Value(ExactError),
+    Storage(crate::bigint::LimbScratchError),
+});
+impl fmt::Display for ExactOperationError {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Value(value) => fmt::Display::fmt(value, out),
+            Self::Storage(error) => fmt::Display::fmt(error, out),
+        }
+    }
+}
+impl std::error::Error for ExactOperationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Storage(error) => Some(error),
+        }
+    }
+}
+
+// Each exact datatype keeps its own lexical reader. Both public entry protocols
+// select the same original destination policy and preserve their error channels.
+macro_rules! lexical_entry {
+    (
+        $type:ty;
+        try_from_lexical { $(#[$native:meta])* }
+        from_str { $(#[$resident:meta])* }
+    ) => {
+        impl $type {
+            $(#[$native])*
+            pub fn try_from_lexical(lexical: &str) -> Result<Self, $crate::exact::ExactParseError> {
+                Self::parse_with_storage(lexical, &$crate::bigint::scratch::Fallible)
+            }
+        }
+        impl ::std::str::FromStr for $type {
+            type Err = $crate::exact::ExactError;
+            $(#[$resident])*
+            fn from_str(lexical: &str) -> Result<Self, $crate::exact::ExactError> {
+                Self::parse_with_storage(lexical, &$crate::bigint::scratch::Unbounded)
+                    .map_err(|error| error.into_value_error(lexical)
+                        .expect("unbounded integer storage"))
+            }
+        }
+    };
+}
+pub(crate) use lexical_entry;

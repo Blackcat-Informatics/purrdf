@@ -32,6 +32,22 @@ throughout the fixtures.
 
 ## 1. Four stages, one executor
 
+The unscored candidate seam shares this executor. `plan_candidates` takes
+explicit per-stratum work depths, `compile_candidates` admits and emits their
+native units, and the same `execute` or `execute_within` runs them. `union`
+deduplicates their prefixes by subject and keeps every original per-stratum
+rank, actual work depth, read status and producer evidence. It adds no score or
+relevance order. Its canonical subject order represents a set; callers own any
+subsequent ranking. These depths are independent of the fused answer's `k` and
+of selectivity narrowing.
+
+A candidate prefix is complete only when every selected producer reached its
+requested depth or proved exhaustion through its original verified receipt.
+Producer failures and cap shortfalls remain visible alongside partial ranks;
+incomplete-index and rank-fidelity declarations remain distinct from prefix
+completion. The original `plan`/`compile`/`execute`/`fuse` and `search`
+composition retain their existing semantics and identities.
+
 Retrieval is four composed stages:
 
 ```text

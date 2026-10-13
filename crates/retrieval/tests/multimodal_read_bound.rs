@@ -586,9 +586,7 @@ impl CountingProducer {
             }
         });
         reason.map_or(ServiceLevel::Undeclared, |reason| {
-            ServiceLevel::Incomplete {
-                reason: reason.to_owned(),
-            }
+            ServiceLevel::incomplete_static(reason)
         })
     }
 }
@@ -819,7 +817,7 @@ fn accepted_terms(predicate: &str) -> Vec<AcceptedTerm> {
             predicate: Some(ex(predicate)),
         },
         placements: vec![TermPlacement {
-            facet: RequestFacet::Value,
+            facet: RequestFacet::ScopedLexicalValue,
             position: 1,
             datatype: None,
         }],
@@ -954,9 +952,11 @@ struct Measured {
     /// Ranks fusion really pulled off each stream.
     ranks_pulled: BTreeMap<Iri, u64>,
     /// What the trailer says stopped each stream.
-    status: BTreeMap<Iri, ProducerStatus>,
+    status: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
+    >,
     /// The answer itself, with each row's per-stratum rank.
-    rows: Vec<FusedRow>,
+    rows: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<FusedRow>>,
     /// The work each relation reported for each read, oldest first — the
     /// producer's own `take_work` figure beside the rows of [`Self::reads`].
     work: BTreeMap<Iri, Vec<u64>>,
@@ -1046,14 +1046,24 @@ impl Measured {
     /// The value `field` carries for both strata, and a panic naming both when
     /// they disagree — every assertion in this file is about a number the two
     /// symmetric producers reach together.
-    fn both<T: Clone + PartialEq + std::fmt::Debug>(
+    fn both<'a, T: Clone + PartialEq + std::fmt::Debug + 'a>(
         &self,
         what: &str,
-        field: &BTreeMap<Iri, T>,
+        field: impl IntoIterator<Item = (&'a Iri, &'a T)>,
     ) -> T {
         let [left, right] = strata();
-        let left_value = field.get(&left).expect("the left stratum was measured");
-        let right_value = field.get(&right).expect("the right stratum was measured");
+        let mut left_value = None;
+        let mut right_value = None;
+        for (stratum, value) in field {
+            if stratum == &left {
+                left_value = Some(value);
+            }
+            if stratum == &right {
+                right_value = Some(value);
+            }
+        }
+        let left_value = left_value.expect("the left stratum was measured");
+        let right_value = right_value.expect("the right stratum was measured");
         assert_eq!(
             left_value, right_value,
             "the two symmetric producers disagree on {what}"
@@ -1190,7 +1200,10 @@ fn measure_at_planned_depth(config: Configuration, dataset: &RdfDataset) -> Meas
         compiled.fused_bound,
     ))
     .expect("the executed streams fuse");
-    let trailer = fused.trailer.completed_with(execution.statuses);
+    let trailer = fused
+        .trailer
+        .completed_with(execution.statuses)
+        .expect("status publication is admitted");
 
     measured(&planned, &compiled, &counters, &trailer, fused.rows)
 }
@@ -1205,7 +1218,7 @@ fn measured(
     compiled: &CompiledRetrieval,
     counters: &[Arc<Reads>; 2],
     trailer: &FusionTrailer,
-    rows: Vec<FusedRow>,
+    rows: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<FusedRow>>,
 ) -> Measured {
     Measured {
         planned_depth: planned
@@ -4051,7 +4064,7 @@ fn the_plan_surfaces_the_crossing_and_it_predicts_the_read_that_reaches_it() {
             // The set the planner derived from the declarations, against the set
             // this test derives from the configuration's own two bits.
             assert_eq!(
-                planned.sharing_weights,
+                planned.sharing_weights.as_slice(),
                 sharing,
                 "{name}: the plan's sharing set is not the one the declarations \
                  describe — {report}",

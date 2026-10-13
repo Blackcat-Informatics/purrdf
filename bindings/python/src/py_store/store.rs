@@ -265,7 +265,7 @@ impl PyStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
-        xpath_regex=None,
+        xpath_regex=None, geo=None,
         division=None,
     ))]
     #[allow(
@@ -285,6 +285,7 @@ impl PyStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
         presentation::settled(move || {
@@ -303,10 +304,15 @@ impl PyStore {
                 property_fn_namespaces,
                 standpoint_predicates,
                 xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             // Carried forward exactly as `standpoint_for_run` is: the law is read at
             // EVALUATION time, off the engine `run` builds, so the handle keeps it.
             let xpath_regex_for_run = config.xpath_regex;
+            let geo_for_run = config
+                .geo
+                .clone()
+                .unwrap_or_else(|| purrdf_validate::geo::GeoSession::default().profile_snapshot());
             let parameters = parameters.unwrap_or_default();
             // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
             // does: the namespace declarations are parse configuration, they belong to
@@ -358,6 +364,7 @@ impl PyStore {
                     aggregates.as_ref(),
                     standpoint_for_run,
                     xpath_regex_for_run,
+                    geo_for_run,
                     graph_derived,
                     division,
                 )

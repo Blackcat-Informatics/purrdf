@@ -18,4 +18,3 @@ Source: https://www.unicode.org/Public/17.0.0/ucd/
 Evidence: crates/iri/unicode/PROVENANCE.md
 Evidence: LICENSING.md
 Notice: third-party/unicode/0-Unicode-3.0.txt
-

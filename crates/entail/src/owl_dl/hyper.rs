@@ -375,6 +375,8 @@ struct Branches {
     dispensed: usize,
     /// The recorded branch step this level is, when the run is recording.
     record: Option<usize>,
+    /// Original matched branch frame; absent outside recording.
+    site: Option<BranchSite>,
 }
 
 /// The alternative a recording run is currently exploring, and where its outcome is filed.
@@ -428,6 +430,9 @@ enum ApplySite<'f> {
         branch: usize,
         /// Which alternative of it.
         ordinal: usize,
+        /// Original licensed clause instance.
+        index: usize,
+        frame: &'f [usize],
     },
     /// Nothing replayable: a non-recording run, or a branch point past the recording ceiling.
     Unrecorded,
@@ -522,7 +527,18 @@ pub(crate) fn decide_recording(
     budget: Budget,
 ) -> (Decision, Recorder) {
     let mut h = Hyper::new_recording(kb, budget);
-    let st = h.g.init_state(assumptions);
+    #[cfg(test)]
+    if let Some(budget) = kb.schema_recording_budget {
+        h.trace
+            .as_ref()
+            .expect("recording constructor owns the native recorder")
+            .borrow_mut()
+            .support_budget(budget);
+    }
+    let mut st = h.g.init_state(assumptions);
+    if kb.schema.stats.contradictions != 0 {
+        st.support = super::support::Cursor::Active(None);
+    }
     let decision = h.run(st);
     let trace = h
         .trace
@@ -531,11 +547,39 @@ pub(crate) fn decide_recording(
     (decision, trace.into_inner())
 }
 
+pub(crate) fn replay_current_support(
+    kb: &Kb,
+    assumptions: &Assumptions<'_>,
+    applications: &[super::support::Application],
+    clause: usize,
+    frame: &[usize],
+    branches: &[BranchStep],
+) -> Result<(Vec<NodeRef>, Vec<super::proof::ProofFact>), super::proof::DlProofError> {
+    Hyper::replay_support(kb, assumptions, applications, clause, frame, branches)
+}
+
 impl Hyper<'_> {
     /// Run the search from `st` and assemble the [`Decision`] it reached.
     fn run(&mut self, st: State) -> Decision {
-        match self.solve(st) {
+        if self.g.kb().schema.stats.obstruction.is_some() {
+            return Decision {
+                storage_refusal: self.g.storage_refusal(),
+                consistent: false,
+                steps: 0,
+                work: 0,
+                exhausted: true,
+                stopped: false,
+                peak_nodes: 0,
+                disjunctions: 0,
+                peak_depth: 0,
+            };
+        }
+        match self.solve(st).and_then(|answer| {
+            self.check_work()?;
+            Ok(answer)
+        }) {
             Ok(consistent) => Decision {
+                storage_refusal: self.g.storage_refusal(),
                 consistent,
                 steps: self.steps,
                 work: self.g.work().spent(),
@@ -553,10 +597,11 @@ impl Hyper<'_> {
             // measurements a reader of a `budget-exhausted` certificate most needs: they say
             // whether the rounds went into a graph, into a branch factor or into a depth.
             Err(Exhausted) => Decision {
+                storage_refusal: self.g.storage_refusal(),
                 consistent: false,
                 steps: self.steps,
                 work: self.g.work().spent(),
-                exhausted: !self.stopped,
+                exhausted: !self.stopped && self.g.storage_refusal().is_none(),
                 stopped: self.stopped,
                 peak_nodes: self.peak_nodes,
                 disjunctions: self.disjunctions,
@@ -574,6 +619,9 @@ impl Hyper<'_> {
 /// round cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
     let decision = decide(kb, assumptions, Budget::for_kb(kb));
+    if let Some(original) = decision.storage_refusal {
+        return Err(super::roles::RoleHierarchyError::Storage(original).into());
+    }
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
@@ -609,7 +657,7 @@ impl<'a> Hyper<'a> {
             defer: std::cell::Cell::new(false),
             identifying: (0..clauses.count())
                 .map(|index| {
-                    let head = &clauses.clause(index).head;
+                    let head = &clauses.clause(index, &kb.schema).head;
                     !head.is_empty()
                         && head.iter().all(|disjunct| {
                             !disjunct.is_empty()
@@ -646,7 +694,7 @@ impl<'a> Hyper<'a> {
         hyper.identifies_all = {
             let leads = |index: usize| {
                 hyper.identifying[index]
-                    || hyper.clauses.clause(index).head.iter().flatten().any(|atom| {
+                    || hyper.clauses.clause(index, &hyper.g.kb().schema).head.iter().flatten().any(|atom| {
                         matches!(*atom, HeadAtom::Concept { var: 0, concept } if hyper.identifies[concept as usize])
                     })
             };
@@ -672,13 +720,45 @@ impl<'a> Hyper<'a> {
         let Some(trace) = self.trace.as_ref() else {
             return;
         };
-        let witness = observe_body(self.g.kb(), st, self.clauses.clause(index), frame);
-        trace.borrow_mut().clash(ClashStep::new(
-            index,
-            node_ref(st, x),
-            frame_refs(st, frame),
-            witness,
-        ));
+        let witness = observe_body(
+            self.g.kb(),
+            st,
+            self.clauses.clause(index, &self.g.kb().schema),
+            frame,
+        );
+        let mut step = ClashStep::new(index, node_ref(st, x), frame_refs(st, frame), witness);
+        if let Some(class) = self.clauses.schema_class(index, &self.g.kb().schema) {
+            #[cfg(test)]
+            let reference = self
+                .g
+                .kb()
+                .schema_reference
+                .then(|| super::bounds::Preparation::current_class(self.g.kb(), class));
+            #[cfg(test)]
+            let evidence = if self.g.kb().schema_reference {
+                reference
+                    .as_ref()
+                    .and_then(|entry| entry.evidence(class))
+                    .expect("uncached current class has its newly checked evidence")
+            } else {
+                self.g
+                    .kb()
+                    .schema
+                    .evidence(class)
+                    .expect("schema clause has its original evidence")
+            };
+            #[cfg(not(test))]
+            let evidence = self
+                .g
+                .kb()
+                .schema
+                .evidence(class)
+                .expect("schema clause has its original evidence");
+            if let super::support::Cursor::Active(latest) = st.support {
+                step.schema = trace.borrow_mut().schema_clash(evidence, latest, frame);
+            }
+        }
+        trace.borrow_mut().clash(step);
     }
 
     /// Write down one identification and the clause instance that LICENSED it, if this run is
@@ -705,7 +785,9 @@ impl<'a> Hyper<'a> {
                 frame: frame_refs(st, frame),
                 atom,
             },
-            ApplySite::Branch { branch, ordinal } => MergeLicence::Branch {
+            ApplySite::Branch {
+                branch, ordinal, ..
+            } => MergeLicence::Branch {
                 branch,
                 ordinal,
                 atom,
@@ -905,7 +987,16 @@ impl<'a> Hyper<'a> {
                         // dispensed it: the checker regenerates that point's alternatives from
                         // the clause it cites and finds the identification in one of them.
                         let site = record.map_or(ApplySite::Unrecorded, |branch| {
-                            ApplySite::Branch { branch, ordinal }
+                            let site = level
+                                .site
+                                .as_ref()
+                                .expect("a recorded branch has its source frame");
+                            ApplySite::Branch {
+                                branch,
+                                ordinal,
+                                index: site.index,
+                                frame: &site.frame,
+                            }
                         });
                         if self.apply(&mut next, &disjunct, &site) {
                             open = slot;
@@ -967,6 +1058,7 @@ impl<'a> Hyper<'a> {
                         alternatives: branching.alternatives.into_iter(),
                         dispensed: 0,
                         record,
+                        site: branching.site,
                     });
                     self.peak_depth = self.peak_depth.max(stack.len() as u64);
                 }
@@ -1031,7 +1123,14 @@ impl<'a> Hyper<'a> {
                 st.clash = true;
                 return Ok(false);
             }
-            let affected = if self.g.kb().rematches_everything() {
+            // A chain can expose a new match at an arbitrarily distant prefix
+            // root. The bounded-radius/transitive-bit region is valid only for
+            // its original role grammar. Regular languages use the complete
+            // root set, without a role-count or path-length bitmask cutoff.
+            let affected = if self.g.kb().rematches_everything()
+                || self.g.kb().role_program.is_some()
+                || self.g.has_universal_role()
+            {
                 (0..st.nodes.len())
                     .filter(|&x| find(st, x) == x)
                     .map(|node| Affected {
@@ -1090,8 +1189,8 @@ impl<'a> Hyper<'a> {
     /// one place they become a decision. Every enumerator polls the same meter and stops, so
     /// the search reaches this within a bounded amount of work of the cap rather than after
     /// whatever the enumeration in flight would have cost.
-    fn check_work(&self) -> Result<(), Exhausted> {
-        if self.g.work().exhausted() {
+    fn check_work(&mut self) -> Result<(), Exhausted> {
+        if self.g.refused(&mut self.stopped) {
             return Err(Exhausted);
         }
         Ok(())
@@ -1181,6 +1280,16 @@ impl<'a> Hyper<'a> {
     /// triggers ([`ClauseSet::untriggered`]).
     fn untriggered_at(&self, st: &State, x: usize) -> Vec<usize> {
         let mut open: Vec<usize> = self.clauses.untriggered().to_vec();
+        if self.g.kb().role_program.is_some() || self.g.has_universal_role() {
+            // A chain may realize a role without an incident edge carrying that
+            // role's name. The primitive edge index is not a complete filter for
+            // language-valued guards. The fixed universal role also has no
+            // authored edge requirement; the actual matcher checks every guard.
+            open.extend(self.clauses.all_edge_triggered());
+            open.sort_unstable();
+            open.dedup();
+            return open;
+        }
         for &edge in st.class_edges(x) {
             let (from, to, property) = st.edges[edge];
             if find(st, from) == x {
@@ -1338,6 +1447,59 @@ impl<'a> Hyper<'a> {
             // with `y` a literal — which is the range axiom doing its job rather than a TBox
             // axiom escaping its domain.
             let object_domain = !st.nodes[x].concrete;
+            if object_domain && full {
+                #[cfg(test)]
+                if self.g.kb().schema_reference {
+                    for class in 0..self.g.kb().table.len() {
+                        let class = class as u32;
+                        if !matches!(
+                            self.g.kb().table.decomp(class),
+                            super::concept::Decomp::Named | super::concept::Decomp::Top
+                        ) || !self.g.has_concept(st, x, class)
+                        {
+                            continue;
+                        }
+                        let entry = super::bounds::Preparation::current_class(self.g.kb(), class);
+                        let mut stats = self.g.kb().schema_reference_stats.get();
+                        stats.classes += entry.stats.classes;
+                        stats.restrictions += entry.stats.restrictions;
+                        stats.contradictions += entry.stats.contradictions;
+                        stats.work += entry.stats.work;
+                        stats.allocations += entry.stats.allocations;
+                        stats.peak_bytes = stats.peak_bytes.max(entry.stats.peak_bytes);
+                        self.g.kb().schema_reference_stats.set(stats);
+                        if entry.evidence(class).is_some() {
+                            let (index, _) = self
+                                .clauses
+                                .schema_clauses(&self.g.kb().schema)
+                                .find(|&(_, held)| held == class)
+                                .expect(
+                                    "the same native class preparation compiles the same clause",
+                                );
+                            changed |= self.fire(st, index, x);
+                            if st.clash {
+                                return changed;
+                            }
+                        }
+                    }
+                }
+                // A checked class-local clash needs only its current membership,
+                // and closes before any of its incompatible lower bounds mint
+                // successors. Clause indices and unrelated derivation order stay
+                // unchanged; this uses the original matcher and proof recorder.
+                for (index, class) in self.clauses.schema_clauses(&self.g.kb().schema) {
+                    self.g.work().charge(1);
+                    if self.g.work().exhausted() {
+                        break 'nodes;
+                    }
+                    if self.g.has_concept(st, x, class) {
+                        changed |= self.fire(st, index, x);
+                        if st.clash {
+                            return changed;
+                        }
+                    }
+                }
+            }
             if !full {
                 // Reached through nothing but transitive closures: only a clause that reads one
                 // of them can match anything new here, so only those are tried.
@@ -1352,7 +1514,7 @@ impl<'a> Hyper<'a> {
                     if !object_domain && self.clauses.is_tbox(index) {
                         continue;
                     }
-                    if let Some(trigger) = self.clauses.clause(index).trigger()
+                    if let Some(trigger) = self.clauses.clause(index, &self.g.kb().schema).trigger()
                         && !self.g.has_concept(st, x, trigger)
                     {
                         continue;
@@ -1379,7 +1541,7 @@ impl<'a> Hyper<'a> {
                 if self.g.work().exhausted() {
                     break 'nodes;
                 }
-                for &index in self.clauses.triggered_by(concept) {
+                for index in self.clauses.triggered_by(concept, &self.g.kb().schema) {
                     // One unit per clause CONSIDERED, whether or not it is fired: a
                     // disjunctive clause is skipped here without being matched, and a skip
                     // this round repeats is still a scan.
@@ -1422,7 +1584,7 @@ impl<'a> Hyper<'a> {
     /// [`Self::fire`], over the matches whose single read binds one of `delta` alone when it is
     /// given — see [`SingleRead`].
     fn fire_over(&self, st: &mut State, index: usize, x: usize, delta: Option<&[usize]>) -> bool {
-        let clause = self.clauses.clause(index);
+        let clause = self.clauses.clause(index, &self.g.kb().schema);
         let form = clause.head_form();
         if form == HeadForm::Disjunctive {
             return false;
@@ -1646,11 +1808,9 @@ impl<'a> Hyper<'a> {
                 let leads = children.iter().any(|&child| out[child as usize])
                     || self
                         .clauses
-                        .triggered_by(concept as u32)
-                        .iter()
-                        .any(|&index| {
+                        .triggered_by(concept as u32, &self.g.kb().schema).any(|index| {
                             self.identifying[index]
-                                || self.clauses.clause(index).head.iter().flatten().any(|atom| {
+                                || self.clauses.clause(index, &self.g.kb().schema).head.iter().flatten().any(|atom| {
                                     matches!(*atom, HeadAtom::Concept { var: 0, concept } if out[concept as usize])
                                 })
                         });
@@ -1693,7 +1853,7 @@ impl<'a> Hyper<'a> {
         let mut candidates: Vec<usize> = st.nodes[x]
             .label
             .iter()
-            .flat_map(|&concept| self.clauses.triggered_by(concept).iter().copied())
+            .flat_map(|&concept| self.clauses.triggered_by(concept, &self.g.kb().schema))
             .chain(self.untriggered_at(st, x))
             .filter(|&index| self.identifying[index])
             .collect();
@@ -1701,7 +1861,7 @@ impl<'a> Hyper<'a> {
         candidates.dedup();
         self.g.work().charge(candidates.len() as u64 + 1);
         candidates.into_iter().any(|index| {
-            let clause = self.clauses.clause(index);
+            let clause = self.clauses.clause(index, &self.g.kb().schema);
             if clause.head_form() == HeadForm::Disjunctive {
                 return self.branch_of(st, index, x).is_some();
             }
@@ -1728,7 +1888,7 @@ impl<'a> Hyper<'a> {
         // the counter that sees it.
         self.g.work().charge(triggers.len() as u64 + 1);
         for concept in triggers {
-            for &index in self.clauses.triggered_by(concept) {
+            for index in self.clauses.triggered_by(concept, &self.g.kb().schema) {
                 self.g.work().charge(1);
                 if identifying && !self.identifying[index] {
                     continue;
@@ -1759,7 +1919,7 @@ impl<'a> Hyper<'a> {
     /// alternatives from. The capture is one `Option` test and a frame clone; it charges
     /// nothing, decides nothing, and is absent from every non-recording run.
     fn branch_of(&self, st: &State, index: usize, x: usize) -> Option<Branching> {
-        let clause = self.clauses.clause(index);
+        let clause = self.clauses.clause(index, &self.g.kb().schema);
         if clause.head_form() != HeadForm::Disjunctive {
             return None;
         }
@@ -1881,6 +2041,28 @@ impl<'a> Hyper<'a> {
     /// recording run: constructing one is an enum with a borrowed slice in it, which allocates
     /// nothing, decides nothing and charges nothing.
     fn apply(&self, st: &mut State, disjunct: &[Ground<usize>], site: &ApplySite<'_>) -> bool {
+        if let super::support::Cursor::Active(previous) = st.support
+            && let Some(trace) = &self.trace
+        {
+            let application = match site {
+                ApplySite::Clause { index, frame } => Some((*index, *frame, None)),
+                ApplySite::Branch {
+                    index,
+                    frame,
+                    branch,
+                    ordinal,
+                } => Some((*index, *frame, Some((*branch, *ordinal)))),
+                ApplySite::Unrecorded => None,
+            };
+            if let Some((index, frame, branch)) = application {
+                st.support = trace
+                    .borrow_mut()
+                    .schema_application(previous, index, frame, branch, disjunct)
+                    .map_or(super::support::Cursor::Disabled, |latest| {
+                        super::support::Cursor::Active(Some(latest))
+                    });
+            }
+        }
         for (at, atom) in disjunct.iter().enumerate() {
             match atom {
                 Ground::Concept(node, concept) => {
@@ -1960,6 +2142,169 @@ impl<'a> Hyper<'a> {
             }
         }
         !st.clash
+    }
+
+    pub(crate) fn replay_support(
+        kb: &'a Kb,
+        assumptions: &Assumptions<'_>,
+        applications: &[super::support::Application],
+        clause_index: usize,
+        frame: &[usize],
+        branches: &[BranchStep],
+    ) -> Result<(Vec<NodeRef>, Vec<super::proof::ProofFact>), super::proof::DlProofError> {
+        let poll = || {
+            if kb
+                .stop
+                .as_deref()
+                .is_some_and(purrdf_datalog::StopSignal::stopped)
+            {
+                Err(super::proof::DlProofError::Stopped)
+            } else {
+                Ok(())
+            }
+        };
+        poll()?;
+        if assumptions
+            .types
+            .iter()
+            .map(|&(_, concept)| concept)
+            .chain(assumptions.fresh_types.iter().copied())
+            .any(|concept| concept as usize >= kb.table.len())
+        {
+            return Err(super::proof::malformed(
+                "current-support assumption names no source concept",
+            ));
+        }
+        let driver = Self::new(
+            kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        let mut state = driver.g.init_state(assumptions);
+        for application in applications {
+            poll()?;
+            if application.clause >= driver.clauses.count()
+                || !Self::frame_is_supported(
+                    &driver,
+                    &state,
+                    application.clause,
+                    &application.frame,
+                )
+            {
+                return Err(super::proof::malformed(
+                    "current-support application has no established body",
+                ));
+            }
+            if application.head.iter().any(|atom| !match atom {
+                Ground::Concept(node, concept) => {
+                    *node < state.nodes.len() && (*concept as usize) < kb.table.len()
+                }
+                Ground::AtLeast(node, _, _, filler) => {
+                    *node < state.nodes.len() && (*filler as usize) < kb.table.len()
+                }
+                Ground::Equal(left, right) => {
+                    *left < state.nodes.len() && *right < state.nodes.len()
+                }
+                Ground::SelfLoop(node, _) | Ground::EqualIndividual(node, _) => {
+                    *node < state.nodes.len()
+                }
+                Ground::EqualReserved(node, root) => {
+                    let mut root = root;
+                    let mut valid = *node < state.nodes.len();
+                    loop {
+                        valid &= (root.filler as usize) < kb.table.len();
+                        match &root.origin {
+                            super::graph::NominalId::Named(_) => break,
+                            super::graph::NominalId::Generated(parent) => root = parent,
+                        }
+                    }
+                    valid
+                }
+            }) {
+                return Err(super::proof::malformed(
+                    "current-support head names no current graph node",
+                ));
+            }
+            let clause = driver
+                .clauses
+                .clause(application.clause, &driver.g.kb().schema);
+            if let Some((branch, ordinal)) = application.branch {
+                let step = branches
+                    .get(branch)
+                    .ok_or_else(|| super::proof::malformed("missing support branch"))?;
+                if step.clause() != application.clause
+                    || step.frame() != frame_refs(&state, &application.frame)
+                    || step
+                        .alternatives()
+                        .iter()
+                        .chain(step.introduced())
+                        .nth(ordinal)
+                        != Some(&observe_alternative(&state, &application.head))
+                {
+                    return Err(super::proof::malformed(
+                        "current-support alternative differs from its licensed case",
+                    ));
+                }
+            } else if matches!(
+                clause.head_form(),
+                HeadForm::Disjunctive | HeadForm::Inconsistency
+            ) || ground_head(&clause.head, &application.frame).as_slice()
+                != [application.head.clone()]
+            {
+                return Err(super::proof::malformed(
+                    "current-support consequence is not the single licensed head",
+                ));
+            }
+            if !driver.apply(&mut state, &application.head, &ApplySite::Unrecorded)
+                || state.clique_exhausted.get()
+            {
+                return Err(super::proof::malformed(
+                    "current-support replay did not produce a complete open prefix",
+                ));
+            }
+        }
+        if clause_index >= driver.clauses.count()
+            || !Self::frame_is_supported(&driver, &state, clause_index, frame)
+        {
+            return Err(super::proof::malformed(
+                "prepared clash has no source-supported current inhabitant",
+            ));
+        }
+        poll()?;
+        Ok((
+            frame_refs(&state, frame),
+            observe_body(
+                kb,
+                &state,
+                driver.clauses.clause(clause_index, &driver.g.kb().schema),
+                frame,
+            ),
+        ))
+    }
+
+    fn frame_is_supported(driver: &Self, state: &State, index: usize, frame: &[usize]) -> bool {
+        let Some(&root) = frame.first() else {
+            return false;
+        };
+        if frame.iter().any(|&node| node >= state.nodes.len())
+            || (driver.clauses.is_tbox(index) && state.nodes[find(state, root)].concrete)
+        {
+            return false;
+        }
+        let mut found = false;
+        Self::for_each_match(
+            &driver.g,
+            state,
+            driver.clauses.clause(index, &driver.g.kb().schema),
+            root,
+            &mut |current| {
+                found = current == frame;
+                found
+            },
+        );
+        found
     }
 
     /// Call `visit` on every binding frame that satisfies `clause`'s body with variable `0`
@@ -2432,7 +2777,7 @@ fn single_reads(
 ) -> Vec<Option<SingleRead>> {
     (0..clauses.count())
         .map(|index| {
-            let body = &clauses.clause(index).body;
+            let body = &clauses.clause(index, &kb.schema).body;
             let mut read = None;
             for (at, atom) in body.iter().enumerate() {
                 match *atom {
@@ -2828,7 +3173,7 @@ mod tests {
         kb.abox_types.push((IND, wide));
         kb.abox_types.push((IND, narrow));
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -2855,7 +3200,7 @@ mod tests {
         kb.abox_types.push((U, min3));
         kb.individuals.insert(SPY);
         kb.individuals.insert(U);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -2920,7 +3265,7 @@ mod tests {
             kb.individuals.insert(y);
         }
         kb.abox_types.push((X + len, some_e));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3009,7 +3354,7 @@ mod tests {
                 kb.individuals.insert(X + i);
             }
             kb.abox_types.push((X + len, c));
-            kb.finalize();
+            kb.finalize().expect("fixture preparation");
             kb
         };
         for len in [1, 2, 3, 4, 8, 16] {
@@ -3040,7 +3385,7 @@ mod tests {
         const R: u32 = 60;
         let mut kb = Kb::empty();
         kb.transitive.insert(R);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let g = crate::owl_dl::graph::Graph::new(&kb, u64::MAX);
         let mut st = g.init_state(&Assumptions::of_kb());
         for index in 0..6 {
@@ -3126,7 +3471,7 @@ mod tests {
             kb.abox_roles.push((X + i - 1, R, X + i));
             kb.individuals.insert(X + i);
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         for full in [false, true] {
             kb.full_rematch = full;
             let mut h = Hyper::new(&kb, Budget::for_kb(&kb));
@@ -3183,7 +3528,7 @@ mod tests {
                 kb.abox_roles.push((a, R, a + k));
             }
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3341,7 +3686,7 @@ mod tests {
                 let pick = usize::try_from(next(fillers.len() as u64)).expect("in range");
                 place(at, fillers[pick].clone(), &mut kb);
             }
-            kb.finalize();
+            kb.finalize().expect("fixture preparation");
             let cap = Budget::for_kb(&kb);
             let delta = decide(&kb, &Assumptions::of_kb(), cap);
             kb.full_rematch = true;
@@ -3556,7 +3901,7 @@ mod tests {
             Concept::Some(Role::Named(R), Box::new(Concept::Top)),
         );
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3572,7 +3917,7 @@ mod tests {
             .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
         kb.abox_types.push((IND, disjunction));
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -3645,7 +3990,7 @@ mod tests {
             .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
         kb.abox_types.push((IND, disjunction));
         kb.individuals.insert(IND);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let generating = kb.table.intern(Concept::Named(A));
         let inert = kb.table.intern(Concept::Named(B));
         assert!(
@@ -3660,9 +4005,8 @@ mod tests {
 
         let clauses = derive(&kb);
         let clause = clauses
-            .triggered_by(disjunction)
-            .iter()
-            .map(|&index| clauses.clause(index))
+            .triggered_by(disjunction, &kb.schema)
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| clause.head.len() == 2)
             .expect("the disjunction derives its ⊔-clause");
         let authored: Vec<u32> = clause
@@ -3693,7 +4037,7 @@ mod tests {
             Concept::Named(B),
             Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
         );
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let a = kb.table.intern(Concept::Named(A));
         let b = kb.table.intern(Concept::Named(B));
         let c = kb.table.intern(Concept::Named(C));
@@ -3724,7 +4068,7 @@ mod tests {
         let conjunction = kb
             .table
             .intern(Concept::And(vec![Concept::Named(A), Concept::Named(C)]));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert!(!kb.generates(mixed), "C is a way out of the disjunction");
         assert!(kb.generates(both), "both alternatives mint");
         assert!(
@@ -3754,7 +4098,7 @@ mod tests {
             kb.abox_types.push((individual, A));
             kb.individuals.insert(individual);
         }
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let b = kb.table.intern(Concept::Named(B));
 
         let budget = Budget {

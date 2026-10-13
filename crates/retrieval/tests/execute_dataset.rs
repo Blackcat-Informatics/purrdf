@@ -13,7 +13,7 @@
 //! ranking. Every refusal is paired with the neighbouring case that must still
 //! succeed. Fixtures are `example.org` throughout.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
@@ -38,7 +38,7 @@ use purrdf_sparql_eval::{
 mod registry;
 
 use purrdf_retrieval::block_on;
-use purrdf_retrieval::fixture::iri;
+use purrdf_retrieval::fixture::{iri, iri_members};
 use registry::kernel_iri;
 
 const K: u32 = 60;
@@ -208,9 +208,7 @@ impl PfCursor for RowCursor {
     fn service_level(&self) -> ServiceLevel {
         match self.attests {
             Attests::Nothing | Attests::Generation(_) | Attests::Moving => ServiceLevel::Undeclared,
-            Attests::Incomplete(_, reason) => ServiceLevel::Incomplete {
-                reason: reason.to_owned(),
-            },
+            Attests::Incomplete(_, reason) => ServiceLevel::incomplete_static(reason),
         }
     }
 }
@@ -980,9 +978,7 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     let execution = run(&registry, &stats);
     assert_eq!(
         attested(&execution, &alpha).service,
-        ServiceLevel::Incomplete {
-            reason: "rebuilding".to_owned(),
-        },
+        ServiceLevel::incomplete_static("rebuilding"),
         "the relation's own words, verbatim: that is what tells an operator \
          which index to rebuild"
     );
@@ -1002,16 +998,14 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     );
     assert_eq!(
         result.trailer.attestations[&alpha].service,
-        ServiceLevel::Incomplete {
-            reason: "rebuilding".to_owned(),
-        }
+        ServiceLevel::incomplete_static("rebuilding")
     );
     assert_eq!(
         result.trailer.exactness,
         ScoreExactness::Estimated {
-            deficit: BTreeSet::from([alpha.clone()]),
-            inflation: BTreeSet::from([alpha]),
-            unbounded: BTreeSet::new(),
+            deficit: iri_members([alpha.clone()]),
+            inflation: iri_members([alpha]),
+            unbounded: iri_members([]),
         },
         "one stratum served from a short index, so every fused score is an \
          estimate — and the answer names exactly which stratum made it one, on \
@@ -1074,9 +1068,7 @@ fn a_short_index_that_served_no_row_still_reports_its_shortfall() {
     let attestation = attested(&execution, &alpha);
     assert_eq!(
         attestation.service,
-        ServiceLevel::Incomplete {
-            reason: "rebuilding".to_owned(),
-        },
+        ServiceLevel::incomplete_static("rebuilding"),
         "and the hole beneath that emptiness survives having no row to ride on"
     );
     assert_eq!(

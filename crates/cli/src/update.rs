@@ -17,6 +17,8 @@ use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
 pub(crate) struct UpdateOptions<'a> {
+    /// The immutable geographic profile selected by `--geo-profile`.
+    pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     pub(crate) data: &'a str,
     pub(crate) from: Option<CliRdfFormat>,
     pub(crate) output: &'a str,
@@ -89,6 +91,7 @@ pub(crate) fn run(
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
     let query_options = QueryOptions::new()
+        .with_geo(options.geo)
         .with_env(&env)
         .with_division(options.division)
         .with_graph_existence(options.graph_existence);

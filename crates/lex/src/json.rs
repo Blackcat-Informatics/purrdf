@@ -80,6 +80,7 @@
 
 mod error;
 mod number;
+mod output;
 mod read;
 pub mod record;
 mod value;
@@ -87,11 +88,16 @@ mod write;
 
 pub use error::{Error, ErrorKind};
 pub use number::{Decimal, Exponent, Number};
+pub use output::OutputLayout;
 pub use read::{
-    Event, Kind, Limits, Occurrence, Reader, Str, occurrences, read, read_slice, read_with,
+    Event, Kind, Limits, Occurrence, ReadObserver, Reader, Str, occurrences, read, read_slice,
+    read_with,
 };
 pub use value::{Object, Value};
-pub use write::{Format, write, write_compact, write_into, write_pretty};
+pub use write::{
+    Format, write, write_compact, write_into, write_into_with_memory, write_pretty,
+    write_with_memory,
+};
 
 #[cfg(test)]
 mod tests;

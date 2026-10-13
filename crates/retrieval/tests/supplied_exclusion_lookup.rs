@@ -348,7 +348,7 @@ fn shaped_registry(
                         predicate: Some(ex(predicate)),
                     },
                     placements: vec![TermPlacement {
-                        facet: RequestFacet::Value,
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 1,
                         datatype: None,
                     }],
@@ -450,7 +450,7 @@ fn one_call(predicate: &str) -> String {
 /// What one run cost and answered.
 #[derive(Debug)]
 struct Measured {
-    rows: Vec<FusedRow>,
+    rows: purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<FusedRow>>,
     trailer: FusionTrailer,
     /// Rows each producer's ranked reads pulled, one entry per read.
     reads: BTreeMap<Iri, Vec<u64>>,
@@ -544,7 +544,10 @@ fn run_then(
     };
     Ok(Measured {
         rows: fused.rows,
-        trailer: fused.trailer.completed_with(statuses),
+        trailer: fused
+            .trailer
+            .completed_with(statuses)
+            .expect("status publication is admitted"),
         reads: strata()
             .into_iter()
             .zip(counters)
@@ -1287,7 +1290,7 @@ fn asked_over(
                 return (
                     stratum.clone(),
                     Err(match statuses.get(&stratum) {
-                        Some(ProducerStatus::ExecutionFailed { reason }) => reason.clone(),
+                        Some(ProducerStatus::ExecutionFailed { reason }) => reason.to_string(),
                         other => format!("no stream and status {other:?}"),
                     }),
                 );
@@ -2558,7 +2561,9 @@ mod text_relation {
     pub(super) struct TextRun {
         pub(super) answer: Vec<(String, Fixed)>,
         pub(super) exactness: purrdf_retrieval::ScoreExactness,
-        pub(super) statuses: BTreeMap<Iri, ProducerStatus>,
+        pub(super) statuses: purrdf_sparql_eval::SharedWorkspace<
+            purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
+        >,
         pub(super) ranks_pulled: BTreeMap<Iri, u64>,
         pub(super) fused_lookups: BTreeMap<Iri, u64>,
         /// Membership lookups each relation performed, by stratum.
@@ -2665,7 +2670,10 @@ mod text_relation {
             &profile,
             bundle.fused_bound,
         ))?;
-        let trailer = fused.trailer.completed_with(statuses);
+        let trailer = fused
+            .trailer
+            .completed_with(statuses)
+            .expect("status publication is admitted");
         let per = |read: &dyn Fn(&purrdf_retrieval::StratumResolution) -> u64| {
             trailer
                 .resolution
@@ -3937,7 +3945,7 @@ fn no_admitted_shape_excludes_a_candidate_its_stream_names() {
                 panic!("{name}: expected {expected:?}, and it ran: {statuses:?}")
             }
         }
-        for stream in &mut streams {
+        for stream in streams.iter_mut() {
             let verdicts: Vec<(String, ExclusionVerdict)> = probes
                 .iter()
                 .map(|probe| {

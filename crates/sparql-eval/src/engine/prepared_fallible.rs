@@ -39,8 +39,20 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
-        let _reporting = super::reserve_governed_reporting(dataset, governors)?;
-        let state = Arc::new(GovernorState::new(governors));
+        let reporting = super::reserve_governed_reporting(dataset, governors)?;
+        let state = crate::workspace::SharedWorkspace::new_admitted(
+            GovernorState::with_workspace(governors, reporting.capability()),
+            &reporting.capability(),
+        )
+        .map_err(|error| {
+            let failure = reporting.failure().map_or_else(
+                || super::bounded_workspace::AdmissionError::from(error),
+                super::bounded_workspace::AdmissionError::Operational,
+            );
+            let zero = GovernorState::new(governors).evidence();
+            super::fallible_admission_failure(dataset, failure)
+                .map_evidence(|view| GovernedEvidence::new(view, zero))
+        })?;
         preflight_governed_fallible_view(dataset, &state)?;
         self.query_prepared_governed_fallible_admitted(
             dataset,
@@ -48,6 +60,7 @@ impl NativeSparqlEngine {
             &AdmittedSubstitutions::prepared(substitutions),
             options,
             &state,
+            &reporting.execution(),
         )
     }
 
@@ -75,7 +88,7 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         preflight_governed_fallible_view(dataset, state)?;
-        let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
+        let reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
         })?;
         self.query_prepared_governed_fallible_admitted(
@@ -83,7 +96,8 @@ impl NativeSparqlEngine {
             prepared,
             &AdmittedSubstitutions::prepared(substitutions),
             options,
-            state,
+            &crate::workspace::SharedWorkspace::from(state.clone()),
+            &reporting.execution(),
         )
     }
 
@@ -98,24 +112,14 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
         options: QueryOptions<'d>,
-        state: &Arc<GovernorState>,
+        state: &crate::workspace::SharedWorkspace<GovernorState>,
+        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
-        if let Err(diagnostic) = super::bounded_workspace::check_inputs(
-            dataset,
-            !substitutions.values.is_empty(),
-            options,
-        ) {
-            return finish_governed_fallible_query(dataset, state, Err(diagnostic));
-        }
-        let workspace = super::reserve_fallible_workspace(
-            dataset,
-            &prepared.query,
-            !substitutions.values.is_empty(),
-            options,
-        )
-        .map_err(|error| {
-            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
-        })?;
+        let execution =
+            super::reserve_fallible_execution(dataset, workspace.clone()).map_err(|error| {
+                error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+            })?;
+        let workspace = &*execution;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
             .options(dataset, options)
@@ -133,10 +137,10 @@ impl NativeSparqlEngine {
             options,
             state,
             super::Sequencing::for_view::<D>(),
-            &workspace,
+            workspace,
         );
         publication.finish(
-            finish_governed_fallible_query(dataset, state, evaluation),
+            finish_governed_fallible_query(dataset, state, evaluation, Some(workspace)),
             |error| matches!(error, FallibleSparqlError::Query { .. }),
         )
     }

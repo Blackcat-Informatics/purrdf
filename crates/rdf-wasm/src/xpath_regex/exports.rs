@@ -919,3 +919,87 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         }
     }
 }
+
+/// Counted repetitions of one class or one group, with a maximum beyond the input
+/// or an exact count the input meets, through the query entry under each dated law:
+/// each matching shape was refused at these sizes, when a distinct state was kept at
+/// every position.
+#[test]
+fn large_counts_of_one_class_or_one_group_answer_at_the_production_defaults() {
+    use std::fmt::Write as _;
+    let mut prose = purrdf_testkit::text::word_prose(4 << 20);
+    prose.truncate(4 << 20);
+    let ab = purrdf_testkit::text::binary_text(4 << 20, 7);
+    let half = &prose[..2 << 20];
+    let mut nt = String::new();
+    for (subject, value) in [
+        ("prose", prose.clone()),
+        ("prose_lt", format!("{prose}<")),
+        ("prose_bang", format!("{prose}!")),
+        ("ab", ab.clone()),
+        ("ab_longer", format!("{ab}a")),
+        (
+            "ab_broken",
+            format!("{}c{}", &ab[..3_999_999], &ab[..194_305]),
+        ),
+        ("half", half.to_owned()),
+    ] {
+        writeln!(
+            nt,
+            "<http://example.org/{subject}> <http://example.org/v> \"{value}\" ."
+        )
+        .unwrap();
+    }
+    let dataset = Dataset::parse(&nt, "ntriples", None, None).expect("the fixture parses");
+    let cases = [
+        (r"^[\s\S]{0,10000000}$", "prose", true),
+        (r"^[^\n]{0,10000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose_lt", false),
+        (r"^[\p{L} ]{1,5000000}$", "prose", true),
+        (r"^(\w+\s?){1,5000000}$", "prose", true),
+        (r"^(\w+\s?){1,5000000}$", "prose_bang", false),
+        ("^(a|b){4194304}$", "ab", true),
+        ("^(a|b){4194304}$", "ab_longer", false),
+        ("(a|b){4000000}", "ab", true),
+        ("(a|b){4000000}", "ab_broken", false),
+    ];
+    let mut rows = String::new();
+    for (index, (pattern, subject, _)) in cases.iter().enumerate() {
+        write!(
+            rows,
+            " ({index} <http://example.org/{subject}> {})",
+            purrdf_testkit::text::sparql_string(pattern)
+        )
+        .unwrap();
+    }
+    let query = format!(
+        "SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{{rows} }} \
+         ?s <http://example.org/v> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i"
+    );
+    let replace = format!(
+        "SELECT ?r WHERE {{ <http://example.org/half> <http://example.org/v> ?v \
+         BIND(REPLACE(?v, {}, \"[$1]\") AS ?r) }}",
+        purrdf_testkit::text::sparql_string(r"^(\w+\s?){1,5000000}$")
+    );
+    let engine = QueryEngine::new();
+    let column = |query: &str, law: &str| -> Vec<String> {
+        let srj = engine
+            .query_raw(&dataset, query, None, None, None, None, owned(Some(law)))
+            .unwrap_or_else(|_| panic!("{law}: the query answers"));
+        let document = purrdf_lex::json::read(&srj).expect("SRJ parses");
+        (0..)
+            .map_while(|index| document.pointer(&format!("/results/bindings/{index}/r/value")))
+            .map(|value| value.as_str().expect("a lexical form").to_owned())
+            .collect()
+    };
+    let expected: Vec<String> = cases
+        .iter()
+        .map(|&(_, _, matched)| matched.to_string())
+        .collect();
+    let last = &half[half.trim_end_matches(' ').rfind(' ').unwrap() + 1..];
+    for law in [XPATH_20, XPATH_31] {
+        assert_eq!(column(&query, law), expected, "{law}");
+        assert_eq!(column(&replace, law), [format!("[{last}]")], "{law}");
+    }
+}

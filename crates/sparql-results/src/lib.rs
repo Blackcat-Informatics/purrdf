@@ -39,7 +39,7 @@
 //! let result = SparqlResult::Solutions {
 //!     variables: vec!["s".to_string()],
 //!     rows: vec![vec![Some(TermValue::Iri("http://example.org/alice".to_string()))]],
-//!     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+//!     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset").into(),
 //! };
 //!
 //! let outcome = serialize(
@@ -74,8 +74,8 @@ pub use csv::to_csv;
 pub use error::Error;
 pub use json::to_json;
 pub use json_read::{
-    BoundedParsedSolutions, ParsedSolutions, from_json, from_json_boolean, from_json_bounded,
-    provenance_from_json,
+    BoundedParsedSolutions, ParsedSolutions, ReadError, from_json, from_json_boolean,
+    from_json_bounded, from_json_with_memory, provenance_from_json,
 };
 pub use model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 pub use tsv::to_tsv;
@@ -193,7 +193,7 @@ pub struct SerializeOutcome {
 /// let result = SparqlResult::Solutions {
 ///     variables: vec!["s".to_string()],
 ///     rows: vec![vec![Some(TermValue::Iri("http://example.org/s".to_string()))]],
-///     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+///     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset").into(),
 /// };
 ///
 /// let tsv = serialize(
@@ -307,7 +307,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/s".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         }
     }
 

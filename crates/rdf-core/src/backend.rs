@@ -146,6 +146,65 @@ pub struct SparqlRequest<'a> {
 /// projected variable, in projection order (`None` = unbound).
 pub type SolutionRow = Vec<Option<TermValue>>;
 
+/// Immutable frozen dataset ownership shared by resident and native results.
+/// A native dataset retains its original storage admission through every clone;
+/// borrowed access never exposes a lease-free shared pointer.
+#[derive(Debug, Clone)]
+pub struct DatasetHandle(DatasetHandleStorage);
+
+#[derive(Debug, Clone)]
+enum DatasetHandleStorage {
+    Caller(Arc<RdfDataset>),
+    Native(purrdf_lex::allocation::SharedOwned<RdfDataset>),
+}
+
+impl From<Arc<RdfDataset>> for DatasetHandle {
+    fn from(value: Arc<RdfDataset>) -> Self {
+        Self(DatasetHandleStorage::Caller(value))
+    }
+}
+
+impl DatasetHandle {
+    /// Exact native control layout for the original admission owner.
+    #[must_use]
+    pub const fn allocation_layout<O>() -> std::alloc::Layout {
+        purrdf_lex::allocation::SharedOwned::<RdfDataset>::allocation_layout::<O>()
+    }
+
+    /// Publish a frozen dataset and its already admitted original storage owner.
+    ///
+    /// # Errors
+    /// Returns actual allocator refusal, destroying dataset before its owner.
+    pub fn try_from_admitted<O: Send + Sync + 'static>(
+        value: RdfDataset,
+        owner: O,
+    ) -> Result<Self, purrdf_lex::allocation::SharedAllocError> {
+        purrdf_lex::allocation::SharedOwned::try_from_admitted(value, owner)
+            .map(|value| Self(DatasetHandleStorage::Native(value)))
+    }
+
+    /// Whether this allocation already retains its original native admission.
+    #[must_use]
+    pub const fn retains_admission(&self) -> bool {
+        matches!(self.0, DatasetHandleStorage::Native(_))
+    }
+}
+
+impl std::ops::Deref for DatasetHandle {
+    type Target = RdfDataset;
+    fn deref(&self) -> &Self::Target {
+        match &self.0 {
+            DatasetHandleStorage::Caller(value) => value,
+            DatasetHandleStorage::Native(value) => value,
+        }
+    }
+}
+impl AsRef<RdfDataset> for DatasetHandle {
+    fn as_ref(&self) -> &RdfDataset {
+        self
+    }
+}
+
 /// Materialized SPARQL result model independent of any concrete query engine.
 #[derive(Debug, Clone)]
 pub enum SparqlResult {
@@ -160,10 +219,10 @@ pub enum SparqlResult {
         /// (`purrdf:listSlice`/`purrdf:listConcat` mint fresh `rdf:List` cells). Empty for
         /// an ordinary SELECT. Carried so an in-process consumer can dereference a list
         /// head returned in a solution cell; W3C tabular result formats ignore it.
-        aux: Arc<RdfDataset>,
+        aux: DatasetHandle,
     },
     /// A CONSTRUCT/DESCRIBE result, materialized as a frozen dataset.
-    Graph(Arc<RdfDataset>),
+    Graph(DatasetHandle),
     /// An ASK result.
     Boolean(bool),
 }
@@ -298,11 +357,14 @@ mod tests {
         let solutions = SparqlResult::Solutions {
             variables: Vec::new(),
             rows: Vec::new(),
-            aux: empty(),
+            aux: empty().into(),
         };
         assert_eq!(solutions.query_form(), "select");
         assert_eq!(SparqlResult::Boolean(true).query_form(), "ask");
-        assert_eq!(SparqlResult::Graph(empty()).query_form(), "construct");
+        assert_eq!(
+            SparqlResult::Graph(empty().into()).query_form(),
+            "construct"
+        );
     }
 
     #[test]

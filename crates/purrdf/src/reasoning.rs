@@ -1744,7 +1744,8 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
     }
     *graph = builder
         .freeze()
-        .expect("a subset of an already-frozen dataset's quads is itself a valid dataset");
+        .expect("a subset of an already-frozen dataset's quads is itself a valid dataset")
+        .into();
     true
 }
 

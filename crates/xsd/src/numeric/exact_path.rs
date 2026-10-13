@@ -80,6 +80,70 @@ pub(crate) fn binop(a: &XsdValue, b: &XsdValue, op: Op) -> Result<XsdValue, XsdE
     Ok(XsdValue::from_exact_decimal(result))
 }
 
+/// The admitted exact branch borrows input coefficients instead of cloning
+/// magnitudes for numeric promotion.
+pub(crate) fn binary_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    op: super::NumericBinaryOperator,
+    policy: DivisionPolicy,
+    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, super::NumericOperationError> {
+    use super::{NumericBinaryOperator as Operator, NumericOperationError as Error};
+    let integer_pair = is_integer_family(a) && is_integer_family(b);
+    with_coefficient(a, |left, ls| {
+        with_coefficient(b, |right, rs| {
+            if integer_pair && op != Operator::Divide {
+                let operation = match op {
+                    Operator::Add => cost::IntegerOperation::Add,
+                    Operator::Subtract => cost::IntegerOperation::Subtract,
+                    Operator::Multiply => cost::IntegerOperation::Multiply,
+                    Operator::Divide => unreachable!("division excluded"),
+                };
+                admit(left.operation_layout(right, operation)?)?;
+                let result = match op {
+                    Operator::Add => left.try_add(right)?,
+                    Operator::Subtract => left.try_sub(right)?,
+                    Operator::Multiply => left.try_mul(right)?,
+                    Operator::Divide => unreachable!("division excluded"),
+                };
+                return Ok(XsdValue::from_exact_integer(result, XsdDatatype::Integer));
+            }
+            let result = match op {
+                Operator::Add => exact::Decimal::try_add_parts_admitted(left, ls, right, rs, admit)
+                    .map_err(exact::ExactOperationError::Storage),
+                Operator::Subtract => {
+                    exact::Decimal::try_sub_parts_admitted(left, ls, right, rs, admit)
+                        .map_err(exact::ExactOperationError::Storage)
+                }
+                Operator::Multiply => {
+                    exact::Decimal::try_mul_parts_admitted(left, ls, right, rs, admit)
+                }
+                Operator::Divide => {
+                    exact::Decimal::try_div_parts_admitted(left, ls, right, rs, policy, admit)
+                }
+            };
+            result
+                .map(XsdValue::from_exact_decimal)
+                .map_err(|error| match error {
+                    exact::ExactOperationError::Storage(error) => Error::Storage(error),
+                    exact::ExactOperationError::Value(ExactError::DivisionByZero) => {
+                        Error::Value(XsdError::DivisionByZero {
+                            datatype: if integer_pair {
+                                XsdDatatype::Integer
+                            } else {
+                                XsdDatatype::Decimal
+                            },
+                        })
+                    }
+                    exact::ExactOperationError::Value(error) => {
+                        Error::Value(XsdError::Exact(error))
+                    }
+                })
+        })
+    })
+}
+
 /// `op:numeric-divide` for two exact-branch operands under `policy`: always a
 /// decimal (integer ÷ integer included, as XPath defines).
 #[cold]
@@ -104,27 +168,43 @@ pub(crate) fn div(
         })
 }
 
-/// The exact order of two exact-branch operands.
-#[cold]
-#[inline(never)]
-pub(crate) fn cmp(a: &XsdValue, b: &XsdValue) -> Ordering {
-    if is_integer_family(a) && is_integer_family(b) {
-        return integer_of(a).cmp(&integer_of(b));
+pub(crate) fn with_coefficient<T>(
+    value: &XsdValue,
+    use_value: impl FnOnce(&exact::Integer, u32) -> T,
+) -> T {
+    match value {
+        XsdValue::BigInteger { value, .. } => use_value(value, 0),
+        XsdValue::BigDecimal(value) => use_value(value.unscaled(), value.scale()),
+        XsdValue::Integer { value, .. } => use_value(&exact::Integer::from_i128(*value), 0),
+        XsdValue::Decimal(value) => use_value(
+            &exact::Integer::from_i128(value.mantissa()),
+            u32::from(value.scale()),
+        ),
+        _ => unreachable!("exact-branch operands were checked before dispatch"),
     }
-    decimal_of(a).cmp(&decimal_of(b))
 }
 
-/// The exact order of an exact-branch operand against a finite or infinite IEEE
-/// value; `None` only for `NaN`. Linear in the operand, with no reduction to lowest
-/// terms ([`exact::Decimal::cmp_f64`]).
-#[cold]
-#[inline(never)]
-pub(crate) fn cmp_ieee(exact: &XsdValue, ieee: f64) -> Option<Ordering> {
-    match exact {
-        XsdValue::BigInteger { value, .. } => value.cmp_f64(ieee),
-        XsdValue::BigDecimal(decimal) => decimal.cmp_f64(ieee),
-        _ => decimal_of(exact).cmp_f64(ieee),
-    }
+pub(crate) fn cmp_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Ordering, crate::bigint::LimbScratchError> {
+    with_coefficient(a, |left, ls| {
+        with_coefficient(b, |right, rs| {
+            exact::Decimal::try_cmp_parts_admitted(left, ls, right, rs, admit)
+        })
+    })
+}
+
+pub(crate) fn cmp_ieee_admitted_using(
+    exact: &XsdValue,
+    ieee: f64,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
+    with_coefficient(exact, |coefficient, scale| {
+        exact::decimal::cmp_scaled_f64_admitted_using(coefficient, scale, ieee, storage, admit)
+    })
 }
 
 /// The correctly rounded `f64` of an exact-branch operand.

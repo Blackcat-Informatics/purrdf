@@ -103,7 +103,7 @@ fn build_select_result(rows: usize) -> SparqlResult {
     SparqlResult::Solutions {
         variables,
         rows,
-        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
     }
 }
 
@@ -292,7 +292,7 @@ fn build_dataset(rows: usize, reified: usize) -> Arc<RdfDataset> {
 
 fn bench_graph_serialize(c: &mut Bench) {
     let dataset = build_dataset(ROWS, REIFIED);
-    let result = SparqlResult::Graph(dataset);
+    let result = SparqlResult::Graph(dataset.into());
     let provenance = ResultProvenance::default();
 
     // Sanity pass: the CONSTRUCT branch must actually emit the graph body, so a

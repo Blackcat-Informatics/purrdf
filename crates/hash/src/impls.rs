@@ -36,13 +36,13 @@
 macro_rules! debug_non_exhaustive {
     (
         $(#[$meta:meta])*
-        $([$($generics:tt)*])? $name:ident $(<$($arg:tt),+>)? { $($field:ident),+ $(,)? }
+        $([$($generics:tt)*])? $name:ident $(<$($arg:tt),+>)? { $($field:ident),* $(,)? }
     ) => {
         impl $(<$($generics)*>)? ::core::fmt::Debug for $name $(<$($arg),+>)? {
             $(#[$meta])*
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.debug_struct(::core::stringify!($name))
-                    $(.field(::core::stringify!($field), &self.$field))+
+                    $(.field(::core::stringify!($field), &self.$field))*
                     .finish_non_exhaustive()
             }
         }

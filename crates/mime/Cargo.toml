@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-mime"
+description = "Lossless original-byte MIME-to-RDF codec with ordered occurrences and shared cover verification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-mime"
+keywords = ["mime", "rdf", "email", "lossless", "codec"]
+categories = ["encoding", "parser-implementations"]
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+purrdf-core.workspace = true
+purrdf-hash.workspace = true
+purrdf-lex.workspace = true
+purrdf-xsd.workspace = true
+
+[dev-dependencies]
+purrdf-rdf.workspace = true
+purrdf-sparql-algebra.workspace = true
+purrdf-sparql-eval.workspace = true
+purrdf-testkit.workspace = true
+
+[[test]]
+name = "lossless"
+harness = false
+
+[[example]]
+name = "gen_serialized_corpus"
+test = false

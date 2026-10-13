@@ -1,18 +1,25 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Selected pattern laws at the SPARQL expression boundary.
-
 use std::borrow::Cow;
 use std::hash::BuildHasher;
+use std::marker::PhantomData;
+#[cfg(test)]
 use std::sync::Arc;
 
-use purrdf_core::DatasetView;
-use purrdf_core::xsd_regex::{self, xpath};
+use purrdf_core::small::Shared;
+use purrdf_core::xsd_regex::xpath;
+use purrdf_core::{DatasetView, RdfTextDirection, TermValue};
+use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
+use purrdf_lex::allocation::StorageError;
+use purrdf_xsd::datatype::XSD_STRING;
 
-use crate::EvalError;
+use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::EvalCtx;
 use crate::plan_cache::BoundedCache;
+use crate::workspace::LexicalFrame;
+use crate::{EvalError, WorkspaceCapability, WorkspaceTerm};
 
 /// Immutable configuration copied into every evaluator context and worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +32,6 @@ impl Selection {
     pub(crate) const fn new(profile: xpath::Profile, limits: xpath::Limits) -> Self {
         Self { profile, limits }
     }
-
     pub(crate) const fn parts(selection: Option<Self>) -> Option<(xpath::Profile, xpath::Limits)> {
         match selection {
             Some(selection) => Some((selection.profile, selection.limits)),
@@ -34,49 +40,359 @@ impl Selection {
     }
 }
 
-/// Bounded retention of successful programs. The hash is only a lookup hint:
-/// every hit checks the complete profile, source and flags before reuse.
-pub(crate) type Cache = BoundedCache<u64, Arc<xpath::CompiledPattern>>;
-
-#[derive(Clone)]
-pub(crate) enum Program {
-    Compatibility(Arc<xsd_regex::CompiledPattern>),
-    Native(Arc<xpath::CompiledPattern>, xpath::Limits),
+trait FailureOwner {
+    fn take_failure(&mut self) -> Option<EvalError>;
+    fn workspace(&self) -> &WorkspaceCapability;
+    fn storage_error(&mut self, error: StorageError) -> EvalError;
+}
+impl FailureOwner for LexicalFrame {
+    fn take_failure(&mut self) -> Option<EvalError> {
+        Self::take_failure(self)
+    }
+    fn workspace(&self) -> &WorkspaceCapability {
+        Self::workspace(self)
+    }
+    fn storage_error(&mut self, error: StorageError) -> EvalError {
+        Self::storage_error(self, error, "native XPath storage")
+    }
+}
+impl FailureOwner for (LexicalFrame, LexicalFrame) {
+    fn take_failure(&mut self) -> Option<EvalError> {
+        self.0.take_failure().or_else(|| self.1.take_failure())
+    }
+    fn workspace(&self) -> &WorkspaceCapability {
+        self.0.workspace()
+    }
+    fn storage_error(&mut self, error: StorageError) -> EvalError {
+        self.0.storage_error(error, "native XPath storage")
+    }
 }
 
-impl Program {
-    #[inline(never)]
-    pub(crate) fn is_match(&self, text: &str) -> Result<Option<bool>, EvalError> {
-        match self {
-            Self::Compatibility(pattern) => Ok(Some(pattern.is_match(text))),
-            Self::Native(pattern, limits) => expression_result(pattern.is_match(text, *limits)),
+// Operational errors have no owned text. Syntax text remains in the native
+// carrier and dies before its original account; it is only an expression error.
+struct ErrorPublication<T>(PhantomData<fn() -> T>);
+impl<T> ErrorPublication<T> {
+    const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+impl<T, S: FailureOwner> xpath::Publication<xpath::Error, S> for ErrorPublication<T> {
+    type Output = Option<T>;
+    type Error = EvalError;
+    fn publish(
+        self,
+        value: &mut Option<xpath::Error>,
+        storage: &mut S,
+    ) -> Result<Option<T>, EvalError> {
+        if let Some(error) = storage.take_failure() {
+            return Err(error);
+        }
+        match value.as_ref().expect("native error remains enclosed") {
+            xpath::Error::Resource(refusal) => Err(EvalError::XPathRegex(xpath::Error::Resource(
+                refusal.clone(),
+            ))),
+            xpath::Error::Allocation { resource, units } => {
+                Err(EvalError::XPathRegex(xpath::Error::Allocation {
+                    resource: *resource,
+                    units: *units,
+                }))
+            }
+            xpath::Error::Storage(error) => Err(storage.storage_error(*error)),
+            xpath::Error::Flags { .. }
+            | xpath::Error::CompatibilityFlags { .. }
+            | xpath::Error::CompatibilitySource { .. }
+            | xpath::Error::Syntax { .. }
+            | xpath::Error::EmptyMatch
+            | xpath::Error::Replacement(_) => Ok(None),
+            _ => Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                "unclassified native XPath failure",
+                storage.workspace(),
+            )),
         }
     }
+}
 
-    #[inline(never)]
-    pub(crate) fn replace_all<'h>(
-        &self,
-        text: &'h str,
-        replacement: &str,
-    ) -> Result<Option<Cow<'h, str>>, EvalError> {
+// Replace NativeProgram through the Cache/Program declarations at their real
+// existing home; reuse the shipping FailureOwner/ErrorPublication unchanged
+// except classifying CompatibilityFlags/CompatibilitySource as lexical.
+#[derive(Debug)]
+enum NativePattern {
+    Dated(xpath::CompiledPattern),
+    Compatibility(xpath::CompatibilityPattern),
+}
+
+impl NativePattern {
+    fn matches_source(&self, profile: Option<xpath::Profile>, pattern: &str, flags: &str) -> bool {
+        match (self, profile) {
+            (Self::Dated(value), Some(profile)) => value.matches_source(profile, pattern, flags),
+            (Self::Compatibility(value), None) => value.matches_source(pattern, flags),
+            _ => false,
+        }
+    }
+    fn admit(&self, limits: xpath::Limits) -> Result<(), xpath::Error> {
         match self {
-            Self::Compatibility(pattern) => Ok(pattern.replace_all(text, replacement).ok()),
-            Self::Native(pattern, limits) => {
-                expression_result(pattern.replace_all(text, replacement, *limits))
+            Self::Dated(value) => value.admit(limits),
+            Self::Compatibility(value) => value.admit(limits),
+        }
+    }
+    #[expect(
+        clippy::result_large_err,
+        reason = "the original native error and allocation frame return inline; boxing after physical refusal would require another allocation"
+    )]
+    fn is_match_with_storage(
+        &self,
+        input: &str,
+        limits: xpath::Limits,
+        storage: LexicalFrame,
+    ) -> Result<xpath::OwnedPatternValue<bool, LexicalFrame>, xpath::OwnedPatternError<LexicalFrame>>
+    {
+        match self {
+            Self::Dated(value) => value.is_match_with_storage(input, limits, storage),
+            Self::Compatibility(value) => value.is_match_with_storage(input, limits, storage),
+        }
+    }
+    #[expect(
+        clippy::result_large_err,
+        reason = "matcher and output frames retain their original grants on error; boxing a refusal would allocate after admission has already failed"
+    )]
+    fn replace_all_with_storage<'h>(
+        &self,
+        input: &'h str,
+        replacement: &str,
+        limits: xpath::Limits,
+        matcher: LexicalFrame,
+        output: LexicalFrame,
+    ) -> Result<
+        xpath::OwnedReplacement<'h, LexicalFrame, LexicalFrame>,
+        xpath::OwnedPatternError<(LexicalFrame, LexicalFrame)>,
+    > {
+        match self {
+            Self::Dated(value) => {
+                value.replace_all_with_storage(input, replacement, limits, matcher, output)
+            }
+            Self::Compatibility(value) => {
+                value.replace_all_with_storage(input, replacement, limits, matcher, output)
             }
         }
     }
 }
 
-/// A constant retains a successful native program for its exact law and source.
-/// Each execution admits that program under its current limits. Native failures
-/// are recomputed on evaluation and never become a cached request verdict.
-#[derive(Clone)]
-pub(crate) struct LinkedPattern {
-    selection: Option<Selection>,
-    verdict: Result<Option<Program>, EvalError>,
+pub(crate) struct NativeProgram {
+    // Both public law carriers delegate to one program body. The payload dies
+    // before the original compiler/control grant, including a shallow clone.
+    pattern: NativePattern,
+    storage: LexicalFrame,
+}
+impl std::fmt::Debug for NativeProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeProgram")
+            .field("storage", &self.storage)
+            .finish_non_exhaustive()
+    }
+}
+struct ProgramPublication<T> {
+    wrap: fn(T) -> NativePattern,
+}
+impl<T> xpath::Publication<T, LexicalFrame> for ProgramPublication<T> {
+    type Output = Shared<NativeProgram>;
+    type Error = EvalError;
+    fn publish(
+        self,
+        value: &mut Option<T>,
+        storage: &mut LexicalFrame,
+    ) -> Result<Self::Output, EvalError> {
+        let control = Shared::<NativeProgram>::allocation_layout().size();
+        let total = storage
+            .admitted_bytes()
+            .checked_add(control)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        storage.resize_live(total)?;
+        let workspace = storage.workspace().clone();
+        // The final control is allocated before either original owner is
+        // removed. The factory only moves the payload and original grant.
+        Shared::try_new_with(|| NativeProgram {
+            pattern: (self.wrap)(value.take().expect("native program remains enclosed")),
+            storage: std::mem::replace(storage, LexicalFrame::new(&workspace)),
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "native XPath shared program",
+        })
+    }
 }
 
+fn compile_owned(
+    profile: xpath::Profile,
+    pattern: &str,
+    flags: &str,
+    limits: xpath::Limits,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<Shared<NativeProgram>>, EvalError> {
+    let publication = ProgramPublication {
+        wrap: NativePattern::Dated,
+    };
+    match xpath::compile_with_storage(
+        profile,
+        pattern,
+        flags,
+        limits,
+        LexicalFrame::new(workspace),
+    ) {
+        Ok(compiled) => compiled.publish_with(publication).map(Some),
+        Err(error) => error.publish_with(ErrorPublication::new()),
+    }
+}
+
+fn compile_compatibility_owned(
+    pattern: &str,
+    flags: &str,
+    limits: xpath::Limits,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<Shared<NativeProgram>>, EvalError> {
+    let publication = ProgramPublication {
+        wrap: NativePattern::Compatibility,
+    };
+    match xpath::compile_compatibility_with_storage(
+        pattern,
+        flags,
+        limits,
+        LexicalFrame::new(workspace),
+    ) {
+        Ok(compiled) => compiled.publish_with(publication).map(Some),
+        Err(error) => error.publish_with(ErrorPublication::new()),
+    }
+}
+
+/// Successful programs only; full original source/flags/law are rechecked.
+pub(crate) type Cache = BoundedCache<u64, Shared<NativeProgram>>;
+
+#[derive(Clone)]
+pub(crate) struct Program {
+    compiled: Shared<NativeProgram>,
+    limits: xpath::Limits,
+}
+
+impl Program {
+    fn new(compiled: Shared<NativeProgram>, limits: xpath::Limits) -> Self {
+        Self { compiled, limits }
+    }
+}
+
+// Trusted one-step native String -> RDF literal publication. A borrowed Cow is
+// copied under its own exact output account before taking the native carrier.
+struct StringLiteralPublication<'a> {
+    language: Option<&'a str>,
+    direction: Option<RdfTextDirection>,
+}
+impl<'h> xpath::Publication<Cow<'h, str>, (LexicalFrame, LexicalFrame)>
+    for StringLiteralPublication<'_>
+{
+    type Output = WorkspaceTerm;
+    type Error = EvalError;
+    fn publish(
+        self,
+        value: &mut Option<Cow<'h, str>>,
+        storage: &mut (LexicalFrame, LexicalFrame),
+    ) -> Result<WorkspaceTerm, EvalError> {
+        if let Some(error) = storage.take_failure() {
+            return Err(error);
+        }
+        let original = value.as_ref().expect("native replacement remains enclosed");
+        let lexical_bytes = match original {
+            Cow::Borrowed(text) => text.len(),
+            Cow::Owned(text) => text.capacity(),
+        };
+        let direction = self.language.and(self.direction);
+        let datatype = match (self.language, direction) {
+            (Some(_), Some(_)) => DIR_LANG_STRING,
+            (Some(_), None) => LANG_STRING,
+            (None, _) => XSD_STRING,
+        };
+        let total = lexical_bytes
+            .checked_add(datatype.len())
+            .and_then(|bytes| bytes.checked_add(self.language.map_or(0, str::len)))
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        // All fallible payload/grant operations happen with the original Cow
+        // and account intact. Existing Owned text is never copied or detached.
+        storage.1.resize_live(total)?;
+        let datatype = crate::workspace::string(datatype, "native replacement datatype")?;
+        let language = self
+            .language
+            .map(|text| crate::workspace::string(text, "native replacement language"))
+            .transpose()?;
+        let borrowed = match original {
+            Cow::Borrowed(text) => Some(crate::workspace::string(
+                text,
+                "native replacement lexical text",
+            )?),
+            Cow::Owned(_) => None,
+        };
+        // The datatype makes total nonzero, so the account exists even for an
+        // empty replacement. Construction after both takes is infallible.
+        storage.1.finish_term(|| {
+            let lexical_form = match value.take().expect("native replacement remains enclosed") {
+                Cow::Owned(text) => text,
+                Cow::Borrowed(_) => borrowed.expect("borrowed lexical copy already constructed"),
+            };
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            }
+        })
+    }
+}
+
+impl Program {
+    #[inline(never)]
+    pub(crate) fn is_match(
+        &self,
+        text: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<bool>, EvalError> {
+        match self.compiled.pattern.is_match_with_storage(
+            text,
+            self.limits,
+            LexicalFrame::new(workspace),
+        ) {
+            Ok(result) => Ok(Some(*result.value())),
+            Err(error) => error.publish_with(ErrorPublication::new()),
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn replace_literal(
+        &self,
+        text: &str,
+        replacement: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<WorkspaceTerm>, EvalError> {
+        match self.compiled.pattern.replace_all_with_storage(
+            text,
+            replacement,
+            self.limits,
+            LexicalFrame::new(workspace),
+            LexicalFrame::new(workspace),
+        ) {
+            Ok(result) => result
+                .publish_with(StringLiteralPublication {
+                    language,
+                    direction,
+                })
+                .map(Some),
+            Err(error) => error.publish_with(ErrorPublication::new()),
+        }
+    }
+}
+
+/// Linked request verdicts retain successful native programs and their accounts.
+#[derive(Clone)]
+pub(crate) struct LinkedPattern {
+    verdict: Result<Option<Program>, EvalError>,
+}
 impl LinkedPattern {
     pub(crate) fn link<D: DatasetView + Sync>(
         ctx: &mut EvalCtx<'_, D>,
@@ -84,13 +400,18 @@ impl LinkedPattern {
         flags: &str,
     ) -> Self {
         Self {
-            selection: ctx.xpath_regex,
             verdict: cached(ctx, pattern, flags),
         }
     }
 }
 
-/// Resolve a linked or dynamic pattern under the current request's admission.
+fn request(selection: Option<Selection>) -> (Option<xpath::Profile>, xpath::Limits) {
+    selection.map_or(
+        (None, xpath::Limits::without_presets()),
+        |Selection { profile, limits }| (Some(profile), limits),
+    )
+}
+
 #[inline(never)]
 pub(crate) fn resolve<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
@@ -98,24 +419,26 @@ pub(crate) fn resolve<D: DatasetView + Sync>(
     flags: &str,
     linked: Option<&LinkedPattern>,
 ) -> Result<Option<Program>, EvalError> {
-    if let Some(selection) = ctx.xpath_regex {
-        selection
-            .limits
-            .admit_pattern(pattern)
-            .map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
+    let (profile, limits) = request(ctx.xpath_regex);
+    limits
+        .admit_pattern(pattern)
+        .map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
+    if let Some(linked) = linked
+        && let Ok(Some(program)) = &linked.verdict
+        && program
+            .compiled
+            .pattern
+            .matches_source(profile, pattern, flags)
+    {
+        program
+            .compiled
+            .pattern
+            .admit(limits)
+            .map_err(EvalError::XPathRegex)?;
+        return Ok(Some(Program::new(program.compiled.clone(), limits)));
     }
-    if let Some(linked) = linked {
-        match (&linked.verdict, ctx.xpath_regex) {
-            (Ok(Some(Program::Native(compiled, _))), Some(Selection { profile, limits }))
-                if compiled.matches_source(profile, pattern, flags) =>
-            {
-                compiled.admit(limits).map_err(EvalError::XPathRegex)?;
-                return Ok(Some(Program::Native(Arc::clone(compiled), limits)));
-            }
-            (_, None) if linked.selection.is_none() => return linked.verdict.clone(),
-            _ => {}
-        }
-    }
+    // Request failures are not artifacts. A changed law/current request or a
+    // failed original request is resolved again in the current physical owner.
     cached(ctx, pattern, flags)
 }
 
@@ -124,43 +447,37 @@ fn cached<D: DatasetView + Sync>(
     pattern: &str,
     flags: &str,
 ) -> Result<Option<Program>, EvalError> {
-    let Some(Selection { profile, limits }) = ctx.xpath_regex else {
-        return Ok(crate::expr::cached_regex(ctx, pattern, flags).map(Program::Compatibility));
-    };
-    // Admission comes before hashing, cache lookup, flags or syntax recognition.
+    let (profile, limits) = request(ctx.xpath_regex);
     limits
         .admit_pattern(pattern)
         .map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
-    // Do not hash unadmitted flag text. At most one flags variant is retained
-    // per source; its exact flags are compared before reuse. Differing lengths
-    // are rejected by str equality without scanning an arbitrarily long input.
+    // Original flags are compared after lookup. The hint cannot select another
+    // source or law, and no per-row owned pattern/flag key is allocated.
     let key = purrdf_hash::fixed::FixedState::default().hash_one((profile, pattern));
     if let Some(compiled) = ctx.xpath_regex_cache.get(&key)
-        && compiled.matches_source(profile, pattern, flags)
+        && compiled.pattern.matches_source(profile, pattern, flags)
     {
-        compiled.admit(limits).map_err(EvalError::XPathRegex)?;
-        return Ok(Some(Program::Native(compiled, limits)));
+        compiled
+            .pattern
+            .admit(limits)
+            .map_err(EvalError::XPathRegex)?;
+        return Ok(Some(Program::new(compiled, limits)));
     }
-    let Some(compiled) = expression_result(xpath::compile(profile, pattern, flags, limits))? else {
-        // No syntax memo: a later request with less construction storage or work
-        // must get its own admission verdict, rather than a cached expression error.
+    let compiled = match profile {
+        Some(profile) => compile_owned(profile, pattern, flags, limits, &ctx.growth)?,
+        None => compile_compatibility_owned(pattern, flags, limits, &ctx.growth)?,
+    };
+    let Some(compiled) = compiled else {
         return Ok(None);
     };
-    let compiled = Arc::new(compiled);
-    ctx.xpath_regex_cache.insert(
-        key,
-        Arc::clone(&compiled),
-        compiled.storage_bytes().saturating_add(size_of::<u64>()),
-    );
-    Ok(Some(Program::Native(compiled, limits)))
-}
-
-fn expression_result<T>(result: Result<T, xpath::Error>) -> Result<Option<T>, EvalError> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if error.is_operational() => Err(EvalError::XPathRegex(error)),
-        Err(_) => Ok(None),
-    }
+    let bytes = compiled
+        .storage
+        .admitted_bytes()
+        .checked_add(size_of::<u64>())
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    ctx.xpath_regex_cache
+        .insert_admitted(key, compiled.clone(), bytes, &ctx.growth)?;
+    Ok(Some(Program::new(compiled, limits)))
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -183,7 +500,7 @@ mod tests {
             resolve(&mut current, "^(a|b)$", "", Some(&linked))
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -211,7 +528,7 @@ mod tests {
             resolve(&mut current, "^(a|b)$", "", Some(&linked))
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap_err()
                 .code(),
             Some(Resource::MatchSteps.code())
@@ -235,7 +552,7 @@ mod tests {
             resolve(&mut ctx, "a", "", Some(&linked))
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -249,7 +566,7 @@ mod tests {
             resolve(&mut ctx, "(a|ab)", "", None)
                 .unwrap()
                 .unwrap()
-                .is_match("ab")
+                .is_match("ab", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -271,7 +588,7 @@ mod tests {
             resolve(&mut ctx, "(a|ab)", "", None)
                 .unwrap()
                 .unwrap()
-                .is_match("ab")
+                .is_match("ab", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -282,7 +599,7 @@ mod tests {
         let error = resolve(&mut ctx, "(a|ab)", "", None)
             .unwrap()
             .unwrap()
-            .is_match("ab")
+            .is_match("ab", &WorkspaceCapability::resident())
             .unwrap_err();
         assert_eq!(error.code(), Some(Resource::MatchSteps.code()));
     }
@@ -296,7 +613,7 @@ mod tests {
             resolve(&mut ctx, "(?:a)", "", Some(&linked))
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -323,7 +640,7 @@ mod tests {
             resolve(&mut ctx, "a", "", Some(&refused))
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -352,15 +669,23 @@ mod tests {
     fn lookup_hash_collisions_cannot_select_another_pattern_or_law() {
         let data = empty_dataset();
         let mut ctx = EvalCtx::new(&*data).with_xpath_regex(Profile::Xpath31, Limits::new());
-        let different = Arc::new(xpath::compile(Profile::Xpath20, "z", "", Limits::new()).unwrap());
-        let key = purrdf_hash::fixed::FixedState::default().hash_one((Profile::Xpath31, "a"));
+        let different = compile_owned(Profile::Xpath20, "z", "", Limits::new(), &ctx.growth)
+            .unwrap()
+            .unwrap();
+        let key = purrdf_hash::fixed::FixedState::default().hash_one((Some(Profile::Xpath31), "a"));
         ctx.xpath_regex_cache
-            .insert(key, Arc::clone(&different), different.storage_bytes());
+            .insert_admitted(
+                key,
+                different.clone(),
+                different.storage.admitted_bytes(),
+                &ctx.growth,
+            )
+            .unwrap();
         assert_eq!(
             resolve(&mut ctx, "a", "", None)
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -368,7 +693,7 @@ mod tests {
             resolve(&mut ctx, "a", "i", None)
                 .unwrap()
                 .unwrap()
-                .is_match("A")
+                .is_match("A", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(true)
         );
@@ -376,7 +701,7 @@ mod tests {
             resolve(&mut ctx, "a", "", None)
                 .unwrap()
                 .unwrap()
-                .is_match("A")
+                .is_match("A", &WorkspaceCapability::resident())
                 .unwrap(),
             Some(false)
         );
@@ -388,16 +713,334 @@ mod tests {
         let limits = Limits::new().with(Resource::MatchSteps, 0);
         let ctx = EvalCtx::new(&*data).with_xpath_regex(Profile::Xpath31, limits);
         for mut child in [
-            ctx.fork_for_worker(),
+            ctx.fork_for_worker()
+                .expect("resident worker owner admission"),
             ctx.child_for_user_fn().unwrap().unwrap(),
         ] {
             assert_eq!(child.xpath_regex(), Some((Profile::Xpath31, limits)));
             let error = resolve(&mut child, "a", "", None)
                 .unwrap()
                 .unwrap()
-                .is_match("a")
+                .is_match("a", &WorkspaceCapability::resident())
                 .unwrap_err();
             assert_eq!(error.code(), Some(Resource::MatchSteps.code()));
         }
+    }
+}
+
+#[cfg(test)]
+mod native_program_owner_fixtures {
+    use super::*;
+    use crate::workspace::QueryWorkspace;
+    use purrdf_core::{
+        SegmentedBuildLimits, SegmentedBuilder, SegmentedError, SegmentedReadLimits,
+        SegmentedSession,
+    };
+
+    fn account() -> (SegmentedSession, QueryWorkspace<SegmentedError>, u64) {
+        let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap();
+        let image = SegmentedBuilder::new(limits).seal().unwrap();
+        let source = SegmentedSession::open(
+            Arc::new(image.provider()),
+            image.receipt(),
+            SegmentedReadLimits::new(1_000_000, 2, 2048, 20_000_000, 8),
+        )
+        .unwrap();
+        let baseline = source.evidence().live_bytes();
+        let control = QueryWorkspace::<SegmentedError>::control_bytes().unwrap();
+        let reservation = source.reserve_owned_workspace(control).unwrap().unwrap();
+        let workspace = QueryWorkspace::owned(reservation, 0).unwrap();
+        (source, workspace, baseline)
+    }
+
+    #[test]
+    fn native_program_clone_retains_the_original_compiler_and_control_owner() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let first = compile_owned(
+            xpath::Profile::Xpath31,
+            "(a|b){1,20}[c-z-[d-f]]",
+            "i",
+            xpath::Limits::new(),
+            &capability,
+        )
+        .unwrap()
+        .unwrap();
+        let loaded = source.evidence().live_bytes();
+        let cloned = first.clone();
+        assert!(std::ptr::eq(&raw const *first, &raw const *cloned));
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        drop(first);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        assert!(cloned.pattern.matches_source(
+            Some(xpath::Profile::Xpath31),
+            "(a|b){1,20}[c-z-[d-f]]",
+            "i"
+        ));
+        drop(cloned);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn replacement_transfers_the_original_owned_utf8_and_output_grant() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let program = compile_owned(
+            xpath::Profile::Xpath31,
+            "(a)",
+            "",
+            xpath::Limits::new(),
+            &capability,
+        )
+        .unwrap()
+        .unwrap();
+        let native = program
+            .pattern
+            .replace_all_with_storage(
+                "aba",
+                "$1é",
+                xpath::Limits::new(),
+                LexicalFrame::new(&capability),
+                LexicalFrame::new(&capability),
+            )
+            .unwrap();
+        let Cow::Owned(lexical) = native.value() else {
+            panic!("replacement fixture owns output");
+        };
+        let original_pointer = lexical.as_ptr();
+        let value = native
+            .publish_with(StringLiteralPublication {
+                language: Some("fr"),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        let TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } = &*value
+        else {
+            unreachable!();
+        };
+        assert_eq!(lexical_form, "aébaé");
+        assert_eq!(
+            lexical_form.as_ptr(),
+            original_pointer,
+            "publication moves original text"
+        );
+        assert_eq!(datatype, DIR_LANG_STRING);
+        assert_eq!(language.as_deref(), Some("fr"));
+        assert_eq!(*direction, Some(RdfTextDirection::Rtl));
+        drop(program);
+        drop(capability);
+        drop(workspace);
+        assert!(source.evidence().live_bytes() > baseline);
+        assert_eq!(lexical_form, "aébaé");
+        drop(value);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn borrowed_native_output_is_copied_before_the_original_account_is_removed() {
+        let (_source, workspace, _) = account();
+        let capability = workspace.capability();
+        let program = compile_owned(
+            xpath::Profile::Xpath31,
+            "z",
+            "",
+            xpath::Limits::new(),
+            &capability,
+        )
+        .unwrap()
+        .unwrap();
+        let text = String::from("aé");
+        let native = program
+            .pattern
+            .replace_all_with_storage(
+                &text,
+                "unused",
+                xpath::Limits::new(),
+                LexicalFrame::new(&capability),
+                LexicalFrame::new(&capability),
+            )
+            .unwrap();
+        assert!(matches!(native.value(), Cow::Borrowed(_)));
+        let value = native
+            .publish_with(StringLiteralPublication {
+                language: None,
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        let TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } = &*value
+        else {
+            unreachable!();
+        };
+        assert_eq!(lexical_form, "aé");
+        assert_ne!(lexical_form.as_ptr(), text.as_ptr());
+        assert_eq!(datatype, XSD_STRING);
+        assert!(language.is_none());
+        assert!(direction.is_none());
+        drop(text);
+        assert_eq!(lexical_form, "aé");
+    }
+
+    #[test]
+    fn matcher_and_lexical_error_work_is_released_with_original_inputs_alive() {
+        let (source, workspace, _) = account();
+        let capability = workspace.capability();
+        let compiled = compile_owned(
+            xpath::Profile::Xpath31,
+            "(a)",
+            "",
+            xpath::Limits::new(),
+            &capability,
+        )
+        .unwrap()
+        .unwrap();
+        let baseline = source.evidence().live_bytes();
+        let program = Program::new(compiled, xpath::Limits::new());
+        assert_eq!(program.is_match("aba", &capability).unwrap(), Some(true));
+        assert_eq!(source.evidence().live_bytes(), baseline);
+        for pattern in ["[", "(?<bad>", "\\7"] {
+            assert!(
+                compile_owned(
+                    xpath::Profile::Xpath31,
+                    pattern,
+                    "",
+                    xpath::Limits::new(),
+                    &capability
+                )
+                .unwrap()
+                .is_none()
+            );
+            assert_eq!(source.evidence().live_bytes(), baseline);
+        }
+        assert!(
+            program
+                .replace_literal("aba", "$", None, None, &capability)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(source.evidence().live_bytes(), baseline);
+        assert!(workspace.take_failure().is_none());
+    }
+    // Insert inside existing native_program_owner_fixtures, reusing account().
+
+    #[test]
+    fn compatibility_program_clone_keeps_the_original_live_workspace() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let program = compile_compatibility_owned(
+            "((a?)*)\\p{Lu}?",
+            "i",
+            xpath::Limits::without_presets(),
+            &capability,
+        )
+        .unwrap()
+        .unwrap();
+        let loaded = source.evidence().live_bytes();
+        let cloned = program.clone();
+        assert!(std::ptr::eq(&raw const *program, &raw const *cloned));
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        drop(program);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        assert!(cloned.pattern.matches_source(None, "((a?)*)\\p{Lu}?", "i"));
+        assert!(!cloned.pattern.matches_source(
+            Some(xpath::Profile::Xpath31),
+            "((a?)*)\\p{Lu}?",
+            "i"
+        ));
+        drop(cloned);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn compatibility_replacement_transfers_its_original_utf8_allocation_and_grant() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let program =
+            compile_compatibility_owned("", "", xpath::Limits::without_presets(), &capability)
+                .unwrap()
+                .unwrap();
+        let native = program
+            .pattern
+            .replace_all_with_storage(
+                "aé",
+                "|",
+                xpath::Limits::without_presets(),
+                LexicalFrame::new(&capability),
+                LexicalFrame::new(&capability),
+            )
+            .unwrap();
+        let Cow::Owned(text) = native.value() else {
+            panic!("empty matches generate output");
+        };
+        let original_pointer = text.as_ptr();
+        let result = native
+            .publish_with(StringLiteralPublication {
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let TermValue::Literal { lexical_form, .. } = &*result else {
+            unreachable!();
+        };
+        assert_eq!(lexical_form, "|a|é|");
+        assert_eq!(lexical_form.as_ptr(), original_pointer);
+        drop(program);
+        drop(capability);
+        drop(workspace);
+        assert!(source.evidence().live_bytes() > baseline);
+        assert_eq!(lexical_form, "|a|é|");
+        drop(result);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn compatibility_capacity_refusal_preserves_the_first_actual_source_cause() {
+        let (source, workspace, _) = account();
+        let capability = workspace.capability();
+        let before = source.evidence().live_bytes();
+        // The explicit fixture source allows 1 MB live. This request actually
+        // exceeds that source profile; it is not a guessed parser allowance.
+        assert!(matches!(
+            capability.charge(2_000_000),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        let refused_live = source.evidence().live_bytes();
+        assert!(
+            refused_live <= before,
+            "pressure may evict source-owned cached pages"
+        );
+        let failure = compile_compatibility_owned(
+            "(?<bad>",
+            "",
+            xpath::Limits::without_presets(),
+            &capability,
+        )
+        .unwrap_err();
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert_eq!(source.evidence().live_bytes(), refused_live);
+        assert!(
+            matches!(
+                workspace.take_failure(),
+                Some(SegmentedError::Residency { .. })
+            ),
+            "original typed capacity cause must survive"
+        );
+        assert!(
+            matches!(capability.charge(0), Err(EvalError::WorkspaceStopped)),
+            "taking the cause cannot reopen admission"
+        );
     }
 }

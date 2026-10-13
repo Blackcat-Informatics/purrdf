@@ -88,7 +88,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
                 AcceptedTerm {
                     pattern: TermPattern::of_kind(TermKind::Literal),
                     placements: vec![TermPlacement {
-                        facet: RequestFacet::Value,
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 1,
                         datatype: None,
                     }],
@@ -96,7 +96,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
                 AcceptedTerm {
                     pattern: TermPattern::of_kind(TermKind::Iri),
                     placements: vec![TermPlacement {
-                        facet: RequestFacet::Value,
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 2,
                         datatype: None,
                     }],
@@ -408,12 +408,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "f7969bcfcc632bf344d7e31bc888529a4d24a6ef01587cf7d6005b76ab0a0c88";
+    "2b7470bbdaf31e5f661e4bac71b316f34c5a59300ec5fe99491884d9d5c73446";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "b660dba9e2dc9aaafe85e36551708893e6fb4394cb64c0f0b636624349961f28";
+    "7216ca6a1885b9bc03cd239b6a36b49b819a1cbf26d919594aeac19ddaf79034";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -627,7 +627,7 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             accepted_terms: vec![AcceptedTerm {
                 pattern: TermPattern::of_kind(TermKind::Literal),
                 placements: vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     // Named by the host, never minted here.
                     datatype: Some(ex("embedding")),
@@ -754,7 +754,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             accepted_terms: vec![AcceptedTerm {
                 pattern: TermPattern::of_kind(TermKind::Any),
                 placements: vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     datatype: None,
                 }],

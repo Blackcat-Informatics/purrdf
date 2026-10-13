@@ -592,24 +592,41 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
     let cold_answer = engine
         .query_prepared_fallible_view(&cold, &prepared, &[], QueryOptions::EMPTY)
         .expect("cold persistent selective join");
-    assert_eq!(row_count(&cold_answer.result), row_count(&expected));
+    assert_eq!(
+        cold_answer
+            .result
+            .solutions()
+            .expect("SELECT shape")
+            .1
+            .len(),
+        row_count(&expected)
+    );
     assert!(cold_answer.evidence.evictions() > 0);
     let hot = open_with_cache(&image, CEILING, 256);
     let hot_answer = engine
         .query_prepared_fallible_view(&hot, &prepared, &[], QueryOptions::EMPTY)
         .expect("warm persistent selective join");
-    assert_eq!(row_count(&hot_answer.result), row_count(&expected));
+    assert_eq!(
+        hot_answer.result.solutions().expect("SELECT shape").1.len(),
+        row_count(&expected)
+    );
     let warm_requests = hot.evidence().request_count();
     let cached = engine
         .query_fallible_view(&hot, request, QueryOptions::EMPTY)
         .expect("cached selective join");
-    assert_eq!(row_count(&cached.result), row_count(&expected));
+    assert_eq!(
+        cached.result.solutions().expect("SELECT shape").1.len(),
+        row_count(&expected)
+    );
     assert_eq!(hot.evidence().request_count(), warm_requests);
     let governors = QueryGovernors::METERED;
     let governed = engine
         .query_governed_fallible_view(&hot, request, QueryOptions::EMPTY, &governors)
         .expect("metered persistent selective join");
-    assert_eq!(row_count(&governed.result), row_count(&expected));
+    assert_eq!(
+        governed.result.solutions().expect("SELECT shape").1.len(),
+        row_count(&expected)
+    );
     let mut execution = engine
         .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
         .expect("prepare scoped selective join");

@@ -7,11 +7,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use super::RecordKind;
-use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
 use crate::hash::{FastMap, FastSet};
 use crate::ir::cursor::{Cursor, optional};
 use crate::ir::{QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef, TermValue};
+use crate::{DatasetHandle, RdfStoreCapabilities};
 
 /// A term in one mutation snapshot. Equal values shared by both layers always
 /// use `Base`; a `Delta` ID therefore names a value absent from the base.
@@ -56,7 +56,7 @@ impl ViewTermId for DeltaViewId {
 /// with a generic RDF importer does not transfer those sidecars automatically.
 #[derive(Debug, Clone)]
 pub struct DeltaDatasetView {
-    base: Arc<RdfDataset>,
+    base: DatasetHandle,
     delta: Arc<RdfDataset>,
     suppressed: Arc<FastSet<(RecordKind, QuadIds)>>,
     /// Generated base-origin records replay through their original indexed segment.
@@ -83,13 +83,14 @@ impl DeltaDatasetView {
         + 4 * (size_of::<(TermId, TermId)>() + size_of::<(TermId, Option<TermId>)>());
 
     pub(super) fn new(
-        base: Arc<RdfDataset>,
+        base: impl Into<DatasetHandle>,
         delta: Arc<RdfDataset>,
         suppressed: FastSet<(RecordKind, QuadIds)>,
         converted: FastSet<(RecordKind, QuadIds)>,
         withdrawn_graphs: Arc<FastSet<TermId>>,
         limits: crate::ViewLimits,
     ) -> Result<Self, crate::RdfDiagnostic> {
+        let base = base.into();
         let mut stats = crate::ViewStats::default();
         stats.retain(&base);
         stats.retain(&delta);
@@ -273,7 +274,7 @@ impl DeltaDatasetView {
 
     /// Original immutable base, including its locations and non-RDF sidecars.
     #[must_use]
-    pub fn base(&self) -> &Arc<RdfDataset> {
+    pub fn base(&self) -> &DatasetHandle {
         &self.base
     }
 
@@ -391,7 +392,10 @@ impl DeltaDatasetView {
         p: DeltaViewId,
         o: DeltaViewId,
     ) -> Option<DeltaViewId> {
-        for (layer, ds) in [(Layer::Base, &self.base), (Layer::Delta, &self.delta)] {
+        for (layer, ds) in [
+            (Layer::Base, self.base.as_ref()),
+            (Layer::Delta, self.delta.as_ref()),
+        ] {
             if let (Some(s), Some(p), Some(o)) = (
                 self.local_id(s, layer),
                 self.local_id(p, layer),
@@ -1188,7 +1192,7 @@ mod tests {
         assert!(mutation.remove(&row("a", "b")));
         assert!(mutation.insert(row("b", "new")).unwrap());
         let first = mutation.snapshot_view().unwrap();
-        assert!(Arc::ptr_eq(first.base(), &base));
+        assert!(std::ptr::eq(first.base().as_ref(), base.as_ref()));
         assert_eq!(first.delta().quad_count(), 1);
         assert_surface_equal(&first, &mutation.freeze().unwrap());
         assert_eq!(

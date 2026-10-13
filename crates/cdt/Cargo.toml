@@ -49,3 +49,6 @@ purrdf-stack = { workspace = true }
 # the shared property harness. Path-only and unpublished, so it is stripped from
 # the packaged manifest.
 purrdf-testkit = { workspace = true }
+
+# Real allocator evidence for original native storage admission.
+purrdf-alloc-probe = { workspace = true }

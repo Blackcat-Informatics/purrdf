@@ -236,11 +236,19 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
 /// signature and its behaviour, so this is additive and rides the same bump.
 ///
+/// The same additive surface includes the native geographic session and point-index
+/// create/call/free families and the five `*_with_geo` query/update entry points.
+/// These use opaque owned handles and an explicit selected geographic profile;
+/// every existing prototype is unchanged. `PurrdfStatus::GeoError = 14` is appended
+/// for their typed geographic refusals, without renumbering any existing status.
+/// The wildcard-free status test pins that deliberate addition.
+///
 /// # `0.10.0` → `0.11.0`: explicit named-graph lifetime
 ///
-/// Three prototypes gain a mandatory `int32_t graph_existence` selector:
+/// Four prototypes gain a mandatory `int32_t graph_existence` selector:
 /// `purrdf_graph_from_dataset` before `out_graph`, and `purrdf_update_governed`
-/// plus `purrdf_update_governed_xpath_regex` before `governors`. Recompile callers
+/// plus `purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo`
+/// before `governors`. Recompile callers
 /// with `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` to retain empty named slots or
 /// `PURRDF_GRAPH_EXISTENCE_IMPLICIT` for row-driven lifetime. Invalid values are
 /// refused before publication. No existing status value or struct layout changes.
@@ -296,7 +304,7 @@ pub unsafe extern "C" fn purrdf_capabilities(
             if dataset.is_null() || out.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
-            *out = capabilities_to_c(PurrdfDataset::arc(dataset).capabilities());
+            *out = capabilities_to_c(PurrdfDataset::handle(dataset).capabilities());
             PurrdfStatus::Ok as i32
         })
     }

@@ -538,16 +538,7 @@ pub fn emit_pydantic(
 ) -> Result<PydanticPackage, PydanticError> {
     let catalog = CompiledSchemaCatalog::parse_with_limits(
         compiled,
-        // The schema is already in memory, so its size bounds its nodes and
-        // strings (each node takes at least a byte); the definition and depth
-        // ceilings bound the work done per node.
-        SchemaCatalogLimits {
-            input_bytes: compiled.schema_json.len(),
-            definitions: config::MAX_DEFINITIONS,
-            depth: crate::limits::MAX_SCHEMA_DEPTH,
-            nodes: compiled.schema_json.len(),
-            string_bytes: compiled.schema_json.len(),
-        },
+        SchemaCatalogLimits::for_source(compiled.schema_json.len()),
     )
     .map_err(|error| PydanticError::new(error.to_string()))?;
     let defs = catalog.definitions();

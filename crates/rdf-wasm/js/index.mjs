@@ -90,6 +90,8 @@ import init, {
   entailRules,
   entailVerifyEntailment,
   expressionErrorCodes,
+  GeoPointIndex,
+  GeoSession,
   governorDimensions,
   liftProjection,
   ProjectionLift,
@@ -1215,6 +1217,7 @@ export async function ready(wasmBytesOrUrl) {
   }
 
   if (!QueryEngine.prototype.__purrdfPackageRootApi) {
+    const wasmSetGeoSession = QueryEngine.prototype.setGeoSession;
     const wasmQuery = QueryEngine.prototype.query;
     const wasmSelect = QueryEngine.prototype.select;
     const wasmAsk = QueryEngine.prototype.ask;
@@ -1227,6 +1230,11 @@ export async function ready(wasmBytesOrUrl) {
     const wasmUpdateGoverned = QueryEngine.prototype.updateGoverned;
     const wasmExplainQuery = QueryEngine.prototype.explainQuery;
 
+    QueryEngine.prototype.setGeoSession = function (session) {
+      // The generated class check runs before entering the native poison gate.
+      assertNotPoisoned();
+      wasmSetGeoSession.call(this, session);
+    };
     QueryEngine.prototype.query = function (dataset, sparql, options) {
       const { base, xpathRegex } = normalizeQueryOptions(options);
       return queryResultToObject(wasmQuery.call(this, dataset, sparql, base, xpathRegex));
@@ -1645,6 +1653,8 @@ export {
   entailRules,
   entailVerifyEntailment,
   expressionErrorCodes,
+  GeoPointIndex,
+  GeoSession,
   governorDimensions,
   liftProjection,
   ProjectionLift,

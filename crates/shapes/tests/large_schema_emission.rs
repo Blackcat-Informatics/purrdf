@@ -12,7 +12,9 @@ mod turtle;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use purrdf_shapes::json_schema::{Namespaces, SchemaCompileRequest, SchemaSurfaceMode};
+use purrdf_shapes::json_schema::{
+    CompiledSchema, Namespaces, SchemaCompileRequest, SchemaSurfaceMode,
+};
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::{
     GraphqlConfig, LinkmlConfig, PydanticConfig, SchemaDatatypeMap, SchemaImportConfig,
@@ -230,4 +232,171 @@ fn a_schema_past_65536_definitions_and_properties_imports() {
     );
     purrdf_shapes::import_json_schema(&many_definitions(2, 1, 8), &import_config())
         .expect("a shallow neighbour imports");
+}
+
+#[test]
+fn ontology_width_and_coverage_past_the_old_caps_emit_in_all_three_languages() {
+    const CLASSES: usize = 65_537;
+    const PROPERTIES: usize = 17;
+    let mut source = String::new();
+    for class in 0..CLASSES {
+        writeln!(source, "ex:Wide{class:05} a owl:Class .").expect("fixture text");
+    }
+    // Each property belongs only to one class. This crosses the coverage-cell
+    // ceiling without making every emitted class own every property.
+    for property in 0..PROPERTIES {
+        writeln!(source, "ex:wide{property} a owl:DatatypeProperty ; rdfs:domain ex:Wide{property:05} ; rdfs:range xsd:string .").expect("fixture text");
+    }
+    let shape_data = turtle::data(PREFIXES, "");
+    let shapes = from_dataset(&shape_data).expect("empty shapes");
+    let ontology = turtle::data(PREFIXES, &source);
+    let ns = namespaces();
+    let compilation = compile_schema(&SchemaCompileRequest::new(
+        &shapes,
+        &ns,
+        ontology.as_ref(),
+        SchemaSurfaceMode::OntologyComplete,
+    ))
+    .expect("65,537 actual ontology classes compile");
+    let cells: usize = compilation
+        .coverage
+        .properties
+        .iter()
+        .map(|property| property.classes.len())
+        .sum();
+    assert_eq!(compilation.coverage.properties.len(), PROPERTIES);
+    assert_eq!(cells, CLASSES * PROPERTIES);
+    assert!(
+        cells > 1_048_576,
+        "the actual complete coverage exceeds the old cap"
+    );
+    let compiled = &compilation.compiled;
+    let schema = purrdf_lex::json::read_with(
+        &compiled.schema_json,
+        purrdf_lex::json::Limits {
+            max_depth: purrdf_shapes::limits::MAX_SCHEMA_DEPTH,
+            max_values: u64::try_from(compiled.schema_json.len()).expect("source length fits"),
+            max_string_bytes: compiled.schema_json.len(),
+            unique_members: true,
+        },
+    )
+    .expect("the actual compiled schema reads under its input-derived limits");
+    let definitions = schema["$defs"].as_object().expect("definitions");
+    assert_eq!(
+        definitions
+            .keys()
+            .filter(|key| key.starts_with("Wide"))
+            .count(),
+        CLASSES
+    );
+    assert!(definitions.len() > 65_536);
+    drop(schema);
+    // Keep each emitted artifact's peak independent of the other emitters.
+    let typescript = emit_typescript(
+        compiled,
+        &TypeScriptConfig::new("wide-types", "x", "y").expect("config"),
+    )
+    .expect("TypeScript emits every actual definition beyond 65,536");
+    assert_eq!(
+        typescript
+            .type_names
+            .keys()
+            .filter(|key| key.starts_with("Wide"))
+            .count(),
+        CLASSES
+    );
+    assert!(typescript.type_names.contains_key("Wide65536"));
+    drop(typescript);
+    let graphql = emit_graphql(
+        compiled,
+        &GraphqlConfig::new("Wide", "x", "y", "RdfValue").expect("config"),
+    )
+    .expect("GraphQL emits every actual definition beyond 65,536");
+    assert_eq!(
+        graphql
+            .names
+            .definitions
+            .keys()
+            .filter(|key| key.starts_with("Wide"))
+            .count(),
+        CLASSES
+    );
+    assert!(graphql.names.definitions.contains_key("Wide65536"));
+    drop(graphql);
+    let pydantic = emit_pydantic(
+        compiled,
+        &PydanticConfig::new("wide_models", "x", "y").expect("config"),
+    )
+    .expect("Pydantic emits every actual definition beyond 65,536");
+    assert_eq!(
+        pydantic
+            .model_paths
+            .keys()
+            .filter(|key| key.starts_with("Wide"))
+            .count(),
+        CLASSES
+    );
+    assert!(pydantic.model_paths.contains_key("Wide65536"));
+}
+
+#[test]
+fn all_three_emitters_keep_the_shared_depth_refusal_and_accept_its_neighbor() {
+    let compiled = |depth| CompiledSchema {
+        schema_json: many_definitions(2, 1, depth),
+        openapi_json: String::new(),
+        losses: purrdf_rdf::loss::LossLedger::default(),
+    };
+    let deep = compiled(purrdf_shapes::limits::MAX_SCHEMA_DEPTH);
+    // Root, `$defs`, class, properties and the leaf schema open five JSON
+    // containers; each `allOf` adds an object and an array. Exercise the last
+    // accepted member of this fixture family and the very next member.
+    let accepted_depth = (purrdf_shapes::limits::MAX_SCHEMA_DEPTH - 5) / 2;
+    let accepted = compiled(accepted_depth);
+    let refused = compiled(accepted_depth + 1);
+    let typescript = TypeScriptConfig::new("depth-types", "x", "y").expect("config");
+    let graphql = GraphqlConfig::new("Depth", "x", "y", "RdfValue").expect("config");
+    let pydantic = PydanticConfig::new("depth_models", "x", "y").expect("config");
+    for schema in [&refused, &deep] {
+        for error in [
+            emit_typescript(schema, &typescript)
+                .expect_err("TypeScript preserves depth refusal")
+                .to_string(),
+            emit_graphql(schema, &graphql)
+                .expect_err("GraphQL preserves depth refusal")
+                .to_string(),
+            emit_pydantic(schema, &pydantic)
+                .expect_err("Pydantic preserves depth refusal")
+                .to_string(),
+        ] {
+            assert!(
+                error.contains(&format!(
+                    "JSON nesting limit {}",
+                    purrdf_shapes::limits::MAX_SCHEMA_DEPTH
+                )),
+                "{error}"
+            );
+        }
+    }
+    assert_eq!(
+        emit_typescript(&accepted, &typescript)
+            .expect("deepest accepted TypeScript neighbor")
+            .type_names
+            .len(),
+        2
+    );
+    assert_eq!(
+        emit_graphql(&accepted, &graphql)
+            .expect("deepest accepted GraphQL neighbor")
+            .names
+            .definitions
+            .len(),
+        2
+    );
+    assert_eq!(
+        emit_pydantic(&accepted, &pydantic)
+            .expect("deepest accepted Pydantic neighbor")
+            .model_paths
+            .len(),
+        2
+    );
 }

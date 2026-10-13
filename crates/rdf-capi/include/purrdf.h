@@ -268,11 +268,19 @@
  * APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
  * signature and its behaviour, so this is additive and rides the same bump.
  *
+ * The same additive surface includes the native geographic session and point-index
+ * create/call/free families and the five `*_with_geo` query/update entry points.
+ * These use opaque owned handles and an explicit selected geographic profile;
+ * every existing prototype is unchanged. `PurrdfStatus::GeoError = 14` is appended
+ * for their typed geographic refusals, without renumbering any existing status.
+ * The wildcard-free status test pins that deliberate addition.
+ *
  * # `0.10.0` → `0.11.0`: explicit named-graph lifetime
  *
- * Three prototypes gain a mandatory `int32_t graph_existence` selector:
+ * Four prototypes gain a mandatory `int32_t graph_existence` selector:
  * `purrdf_graph_from_dataset` before `out_graph`, and `purrdf_update_governed`
- * plus `purrdf_update_governed_xpath_regex` before `governors`. Recompile callers
+ * plus `purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo`
+ * before `governors`. Recompile callers
  * with `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` to retain empty named slots or
  * `PURRDF_GRAPH_EXISTENCE_IMPLICIT` for row-driven lifetime. Invalid values are
  * refused before publication. No existing status value or struct layout changes.
@@ -368,6 +376,11 @@ enum PurrdfStatus
      * or report is returned: a refusal is never an empty or non-matching result.
      */
     PURRDF_STATUS_REGEX_RESOURCE_ERROR = 13,
+    /**
+     * A geographic reference, geometry, numerical or resource refusal. A
+     * session call also returns the unchanged typed response record.
+     */
+    PURRDF_STATUS_GEO_ERROR = 14,
     /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
@@ -923,7 +936,7 @@ typedef struct PurrdfBuffer PurrdfBuffer;
 typedef struct PurrdfCancellation PurrdfCancellation;
 
 /**
- * A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
+ * A pattern-quad cursor. It holds a frozen storage-owner clone (`pin`) so the
  * term arena the views borrow into cannot dangle — the cursor stays valid even
  * after every `PurrdfDataset` handle is freed. Matching rows are pulled lazily
  * from the core's owned indexed cursor and are never collected. Single-threaded.
@@ -931,7 +944,7 @@ typedef struct PurrdfCancellation PurrdfCancellation;
 typedef struct PurrdfCursor PurrdfCursor;
 
 /**
- * A frozen, immutable RDF-1.2 dataset. Wraps `Arc<RdfDataset>`, so it is
+ * A frozen, immutable RDF-1.2 dataset. Retains the frozen dataset storage owner, so it is
  * `Send + Sync`: it may be read concurrently from multiple threads. Release
  * with `purrdf_dataset_free`.
  *
@@ -947,6 +960,16 @@ typedef struct PurrdfDataset PurrdfDataset;
  * boundary that has one — a named DIMENSION. Opaque to C.
  */
 typedef struct PurrdfError PurrdfError;
+
+/**
+ * Immutable reusable point-cell index. Release with `purrdf_geo_point_index_free`.
+ */
+typedef struct PurrdfGeoPointIndex PurrdfGeoPointIndex;
+
+/**
+ * Immutable geographic profile/session. Release with `purrdf_geo_session_free`.
+ */
+typedef struct PurrdfGeoSession PurrdfGeoSession;
 
 /**
  * A copy-on-write mutable graph: a suppression-delta over a frozen base
@@ -2291,6 +2314,77 @@ const char *purrdf_error_presentation_json(const PurrdfError *err);
 void purrdf_error_free(PurrdfError *err);
 
 /**
+ * Prepare a strict version-one profile, or the standard profile when null.
+ *
+ * # Safety
+ * `profile` must be null or a live NUL-terminated UTF-8 string. `out_session`
+ * and a nonnull `out_error` must be writable. The caller owns the returned handle.
+ */
+int32_t purrdf_geo_session_create(const char *profile,
+                                  PurrdfGeoSession **out_session,
+                                  PurrdfError **out_error);
+
+/**
+ * Execute a strict version-one request and return the engine's canonical response.
+ *
+ * A semantic refusal returns its complete response `error` record with status
+ * `GEO_ERROR`. An operational refusal returns that status and the original
+ * error text while leaving `out_response` null. Free every nonnull response
+ * and error handle. No partial result is emitted.
+ *
+ * # Safety
+ * `session` must be a live handle, `request` a live NUL-terminated UTF-8 string,
+ * and output pointers writable. Handles may be read concurrently; free requires
+ * exclusive ownership after every call has finished.
+ */
+int32_t purrdf_geo_session_call(const PurrdfGeoSession *session,
+                                const char *request,
+                                PurrdfBuffer **out_response,
+                                PurrdfError **out_error);
+
+/**
+ * Release a geographic session; null is a no-op.
+ *
+ * # Safety
+ * `session` must be null or an exclusively owned live handle not already freed.
+ */
+void purrdf_geo_session_free(PurrdfGeoSession *session);
+
+/**
+ * Prepare complete ordered buckets using the session's explicit reference/profile.
+ *
+ * # Safety
+ * `session` must be a live immutable handle and `request` a live UTF-8 C string.
+ * `out_index` and nonnull `out_error` must be writable. The output handle is owned.
+ */
+int32_t purrdf_geo_point_index_create(const PurrdfGeoSession *session,
+                                      const char *request,
+                                      PurrdfGeoPointIndex **out_index,
+                                      PurrdfError **out_error);
+
+/**
+ * Execute a strict physical/reported search and return its canonical response.
+ * Semantic refusal returns its complete typed response through `out_response`;
+ * operational refusal leaves that pointer null and preserves the error cause.
+ *
+ * # Safety
+ * `index` must be a live immutable handle, `request` a live UTF-8 C string and
+ * output pointers writable. Read calls may run concurrently; free is exclusive.
+ */
+int32_t purrdf_geo_point_index_call(const PurrdfGeoPointIndex *index,
+                                    const char *request,
+                                    PurrdfBuffer **out_response,
+                                    PurrdfError **out_error);
+
+/**
+ * Free a point index; null is a no-op.
+ *
+ * # Safety
+ * The handle must be null or exclusively owned, live and not previously freed.
+ */
+void purrdf_geo_point_index_free(PurrdfGeoPointIndex *index);
+
+/**
  * Initialize `*out` as a metered governed call with no finite caller ceiling.
  *
  * # Safety
@@ -2963,6 +3057,126 @@ int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset,
                                            int32_t *out_outcome,
                                            PurrdfGovernorEvidence *out_evidence,
                                            PurrdfError **out_error);
+
+/**
+ * [`purrdf_query_xpath_regex`] with an explicit immutable geographic session.
+ * A null session selects standard CRS84; `regex_profile` retains the original
+ * dated-law selector, so both selections reach the same native query path.
+ *
+ * # Safety
+ * As [`purrdf_query_xpath_regex`]. A nonnull `geo` must remain live and immutable
+ * for the entire call, including result preparation and execution.
+ */
+int32_t purrdf_query_with_geo(const PurrdfGeoSession *geo,
+                              const PurrdfDataset *dataset,
+                              const char *query,
+                              const char *base_iri,
+                              const char *regex_profile,
+                              int32_t *out_kind,
+                              PurrdfRowCursor **out_rows,
+                              PurrdfDataset **out_graph,
+                              uint8_t *out_boolean,
+                              PurrdfError **out_error);
+
+/**
+ * [`purrdf_query_json_xpath_regex`] with an explicit immutable geographic session.
+ * A null session selects standard CRS84; `regex_profile` retains the original
+ * dated-law selector, so both selections reach the same native query path.
+ *
+ * # Safety
+ * As [`purrdf_query_json_xpath_regex`]. A nonnull `geo` must remain live and immutable
+ * for the entire call, including result preparation and execution.
+ */
+int32_t purrdf_query_json_with_geo(const PurrdfGeoSession *geo,
+                                   const PurrdfDataset *dataset,
+                                   const char *query,
+                                   const char *base_iri,
+                                   const char *provenance_prefix,
+                                   const char *provenance_iri,
+                                   const char *regex_profile,
+                                   PurrdfBuffer **out_buffer,
+                                   PurrdfError **out_error);
+
+/**
+ * [`purrdf_query_governed_xpath_regex`] with an explicit immutable geographic session.
+ * A null session selects standard CRS84; `regex_profile` retains the original
+ * dated-law selector, so both selections reach the same native query path.
+ *
+ * # Safety
+ * As [`purrdf_query_governed_xpath_regex`]. A nonnull `geo` must remain live and immutable
+ * for the entire call, including result preparation and execution.
+ */
+int32_t purrdf_query_governed_with_geo(const PurrdfGeoSession *geo,
+                                       const PurrdfDataset *dataset,
+                                       const char *query,
+                                       const char *base_iri,
+                                       const char *aggregate_namespace,
+                                       const char *regex_profile,
+                                       const PurrdfQueryGovernors *governors,
+                                       int32_t *out_outcome,
+                                       int32_t *out_kind,
+                                       PurrdfRowCursor **out_rows,
+                                       PurrdfDataset **out_graph,
+                                       uint8_t *out_boolean,
+                                       PurrdfGovernorEvidence *out_evidence,
+                                       PurrdfPartialCertificate *out_partial,
+                                       PurrdfError **out_error);
+
+/**
+ * [`purrdf_query_entailment_governed_xpath_regex`] with an explicit immutable geographic session.
+ * A null session selects standard CRS84; `regex_profile` retains the original
+ * dated-law selector, so both selections reach the same native query path.
+ *
+ * # Safety
+ * As [`purrdf_query_entailment_governed_xpath_regex`]. A nonnull `geo` must remain live and immutable
+ * for the entire call, including result preparation and execution.
+ */
+int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
+                                                  const PurrdfDataset *dataset,
+                                                  const char *query,
+                                                  const char *base_iri,
+                                                  const char *regime,
+                                                  const char *program,
+                                                  const char *const *import_iris,
+                                                  const char *const *import_documents,
+                                                  size_t import_count,
+                                                  const char *const *premise_iris,
+                                                  size_t premise_iri_count,
+                                                  const uint64_t *max_stored_facts,
+                                                  const uint64_t *max_join_steps,
+                                                  const char *aggregate_namespace,
+                                                  const char *regex_profile,
+                                                  const PurrdfQueryGovernors *governors,
+                                                  int32_t *out_outcome,
+                                                  int32_t *out_kind,
+                                                  PurrdfRowCursor **out_rows,
+                                                  PurrdfDataset **out_graph,
+                                                  uint8_t *out_boolean,
+                                                  PurrdfGovernedEntailmentEvidence *out_evidence,
+                                                  PurrdfPartialCertificate *out_partial,
+                                                  PurrdfBuffer **out_report,
+                                                  PurrdfError **out_error);
+
+/**
+ * [`purrdf_update_governed_xpath_regex`] with an explicit immutable geographic session.
+ * A null session selects standard CRS84; `regex_profile` retains the original
+ * dated-law selector, so both selections reach the same native query path.
+ *
+ * # Safety
+ * As [`purrdf_update_governed_xpath_regex`]. A nonnull `geo` must remain live and immutable
+ * for the entire call, including result preparation and execution.
+ */
+int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo,
+                                        PurrdfDataset *dataset,
+                                        const char *request,
+                                        const char *base_iri,
+                                        const char *aggregate_namespace,
+                                        const char *regex_profile,
+                                        int32_t graph_existence,
+                                        const PurrdfQueryGovernors *governors,
+                                        int32_t *out_outcome,
+                                        PurrdfGovernorEvidence *out_evidence,
+                                        PurrdfError **out_error);
 
 /**
  * Write the number of result variables (columns) to `*out`.

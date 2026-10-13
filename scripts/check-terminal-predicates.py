@@ -142,18 +142,14 @@ CURSOR_POS = re.compile(r"\bself\.(?:pos|position|cursor)\b")
 # silent pass. `crates/geo/src/geojson.rs` carried the `str::trim` defect while
 # its cursor lived in `crates/geo/src/json.rs`, and nothing here caught it.
 SCANNERS: dict[str, str] = {
-    "crates/geo/src/geojson.rs": (
-        "decides GeoJSON lexical emptiness and hands the rest to the cursor in "
-        "crates/geo/src/json.rs, so it scans without holding a cursor itself"
+    "crates/geo-kernel/src/geojson.rs": (
+        "decides GeoJSON lexical boundaries through purrdf_lex::json::Reader; "
+        "its original cursor is delegated rather than implemented in this file"
     ),
-    "crates/geo/src/json.rs": (
-        "IS the GeoJSON cursor -- a thousand lines of self.pos arithmetic -- but "
-        "exposes no `fn peek`, so the structure test misses it. Listing only its "
-        "caller above named the file that is NOT the scanner and omitted the one "
-        "that is. Its whitespace skip spells RFC 8259's `ws = *( %x20 / %x09 / "
-        "%x0A / %x0D )` correctly today, and JSON's `ws` is one of the three "
-        "enumerated terminals this gate exists to defend, so a one-line edit here "
-        "must not pass unseen"
+    "crates/geo-kernel/src/json.rs": (
+        "the GeoJSON document boundary delegates to purrdf_lex::json::read_with; "
+        "the shared reader owns RFC 8259's exact whitespace cursor. A trim here "
+        "would widen that document language without creating a local cursor"
     ),
     "crates/shapes/src/text_ingest.rs": (
         "scans raw document text for Turtle/SPARQL prefix directives and decides "

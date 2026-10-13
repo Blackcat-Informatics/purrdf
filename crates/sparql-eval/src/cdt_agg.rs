@@ -31,7 +31,7 @@
 //! * the survivors are **re-ordered** by the aggregate's own `ORDER BY` before
 //!   anything is folded.
 //!
-//! Phase 2 is nonetheless the ordinary [`crate::modifier::fold_builtin`] tail
+//! Phase 2 is nonetheless the ordinary [`crate::modifier::fold_builtin_admitted`] tail
 //! over an ordinary [`crate::agg_fn::AggregateAccumulator`]
 //! ([`FoldAccumulator`]) — one fold algebra, exactly as `crate::modifier`'s
 //! dispatch documentation promises, not a second one bolted on beside it.
@@ -41,8 +41,8 @@
 //! `FOLD(DISTINCT ?v)` over `{"1"^^xsd:integer, "01"^^xsd:integer}` yields a list
 //! of size **two**: the corpus asserts both elements with `SAMETERM`
 //! (`fold-list-distinct-07.rq`, `-08.rq`), so the de-duplication is on the RDF
-//! term, never on the value. That is what this module's `DetHashSet` of
-//! [`SolutionTerm`]s gives for free — the scratch interner's promotion rule makes
+//! term, never on the value. The admitted map of [`SolutionTerm`] keys preserves
+//! that identity — the scratch interner's promotion rule makes
 //! `SolutionTerm` equality exactly term identity (see `crate::scratch`).
 //!
 //! It reads the FOLD expression list and nothing else: two rows agreeing on `?v`
@@ -68,7 +68,7 @@
 //! # `ORDER BY`, and what it decides for a map
 //!
 //! The sort is SPARQL's own solution ordering (§15.1) — this crate's one
-//! projection of it, `crate::modifier`'s [`project`]/[`compare_keys`], so an
+//! projection of it, `crate::modifier`'s [`project_admitted`]/[`compare_keys_admitted`], so an
 //! unbound key sorts below every bound one exactly as it does in a query's own
 //! `ORDER BY` (`fold-list-orderby-05.rq`) — applied left to right across the
 //! conditions (`fold-list-orderby-06.rq`) and STABLE, so rows the conditions do
@@ -94,13 +94,13 @@ use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{AggregateExpression, OrderExpression};
 
 use crate::agg_fn::AggregateAccumulator;
-use crate::cdt_fn::{argument_element, composite_literal};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
-use crate::modifier::{SortKey, compare_keys, fold_builtin, project};
+use crate::modifier::{compare_keys_admitted, fold_builtin_admitted, project_admitted};
 use crate::scratch::SolutionTerm;
-use crate::solution::{Solution, VarSchema};
+use crate::solution::VarSchema;
+use crate::workspace::{AdmittedMap, AdmittedVec};
 
 /// The `DISTINCT` witness set: one entry per exprlist tuple already folded, in
 /// RDF-TERM identity (see the module docs), and `None` when the call carried no
@@ -110,34 +110,24 @@ use crate::solution::{Solution, VarSchema};
 /// two expressions and nothing else — the unused second slot of the `cdt:List`
 /// form is always `None`, which is one more term-identity value and never
 /// conflates two distinct rows.
-type FoldDistinct<I> = Option<crate::DetHashSet<[Option<SolutionTerm<I>>; 2]>>;
-
-/// Which composite a `FOLD` call builds, decided once from its exprlist length:
-/// one expression is the `cdt:List` form, two the `cdt:Map` form.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum FoldTarget {
-    /// `FOLD(?v)` — a `cdt:List` of the per-row values.
-    List,
-    /// `FOLD(?k, ?v)` — a `cdt:Map` of the per-row `(key, value)` pairs.
-    Map,
-}
+type FoldDistinct<I> = Option<AdmittedMap<[Option<SolutionTerm<I>>; 2], ()>>;
 
 /// One row's already-evaluated contribution to a fold, in exprlist order.
 ///
 /// `None` in either slot is the SEP-0009 `null`: the row's expression was unbound
 /// or raised. Both are one state here because SEP-0009 treats them identically
 /// (see `crate::cdt_fn`'s module docs); WHERE the null lands is what matters, and
-/// that is decided by [`FoldTarget`], not here.
+/// that is decided by the aggregate arity, not here.
 ///
 /// `Default` (both slots `None`) exists so the sort below can permute survivors
 /// with [`std::mem::take`] rather than cloning every retained value a second time.
-#[derive(Clone, Default, Debug)]
+#[derive(Default, Debug)]
 pub(crate) struct FoldRow {
     /// The first expression's value — the list element, or the map KEY.
-    first: Option<TermValue>,
+    first: Option<crate::WorkspaceTerm>,
     /// The second expression's value — the map VALUE. Always `None` (and never
-    /// read) in the [`FoldTarget::List`] form.
-    second: Option<TermValue>,
+    /// read) in the list form.
+    second: Option<crate::WorkspaceTerm>,
 }
 
 /// The `FOLD` fold state: the composite being built, one element per folded row.
@@ -152,9 +142,12 @@ pub(crate) struct FoldRow {
 pub(crate) struct FoldAccumulator {
     /// The list elements, or the map's `(key, value)` pairs, in folded order.
     parts: FoldParts,
+    owners: AdmittedVec<crate::cdt_fn::OwnedCdtTerm>,
+    frame: crate::workspace::LexicalFrame,
+    workspace: crate::WorkspaceCapability,
 }
 
-/// [`FoldAccumulator`]'s state, one arm per [`FoldTarget`].
+/// [`FoldAccumulator`]'s state, one arm per the aggregate arity.
 enum FoldParts {
     /// `cdt:List` elements, in folded order.
     List(Vec<CdtTerm>),
@@ -165,159 +158,202 @@ enum FoldParts {
 }
 
 impl FoldAccumulator {
-    pub(crate) fn for_arguments(arity: usize) -> Self {
-        Self::new(if arity == 1 {
-            FoldTarget::List
-        } else {
-            FoldTarget::Map
-        })
-    }
-    /// A fresh, empty accumulator for `target`.
-    fn new(target: FoldTarget) -> Self {
+    pub(crate) fn for_arguments_admitted(
+        arity: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Self {
         Self {
-            parts: match target {
-                FoldTarget::List => FoldParts::List(Vec::new()),
-                FoldTarget::Map => FoldParts::Map(Vec::new()),
+            parts: if arity == 1 {
+                FoldParts::List(Vec::new())
+            } else {
+                FoldParts::Map(Vec::new())
             },
+            owners: AdmittedVec::new(workspace),
+            frame: crate::workspace::LexicalFrame::new(workspace),
+            workspace: workspace.clone(),
         }
     }
-
-    /// How many top-level elements this accumulator holds.
     fn len(&self) -> usize {
         match &self.parts {
             FoldParts::List(items) => items.len(),
-            FoldParts::Map(pairs) => pairs.len(),
+            FoldParts::Map(items) => items.len(),
         }
     }
-
-    /// Fold one already-evaluated row in.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::CompositeBound`] when the row's value cannot be an element of
-    /// any composite (a nested composite already at the nesting bound — see
-    /// [`crate::cdt_fn::to_cdt_term`]), or when this fold has already reached
-    /// [`purrdf_cdt::MAX_ELEMENTS`] top-level elements.
-    ///
-    /// The element bound is checked HERE, per row, as well as at `finish`. The
-    /// `finish` check is the authoritative one (it counts nested elements and
-    /// measures the canonical form too); this one exists so a group of a hundred
-    /// million rows is refused at the bound instead of after building a hundred
-    /// million `CdtTerm`s that the authoritative check would then reject. It can
-    /// only ever fire on a fold `finish` would refuse anyway, so it changes no
-    /// answer — only the peak memory of reaching the refusal.
-    fn push(&mut self, row: &FoldRow) -> Result<(), EvalError> {
+    fn push_values(
+        &mut self,
+        first: Option<&TermValue>,
+        second: Option<&TermValue>,
+    ) -> Result<(), EvalError> {
         if self.len() >= MAX_ELEMENTS {
-            return Err(crate::cdt_fn::bound(&CdtError::TooManyElements {
-                offset: 0,
-                limit: MAX_ELEMENTS,
-            }));
+            return Err(crate::cdt_fn::bound_admitted(
+                &CdtError::TooManyElements {
+                    offset: 0,
+                    limit: MAX_ELEMENTS,
+                },
+                &self.workspace,
+            ));
         }
-        match &mut self.parts {
+        let first = self.element(first)?;
+        let live = self.frame.admitted_bytes();
+        let result = match &mut self.parts {
             FoldParts::List(items) => {
-                // A row whose expression was unbound or raised is the `null`
-                // ELEMENT, retained and counted — `argument_element` is precisely
-                // the constructor-argument rule, and `FOLD`'s elements are
-                // constructor arguments spread over rows.
-                items.push(argument_element(row.first.as_ref())?);
+                purrdf_lex::allocation::Memory::resume(&mut self.frame, live).push(items, first)
             }
-            FoldParts::Map(pairs) => {
-                // Same rule on both halves, and the ASYMMETRY that follows is
-                // `purrdf_cdt::map_constructor`'s, not this module's: a `null`
-                // (or blank-node) KEY drops the whole entry, while a `null` VALUE
-                // keeps it and stores the null. `fold-map-03.rq`, `-04.rq` and
-                // `-05.rq` pin the three cases.
-                pairs.push((
-                    argument_element(row.first.as_ref())?,
-                    argument_element(row.second.as_ref())?,
-                ));
+            FoldParts::Map(_) => {
+                let second = self.element(second)?;
+                let live = self.frame.admitted_bytes();
+                let FoldParts::Map(items) = &mut self.parts else {
+                    unreachable!()
+                };
+                purrdf_lex::allocation::Memory::resume(&mut self.frame, live)
+                    .push(items, (first, second))
+            }
+        };
+        result.map_err(|error| {
+            crate::cdt_fn::storage_error(&mut self.frame, error, "FOLD state array")
+        })
+    }
+    fn element(&mut self, value: Option<&TermValue>) -> Result<CdtTerm, EvalError> {
+        let Some(value) = value else {
+            return Ok(CdtTerm::Null);
+        };
+        let term = crate::cdt_fn::to_cdt_term_admitted(value, true, &self.workspace)?;
+        self.keep_element(term)
+    }
+    fn keep_element(&mut self, term: crate::cdt_fn::OwnedCdtTerm) -> Result<CdtTerm, EvalError> {
+        self.owners.push(term)?;
+        Ok(std::mem::replace(
+            &mut self
+                .owners
+                .as_mut_slice()
+                .last_mut()
+                .expect("element owner was just inserted")
+                .value,
+            CdtTerm::Null,
+        ))
+    }
+    fn push(&mut self, row: &FoldRow) -> Result<(), EvalError> {
+        self.push_values(row.first.as_deref(), row.second.as_deref())
+    }
+    fn finish_workspace(
+        mut self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::WorkspaceTerm, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let map = matches!(self.parts, FoldParts::Map(_));
+        let parts = std::mem::replace(&mut self.parts, FoldParts::List(Vec::new()));
+        let (outcome, _) = match parts {
+            FoldParts::List(items) => purrdf_cdt::functions::list_constructor_admitted(
+                items,
+                &mut crate::cdt_fn::CdtStorage::new(&mut frame),
+            ),
+            FoldParts::Map(pairs) => purrdf_cdt::functions::map_constructor_admitted(
+                &pairs,
+                &mut crate::cdt_fn::CdtStorage::new(&mut frame),
+            ),
+        }
+        .map_err(|error| {
+            crate::cdt_fn::storage_error(&mut frame, error, "FOLD composite construction")
+        })?;
+        match outcome {
+            purrdf_cdt::CdtOutcome::Value(value) => {
+                crate::cdt_fn::composite_literal_admitted(&value, workspace)
+            }
+            purrdf_cdt::CdtOutcome::Error(_) => crate::cdt_fn::composite_literal_admitted(
+                &if map {
+                    CdtValue::empty_map()
+                } else {
+                    CdtValue::empty_list()
+                },
+                workspace,
+            ),
+            purrdf_cdt::CdtOutcome::Bound(error) => {
+                Err(crate::cdt_fn::bound_admitted(&error, workspace))
             }
         }
-        Ok(())
     }
 }
 
 impl AggregateAccumulator for FoldAccumulator {
-    /// The trait's fully-bound step: `args` is one already-bound value for the
-    /// `cdt:List` form, two for the `cdt:Map` form.
-    ///
-    /// This is a special case of [`FoldAccumulator::push`] — the one where no
-    /// position is the SEP-0009 `null` — and it is what makes this type a genuine
-    /// member of the crate's one fold algebra rather than a lookalike. A missing
-    /// position is read as `null`, matching what `push` does with an unbound one.
-    ///
-    /// # Errors
-    ///
-    /// [`FoldAccumulator::push`]'s errors.
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        self.push(&FoldRow {
-            first: args.first().cloned(),
-            second: args.get(1).cloned(),
-        })
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        Some(&self.workspace)
     }
-
-    /// Append `other`'s elements after this accumulator's own.
-    ///
-    /// `self` holds the EARLIER partial fold and `other` the later one (the
-    /// chunk-order contract on [`AggregateAccumulator::combine`]), so appending
-    /// is exactly the order-dependent merge this aggregate needs: it reproduces
-    /// the sequential fold's element order, and therefore also which value a
-    /// repeated map key keeps.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::Function`] if `other` is not a [`FoldAccumulator`] (impossible
-    /// by construction — see [`crate::agg_fn::downcast_combine_partial`]), and
-    /// [`EvalError::internal`] if the two partials somehow disagree about their
-    /// composite datatype, which one `FOLD` call's single `init` factory cannot
-    /// produce.
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        self.push_values(args.first(), args.get(1))
+    }
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        self.push_values(args.first(), args.get(1))
+    }
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
-        let other: Self = crate::agg_fn::downcast_combine_partial(other)?;
-        match (&mut self.parts, other.parts) {
-            (FoldParts::List(items), FoldParts::List(more)) => items.extend(more),
-            (FoldParts::Map(pairs), FoldParts::Map(more)) => pairs.extend(more),
-            (FoldParts::List(_) | FoldParts::Map(_), _) => {
-                return Err(EvalError::internal(
-                    "FOLD combined two partial accumulators built for different composite \
-                     datatypes; every partial of one fold comes from the same init factory",
-                ));
+        let mut other: Self = crate::agg_fn::downcast_combine_partial(other)?;
+        if matches!(
+            (&self.parts, &other.parts),
+            (FoldParts::List(_), FoldParts::Map(_)) | (FoldParts::Map(_), FoldParts::List(_))
+        ) {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Internal,
+                "FOLD combined two partial accumulators built for different composite datatypes; every partial of one fold comes from the same init factory",
+                &self.workspace,
+            ));
+        }
+        self.owners.reserve_additional(other.owners.len())?;
+        let result = (|| {
+            let additional = match (&self.parts, &other.parts) {
+                (FoldParts::List(_), FoldParts::List(more)) => more.len(),
+                (FoldParts::Map(_), FoldParts::Map(more)) => more.len(),
+                _ => return Err(purrdf_lex::allocation::StorageError::FormattingFailed),
+            };
+            let live = self.frame.admitted_bytes();
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut self.frame, live);
+            match &mut self.parts {
+                FoldParts::List(items) => {
+                    let required = items
+                        .len()
+                        .checked_add(additional)
+                        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                    memory.reserve(items, required)?;
+                }
+                FoldParts::Map(items) => {
+                    let required = items
+                        .len()
+                        .checked_add(additional)
+                        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                    memory.reserve(items, required)?;
+                }
             }
+            Ok(())
+        })();
+        result.map_err(|error| {
+            crate::cdt_fn::storage_error(&mut self.frame, error, "FOLD partial state merge")
+        })?;
+        self.owners.append_reserved(&mut other.owners);
+        match (&mut self.parts, &mut other.parts) {
+            (FoldParts::List(items), FoldParts::List(more)) => items.append(more),
+            (FoldParts::Map(items), FoldParts::Map(more)) => items.append(more),
+            _ => unreachable!("FOLD partial datatype was checked before transfer"),
         }
         Ok(())
     }
-
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
         self
     }
-
-    /// Mint the group's composite, in `purrdf-cdt`'s canonical form.
-    ///
-    /// Never unbound, including for a group nothing was folded into: an empty
-    /// fold is `"[]"^^cdt:List` / `"{}"^^cdt:Map`, not `None`.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::CompositeBound`] when the folded value crosses one of
-    /// `purrdf-cdt`'s three bounds. A hard failure of the query, never an unbound
-    /// answer — see `crate::cdt_fn`'s tri-state contract for why degrading a
-    /// refused mint to `None` would let a resource refusal change a result set.
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let (outcome, empty) = match self.parts {
-            FoldParts::List(items) => (purrdf_cdt::list_constructor(items), CdtValue::empty_list()),
-            // Where SEP-0009's "the last binding wins" rule for a repeated key
-            // is applied, over the folded order this accumulator preserved.
-            FoldParts::Map(pairs) => (purrdf_cdt::map_constructor(&pairs), CdtValue::empty_map()),
-        };
-        match outcome {
-            purrdf_cdt::CdtOutcome::Value(value) => Ok(Some(composite_literal(&value))),
-            // Neither constructor has an `Error` outcome — every argument shape is
-            // a value one of them accepts — so this arm exists only because
-            // `CdtOutcome` is a three-state type this crate does not own. The empty
-            // composite of the same datatype is the honest answer for "nothing to
-            // build", and it keeps the never-unbound rule above true on every path.
-            purrdf_cdt::CdtOutcome::Error(_) => Ok(Some(composite_literal(&empty))),
-            purrdf_cdt::CdtOutcome::Bound(error) => Err(crate::cdt_fn::bound(&error)),
+        let workspace = self.workspace.clone();
+        if workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced("raw FOLD result extraction"));
         }
+        self.finish_workspace(&workspace)
+            .map(|term| Some(term.into_parts().0))
+    }
+    fn finish_admitted(
+        self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        self.finish_workspace(workspace).map(Some)
     }
 }
 
@@ -328,7 +364,7 @@ impl AggregateAccumulator for FoldAccumulator {
 /// row order, exactly as
 /// `crate::modifier`'s `eval_aggregate` supplies it. The two phases are the ones
 /// this module's docs describe: evaluate + de-duplicate + order (here), then fold
-/// (through [`FoldAccumulator`], driven by [`fold_builtin`]).
+/// (through [`FoldAccumulator`], driven by [`fold_builtin_admitted`]).
 ///
 /// # Errors
 ///
@@ -340,7 +376,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     agg: &AggregateExpression,
     links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
-    rows: &[Solution<D::Id>],
+    rows: &[crate::solution::RetainedRow<D::Id>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
@@ -355,21 +391,16 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
             ));
         }
     };
-    let target = if second_arg.is_some() {
-        FoldTarget::Map
-    } else {
-        FoldTarget::List
-    };
     let order_by: &[OrderExpression] = agg.order_by();
     let width = order_by.len();
 
     // Phase 1. `DISTINCT` keys on the exprlist's own terms — see the module docs
     // for why that is TERM identity and why it ignores the sort key.
-    let mut seen: FoldDistinct<D::Id> = agg.distinct.then(crate::DetHashSet::default);
-    let mut survivors: Vec<FoldRow> = Vec::new();
+    let mut seen: FoldDistinct<D::Id> = agg.distinct.then(AdmittedMap::default);
+    let mut survivors = AdmittedVec::new(&ctx.growth);
     // Row `i`'s sort values are `sort_values[i * width..][..width]`, flattened so
     // the projected keys below can borrow one contiguous buffer.
-    let mut sort_values: Vec<Option<TermValue>> = Vec::new();
+    let mut sort_values = AdmittedVec::new(&ctx.growth);
 
     // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
     // latched trip first, then the `aggregate-accumulation` charge and its poll.
@@ -389,25 +420,19 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
             ctx.record_barrier(tripped);
             return Ok(None);
         }
-        if let Some(seen) = seen.as_mut()
-            && !seen.insert([first, second])
-        {
-            continue;
+        if let Some(seen) = seen.as_mut() {
+            let tuple = [first, second];
+            if seen.get(&tuple).is_some() {
+                continue;
+            }
+            let _ = seen.insert_admitted(tuple, (), &ctx.growth)?;
         }
         let retained = FoldRow {
             first: first
-                .map(|term| {
-                    ctx.scratch
-                        .try_value_of(ctx.dataset, term)
-                        .map_err(EvalError::source_read)
-                })
+                .map(|term| crate::expr::owned_value_of(ctx, term))
                 .transpose()?,
             second: second
-                .map(|term| {
-                    ctx.scratch
-                        .try_value_of(ctx.dataset, term)
-                        .map_err(EvalError::source_read)
-                })
+                .map(|term| crate::expr::owned_value_of(ctx, term))
                 .transpose()?,
         };
         // `value_of` mints nothing (it clones an already-interned value back out),
@@ -422,27 +447,23 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
             ctx.record_barrier(tripped);
             return Ok(None);
         }
-        survivors.push(retained);
+        survivors.push(retained)?;
 
         // Only a SURVIVOR's sort key is ever needed: `DISTINCT` keeps each value's
         // first occurrence, so that row's own key is the one the element sorts by.
         for key_link in keys.iter_mut() {
             let key = key_link.term(row, schema, ctx)?;
             let key = key
-                .map(|term| {
-                    ctx.scratch
-                        .try_value_of(ctx.dataset, term)
-                        .map_err(EvalError::source_read)
-                })
+                .map(|term| crate::expr::owned_value_of(ctx, term))
                 .transpose()?;
             if let Err(tripped) = ctx.charge_amount(
                 purrdf_core::ResourceDimension::ScratchBytes,
-                key.as_ref().map_or(0, crate::scratch::value_bytes),
+                key.as_deref().map_or(0, crate::scratch::value_bytes),
             ) {
                 ctx.record_barrier(tripped);
                 return Ok(None);
             }
-            sort_values.push(key);
+            sort_values.push(key)?;
         }
     }
 
@@ -450,48 +471,60 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     // solution ordering. `sort_by` is stable, so conditions that do not separate
     // two rows leave them in row order.
     if width > 0 {
-        let keys: Vec<SortKey<'_>> = sort_values.iter().map(|v| project(v.as_ref())).collect();
-        // Numbers past the bounded variants are priced before the sort, as the
-        // query's own `ORDER BY` prices them.
-        if !crate::expr::numeric_step_admitted(
-            ctx,
-            crate::modifier::sort_keys_numeric_cost(&keys, width),
-        ) {
+        let mut keys = AdmittedVec::with_capacity(sort_values.len(), &ctx.growth)?;
+        for value in &sort_values {
+            keys.push(project_admitted(value.as_deref(), &ctx.growth)?)?;
+        }
+        let cost = crate::modifier::sort_keys_numeric_cost_admitted(
+            &keys.iter().map(|key| &key.key),
+            keys.len(),
+            width,
+            &ctx.growth,
+        )?;
+        if !crate::expr::numeric_step_admitted(ctx, cost) {
             return Ok(None);
         }
-        let mut order: Vec<usize> = (0..survivors.len()).collect();
-        order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], order_by));
-        let mut source = survivors;
-        survivors = order
-            .into_iter()
-            .map(|i| std::mem::take(&mut source[i]))
-            .collect();
+        let order = crate::modifier::owners::order_permutation(
+            survivors.len(),
+            &ctx.growth,
+            |left, right| {
+                compare_keys_admitted(
+                    &keys[left * width..],
+                    &keys[right * width..],
+                    order_by,
+                    &ctx.growth,
+                )
+            },
+        )?;
+        let mut reordered = AdmittedVec::with_capacity(survivors.len(), &ctx.growth)?;
+        for position in order {
+            reordered.push(std::mem::take(&mut survivors.as_mut_slice()[position]))?;
+        }
+        survivors = reordered;
     }
-
-    // Phase 2: the shared built-in tail, over this module's accumulator.
-    let value = fold_builtin(
+    let workspace = ctx.growth.clone();
+    let value = fold_builtin_admitted(
         ctx.sequential_operation_required(),
         &survivors,
-        || FoldAccumulator::new(target),
+        || {
+            Ok(FoldAccumulator::for_arguments_admitted(
+                agg.args().len(),
+                &workspace,
+            ))
+        },
         FoldAccumulator::push,
+        &workspace,
     )?;
-    // `and_then`, not `map`: an aggregate whose result the interner refuses is
-    // an aggregate with no value, which is the same unbound answer this function
-    // already returns for an empty group. See `ScratchInterner::intern_checked`.
-    Ok(value
-        .map(|v| {
-            ctx.scratch
-                .try_intern_checked(ctx.dataset, v)
-                .map_err(EvalError::source_read)
-        })
-        .transpose()?
-        .flatten())
+    value
+        .map(|value| ctx.intern_workspace_term(value))
+        .transpose()
+        .map(Option::flatten)
 }
 
 /// The scratch-byte cost of one retained [`FoldRow`], through the same
 /// deterministic per-value proxy the arena's own automatic charge uses.
 fn row_bytes(row: &FoldRow) -> u64 {
-    let first = row.first.as_ref().map_or(0, crate::scratch::value_bytes);
-    let second = row.second.as_ref().map_or(0, crate::scratch::value_bytes);
+    let first = row.first.as_deref().map_or(0, crate::scratch::value_bytes);
+    let second = row.second.as_deref().map_or(0, crate::scratch::value_bytes);
     first.saturating_add(second)
 }

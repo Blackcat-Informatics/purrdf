@@ -14,7 +14,8 @@ use purrdf_testkit::exact::Rational;
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::{Decimal, XsdDatatype, XsdValue};
 
-use super::{cast_numeric_value, xpath_double_to_string, xpath_float_to_string};
+use super::cast_numeric_value;
+use purrdf_xsd::numeric::{xpath_double_text, xpath_float_text};
 
 /// Random draws per property, besides the hard cases.
 const DRAWS: usize = 40_000;
@@ -428,7 +429,7 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
         let bits = value.to_bits();
         let back = |exact: &Rational| exact.to_f64().to_bits();
         assert_round_trip(
-            &xpath_double_to_string(value),
+            xpath_double_text(value).as_str(),
             back,
             bits,
             in_plain_range(value.abs()),
@@ -439,7 +440,7 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
             bits,
             false,
         );
-        match purrdf_xsd::parse(&xpath_double_to_string(value), XsdDatatype::Double) {
+        match purrdf_xsd::parse(xpath_double_text(value).as_str(), XsdDatatype::Double) {
             Ok(XsdValue::Double(parsed)) => assert_eq!(parsed.to_bits(), bits),
             other => panic!("{value:e}: {other:?}"),
         }
@@ -464,7 +465,7 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
         let bits = u64::from(value.to_bits());
         let back = |exact: &Rational| u64::from(exact.to_f32().to_bits());
         assert_round_trip(
-            &xpath_float_to_string(value),
+            xpath_float_text(value).as_str(),
             back,
             bits,
             in_plain_range(f64::from(value.abs())),
@@ -475,7 +476,7 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
             bits,
             false,
         );
-        match purrdf_xsd::parse(&xpath_float_to_string(value), XsdDatatype::Float) {
+        match purrdf_xsd::parse(xpath_float_text(value).as_str(), XsdDatatype::Float) {
             Ok(XsdValue::Float(parsed)) => assert_eq!(u64::from(parsed.to_bits()), bits),
             other => panic!("{value:e}: {other:?}"),
         }
@@ -488,13 +489,13 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
         (f64::INFINITY, "INF"),
         (f64::NEG_INFINITY, "-INF"),
     ] {
-        assert_eq!(xpath_double_to_string(value), expected);
+        assert_eq!(xpath_double_text(value).as_str(), expected);
         #[allow(
             clippy::cast_possible_truncation,
             reason = "the special values narrow exactly"
         )]
         let narrow = value as f32;
-        assert_eq!(xpath_float_to_string(narrow), expected);
+        assert_eq!(xpath_float_text(narrow).as_str(), expected);
     }
     assert!(checked > 2 * DRAWS, "{checked}");
 }

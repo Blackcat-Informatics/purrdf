@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The owning value tree's `Drop`, `Clone` and `Debug`, each over an explicit heap
-//! work list rather than the compiler's recursive glue.
+//! The owning value tree's iterative `Drop`, `Clone` and `Debug`.
+//! Destruction threads ancestors through existing slots without allocating;
+//! copying and debugging use explicit work lists instead of recursive glue.
 //!
 //! A [`CdtTerm`] owns [`CdtValue`]s and [`CdtTripleTerm`]s, and those own
 //! [`CdtTerm`]s again, so a value is a tree whose depth only [`crate::MAX_ELEMENTS`]
 //! and [`crate::MAX_LEXICAL_BYTES`] bound — a level is one element and a few bytes.
 //! The glue `#[derive]` writes for such a type recurses once per level, and in Rust
 //! a stack overflow is an `abort` no caller can catch, so every walk that touches the
-//! whole tree is a loop over a heap stack:
+//! whole tree is iterative; destruction reuses its existing slots and the other
+//! walks use a heap work list:
 //!
 //! * **`Drop`** lives on the two owners whose contents are sealed or structural,
-//!   [`CdtValue`] and [`CdtTripleTerm`]. Each moves the nodes it owns onto a work
-//!   list and dismantles that list in a loop, taking every popped node's children
-//!   before the node itself goes, so no drop it runs recurses. It does not live on
+//!   [`CdtValue`] and [`CdtTripleTerm`]. Each threads ancestors through already evacuated term
+//!   slots using the one allocation-free lexical dismantling loop, so no drop it runs recurses. It does not live on
 //!   [`CdtTerm`]: a type that implements `Drop` cannot be destructured by value, and
 //!   matching an element by value to move its payload out is how the scanner, the
 //!   function library and every consumer take a term apart.
@@ -32,7 +33,6 @@
 //! Equality and ordering are already iterative in [`crate::ops`], and the renderer
 //! in [`crate::render`].
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
@@ -49,67 +49,108 @@ const fn owns_nodes(term: &CdtTerm) -> bool {
     matches!(term, CdtTerm::Composite(_) | CdtTerm::TripleTerm(_))
 }
 
-/// Move the nodes `parts` owns onto `work`; the leaves drop here, recursing nowhere.
-fn release_parts(parts: CdtParts, work: &mut Vec<CdtTerm>) {
-    match parts {
-        CdtParts::List(items) => work.extend(items.into_iter().filter(owns_nodes)),
-        CdtParts::Map(entries) => work.extend(
-            entries
-                .into_iter()
-                .map(|entry| entry.value)
-                .filter(owns_nodes),
-        ),
-    }
-}
-
-/// Move the components `triple` owns onto `work`, leaving it holding three nulls.
-fn release_components(triple: &mut CdtTripleTerm, work: &mut Vec<CdtTerm>) {
-    for slot in [
-        &mut triple.subject,
-        &mut triple.predicate,
-        &mut triple.object,
-    ] {
-        let component = mem::replace(slot, CdtTerm::Null);
-        if owns_nodes(&component) {
-            work.push(component);
+impl purrdf_lex::walk::DismantleOwned for CdtTerm {
+    fn take_child(&mut self) -> Option<Self> {
+        match self {
+            Self::Composite(value) => match value.dismantling_parts() {
+                CdtParts::List(items) => loop {
+                    let slot = items.last_mut()?;
+                    let child = mem::replace(slot, Self::Null);
+                    if owns_nodes(&child) {
+                        return Some(child);
+                    }
+                    drop(child);
+                    items.pop();
+                },
+                CdtParts::Map(entries) => loop {
+                    let slot = &mut entries.last_mut()?.value;
+                    let child = mem::replace(slot, Self::Null);
+                    if owns_nodes(&child) {
+                        return Some(child);
+                    }
+                    drop(child);
+                    entries.pop();
+                },
+            },
+            Self::TripleTerm(triple) => loop {
+                let child = mem::replace(&mut triple.object, Self::Null);
+                if owns_nodes(&child) {
+                    return Some(child);
+                }
+                drop(child);
+                triple.object = mem::replace(&mut triple.predicate, Self::Null);
+                triple.predicate = mem::replace(&mut triple.subject, Self::Null);
+                if matches!(
+                    (&triple.subject, &triple.predicate, &triple.object),
+                    (Self::Null, Self::Null, Self::Null)
+                ) {
+                    return None;
+                }
+            },
+            Self::Iri(_) | Self::Blank(_) | Self::Literal(_) | Self::Null => None,
         }
     }
-}
 
-/// Dismantle `work`: every node popped gives its children up onto the list before it
-/// is dropped, so the drop that then runs on it owns nothing and recurses nowhere.
-fn reclaim(mut work: Vec<CdtTerm>) {
-    while let Some(node) = work.pop() {
-        match node {
-            CdtTerm::Composite(mut value) => release_parts(value.take_parts(), &mut work),
-            CdtTerm::TripleTerm(mut triple) => release_components(&mut triple, &mut work),
-            CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::Literal(_) | CdtTerm::Null => {}
+    fn store_parent(&mut self, parent: Option<Self>) {
+        let parent = parent.unwrap_or(Self::Null);
+        match self {
+            Self::Composite(value) => match value.dismantling_parts() {
+                CdtParts::List(items) => *items.last_mut().expect("removed a child") = parent,
+                CdtParts::Map(entries) => {
+                    entries.last_mut().expect("removed a child").value = parent;
+                }
+            },
+            Self::TripleTerm(triple) => triple.object = parent,
+            _ => unreachable!("only an owning node removes a child"),
         }
+    }
+
+    fn take_parent(&mut self) -> Option<Self> {
+        let parent = match self {
+            Self::Composite(value) => match value.dismantling_parts() {
+                CdtParts::List(items) => items.pop().expect("a parent occupies the last slot"),
+                CdtParts::Map(entries) => {
+                    entries
+                        .pop()
+                        .expect("a parent occupies the last slot")
+                        .value
+                }
+            },
+            Self::TripleTerm(triple) => {
+                let parent = mem::replace(&mut triple.object, Self::Null);
+                triple.object = mem::replace(&mut triple.predicate, Self::Null);
+                triple.predicate = mem::replace(&mut triple.subject, Self::Null);
+                parent
+            }
+            _ => unreachable!("only an owning node resumes"),
+        };
+        owns_nodes(&parent).then_some(parent)
     }
 }
 
 impl Drop for CdtValue {
     fn drop(&mut self) {
-        let nested = match self.contents() {
-            CdtContents::List(items) => items.iter().any(owns_nodes),
-            CdtContents::Map(entries) => entries.iter().any(|entry| owns_nodes(&entry.value)),
-        };
-        // A value of leaves drops as the compiler drops it; only a value that owns
-        // another node is taken apart on the work list.
-        if nested {
-            let mut work = Vec::new();
-            release_parts(self.take_parts(), &mut work);
-            reclaim(work);
+        // Each existing top-level term is the root of the same shared loop. The
+        // loop empties every existing box before its ordinary Drop can recurse.
+        match self.take_parts() {
+            CdtParts::List(items) => {
+                for item in items {
+                    purrdf_lex::walk::dismantle_owned(item);
+                }
+            }
+            CdtParts::Map(entries) => {
+                for entry in entries {
+                    purrdf_lex::walk::dismantle_owned(entry.value);
+                }
+            }
         }
     }
 }
 
 impl Drop for CdtTripleTerm {
     fn drop(&mut self) {
-        if owns_nodes(&self.subject) || owns_nodes(&self.predicate) || owns_nodes(&self.object) {
-            let mut work = Vec::new();
-            release_components(self, &mut work);
-            reclaim(work);
+        for slot in [&mut self.subject, &mut self.predicate, &mut self.object] {
+            purrdf_lex::walk::dismantle_owned(mem::replace(slot, CdtTerm::Null));
         }
     }
 }
@@ -117,121 +158,284 @@ impl Drop for CdtTripleTerm {
 // ── Clone ────────────────────────────────────────────────────────────────────────
 
 /// The copy of a term that owns no node.
-fn shallow(leaf: &CdtTerm) -> CdtTerm {
-    match leaf {
-        CdtTerm::Iri(iri) => CdtTerm::Iri(iri.clone()),
-        CdtTerm::Blank(label) => CdtTerm::Blank(label.clone()),
-        CdtTerm::Literal(literal) => CdtTerm::Literal(literal.clone()),
+fn shallow(
+    leaf: &CdtTerm,
+    memory: &mut crate::memory::Memory<'_>,
+) -> Result<CdtTerm, crate::memory::StorageError> {
+    Ok(match leaf {
+        CdtTerm::Iri(iri) => CdtTerm::Iri(memory.string(iri)?),
+        CdtTerm::Blank(label) => CdtTerm::Blank(memory.string(label)?),
+        CdtTerm::Literal(literal) => CdtTerm::Literal(literal.clone_with_memory(memory)?),
         CdtTerm::Null => CdtTerm::Null,
         CdtTerm::Composite(_) | CdtTerm::TripleTerm(_) => {
             unreachable!("only a leaf is copied shallowly")
         }
-    }
+    })
 }
 
 /// One step of the bottom-up copy.
 enum Step<'a> {
-    /// Visit a node: copy a leaf outright, or schedule a node's children before it.
     Enter(&'a CdtTerm),
-    /// Every child of the node has been copied; assemble the node's own copy.
     Exit(&'a CdtTerm),
 }
 
-/// The finished copy on top of `copies`.
 fn finished(copies: &mut Vec<CdtTerm>) -> CdtTerm {
     copies
         .pop()
-        .expect("a copy is assembled from its children's copies, which precede it")
+        .expect("copies are assembled after their children")
 }
 
-/// A copy of the tree under `root`, built bottom-up over a work list: each node's copy
-/// is assembled from its shallow fields and its children's finished copies.
-fn clone_tree(root: &CdtTerm) -> CdtTerm {
-    let mut steps: Vec<Step<'_>> = alloc::vec![Step::Enter(root)];
+/// The original bottom-up copy, admitting each native destination before birth.
+fn clone_tree(
+    root: &CdtTerm,
+    memory: &mut crate::memory::Memory<'_>,
+) -> Result<CdtTerm, crate::memory::StorageError> {
+    use crate::memory::CdtMemory as _;
+    let mut steps: WorkList<Step<'_>, 8> = WorkList::new();
+    steps.try_push_admitted(Step::Enter(root), memory)?;
     let mut copies: Vec<CdtTerm> = Vec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node) => match node {
                 CdtTerm::Composite(value) => {
-                    // Children are pushed last-first so they pop, and so their copies
-                    // land, in the value's own order.
-                    steps.push(Step::Exit(node));
+                    steps.try_push_admitted(Step::Exit(node), memory)?;
                     match value.contents() {
                         CdtContents::List(items) => {
-                            steps.extend(items.iter().rev().map(Step::Enter));
+                            for child in items.iter().rev() {
+                                steps.try_push_admitted(Step::Enter(child), memory)?;
+                            }
                         }
                         CdtContents::Map(entries) => {
-                            steps.extend(
-                                entries.iter().rev().map(|entry| Step::Enter(&entry.value)),
-                            );
+                            for entry in entries.iter().rev() {
+                                steps.try_push_admitted(Step::Enter(&entry.value), memory)?;
+                            }
                         }
                     }
                 }
                 CdtTerm::TripleTerm(triple) => {
-                    steps.push(Step::Exit(node));
-                    steps.push(Step::Enter(&triple.object));
-                    steps.push(Step::Enter(&triple.predicate));
-                    steps.push(Step::Enter(&triple.subject));
+                    steps.try_push_admitted(Step::Exit(node), memory)?;
+                    steps.try_push_admitted(Step::Enter(&triple.object), memory)?;
+                    steps.try_push_admitted(Step::Enter(&triple.predicate), memory)?;
+                    steps.try_push_admitted(Step::Enter(&triple.subject), memory)?;
                 }
-                leaf => copies.push(shallow(leaf)),
+                leaf => {
+                    let copy = shallow(leaf, memory)?;
+                    memory.push(&mut copies, copy)?;
+                }
             },
             Step::Exit(node) => {
                 let copy = match node {
                     CdtTerm::Composite(value) => {
                         let first = copies.len() - value.len();
-                        let kids = copies.drain(first..);
                         let parts = match value.contents() {
-                            CdtContents::List(_) => CdtParts::List(kids.collect()),
-                            CdtContents::Map(entries) => CdtParts::Map(
-                                entries
-                                    .iter()
-                                    .zip(kids)
-                                    .map(|(entry, value)| CdtEntry {
-                                        key: entry.key.clone(),
-                                        value,
-                                    })
-                                    .collect(),
-                            ),
+                            CdtContents::List(_) => {
+                                let mut items = Vec::new();
+                                memory.reserve(&mut items, value.len())?;
+                                items.extend(copies.drain(first..));
+                                CdtParts::List(items)
+                            }
+                            CdtContents::Map(entries) => {
+                                let mut output = Vec::new();
+                                memory.reserve(&mut output, entries.len())?;
+                                for (entry, value) in entries.iter().zip(copies.drain(first..)) {
+                                    let key = entry.key.clone_with_memory(memory)?;
+                                    output.push(CdtEntry { key, value });
+                                }
+                                CdtParts::Map(output)
+                            }
                         };
-                        // The copy holds the same contents, so it carries the same
-                        // measure.
                         let extent = value.extent();
-                        CdtTerm::Composite(Box::new(match parts {
+                        let value = match parts {
                             CdtParts::List(items) => CdtValue::from_checked_items(items, extent),
                             CdtParts::Map(entries) => {
                                 CdtValue::from_checked_entries(entries, extent)
                             }
-                        }))
+                        };
+                        CdtTerm::Composite(memory.boxed_value(value)?)
                     }
                     CdtTerm::TripleTerm(_) => {
                         let object = finished(&mut copies);
                         let predicate = finished(&mut copies);
                         let subject = finished(&mut copies);
-                        CdtTerm::TripleTerm(Box::new(CdtTripleTerm {
+                        CdtTerm::TripleTerm(memory.boxed_triple(CdtTripleTerm {
                             subject,
                             predicate,
                             object,
-                        }))
+                        })?)
                     }
-                    CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::Literal(_) | CdtTerm::Null => {
-                        unreachable!("only a node that owns nodes is exited")
-                    }
+                    _ => unreachable!("only a node that owns children is exited"),
                 };
-                copies.push(copy);
+                memory.push(&mut copies, copy)?;
             }
         }
     }
-    finished(&mut copies)
+    let result = finished(&mut copies);
+    memory.release_vec(copies)?;
+    steps.release_admitted(memory)?;
+    Ok(result)
 }
 
-impl Clone for CdtTerm {
-    fn clone(&self) -> Self {
+// The public clone entry and resident Clone use one protocol. Each payload
+// retains its own native clone body, including the original iterative tree law.
+macro_rules! clone_entry {
+    ($(#[$meta:meta])* $type:ty, $resident:literal) => {
+        impl $type {
+            $(#[$meta])*
+            pub fn clone_admitted(
+                &self,
+                storage: &mut dyn $crate::memory::Storage,
+            ) -> Result<(Self, usize), $crate::memory::StorageError> {
+                let mut memory = $crate::memory::Memory::new(storage);
+                let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+                Ok((value, memory.admitted_bytes()))
+            }
+        }
+        impl Clone for $type {
+            fn clone(&self) -> Self {
+                self.clone_admitted(&mut $crate::memory::Resident)
+                    .expect($resident).0
+            }
+        }
+    };
+}
+pub(crate) use clone_entry;
+
+impl CdtTerm {
+    pub(crate) fn clone_with_memory(
+        &self,
+        memory: &mut crate::memory::Memory<'_>,
+    ) -> Result<Self, crate::memory::StorageError> {
         if owns_nodes(self) {
-            clone_tree(self)
+            clone_tree(self, memory)
         } else {
-            shallow(self)
+            shallow(self, memory)
         }
     }
+    /// Release only storage already included in this original Memory account.
+    pub(crate) fn release_with_memory(
+        self,
+        memory: &mut crate::memory::Memory<'_>,
+    ) -> Result<(), crate::memory::StorageError> {
+        match self {
+            Self::Iri(value) | Self::Blank(value) => memory.release_string(value),
+            Self::Literal(value) => value.release_with_memory(memory),
+            Self::Null => Ok(()),
+            node => {
+                let bytes = owned_bytes(OwnedRoot::Term(&node), memory)?;
+                drop(node);
+                memory.release_bytes(bytes)
+            }
+        }
+    }
+}
+crate::tree::clone_entry! {
+    /// Copy under original native storage; surviving bytes exclude dead scratch.
+    ///
+    /// # Errors
+    /// Returns checked layout, physical allocator or original admission refusal.
+    CdtTerm, "resident CDT clone capacity"
+}
+
+impl CdtValue {
+    pub(crate) fn clone_with_memory(
+        &self,
+        memory: &mut crate::memory::Memory<'_>,
+    ) -> Result<Self, crate::memory::StorageError> {
+        let extent = self.extent();
+        match self.contents() {
+            CdtContents::List(items) => {
+                let mut output = Vec::new();
+                memory.reserve(&mut output, items.len())?;
+                for item in items {
+                    output.push(item.clone_with_memory(memory)?);
+                }
+                Ok(Self::from_checked_items(output, extent))
+            }
+            CdtContents::Map(entries) => {
+                let mut output = Vec::new();
+                memory.reserve(&mut output, entries.len())?;
+                for entry in entries {
+                    output.push(entry.clone_with_memory(memory)?);
+                }
+                Ok(Self::from_checked_entries(output, extent))
+            }
+        }
+    }
+    pub(crate) fn release_with_memory(
+        self,
+        memory: &mut crate::memory::Memory<'_>,
+    ) -> Result<(), crate::memory::StorageError> {
+        let bytes = owned_bytes(OwnedRoot::Value(&self), memory)?;
+        drop(self);
+        memory.release_bytes(bytes)
+    }
+}
+crate::tree::clone_entry! {
+    /// Copy the immutable composite under its original native caller.
+    ///
+    /// # Errors
+    /// Returns checked layout, allocator or original admission refusal.
+    CdtValue, "resident CDT clone capacity"
+}
+
+/// Both destruction-only roots share one checked physical-layout observation.
+/// This cannot admit or certify an unpriced producer.
+enum OwnedRoot<'a> {
+    Term(&'a CdtTerm),
+    Value(&'a CdtValue),
+}
+fn owned_bytes(
+    root: OwnedRoot<'_>,
+    memory: &mut crate::memory::Memory<'_>,
+) -> Result<usize, crate::memory::StorageError> {
+    use crate::memory::StorageError;
+    use core::alloc::Layout;
+    let mut bytes = 0usize;
+    let mut pending: WorkList<OwnedRoot<'_>, 8> = WorkList::new();
+    pending.try_push_admitted(root, memory)?;
+    while let Some(node) = pending.pop() {
+        let local = match node {
+            OwnedRoot::Term(term) => match term {
+                CdtTerm::Iri(value) | CdtTerm::Blank(value) => value.capacity(),
+                CdtTerm::Literal(value) => value.owned_bytes()?,
+                CdtTerm::Null => 0,
+                CdtTerm::Composite(value) => {
+                    pending.try_push_admitted(OwnedRoot::Value(value), memory)?;
+                    Layout::new::<CdtValue>().size()
+                }
+                CdtTerm::TripleTerm(value) => {
+                    pending.try_push_admitted(OwnedRoot::Term(&value.object), memory)?;
+                    pending.try_push_admitted(OwnedRoot::Term(&value.predicate), memory)?;
+                    pending.try_push_admitted(OwnedRoot::Term(&value.subject), memory)?;
+                    Layout::new::<CdtTripleTerm>().size()
+                }
+            },
+            OwnedRoot::Value(value) => match value.parts_for_release() {
+                CdtParts::List(items) => {
+                    for term in items {
+                        pending.try_push_admitted(OwnedRoot::Term(term), memory)?;
+                    }
+                    Layout::array::<CdtTerm>(items.capacity())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size()
+                }
+                CdtParts::Map(entries) => {
+                    for entry in entries {
+                        bytes = bytes
+                            .checked_add(entry.key.owned_bytes()?)
+                            .ok_or(StorageError::SizeOverflow)?;
+                        pending.try_push_admitted(OwnedRoot::Term(&entry.value), memory)?;
+                    }
+                    Layout::array::<CdtEntry>(entries.capacity())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size()
+                }
+            },
+        };
+        bytes = bytes.checked_add(local).ok_or(StorageError::SizeOverflow)?;
+    }
+    pending.release_admitted(memory)?;
+    Ok(bytes)
 }
 
 // ── Debug ────────────────────────────────────────────────────────────────────────

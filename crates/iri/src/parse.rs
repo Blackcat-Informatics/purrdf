@@ -50,9 +50,34 @@ pub struct Iri {
 }
 
 impl Iri {
+    /// Copy the validated value without repeating recognition, admitting its
+    /// actual lexical buffer through the original memory before allocation.
+    /// # Errors
+    /// Returns the original layout, admission or allocator refusal.
+    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            text: memory.string(&self.text)?,
+            scheme: self.scheme.clone(),
+            authority: self.authority.clone(),
+            path: self.path.clone(),
+            query: self.query.clone(),
+            fragment: self.fragment.clone(),
+        })
+    }
+
     /// The full IRI text, verbatim.
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    /// Move the validated verbatim text without constructing a second copy.
+    /// Native callers preserve the original account covering this allocation.
+    #[must_use]
+    pub fn into_text(self) -> String {
+        self.text
     }
 
     /// The scheme (without the trailing `:`), if present.
@@ -305,6 +330,134 @@ pub(crate) fn classify(s: &str) -> Result<IriForm> {
     })
 }
 
+/// The same scanner's allocation-free absolute/relative/invalid verdict.
+/// `Some(true)` is absolute, `Some(false)` is a valid relative reference, and
+/// `None` is malformed. Neither parsed text nor a discarded diagnostic is owned;
+/// public diagnostic-producing parse APIs retain their original messages.
+#[must_use]
+pub fn absolute_verdict(s: &str) -> Option<bool> {
+    scan_with(s, Mode::Iri, Diagnostics::Verdict)
+        .ok()
+        .map(|spans| spans.scheme.is_some())
+}
+
+/// A native lexical error or a physical diagnostic-storage refusal.
+#[derive(Debug)]
+pub enum IriReadError {
+    /// The same IRI grammar error and exact message as resident recognition.
+    Lexical(IriError),
+    /// Original physical refusal before diagnostic allocation.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+purrdf_lex::variant_from!(IriReadError { Lexical(IriError) });
+purrdf_lex::variant_from!(IriReadError { Storage(purrdf_lex::allocation::StorageError) });
+impl core::fmt::Display for IriReadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Lexical(error) => core::fmt::Display::fmt(error, f),
+            Self::Storage(error) => core::fmt::Display::fmt(error, f),
+        }
+    }
+}
+impl std::error::Error for IriReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Lexical(error) => Some(error),
+            Self::Storage(error) => Some(error),
+        }
+    }
+}
+
+/// Run the existing IRI recognition law under original diagnostic admission.
+///
+/// Successful recognition owns no parsed-text copy. Any owned grammar-error text
+/// remains in `memory`; the caller retains its original grant until that error is
+/// destroyed or rendered into its independently admitted terminal carrier.
+///
+/// # Errors
+/// Returns the original grammar failure or typed physical refusal.
+pub fn is_absolute_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    s: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> core::result::Result<bool, IriReadError> {
+    let memory = core::cell::RefCell::new(memory);
+    let render = |message: core::fmt::Arguments<'_>| memory.borrow_mut().format(&message);
+    scan_with(s, Mode::Iri, Diagnostics::Admitted(&render)).map(|spans| spans.scheme.is_some())
+}
+
+/// Parse an IRI under its caller's original physical allocation account.
+///
+/// The returned text and any lexical error retain their bytes in `memory`;
+/// callers keep that account until destroying or publishing the payload.
+///
+/// # Errors
+/// Returns the original grammar error or a physical storage refusal.
+pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    s: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> core::result::Result<Iri, IriReadError> {
+    let spans = scan_admitted(s, memory)?;
+    Ok(iri_from_spans(memory.string(s)?, spans))
+}
+
+pub(crate) fn parse_owned_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    text: String,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> core::result::Result<Iri, IriReadError> {
+    match scan_admitted(&text, memory) {
+        Ok(spans) => Ok(iri_from_spans(text, spans)),
+        Err(error) => {
+            memory.release_string(text)?;
+            Err(error)
+        }
+    }
+}
+
+fn scan_admitted<S: purrdf_lex::allocation::Admission + ?Sized>(
+    text: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> core::result::Result<Spans, IriReadError> {
+    let memory = core::cell::RefCell::new(memory);
+    let render = |message: core::fmt::Arguments<'_>| memory.borrow_mut().format(&message);
+    scan_with(text, Mode::Iri, Diagnostics::Admitted(&render))
+}
+
+fn iri_from_spans(text: String, spans: Spans) -> Iri {
+    Iri {
+        text,
+        scheme: spans.scheme,
+        authority: spans.authority,
+        path: spans.path,
+        query: spans.query,
+        fragment: spans.fragment,
+    }
+}
+
+/// Internal diagnostic storage policy; it does not change any grammar decision.
+#[derive(Clone, Copy)]
+pub(crate) enum Diagnostics<'a> {
+    Owned,
+    Verdict,
+    Admitted(
+        &'a dyn Fn(
+            core::fmt::Arguments<'_>,
+        ) -> core::result::Result<String, purrdf_lex::allocation::StorageError>,
+    ),
+}
+
+impl Diagnostics<'_> {
+    pub(crate) fn message(
+        self,
+        message: core::fmt::Arguments<'_>,
+    ) -> core::result::Result<String, IriReadError> {
+        match self {
+            Self::Owned => Ok(message.to_string()),
+            Self::Verdict => Ok(String::new()),
+            Self::Admitted(render) => render(message).map_err(IriReadError::Storage),
+        }
+    }
+}
+
 /// The component spans [`scan`] computes: [`Iri`] without its owned text.
 struct Spans {
     scheme: Option<Range<usize>>,
@@ -329,8 +482,22 @@ fn parse_inner(s: &str, mode: Mode) -> Result<Iri> {
 /// Split and validate `s`'s components, returning their spans. The whole grammar
 /// lives here; [`parse_inner`] adds the owned text and nothing else.
 fn scan(s: &str, mode: Mode) -> Result<Spans> {
+    match scan_with(s, mode, Diagnostics::Owned) {
+        Ok(spans) => Ok(spans),
+        Err(IriReadError::Lexical(error)) => Err(error),
+        Err(IriReadError::Storage(_)) => {
+            unreachable!("resident diagnostic rendering has no storage callback")
+        }
+    }
+}
+
+fn scan_with(
+    s: &str,
+    mode: Mode,
+    diagnostics: Diagnostics<'_>,
+) -> core::result::Result<Spans, IriReadError> {
     if s.is_empty() {
-        return Err(IriError::Empty);
+        return Err(IriError::Empty.into());
     }
 
     // ---- Component split (RFC-3986 Appendix B, hand-rolled) -------------------
@@ -341,7 +508,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
 
     let mut scheme: Option<Range<usize>> = None;
     if let Some(colon) = find_scheme_colon(s) {
-        validate_scheme(&s[..colon])?;
+        validate_scheme_with(&s[..colon], diagnostics)?;
         scheme = Some(0..colon);
         idx = colon + 1; // skip ':'
     }
@@ -352,7 +519,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
         let astart = idx + 2;
         // authority runs until the next '/', '?', '#' or end.
         let aend = astart + find_authority_end(&bytes[astart..]).unwrap_or(bytes.len() - astart);
-        validate_authority(&s[astart..aend], astart, mode)?;
+        validate_authority_with(&s[astart..aend], astart, mode, diagnostics)?;
         authority = Some(astart..aend);
         idx = aend;
     }
@@ -369,7 +536,7 @@ fn scan(s: &str, mode: Mode) -> Result<Spans> {
         let first_seg = &s[pstart..pend];
         let seg = first_seg.split('/').next().unwrap_or("");
         if let Some(rel) = seg.find(':') {
-            return Err(IriError::DisallowedChar(':', pstart + rel));
+            return Err(IriError::DisallowedChar(':', pstart + rel).into());
         }
     }
     let path = pstart..pend;
@@ -418,18 +585,21 @@ fn find_scheme_colon(s: &str) -> Option<usize> {
     }
 }
 
-fn validate_scheme(s: &str) -> Result<()> {
+fn validate_scheme_with(
+    s: &str,
+    diagnostics: Diagnostics<'_>,
+) -> core::result::Result<(), IriReadError> {
     let b = s.as_bytes();
     if b.is_empty() {
-        return Err(IriError::MissingScheme);
+        return Err(IriError::MissingScheme.into());
     }
     if !b[0].is_ascii_alphabetic() {
-        return Err(IriError::BadScheme(s.to_owned()));
+        return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))?).into());
     }
     for &c in &b[1..] {
         // scheme tail = ALPHA / DIGIT / `+` `-` `.` (ASCII-only by grammar).
         if !ascii_class(c, SCHEME_TAIL) {
-            return Err(IriError::BadScheme(s.to_owned()));
+            return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))?).into());
         }
     }
     Ok(())
@@ -702,7 +872,12 @@ fn clean_prefix_len(word: &[u8; CLEAN_WORD], extra_mask: u8) -> usize {
     (u64::from_le_bytes(lanes).trailing_ones() / u8::BITS) as usize
 }
 
-fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
+fn validate_authority_with(
+    s: &str,
+    base_off: usize,
+    mode: Mode,
+    diagnostics: Diagnostics<'_>,
+) -> core::result::Result<(), IriReadError> {
     // authority = [ userinfo "@" ] host [ ":" port ]
     // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
     let (userinfo, rest, host_off) = match find_byte(s.as_bytes(), b'@') {
@@ -726,14 +901,17 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
                     (host, Some(host_off + close + 2), Some(stripped))
                 } else {
                     return Err(IriError::BadAuthority(
-                        "trailing characters after IP-literal".to_owned(),
-                    ));
+                        diagnostics
+                            .message(format_args!("trailing characters after IP-literal"))?,
+                    )
+                    .into());
                 }
             }
             None => {
                 return Err(IriError::BadAuthority(
-                    "unterminated IP-literal '['".to_owned(),
-                ));
+                    diagnostics.message(format_args!("unterminated IP-literal '['"))?,
+                )
+                .into());
             }
         }
     } else {
@@ -747,11 +925,11 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
         }
     };
 
-    crate::host::validate_host(host, host_off, mode)?;
+    crate::host::validate_host_with(host, host_off, mode, diagnostics)?;
     if let (Some(p), Some(poff)) = (port, port_off) {
         for (k, c) in p.char_indices() {
             if !c.is_ascii_digit() {
-                return Err(IriError::DisallowedChar(c, poff + k));
+                return Err(IriError::DisallowedChar(c, poff + k).into());
             }
         }
         // RFC 3986 §3.2.3 defines the generic syntax as `port = *DIGIT`.
@@ -800,6 +978,59 @@ fn find_scheme_end(bytes: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_iri_copy_preserves_component_spans_and_original_admission() {
+        struct Grant {
+            live: usize,
+            refuse: bool,
+        }
+        impl purrdf_lex::allocation::Admission for Grant {
+            fn resize(
+                &mut self,
+                live: usize,
+            ) -> core::result::Result<(), purrdf_lex::allocation::StorageError> {
+                if self.refuse && live != 0 {
+                    return Err(purrdf_lex::allocation::StorageError::AdmissionFailed);
+                }
+                self.live = live;
+                Ok(())
+            }
+        }
+        for text in [
+            "http://user@[2001:db8::1]:80/path%20part?x=1#frag",
+            "urn:example:one",
+            "../relative/path?query#fragment",
+            "https://example.org/日本語?値=一#章",
+        ] {
+            let original = parse(text).expect("valid fixture IRI");
+            let mut grant = Grant {
+                live: 0,
+                refuse: false,
+            };
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut grant);
+            let copy = original
+                .clone_with_memory(&mut memory)
+                .expect("admitted copy");
+            assert_eq!(copy, original);
+            assert_eq!(copy, parse(copy.as_str()).expect("independent recognition"));
+            assert_eq!(memory.admitted_bytes(), copy.text.capacity());
+            memory
+                .release_string(copy.into_text())
+                .expect("destroy original buffer");
+            assert_eq!(grant.live, 0);
+
+            grant.refuse = true;
+            let refused =
+                original.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut grant));
+            assert_eq!(
+                refused.expect_err("before-copy refusal"),
+                purrdf_lex::allocation::StorageError::AdmissionFailed
+            );
+            assert_eq!(grant.live, 0);
+            assert_eq!(original.as_str(), text);
+        }
+    }
 
     /// **`is_absolute` is `parse(..).map(has_scheme)`, for every input.**
     ///

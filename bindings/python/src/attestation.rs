@@ -38,7 +38,7 @@ use purrdf_sparql_eval::{
     BindingPattern, EvalError, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
     ServiceLevel, Volatility,
 };
-use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::{PyMemoryError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
@@ -120,17 +120,22 @@ impl Attestation {
                 ))
             })
         };
+        let generation = read(&generation, "generation")?
+            .map_or(IndexGeneration::Undeclared, IndexGeneration::declared);
+        let service = match read(&incompleteness, "incompleteness")? {
+            None => ServiceLevel::Undeclared,
+            Some(reason) => ServiceLevel::Incomplete {
+                reason: purrdf_core::small::shared::SharedText::try_from_admitted(reason, ())
+                    .map_err(|error| PyMemoryError::new_err(error.to_string()))?,
+            },
+        };
         Ok(Some(Self {
             // Recorded verbatim on both halves. The kernel never parses either
             // string, and neither does this boundary: a generation is whatever the
             // host's index calls its versions, and a reason is whatever an
             // operator needs to read.
-            generation: read(&generation, "generation")?
-                .map_or(IndexGeneration::Undeclared, IndexGeneration::declared),
-            service: read(&incompleteness, "incompleteness")?
-                .map_or(ServiceLevel::Undeclared, |reason| {
-                    ServiceLevel::Incomplete { reason }
-                }),
+            generation,
+            service,
         }))
     }
 

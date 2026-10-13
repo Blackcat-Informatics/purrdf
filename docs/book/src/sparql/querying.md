@@ -96,8 +96,9 @@ graph terms. UPDATE, governed UPDATE, `Store.checkpoint` and
 `MutableDataset.compact` preserve the selection. WebAssembly selects it with
 `new Dataset(false)` or `Dataset.parse(input, format, base, false)`; the C ABI
 with `PURRDF_GRAPH_EXISTENCE_IMPLICIT` as the `graph_existence` argument of
-`purrdf_graph_from_dataset`, `purrdf_update_governed` or
-`purrdf_update_governed_xpath_regex`; and the command line with
+`purrdf_graph_from_dataset`, `purrdf_update_governed`,
+`purrdf_update_governed_xpath_regex` or `purrdf_update_governed_with_geo`;
+and the command line with
 `purrdf update --graph-existence implicit`. Loading and dumping declared empty
 graphs through TriG, JSON-LD and TriX works in both modes; mode is mutation
 policy rather than serialized data. A stopped UPDATE publishes nothing,

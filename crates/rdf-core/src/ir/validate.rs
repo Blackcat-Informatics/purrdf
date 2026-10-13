@@ -27,8 +27,10 @@
 //!
 //! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
 
+use super::builder::NativeBuildError;
 use crate::RdfDiagnostic;
 use purrdf_events::MAX_TERM_NESTING_DEPTH;
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
@@ -142,169 +144,13 @@ pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(
 /// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
 /// is structurally sound, or a precise [`RdfDiagnostic`] on the first violation.
 pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
-    let term_count = builder.term_count();
-
-    // 0. The IR-boundary absoluteness invariant. Checked FIRST, and before any
-    //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
-    //    every positional check below would report a downstream symptom of it.
-    require_absolute_iris(builder)?;
-    if let Some((code, message)) = builder.invalid_literal() {
-        return Err(diag(code, message.to_owned()));
-    }
-
-    // 1. Every interned triple term references in-range ids, has an IRI predicate
-    //    and a non-literal subject, and the whole nesting forest is acyclic and
-    //    depth-bounded.
-    validate_triple_terms(builder, term_count)?;
-
-    // 2. Every declared named graph names an in-range IRI or blank node, exactly as
-    //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
-    for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
-        check_id_in_range(graph, term_count, || {
-            format!("named graph declaration #{i}")
-        })?;
-        require_graph_name(builder, graph, || format!("named graph declaration #{i}"))?;
-    }
-
-    // 3. Quad positional + id-reference validity.
-    for (i, q) in builder.quad_rows().iter().enumerate() {
-        check_id_in_range(q.s, term_count, || quad_ref_ctx(i, "subject"))?;
-        check_id_in_range(q.p, term_count, || quad_ref_ctx(i, "predicate"))?;
-        check_id_in_range(q.o, term_count, || quad_ref_ctx(i, "object"))?;
-        if let Some(g) = q.g {
-            check_id_in_range(g, term_count, || quad_ref_ctx(i, "graph"))?;
-        }
-
-        require_subject(
-            builder,
-            q.s,
-            || quad_ref_ctx(i, "subject"),
-            ASSERTED_SUBJECT,
-        )?;
-        require_iri_predicate(builder, q.p, || quad_ref_ctx(i, "predicate"))?;
-        if let Some(g) = q.g {
-            require_graph_name(builder, g, || quad_ref_ctx(i, "graph"))?;
-        }
-    }
-
-    // 4. Reifier id-reference validity; the reified target MUST be a triple term.
-    for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
-        check_id_in_range(*reifier, term_count, || format!("reifier #{i} resource"))?;
-        check_id_in_range(*triple, term_count, || format!("reifier #{i} target"))?;
-        require_subject(
-            builder,
-            *reifier,
-            || format!("reifier #{i} resource"),
-            ASSERTED_SUBJECT,
-        )?;
-        if let Some(g) = graph {
-            check_id_in_range(*g, term_count, || format!("reifier #{i} graph"))?;
-            require_graph_name(builder, *g, || format!("reifier #{i} graph"))?;
-        }
-        if !matches!(builder.term(*triple), InternedTerm::Triple { .. }) {
-            return Err(diag(
-                "rdf-ir-reifier-not-triple",
-                format!(
-                    "reifier #{i} must bind a triple term, but its target resolves to {}",
-                    kind_str(builder.term(*triple))
-                ),
-            ));
-        }
-    }
-
-    // 5. Annotation id-reference validity + predicate-is-IRI.
-    for (i, (reifier, p, o, graph)) in builder.annotation_rows().iter().enumerate() {
-        check_id_in_range(*reifier, term_count, || format!("annotation #{i} reifier"))?;
-        check_id_in_range(*p, term_count, || format!("annotation #{i} predicate"))?;
-        check_id_in_range(*o, term_count, || format!("annotation #{i} object"))?;
-        require_iri_predicate(builder, *p, || format!("annotation #{i} predicate"))?;
-        require_subject(
-            builder,
-            *reifier,
-            || format!("annotation #{i} reifier"),
-            ASSERTED_SUBJECT,
-        )?;
-        if let Some(g) = graph {
-            check_id_in_range(*g, term_count, || format!("annotation #{i} graph"))?;
-            require_graph_name(builder, *g, || format!("annotation #{i} graph"))?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Enforce the IR-boundary absoluteness invariant: no interned IRI term may be a
-/// relative IRI reference.
-///
-/// The check itself already ran, once per DISTINCT IRI, on the miss path of the
-/// builder's store-once interner (`super::absolute::check_absolute`); this reads the
-/// recorded verdict rather than re-walking the term table, so freeze costs nothing
-/// extra for the overwhelmingly common case of a dataset with no violation.
-///
-/// The reported `code` is [`purrdf_iri::IriError::diagnostic_code`] verbatim — the
-/// workspace's single owner of these spellings — so a relative IRI reaching the IR
-/// through a non-codec ingress reports exactly the code the codecs report.
-///
-/// The remedy is carried by the MESSAGE and by nothing else. `IriError`'s
-/// [`Display`](core::fmt::Display) already ends with
-/// [`remedy_hint`](purrdf_iri::IriError::remedy_hint) — that is the contract its own
-/// rustdoc states — and [`RdfDiagnostic`]'s rendering appends `detail` after the
-/// message, so attaching the hint as `detail` here printed the same sentence twice in
-/// one diagnostic at every consumer that formats `{diagnostic}`.
-fn require_absolute_iris(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
-    let Some((iri, err)) = builder.relative_iri() else {
-        return Ok(());
-    };
-    Err(diag(
-        err.diagnostic_code(),
-        format!("IRI term {iri:?} cannot be interned into the RDF IR: {err}"),
+    resident_validation(validate_with_memory(
+        builder,
+        &mut Memory::new(&mut Resident),
     ))
 }
 
-/// Validate every interned triple term: in-range components, IRI predicate,
-/// IRI-or-blank subject, and global acyclicity (C0.3) bounded by depth.
-fn validate_triple_terms(
-    builder: &RdfDatasetBuilder,
-    term_count: usize,
-) -> Result<(), RdfDiagnostic> {
-    // First pass: per-triple positional + id-range checks. A triple term's subject is
-    // an IRI or a blank node and its predicate is an IRI, exactly like an asserted
-    // statement; only the OBJECT may nest another triple term.
-    for raw in 0..term_count {
-        let id = TermId::from_index(raw as u32);
-        if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
-            check_id_in_range(s, term_count, || format!("triple term #{raw} subject"))?;
-            check_id_in_range(p, term_count, || format!("triple term #{raw} predicate"))?;
-            check_id_in_range(o, term_count, || format!("triple term #{raw} object"))?;
-            require_subject(
-                builder,
-                s,
-                || format!("triple term #{raw} subject"),
-                TRIPLE_COMPONENT_SUBJECT,
-            )?;
-            require_iri_predicate(builder, p, || format!("triple term #{raw} predicate"))?;
-        }
-    }
-
-    // Second pass: acyclicity and nesting. DFS each triple term following only the
-    // components that are themselves triple terms, memoizing every term's nesting (how
-    // many triple terms its longest chain holds, itself included) so a term shared by
-    // many others is walked once. The bound is on that nesting, not on how deep the
-    // search happened to find a term: a chain interned innermost first reaches every
-    // term at depth 0, already finished, and is refused all the same. With ids in range
-    // guaranteed above, a cycle is the only way for the search itself to run past the
-    // bound, so the depth bound doubles as the cycle guard and the recursion never
-    // exceeds MAX_TERM_NESTING_DEPTH + 1 frames.
-    let mut state = vec![VisitState::Unvisited; term_count];
-    for raw in 0..term_count {
-        let id = TermId::from_index(raw as u32);
-        if matches!(builder.term(id), InternedTerm::Triple { .. }) {
-            check_acyclic(builder, id, 0, &mut state)?;
-        }
-    }
-    Ok(())
-}
-
+/// The original DFS state for global triple-term acyclicity and nesting depth.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VisitState {
     Unvisited,
@@ -317,75 +163,12 @@ enum VisitState {
 
 /// The refusal of a triple term nested deeper than [`MAX_TERM_NESTING_DEPTH`].
 fn nesting_limit() -> RdfDiagnostic {
-    diag(
-        "rdf-ir-triple-nesting-limit",
-        format!("triple-term nesting depth exceeds the limit of {MAX_TERM_NESTING_DEPTH}"),
-    )
-}
-
-/// DFS over triple-term nesting from `id`, `depth` triple terms below the term the
-/// search started at. Detects back edges (cycles) and returns the triple-term nesting
-/// `id` holds — 1 for a triple term whose components are not triple terms, one more
-/// than its deepest triple-term component otherwise — refusing a nesting past
-/// [`MAX_TERM_NESTING_DEPTH`].
-fn check_acyclic(
-    builder: &RdfDatasetBuilder,
-    id: TermId,
-    depth: usize,
-    state: &mut [VisitState],
-) -> Result<usize, RdfDiagnostic> {
-    if depth > MAX_TERM_NESTING_DEPTH {
-        return Err(nesting_limit());
-    }
-    match state[id.index()] {
-        VisitState::Done(nesting) => return Ok(nesting),
-        VisitState::OnStack => {
-            return Err(diag(
-                "rdf-ir-triple-cycle",
-                "triple term participates in a reference cycle (a triple cannot contain itself)",
-            ));
-        }
-        VisitState::Unvisited => {}
-    }
-
-    let InternedTerm::Triple { s, p, o } = *builder.term(id) else {
-        // A non-triple leaf is trivially acyclic and holds no triple term.
-        state[id.index()] = VisitState::Done(0);
-        return Ok(0);
-    };
-
-    state[id.index()] = VisitState::OnStack;
-    let mut deepest = 0;
-    for component in [s, p, o] {
-        if matches!(builder.term(component), InternedTerm::Triple { .. }) {
-            deepest = deepest.max(check_acyclic(builder, component, depth + 1, state)?);
+    match nesting_limit_with_memory(&mut Memory::new(&mut Resident)) {
+        NativeBuildError::Diagnostic(diagnostic) => diagnostic,
+        NativeBuildError::Storage(error) => {
+            panic!("resident RDF validation allocation failed: {error}")
         }
     }
-    let nesting = deepest + 1;
-    if nesting > MAX_TERM_NESTING_DEPTH {
-        return Err(nesting_limit());
-    }
-    state[id.index()] = VisitState::Done(nesting);
-    Ok(nesting)
-}
-
-/// Reject an out-of-range term id (orphan reference) with a precise diagnostic.
-fn check_id_in_range(
-    id: TermId,
-    term_count: usize,
-    ctx: impl FnOnce() -> String,
-) -> Result<(), RdfDiagnostic> {
-    if id.index() >= term_count {
-        return Err(diag(
-            "rdf-ir-term-out-of-range",
-            format!(
-                "{} references term #{} but only {term_count} terms are interned",
-                ctx(),
-                id.index(),
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// A subject position MUST be an IRI or a blank node; `triple_reason` says why a
@@ -407,31 +190,17 @@ fn check_id_in_range(
 ///   `purrdf-rdf`'s N-Triples/N-Quads statement validator rejects a nested
 ///   triple-term subject, so admitting one here would let the writers emit a
 ///   document the readers refuse.
-fn require_subject(
-    builder: &RdfDatasetBuilder,
-    id: TermId,
-    ctx: impl FnOnce() -> String,
-    triple_reason: &str,
-) -> Result<(), RdfDiagnostic> {
-    require_subject_kind(interned_kind(builder.term(id)), ctx, triple_reason)
-}
-
 fn require_subject_kind(
     kind: Kind,
     ctx: impl FnOnce() -> String,
     triple_reason: &str,
 ) -> Result<(), RdfDiagnostic> {
-    match kind {
-        Kind::Iri | Kind::Blank => Ok(()),
-        Kind::Literal => Err(diag(
-            "rdf-ir-literal-subject",
-            format!("{} must not be a literal", ctx()),
-        )),
-        Kind::Triple => Err(diag(
-            "rdf-ir-triple-subject",
-            format!("{} must be an IRI or blank node; {triple_reason}", ctx()),
-        )),
-    }
+    resident_validation(require_subject_kind_with_memory(
+        kind,
+        &LazyContext(core::cell::RefCell::new(Some(ctx))),
+        triple_reason,
+        &mut Memory::new(&mut Resident),
+    ))
 }
 
 /// Why a triple term cannot be an asserted subject (see [`require_subject`]).
@@ -442,53 +211,21 @@ const TRIPLE_COMPONENT_SUBJECT: &str =
     "RDF 1.2 nests a triple term only in the OBJECT of another triple term";
 
 /// A predicate MUST be an IRI.
-fn require_iri_predicate(
-    builder: &RdfDatasetBuilder,
-    id: TermId,
-    ctx: impl FnOnce() -> String,
-) -> Result<(), RdfDiagnostic> {
-    require_predicate_kind(interned_kind(builder.term(id)), ctx)
-}
-
 fn require_predicate_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
-    if !matches!(kind, Kind::Iri) {
-        return Err(diag(
-            "rdf-ir-predicate-not-iri",
-            format!(
-                "{} must be an IRI, but resolves to {}",
-                ctx(),
-                kind_name(kind)
-            ),
-        ));
-    }
-    Ok(())
+    resident_validation(require_predicate_kind_with_memory(
+        kind,
+        &LazyContext(core::cell::RefCell::new(Some(ctx))),
+        &mut Memory::new(&mut Resident),
+    ))
 }
 
 /// A graph name MUST be an IRI or a blank node (never a literal or triple term).
-fn require_graph_name(
-    builder: &RdfDatasetBuilder,
-    id: TermId,
-    ctx: impl FnOnce() -> String,
-) -> Result<(), RdfDiagnostic> {
-    require_graph_kind(interned_kind(builder.term(id)), ctx)
-}
-
 fn require_graph_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
-    match kind {
-        Kind::Iri | Kind::Blank => Ok(()),
-        other => Err(diag(
-            "rdf-ir-graph-name-invalid",
-            format!(
-                "{} must be an IRI or blank node, but resolves to {}",
-                ctx(),
-                kind_name(other)
-            ),
-        )),
-    }
-}
-
-fn quad_ref_ctx(index: usize, position: &str) -> String {
-    format!("quad #{index} {position}")
+    resident_validation(require_graph_kind_with_memory(
+        kind,
+        &LazyContext(core::cell::RefCell::new(Some(ctx))),
+        &mut Memory::new(&mut Resident),
+    ))
 }
 
 fn kind_str(term: &InternedTerm) -> &'static str {
@@ -507,6 +244,460 @@ fn kind_name(kind: Kind) -> &'static str {
 /// Construct a structural-validation error diagnostic.
 fn diag(code: &str, message: impl Into<String>) -> RdfDiagnostic {
     RdfDiagnostic::error(code, message)
+}
+
+fn resident_validation<T>(result: Result<T, NativeBuildError>) -> Result<T, RdfDiagnostic> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(NativeBuildError::Diagnostic(diagnostic)) => Err(diagnostic),
+        Err(NativeBuildError::Storage(error)) => {
+            panic!("resident RDF validation allocation failed: {error}")
+        }
+    }
+}
+
+struct LazyContext<F>(core::cell::RefCell<Option<F>>);
+impl<F: FnOnce() -> String> core::fmt::Display for LazyContext<F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let context = self
+            .0
+            .borrow_mut()
+            .take()
+            .expect("a positional context is rendered once");
+        f.write_str(&context())
+    }
+}
+struct QuadContext<'a>(usize, &'a str);
+impl core::fmt::Display for QuadContext<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "quad #{} {}", self.0, self.1)
+    }
+}
+
+pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    let term_count = builder.term_count();
+
+    // 0. The IR-boundary absoluteness invariant. Checked FIRST, and before any
+    //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
+    //    every positional check below would report a downstream symptom of it.
+    require_absolute_iris_with_memory(builder, memory)?;
+    if let Some((code, message)) = builder.invalid_literal() {
+        return Err(diag_with_memory(code, message, memory));
+    }
+
+    // 1. Every interned triple term references in-range ids, has an IRI predicate
+    //    and a non-literal subject, and the whole nesting forest is acyclic and
+    //    depth-bounded.
+    validate_triple_terms_with_memory(builder, term_count, memory)?;
+
+    // 2. Every declared named graph names an in-range IRI or blank node, exactly as
+    //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
+    for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
+        check_id_in_range_with_memory(
+            graph,
+            term_count,
+            &format_args!("named graph declaration #{i}"),
+            memory,
+        )?;
+        require_graph_name_with_memory(
+            builder,
+            graph,
+            &format_args!("named graph declaration #{i}"),
+            memory,
+        )?;
+    }
+
+    // 3. Quad positional + id-reference validity.
+    for (i, q) in builder.quad_rows().iter().enumerate() {
+        check_id_in_range_with_memory(q.s, term_count, &QuadContext(i, "subject"), memory)?;
+        check_id_in_range_with_memory(q.p, term_count, &QuadContext(i, "predicate"), memory)?;
+        check_id_in_range_with_memory(q.o, term_count, &QuadContext(i, "object"), memory)?;
+        if let Some(g) = q.g {
+            check_id_in_range_with_memory(g, term_count, &QuadContext(i, "graph"), memory)?;
+        }
+
+        require_subject_with_memory(
+            builder,
+            q.s,
+            &QuadContext(i, "subject"),
+            ASSERTED_SUBJECT,
+            memory,
+        )?;
+        require_iri_predicate_with_memory(builder, q.p, &QuadContext(i, "predicate"), memory)?;
+        if let Some(g) = q.g {
+            require_graph_name_with_memory(builder, g, &QuadContext(i, "graph"), memory)?;
+        }
+    }
+
+    // 4. Reifier id-reference validity; the reified target MUST be a triple term.
+    for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
+        check_id_in_range_with_memory(
+            *reifier,
+            term_count,
+            &format_args!("reifier #{i} resource"),
+            memory,
+        )?;
+        check_id_in_range_with_memory(
+            *triple,
+            term_count,
+            &format_args!("reifier #{i} target"),
+            memory,
+        )?;
+        require_subject_with_memory(
+            builder,
+            *reifier,
+            &format_args!("reifier #{i} resource"),
+            ASSERTED_SUBJECT,
+            memory,
+        )?;
+        if let Some(g) = graph {
+            check_id_in_range_with_memory(
+                *g,
+                term_count,
+                &format_args!("reifier #{i} graph"),
+                memory,
+            )?;
+            require_graph_name_with_memory(
+                builder,
+                *g,
+                &format_args!("reifier #{i} graph"),
+                memory,
+            )?;
+        }
+        if !matches!(builder.term(*triple), InternedTerm::Triple { .. }) {
+            return Err(diag_with_memory(
+                "rdf-ir-reifier-not-triple",
+                format_args!(
+                    "reifier #{i} must bind a triple term, but its target resolves to {}",
+                    kind_str(builder.term(*triple))
+                ),
+                memory,
+            ));
+        }
+    }
+
+    // 5. Annotation id-reference validity + predicate-is-IRI.
+    for (i, (reifier, p, o, graph)) in builder.annotation_rows().iter().enumerate() {
+        check_id_in_range_with_memory(
+            *reifier,
+            term_count,
+            &format_args!("annotation #{i} reifier"),
+            memory,
+        )?;
+        check_id_in_range_with_memory(
+            *p,
+            term_count,
+            &format_args!("annotation #{i} predicate"),
+            memory,
+        )?;
+        check_id_in_range_with_memory(
+            *o,
+            term_count,
+            &format_args!("annotation #{i} object"),
+            memory,
+        )?;
+        require_iri_predicate_with_memory(
+            builder,
+            *p,
+            &format_args!("annotation #{i} predicate"),
+            memory,
+        )?;
+        require_subject_with_memory(
+            builder,
+            *reifier,
+            &format_args!("annotation #{i} reifier"),
+            ASSERTED_SUBJECT,
+            memory,
+        )?;
+        if let Some(g) = graph {
+            check_id_in_range_with_memory(
+                *g,
+                term_count,
+                &format_args!("annotation #{i} graph"),
+                memory,
+            )?;
+            require_graph_name_with_memory(
+                builder,
+                *g,
+                &format_args!("annotation #{i} graph"),
+                memory,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Enforce the IR-boundary absoluteness invariant: no interned IRI term may be a
+/// relative IRI reference. The builder records the verdict once per distinct IRI
+/// at the store-once interner's miss path; freeze reads it without another walk.
+/// The diagnostic code comes verbatim from IriError. Its Display already owns
+/// remedy_hint, so adding the same hint as diagnostic detail would print it twice.
+fn require_absolute_iris_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    let Some((iri, err)) = builder.relative_iri() else {
+        return Ok(());
+    };
+    Err(diag_with_memory(
+        err.diagnostic_code(),
+        format_args!("IRI term {iri:?} cannot be interned into the RDF IR: {err}"),
+        memory,
+    ))
+}
+
+/// Validate every interned triple term: in-range components, IRI predicate,
+/// IRI-or-blank subject, and global acyclicity (C0.3) bounded by depth.
+fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    term_count: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    // First pass: per-triple positional + id-range checks. A triple term's subject is
+    // an IRI or a blank node and its predicate is an IRI, exactly like an asserted
+    // statement; only the OBJECT may nest another triple term.
+    for raw in 0..term_count {
+        let id = TermId::from_index(raw as u32);
+        if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
+            check_id_in_range_with_memory(
+                s,
+                term_count,
+                &format_args!("triple term #{raw} subject"),
+                memory,
+            )?;
+            check_id_in_range_with_memory(
+                p,
+                term_count,
+                &format_args!("triple term #{raw} predicate"),
+                memory,
+            )?;
+            check_id_in_range_with_memory(
+                o,
+                term_count,
+                &format_args!("triple term #{raw} object"),
+                memory,
+            )?;
+            require_subject_with_memory(
+                builder,
+                s,
+                &format_args!("triple term #{raw} subject"),
+                TRIPLE_COMPONENT_SUBJECT,
+                memory,
+            )?;
+            require_iri_predicate_with_memory(
+                builder,
+                p,
+                &format_args!("triple term #{raw} predicate"),
+                memory,
+            )?;
+        }
+    }
+
+    // Second pass: acyclicity and nesting. DFS each triple term following only the
+    // components that are themselves triple terms, memoizing every term's nesting (how
+    // many triple terms its longest chain holds, itself included) so a term shared by
+    // many others is walked once. The bound is on that nesting, not on how deep the
+    // search happened to find a term: a chain interned innermost first reaches every
+    // term at depth 0, already finished, and is refused all the same. With ids in range
+    // guaranteed above, a cycle is the only way for the search itself to run past the
+    // bound, so the depth bound doubles as the cycle guard and the recursion never
+    // exceeds MAX_TERM_NESTING_DEPTH + 1 frames.
+    let mut state = memory.collect(core::iter::repeat_n(VisitState::Unvisited, term_count))?;
+    let result = (|| {
+        for raw in 0..term_count {
+            let id = TermId::from_index(raw as u32);
+            if matches!(builder.term(id), InternedTerm::Triple { .. }) {
+                check_acyclic_with_memory(builder, id, 0, &mut state, memory)?;
+            }
+        }
+        Ok(())
+    })();
+    memory.release_vec(state)?;
+    result
+}
+
+fn nesting_limit_with_memory<S: Admission + ?Sized>(
+    memory: &mut Memory<'_, S>,
+) -> NativeBuildError {
+    diag_with_memory(
+        "rdf-ir-triple-nesting-limit",
+        format_args!("triple-term nesting depth exceeds the limit of {MAX_TERM_NESTING_DEPTH}"),
+        memory,
+    )
+}
+
+/// DFS from id, depth triple terms below the original root. Detects back edges
+/// and records the subtree's nesting, refusing a depth past MAX_TERM_NESTING_DEPTH.
+fn check_acyclic_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    depth: usize,
+    state: &mut [VisitState],
+    memory: &mut Memory<'_, S>,
+) -> Result<usize, NativeBuildError> {
+    if depth > MAX_TERM_NESTING_DEPTH {
+        return Err(nesting_limit_with_memory(memory));
+    }
+    match state[id.index()] {
+        VisitState::Done(nesting) => return Ok(nesting),
+        VisitState::OnStack => {
+            return Err(diag_with_memory(
+                "rdf-ir-triple-cycle",
+                "triple term participates in a reference cycle (a triple cannot contain itself)",
+                memory,
+            ));
+        }
+        VisitState::Unvisited => {}
+    }
+
+    let InternedTerm::Triple { s, p, o } = *builder.term(id) else {
+        // A non-triple leaf is trivially acyclic and holds no triple term.
+        state[id.index()] = VisitState::Done(0);
+        return Ok(0);
+    };
+
+    state[id.index()] = VisitState::OnStack;
+    let mut deepest = 0;
+    for component in [s, p, o] {
+        if matches!(builder.term(component), InternedTerm::Triple { .. }) {
+            deepest = deepest.max(check_acyclic_with_memory(
+                builder,
+                component,
+                depth + 1,
+                state,
+                memory,
+            )?);
+        }
+    }
+    let nesting = deepest + 1;
+    if nesting > MAX_TERM_NESTING_DEPTH {
+        return Err(nesting_limit_with_memory(memory));
+    }
+    state[id.index()] = VisitState::Done(nesting);
+    Ok(nesting)
+}
+
+/// Reject an out-of-range term id (orphan reference) with a precise diagnostic.
+fn check_id_in_range_with_memory<S: Admission + ?Sized>(
+    id: TermId,
+    term_count: usize,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    if id.index() >= term_count {
+        return Err(diag_with_memory(
+            "rdf-ir-term-out-of-range",
+            format_args!(
+                "{} references term #{} but only {term_count} terms are interned",
+                ctx,
+                id.index(),
+            ),
+            memory,
+        ));
+    }
+    Ok(())
+}
+
+fn require_subject_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    triple_reason: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    require_subject_kind_with_memory(interned_kind(builder.term(id)), ctx, triple_reason, memory)
+}
+
+fn require_subject_kind_with_memory<S: Admission + ?Sized>(
+    kind: Kind,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    triple_reason: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    match kind {
+        Kind::Iri | Kind::Blank => Ok(()),
+        Kind::Literal => Err(diag_with_memory(
+            "rdf-ir-literal-subject",
+            format_args!("{ctx} must not be a literal"),
+            memory,
+        )),
+        Kind::Triple => Err(diag_with_memory(
+            "rdf-ir-triple-subject",
+            format_args!("{ctx} must be an IRI or blank node; {triple_reason}"),
+            memory,
+        )),
+    }
+}
+
+fn require_iri_predicate_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    require_predicate_kind_with_memory(interned_kind(builder.term(id)), ctx, memory)
+}
+
+fn require_predicate_kind_with_memory<S: Admission + ?Sized>(
+    kind: Kind,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    if !matches!(kind, Kind::Iri) {
+        return Err(diag_with_memory(
+            "rdf-ir-predicate-not-iri",
+            format_args!(
+                "{} must be an IRI, but resolves to {}",
+                ctx,
+                kind_name(kind)
+            ),
+            memory,
+        ));
+    }
+    Ok(())
+}
+
+fn require_graph_name_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    require_graph_kind_with_memory(interned_kind(builder.term(id)), ctx, memory)
+}
+
+fn require_graph_kind_with_memory<S: Admission + ?Sized>(
+    kind: Kind,
+    ctx: &(impl core::fmt::Display + ?Sized),
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    match kind {
+        Kind::Iri | Kind::Blank => Ok(()),
+        other => Err(diag_with_memory(
+            "rdf-ir-graph-name-invalid",
+            format_args!(
+                "{} must be an IRI or blank node, but resolves to {}",
+                ctx,
+                kind_name(other)
+            ),
+            memory,
+        )),
+    }
+}
+
+fn diag_with_memory<S: Admission + ?Sized>(
+    code: &str,
+    message: impl core::fmt::Display,
+    memory: &mut Memory<'_, S>,
+) -> NativeBuildError {
+    match RdfDiagnostic::try_error_with_memory(code, &message, memory) {
+        Ok(diagnostic) => NativeBuildError::Diagnostic(diagnostic),
+        Err(error) => NativeBuildError::Storage(error),
+    }
 }
 
 #[cfg(test)]

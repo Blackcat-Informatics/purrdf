@@ -49,7 +49,6 @@ pub const TYPESCRIPT_DECLARATION_PATH: &str = "index.d.ts";
 
 const LOSS_FROM: &str = "json-schema";
 const LOSS_CONTEXT: &str = "typescript-emitter";
-const MAX_DEFINITIONS: usize = 65_536;
 /// The greatest length a JavaScript array can have (ECMA-262 §10.4.2): a
 /// length bound at or beyond it constrains no JSON value TypeScript types.
 const MAX_ARRAY_LENGTH: u64 = 4_294_967_295;
@@ -237,13 +236,6 @@ pub fn emit_typescript(
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| TypeScriptError::new(error.to_string()))?;
     let definitions = catalog.definitions();
-    if definitions.len() > MAX_DEFINITIONS {
-        return Err(TypeScriptError::new(format!(
-            "CompiledSchema contains {} definitions; TypeScript emission is limited to \
-             {MAX_DEFINITIONS}",
-            definitions.len()
-        )));
-    }
 
     let type_names = definition_names(definitions)?;
     validate_unguarded_reference_cycles(definitions)?;

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use std::fmt;
-use std::fmt::Write as _;
 
 pub use purrdf_lex::diagnostic::{
     DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
@@ -49,7 +48,7 @@ impl fmt::Display for RdfSeverity {
 /// so the struct derives a total order directly — the loss ledger relies on
 /// this to sort runtime entries deterministically without a separate
 /// `display()`-string comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct RdfLocation {
     /// The source file path (physical location anchor).
     pub path: Option<String>,
@@ -76,7 +75,43 @@ pub struct RdfLocation {
     pub gts_segment_index: Option<u64>,
 }
 
+purrdf_lex::resident_clone!(RdfLocation);
+
 impl RdfLocation {
+    /// Copy physical and logical locations without allocating ahead of admission.
+    ///
+    /// # Errors
+    /// Returns the original physical refusal, preserving the source location.
+    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            path: self
+                .path
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            line: self.line,
+            column: self.column,
+            logical: self
+                .logical
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            subject: self
+                .subject
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            gts_term_id: self.gts_term_id,
+            gts_quad_index: self.gts_quad_index,
+            gts_reifier_id: self.gts_reifier_id,
+            gts_frame_index: self.gts_frame_index,
+            gts_segment_index: self.gts_segment_index,
+        })
+    }
+
     /// A purely logical location (no file path), from its label.
     pub fn logical(logical: impl Into<String>) -> Self {
         Self {
@@ -171,39 +206,39 @@ impl RdfLocation {
     /// to the logical label or `<unknown>`) followed by any GTS anchors, e.g.
     /// `term#3 quad#7`.
     pub fn display(&self) -> String {
-        let mut out = self
-            .path
-            .as_deref()
-            .or(self.logical.as_deref())
-            .unwrap_or("<unknown>")
-            .to_owned();
+        self.to_string()
+    }
+}
+
+impl fmt::Display for RdfLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            self.path
+                .as_deref()
+                .or(self.logical.as_deref())
+                .unwrap_or("<unknown>"),
+        )?;
         if let Some(line) = self.line {
-            out.push(':');
-            out.push_str(&line.to_string());
+            write!(f, ":{line}")?;
             if let Some(column) = self.column {
-                out.push(':');
-                out.push_str(&column.to_string());
+                write!(f, ":{column}")?;
             }
         }
-        if let Some(term_id) = self.gts_term_id {
-            let _ = write!(out, " term#{term_id}");
-        }
-        if let Some(quad_index) = self.gts_quad_index {
-            let _ = write!(out, " quad#{quad_index}");
-        }
-        if let Some(reifier_id) = self.gts_reifier_id {
-            let _ = write!(out, " reifier#{reifier_id}");
-        }
-        if let Some(frame_index) = self.gts_frame_index {
-            let _ = write!(out, " frame#{frame_index}");
-        }
-        if let Some(segment_index) = self.gts_segment_index {
-            let _ = write!(out, " segment#{segment_index}");
+        for (label, value) in [
+            ("term", self.gts_term_id),
+            ("quad", self.gts_quad_index),
+            ("reifier", self.gts_reifier_id),
+            ("frame", self.gts_frame_index),
+            ("segment", self.gts_segment_index),
+        ] {
+            if let Some(value) = value {
+                write!(f, " {label}#{value}")?;
+            }
         }
         if let Some(subject) = &self.subject {
-            let _ = write!(out, " subject={subject}");
+            write!(f, " subject={subject}")?;
         }
-        out
+        Ok(())
     }
 }
 
@@ -218,7 +253,7 @@ impl RdfLocation {
 ///     message: "failure".to_owned(), detail: None, location: None,
 /// };
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct RdfDiagnostic {
     /// The diagnostic severity level.
@@ -234,7 +269,90 @@ pub struct RdfDiagnostic {
     presentation: Option<Box<DiagnosticPresentation>>,
 }
 
+purrdf_lex::resident_clone!(RdfDiagnostic);
+
 impl RdfDiagnostic {
+    /// Copy original typed diagnostic data through its actual allocation owner.
+    /// All boxes and text are admitted before physical allocation or copying.
+    ///
+    /// # Errors
+    /// Returns the first physical refusal before the replacement is published.
+    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            severity: self.severity,
+            code: memory.string(&self.code)?,
+            message: memory.string(&self.message)?,
+            detail: self
+                .detail
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            location: self
+                .location
+                .as_deref()
+                .map(|location| {
+                    let location = location.clone_with_memory(memory)?;
+                    memory.boxed(location)
+                })
+                .transpose()?,
+            presentation: self
+                .presentation
+                .as_deref()
+                .map(|presentation| {
+                    let presentation = presentation.clone_with_memory(memory)?;
+                    memory.boxed(presentation)
+                })
+                .transpose()?,
+        })
+    }
+
+    /// Exact concrete heap capacity, excluding the outer diagnostic value.
+    /// Location and presentation boxes, spare arrays and all owned text count.
+    #[must_use]
+    pub fn retained_bytes(&self) -> Option<usize> {
+        let mut bytes = self
+            .code
+            .capacity()
+            .checked_add(self.message.capacity())?
+            .checked_add(self.detail.as_ref().map_or(0, String::capacity))?;
+        if let Some(location) = &self.location {
+            bytes = bytes.checked_add(size_of::<RdfLocation>())?;
+            for text in [&location.path, &location.logical, &location.subject]
+                .into_iter()
+                .flatten()
+            {
+                bytes = bytes.checked_add(text.capacity())?;
+            }
+        }
+        if let Some(presentation) = &self.presentation {
+            bytes = bytes
+                .checked_add(size_of::<DiagnosticPresentation>())?
+                .checked_add(presentation.retained_bytes()?)?;
+        }
+        Some(bytes)
+    }
+
+    /// Construct a native error through its original physical admission before
+    /// copying the code or rendering the borrowed message once. The formatter
+    /// must allocate no private payload; all destination growth uses this memory.
+    ///
+    /// # Errors
+    /// Returns the physical refusal, allocator failure or formatter failure.
+    pub fn try_error_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        code: &str,
+        message: &(impl fmt::Display + ?Sized),
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        let mut owned_code = String::new();
+        memory.reserve_string(&mut owned_code, code.len())?;
+        owned_code.push_str(code);
+        let message = memory.format(message)?;
+        Ok(Self::error(owned_code, message))
+    }
+
     /// A diagnostic from its severity, code, and message, with no detail or
     /// location.
     pub fn new(severity: RdfSeverity, code: impl Into<String>, message: impl Into<String>) -> Self {
@@ -342,7 +460,7 @@ impl fmt::Display for RdfDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}: {}", self.severity, self.code, self.message)?;
         if let Some(location) = &self.location {
-            write!(f, " at {}", location.display())?;
+            write!(f, " at {location}")?;
         }
         if let Some(detail) = &self.detail {
             write!(f, " ({detail})")?;
@@ -356,6 +474,89 @@ impl std::error::Error for RdfDiagnostic {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_diagnostic_copy_preserves_typed_fields_and_exact_original_layouts() {
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        struct Grant {
+            live: usize,
+            limit: usize,
+        }
+        impl Admission for Grant {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                if bytes > self.limit {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live = bytes;
+                Ok(())
+            }
+        }
+        let primary = DiagnosticPresentation::new(
+            "primary",
+            "bad {value}",
+            vec![DiagnosticParameter::new(
+                "value",
+                DiagnosticValue::Text("verbatim λ".into()),
+            )],
+        )
+        .unwrap();
+        let detail = DiagnosticPresentation::new(
+            "detail",
+            "at {offset}",
+            vec![DiagnosticParameter::new(
+                "offset",
+                DiagnosticValue::Unsigned((1 << 53) + 1),
+            )],
+        )
+        .unwrap();
+        let mut source = RdfDiagnostic::error("typed-copy", "")
+            .with_presentation(primary.with_detail(detail).unwrap());
+        source.location = Some(Box::new(RdfLocation {
+            path: Some("document.ttl".into()),
+            logical: Some("source stage".into()),
+            subject: Some("example subject".into()),
+            line: Some(17),
+            column: Some(9),
+            gts_term_id: Some(41),
+            gts_quad_index: Some(42),
+            gts_reifier_id: Some(43),
+            gts_frame_index: Some(44),
+            gts_segment_index: Some(45),
+        }));
+        let mut refused = Grant { live: 0, limit: 0 };
+        {
+            let mut memory = Memory::new(&mut refused);
+            assert!(matches!(
+                source.clone_with_memory(&mut memory),
+                Err(StorageError::AdmissionFailed)
+            ));
+            assert_eq!(
+                memory.admitted_bytes(),
+                0,
+                "first copy refuses before payload allocation"
+            );
+        }
+        assert_eq!(refused.live, 0);
+        let mut admitted = Grant {
+            live: 0,
+            limit: usize::MAX,
+        };
+        {
+            let mut memory = Memory::new(&mut admitted);
+            let copy = source.clone_with_memory(&mut memory).unwrap();
+            assert_eq!(copy, source, "all typed fields and exact English survive");
+            let bytes = copy.retained_bytes().unwrap();
+            assert_eq!(
+                memory.admitted_bytes(),
+                bytes,
+                "the original grant covers concrete copied capacities and boxes"
+            );
+            drop(copy);
+            memory.release_bytes(bytes).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+        assert_eq!(admitted.live, 0);
+    }
 
     #[test]
     fn template_drift_is_refused_and_large_arguments_remain_exact() {

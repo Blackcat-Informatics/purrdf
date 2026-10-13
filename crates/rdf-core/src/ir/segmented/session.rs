@@ -112,6 +112,8 @@ impl Budget {
         Ok(SegmentedReservation {
             budget: Arc::clone(self),
             bytes,
+            control: 0,
+            cache: None,
         })
     }
 }
@@ -122,6 +124,12 @@ impl Budget {
 pub struct SegmentedReservation {
     budget: Arc<Budget>,
     bytes: u64,
+    // An owned factory admits its concrete box before allocating it. Resizing
+    // payload to zero must still cover that live control allocation.
+    control: u64,
+    // Cache blocks themselves hold reservations. A weak account prevents their
+    // reservations from keeping the cache alive through a reference cycle.
+    cache: Option<std::sync::Weak<Mutex<State>>>,
 }
 impl SegmentedReservation {
     /// The admitted retained-capacity charge.
@@ -138,11 +146,17 @@ impl SegmentedReservation {
 impl crate::WorkspaceReservation for SegmentedReservation {
     type Error = SegmentedError;
     fn resize(&mut self, bytes: u64) -> Result<(), SegmentedError> {
+        let bytes = bytes
+            .checked_add(self.control)
+            .ok_or(SegmentedError::AddressExhausted)?;
         if bytes <= self.bytes {
             self.shrink(bytes);
             return Ok(());
         }
         let growth = bytes - self.bytes;
+        if let Some(cache) = self.cache.as_ref().and_then(std::sync::Weak::upgrade) {
+            make_room(&mut lock_read_state(&cache), &self.budget, growth, None)?;
+        }
         let mut state = lock_read_state(&self.budget.state);
         let requested = state
             .live
@@ -161,6 +175,12 @@ impl crate::WorkspaceReservation for SegmentedReservation {
         Ok(())
     }
 }
+impl crate::WorkspaceReservation for [SegmentedReservation; 1] {
+    type Error = SegmentedError;
+    fn resize(&mut self, bytes: u64) -> Result<(), SegmentedError> {
+        crate::WorkspaceReservation::resize(&mut self[0], bytes)
+    }
+}
 impl Drop for SegmentedReservation {
     fn drop(&mut self) {
         lock_read_state(&self.budget.state).live -= self.bytes;
@@ -171,7 +191,7 @@ impl Drop for SegmentedReservation {
 struct CachedBlock {
     encoded: Vec<u8>,
     decoded: Option<DecodedRecords>,
-    _reservation: SegmentedReservation,
+    reservation: SegmentedReservation,
 }
 #[derive(Debug)]
 struct CacheEntry {
@@ -185,6 +205,53 @@ struct State {
     io_bytes: u64,
     evictions: u64,
     hash: Hasher,
+}
+
+// Workspace growth and block loading evict through the same account. A pinned
+// block is never evicted, and checked addition is a bound rather than a heuristic.
+fn make_room(
+    state: &mut State,
+    budget: &Budget,
+    charge: u64,
+    cache_slots: Option<u32>,
+) -> Result<(), SegmentedError> {
+    loop {
+        let requested = lock_read_state(&budget.state)
+            .live
+            .checked_add(charge)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let slots_available = match cache_slots {
+            None => true,
+            Some(slots) => {
+                state.cache.len()
+                    < usize::try_from(slots).map_err(|_| SegmentedError::AddressExhausted)?
+            }
+        };
+        if requested <= budget.limit && slots_available {
+            return Ok(());
+        }
+        if let Some(index) = state
+            .cache
+            .iter()
+            .position(|entry| Arc::strong_count(&entry.block) == 1)
+        {
+            state.cache.remove(index);
+            state.evictions = state
+                .evictions
+                .checked_add(1)
+                .ok_or(SegmentedError::AddressExhausted)?;
+        } else {
+            let error = if state.cache.is_empty() {
+                SegmentedError::Residency {
+                    requested,
+                    limit: budget.limit,
+                }
+            } else {
+                SegmentedError::PinnedBlocks
+            };
+            return Err(error);
+        }
+    }
 }
 impl std::fmt::Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -209,6 +276,7 @@ pub struct SegmentedEvidence {
     hash: [u8; 32],
     io_bytes: u64,
     live_bytes: u64,
+    unpinned_cache_bytes: u64,
     peak_bytes: u64,
     evictions: u64,
     _base: Arc<SegmentedReservation>,
@@ -220,6 +288,7 @@ impl PartialEq for SegmentedEvidence {
             || self.hash != other.hash
             || self.io_bytes != other.io_bytes
             || self.live_bytes != other.live_bytes
+            || self.unpinned_cache_bytes != other.unpinned_cache_bytes
             || self.peak_bytes != other.peak_bytes
             || self.evictions != other.evictions
         {
@@ -270,6 +339,15 @@ impl SegmentedEvidence {
     #[must_use]
     pub const fn live_bytes(&self) -> u64 {
         self.live_bytes
+    }
+    /// Charged capacity retained exclusively by the evictable provider cache.
+    ///
+    /// Subtracting this from [`Self::live_bytes`] isolates the original account's
+    /// other live owners. Pinned blocks remain in that balance: a leaked pin or
+    /// query grant cannot be hidden by a legitimate cache eviction or reload.
+    #[must_use]
+    pub const fn unpinned_cache_bytes(&self) -> u64 {
+        self.unpinned_cache_bytes
     }
     /// Highest pre-admitted live capacity so far; never exceeds the caller's ceiling.
     #[must_use]
@@ -418,6 +496,8 @@ impl SegmentedSession {
         let base = Arc::new(SegmentedReservation {
             budget: Arc::clone(&budget),
             bytes: base_bytes,
+            control: 0,
+            cache: None,
         });
         let state = Arc::new(Mutex::new(State {
             cache: Vec::with_capacity(cache_count),
@@ -492,50 +572,26 @@ impl SegmentedSession {
         self.ready()?;
         let mut state = lock_read_state(&self.state);
         self.make_room(&mut state, bytes, false)?;
-        self.budget.reserve(bytes).inspect_err(|error| {
-            state.error = Some(error.clone());
+        self.budget.reserve(bytes).map(|mut reservation| {
+            reservation.cache = Some(Arc::downgrade(&self.state));
+            reservation
         })
     }
 
     fn make_room(&self, state: &mut State, charge: u64, slot: bool) -> Result<(), SegmentedError> {
-        loop {
-            let enough = lock_read_state(&self.budget.state)
-                .live
-                .checked_add(charge)
-                .is_some_and(|live| live <= self.limits.live_bytes);
-            if enough
-                && (!slot
-                    || state.cache.len()
-                        < usize::try_from(self.limits.cache_blocks)
-                            .map_err(|_| SegmentedError::AddressExhausted)?)
-            {
-                return Ok(());
-            }
-            if let Some(index) = state
-                .cache
-                .iter()
-                .position(|entry| Arc::strong_count(&entry.block) == 1)
-            {
-                state.cache.remove(index);
-                state.evictions = state
-                    .evictions
-                    .checked_add(1)
-                    .ok_or(SegmentedError::AddressExhausted)?;
-            } else {
-                let error = if state.cache.is_empty() {
-                    SegmentedError::Residency {
-                        requested: lock_read_state(&self.budget.state)
-                            .live
-                            .saturating_add(charge),
-                        limit: self.limits.live_bytes,
-                    }
-                } else {
-                    SegmentedError::PinnedBlocks
-                };
+        make_room(
+            state,
+            &self.budget,
+            charge,
+            slot.then_some(self.limits.cache_blocks),
+        )
+        .inspect_err(|error| {
+            // A refused workspace resize leaves the readable snapshot valid.
+            // Block-load failures remain sticky so omitted facts cannot succeed.
+            if slot {
                 state.error.get_or_insert_with(|| error.clone());
-                return Err(error);
             }
-        }
+        })
     }
 
     fn request(
@@ -712,7 +768,7 @@ impl SegmentedSession {
             Ok(Arc::new(CachedBlock {
                 encoded: bytes,
                 decoded: decoded_records,
-                _reservation: reservation,
+                reservation,
             }))
         })();
         match result {
@@ -948,6 +1004,14 @@ impl SegmentedSession {
             hash: *state.hash.finalize().as_bytes(),
             io_bytes: state.io_bytes,
             live_bytes: residency.live,
+            // These disjoint reservations are already included in checked live
+            // residency, so their sum cannot exceed it or overflow.
+            unpinned_cache_bytes: state
+                .cache
+                .iter()
+                .filter(|entry| Arc::strong_count(&entry.block) == 1)
+                .map(|entry| entry.block.reservation.bytes())
+                .sum(),
             peak_bytes: residency.peak,
             evictions: state.evictions,
             _base: Arc::clone(&self.base),
@@ -1184,6 +1248,26 @@ impl DatasetView for SegmentedSession {
     fn max_owned_term_bytes(&self) -> Option<u64> {
         Some(self.header.max_owned_term_bytes)
     }
+    fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some((|| {
+            let control = u64::try_from(size_of::<SegmentedReservation>())
+                .map_err(|_| SegmentedError::AddressExhausted)?;
+            let total = bytes
+                .checked_add(control)
+                .ok_or(SegmentedError::AddressExhausted)?;
+            let mut reservation = Self::reserve_workspace(self, total)?;
+            reservation.control = control;
+            // One element has exactly the concrete box layout. The fallible Vec
+            // reserve happens after admission; conversion to a one-element boxed
+            // array reuses that allocation and performs no subsequent growth.
+            let boxed = crate::small::try_boxed_one(reservation)
+                .map_err(|_| SegmentedError::AllocationFailed("owned workspace reservation"))?;
+            Ok(boxed as crate::OwnedWorkspaceReservation<Self::ReadError>)
+        })())
+    }
     fn storage_live_budget(&self) -> Option<u64> {
         Some(self.limits.live_bytes)
     }
@@ -1297,6 +1381,17 @@ impl DatasetView for SegmentedSession {
     }
     fn term_count(&self) -> u64 {
         self.header.terms
+    }
+    fn workspace_candidate_bound(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> Result<Option<u64>, Self::ReadError> {
+        // This implementation's checked summary/range body already includes
+        // all three physical tables. Count it once, preserving its sticky error.
+        self.checked_read(|view| Some(view.cardinality_estimate(s, p, o, g)))
     }
     fn len_hint(&self) -> Option<u64> {
         Some(self.header.streams[0].rows)

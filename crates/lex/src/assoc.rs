@@ -24,6 +24,22 @@
 use core::borrow::Borrow;
 use core::mem;
 
+/// The value paired with `key` in a table of strictly ascending, unique keys.
+///
+/// Unlike [`get`], this reads a sorted table rather than a document-ordered
+/// association list. The caller guarantees sorted, unique keys. The returned
+/// value is borrowed from the table; lookup allocates nothing.
+pub fn get_sorted<'a, K, V, Q>(pairs: &'a [(K, V)], key: &Q) -> Option<&'a V>
+where
+    K: Borrow<Q>,
+    Q: Ord + ?Sized,
+{
+    pairs
+        .binary_search_by(|(candidate, _)| candidate.borrow().cmp(key))
+        .ok()
+        .map(|index| &pairs[index].1)
+}
+
 /// The value of the first pair whose key is `key`, or `None`.
 pub fn get<'a, K, V, Q>(pairs: &'a [(K, V)], key: &Q) -> Option<&'a V>
 where
@@ -52,18 +68,51 @@ where
 /// replaces, or append the pair when there is none: the list keeps its order and
 /// its length grows only for a new key.
 pub fn insert<K: PartialEq, V>(pairs: &mut Vec<(K, V)>, key: K, value: V) -> Option<V> {
+    try_insert(pairs, key, value, |pairs, pair| {
+        pairs.push(pair);
+        Ok::<(), core::convert::Infallible>(())
+    })
+    .unwrap_or_else(|never| match never {})
+}
+
+/// The same first-match update with a caller-owned fallible append operation.
+/// # Errors
+/// Preserves the original append refusal without changing existing members.
+pub fn try_insert<K: PartialEq, V, E>(
+    pairs: &mut Vec<(K, V)>,
+    key: K,
+    value: V,
+    append: impl FnOnce(&mut Vec<(K, V)>, (K, V)) -> Result<(), E>,
+) -> Result<Option<V>, E> {
     match get_mut(pairs, &key) {
-        Some(slot) => Some(mem::replace(slot, value)),
+        Some(slot) => Ok(Some(mem::replace(slot, value))),
         None => {
-            pairs.push((key, value));
-            None
+            append(pairs, (key, value))?;
+            Ok(None)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{get, get_mut, insert};
+    use super::{get, get_mut, get_sorted, insert};
+
+    #[test]
+    fn sorted_lookup_agrees_with_linear_lookup_for_present_and_absent_keys() {
+        let pairs = [(2_u32, "first"), (5, "middle"), (9, "last")];
+        for key in 0..=12 {
+            let expected = pairs
+                .iter()
+                .find(|(candidate, _)| candidate == &key)
+                .map(|(_, value)| value);
+            assert_eq!(get_sorted(&pairs, &key), expected);
+        }
+        assert_eq!(get_sorted::<u32, &str, u32>(&[], &2), None);
+        let owned = [("alpha".to_owned(), 1), ("omega".to_owned(), 2)];
+        assert_eq!(get_sorted(&owned, "alpha"), Some(&1));
+        assert_eq!(get_sorted(&owned, "omega"), Some(&2));
+        assert_eq!(get_sorted(&owned, "delta"), None);
+    }
 
     #[test]
     fn get_answers_the_first_pair_with_the_key() {

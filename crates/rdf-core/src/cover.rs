@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The cover law: a set of verbatim byte spans back into the document
-//! they cover, byte for byte — the decode half of every ordered codec.
+//! they cover, byte for byte — the shared emit and decode law of ordered codecs.
 //!
 //! A codec in this workspace emits a graph whose text-carrying spans
 //! cover **every byte** of its source, each span quoting its bytes
@@ -13,8 +13,9 @@
 //! source digest the graph states. It is format-neutral on purpose —
 //! nothing here knows a heading from a mail header — so every codec
 //! decodes under one law and two formats cannot drift apart on it.
-//! `purrdf-markdown` (its specification's §11.3) is the first emitter;
-//! the next structured format reuses this module unchanged.
+//! Structured codecs declare ranges through [`CoverBuilder`]; opaque content
+//! uses [`ByteCover::identity`]. The existing UTF-8 decoder and the arbitrary-byte
+//! decoder apply one coverage walk and one digest check.
 //!
 //! # The overlap law
 //!
@@ -39,6 +40,22 @@
 //! in memory.
 
 use crate::ContentDigest;
+
+mod emit;
+pub use emit::{ByteCover, CoverBuilder, DelimitedCover, EmitError, SpanReference};
+
+/// A verbatim byte span, including content that is not UTF-8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteSpan<'a> {
+    /// Inclusive byte offset in the source.
+    pub byte_start: u64,
+    /// Exclusive byte offset in the source.
+    pub byte_end: u64,
+    /// Unchanged source bytes.
+    pub bytes: &'a [u8],
+    /// The strictly earlier span this occurrence explicitly continues.
+    pub continues: Option<(u64, u64)>,
+}
 
 /// One text-carrying span of a cover: the bytes at
 /// `byte_start..byte_end`, quoted verbatim.
@@ -120,8 +137,8 @@ pub enum ReconstructError {
         /// The first byte offset at which the two texts disagree.
         at: u64,
     },
-    /// The reconstructed bytes are not UTF-8, which no lawful set of
-    /// spans can produce: every span's text is UTF-8 whole, every
+    /// The UTF-8 adapter's reconstructed bytes are not UTF-8, which no lawful set of
+    /// text spans can produce: every span's text is UTF-8 whole, every
     /// admitted overlap agrees with a strictly earlier piece, and so
     /// every appended tail begins on a scalar boundary. It is kept as
     /// the typed last line — never an `expect` — so a defect in that
@@ -222,8 +239,8 @@ impl std::error::Error for ReconstructError {}
 ///
 /// The spans may come in any order — a graph states no order — and the
 /// answer does not depend on theirs. Empty spans cover nothing and are
-/// ignored; a codec never emits one, and refusing one would refuse a
-/// claim that asserts nothing.
+/// ignored by coverage; an empty-record occurrence may deliberately carry one,
+/// and refusing it would refuse a claim that asserts nothing about coverage.
 ///
 /// # Errors
 ///
@@ -243,6 +260,39 @@ pub fn reconstruct(
     source_digest: &ContentDigest,
     spans: &[VerbatimSpan<'_>],
 ) -> Result<String, ReconstructError> {
+    let bytes = reconstruct_over(
+        byte_length,
+        source_digest,
+        spans.iter().map(|span| ByteSpan {
+            byte_start: span.byte_start,
+            byte_end: span.byte_end,
+            bytes: span.text.as_bytes(),
+            continues: span.continues,
+        }),
+    )?;
+    String::from_utf8(bytes).map_err(|error| ReconstructError::InvalidUtf8 {
+        valid_up_to: error.utf8_error().valid_up_to(),
+    })
+}
+
+/// Reconstruct arbitrary bytes under the same coverage, continuation and digest law.
+///
+/// # Errors
+/// Returns the same typed span, gap, overlap and digest refusals as [`reconstruct`].
+pub fn reconstruct_bytes(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: &[ByteSpan<'_>],
+) -> Result<Vec<u8>, ReconstructError> {
+    reconstruct_over(byte_length, source_digest, spans.iter().copied())
+}
+
+fn reconstruct_over<'a>(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: impl IntoIterator<Item = ByteSpan<'a>>,
+) -> Result<Vec<u8>, ReconstructError> {
+    let mut ordered = Vec::new();
     for span in spans {
         if span.byte_end < span.byte_start {
             return Err(ReconstructError::InvertedSpan {
@@ -257,22 +307,23 @@ pub fn reconstruct(
                 byte_length,
             });
         }
-        if span.text.len() as u64 != span.byte_end - span.byte_start {
+        if span.bytes.len() as u64 != span.byte_end - span.byte_start {
             return Err(ReconstructError::SpanLengthMismatch {
                 byte_start: span.byte_start,
                 byte_end: span.byte_end,
-                text_bytes: span.text.len(),
+                text_bytes: span.bytes.len(),
             });
         }
+        if span.byte_start < span.byte_end {
+            ordered.push(span);
+        }
     }
-    let mut ordered: Vec<&VerbatimSpan<'_>> =
-        spans.iter().filter(|s| s.byte_start < s.byte_end).collect();
-    // The text is inside the sort key so the order is total: two spans
-    // over one range with different texts — no lawful cover has them,
+    // The bytes are inside the sort key so the order is total: two spans
+    // over one range with different payloads — no lawful cover has them,
     // but a hostile one may — sort the same way on every run and every
     // host, and the walk below therefore accepts or refuses such a
     // cover deterministically rather than by allocation order.
-    ordered.sort_unstable_by_key(|s| (s.byte_start, s.byte_end, s.text));
+    ordered.sort_unstable_by_key(|s| (s.byte_start, s.byte_end, s.bytes));
 
     // The coverage walk, before a buffer exists: `frontier` is one past
     // the last covered byte, and `owner` the span that put it there.
@@ -297,15 +348,14 @@ pub fn reconstruct(
     // common cover — the one with no overlap at all.
     // The first span of the equal-range group, so a duplicated range is
     // answered by the same representative on every run.
-    let find = |key: (u64, u64)| -> Option<&VerbatimSpan<'_>> {
+    let find = |key: (u64, u64)| -> Option<&ByteSpan<'_>> {
         let at = ordered.partition_point(|s| (s.byte_start, s.byte_end) < key);
         ordered
             .get(at)
             .filter(|s| (s.byte_start, s.byte_end) == key)
-            .copied()
     };
     let mut frontier = 0u64;
-    let mut owner: Option<&VerbatimSpan<'_>> = None;
+    let mut owner: Option<&ByteSpan<'_>> = None;
     for span in &ordered {
         if span.byte_start > frontier {
             return Err(ReconstructError::UncoveredRange {
@@ -337,14 +387,14 @@ pub fn reconstruct(
                     covered_end: covering.byte_end,
                 });
             };
-            // Both narrowings are bounded by a resident `&str`'s
-            // length — `shared` by this span's text, `from + shared`
+            // Both narrowings are bounded by a resident byte slice's
+            // length — `shared` by this span's bytes, `from + shared`
             // by the declared piece's, both via the length check
             // above — so neither can truncate on a 32-bit target.
             let shared = (shared_end - span.byte_start) as usize;
-            let of_continuation = &span.text.as_bytes()[..shared];
+            let of_continuation = &span.bytes[..shared];
             let from = (span.byte_start - piece.byte_start) as usize;
-            let of_piece = &piece.text.as_bytes()[from..from + shared];
+            let of_piece = &piece.bytes[from..from + shared];
             // One slice comparison decides — the compiler lowers it to
             // a memcmp — and only a refusal pays to locate the byte.
             if of_continuation != of_piece {
@@ -386,9 +436,9 @@ pub fn reconstruct(
         if span.byte_end > written {
             // Bounded by this span's own text: the proven cover keeps
             // `written` between `byte_start` and `byte_end`, whose
-            // distance is the text's length, checked above.
+            // distance is the payload length, checked above.
             let skip = (written - span.byte_start) as usize;
-            bytes.extend_from_slice(&span.text.as_bytes()[skip..]);
+            bytes.extend_from_slice(&span.bytes[skip..]);
         }
     }
     let digest = ContentDigest::of(&bytes);
@@ -398,9 +448,7 @@ pub fn reconstruct(
             reconstructed: digest.to_hex(),
         });
     }
-    String::from_utf8(bytes).map_err(|e| ReconstructError::InvalidUtf8 {
-        valid_up_to: e.utf8_error().valid_up_to(),
-    })
+    Ok(bytes)
 }
 
 #[cfg(test)]

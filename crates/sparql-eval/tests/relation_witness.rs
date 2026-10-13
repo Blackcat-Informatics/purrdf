@@ -155,9 +155,7 @@ impl PfCursor for AttestingCursor {
     fn service_level(&self) -> ServiceLevel {
         match self.declares {
             Declares::GenerationThenIncomplete(_, reason)
-            | Declares::UndeclaredThenIncomplete(reason) => ServiceLevel::Incomplete {
-                reason: reason.to_owned(),
-            },
+            | Declares::UndeclaredThenIncomplete(reason) => ServiceLevel::incomplete_static(reason),
             Declares::PanicOnServiceLevel => panic!("the-service-level-panic-payload"),
             Declares::Nothing | Declares::Generation(_) | Declares::PanicOnGeneration => {
                 ServiceLevel::Undeclared
@@ -722,8 +720,12 @@ fn the_declarations_are_identical_across_runs_and_across_the_fork() {
             .map(|(iri, attested)| {
                 (
                     iri.to_owned(),
-                    attested.generations.clone(),
-                    attested.incompleteness.clone(),
+                    attested.generations.iter().cloned().collect(),
+                    attested
+                        .incompleteness
+                        .iter()
+                        .map(|value| value.as_str().to_owned())
+                        .collect(),
                 )
             })
             .collect()

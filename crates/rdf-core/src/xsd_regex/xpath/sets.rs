@@ -59,6 +59,8 @@
 use std::cmp::Ordering;
 use std::ops::Range;
 
+use purrdf_lex::assoc;
+
 use super::compile::{Count, Node};
 use super::r#match::{Ctx, decide};
 use super::pike::{CONSUMED, Pc, ROOT, copy_steps, reserve};
@@ -189,12 +191,24 @@ struct Cache {
     spans: Vec<(usize, usize)>,
     /// Open addressing over state ids, `u32::MAX` empty.
     index: Vec<u32>,
-    /// Open addressing over transitions: the key, then the next state.
-    moves: Vec<(u64, u32)>,
+    /// Open addressing over transitions: the key, the next state, and where
+    /// the next state's offsets are derived from in `offsets`
+    /// ([`NO_OFFSETS`] when it keeps none).
+    moves: Vec<(u64, u32, u32)>,
     moves_held: usize,
+    /// For each move into a state that keeps counts relative to offsets, one
+    /// cell per such repetition: [`RELATIVE`] with the amount the offset
+    /// grows by, or the new offset itself.
+    offsets: Vec<u64>,
 }
 
 const NO_MOVE: u64 = u64::MAX;
+
+/// A move into a state that keeps no counts relative to an offset.
+const NO_OFFSETS: u32 = u32::MAX;
+
+/// A move's offset cell that adds to the current state's offset.
+const RELATIVE: u64 = 1 << 63;
 
 impl Cache {
     fn cells(&self) -> usize {
@@ -202,6 +216,7 @@ impl Cache {
             + self.spans.capacity() * 2
             + self.index.capacity()
             + self.moves.capacity() * 2
+            + self.offsets.capacity()
     }
 
     fn state(&self, id: u32) -> &[u64] {
@@ -209,19 +224,19 @@ impl Cache {
         &self.contents[start..start + len]
     }
 
-    fn lookup(&self, key: u64) -> Option<u32> {
+    fn lookup(&self, key: u64) -> Option<(u32, u32)> {
         if self.moves.is_empty() {
             return None;
         }
         let mask = self.moves.len() - 1;
         let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
         loop {
-            let (stored, next) = self.moves[slot];
+            let (stored, next, offsets) = self.moves[slot];
             if stored == NO_MOVE {
                 return None;
             }
             if stored == key {
-                return Some(next);
+                return Some((next, offsets));
             }
             slot = (slot + 1) & mask;
         }
@@ -230,6 +245,10 @@ impl Cache {
 
 /// The capture-free machine and the match starts it has marked.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Acceptance, eager stopping, cache freshness and dependence on offsets are independent execution facts."
+)]
 pub(super) struct Sets {
     direction: Direction,
     /// Program points, levels and keys of entries and items.
@@ -260,7 +279,29 @@ pub(super) struct Sets {
     /// range may hold: [`CHECKPOINT`] and [`COVER_CELLS`], except where a
     /// test makes every stretch and range small.
     spacing: (usize, usize),
+    /// The repetitions whose counts a state may keep relative to an offset,
+    /// ascending, once known ([`Sets::normal`]).
+    normal: Option<Vec<u32>>,
+    /// The current state's offsets: each repetition its encoding keeps
+    /// relative to one, ascending, and the offset.
+    offsets: Vec<(u32, u64)>,
+    /// The offsets of the state being encoded, and its move cells.
+    next_offsets: Vec<(u32, u64)>,
+    next_moves: Vec<u64>,
+    /// Each repetition's least and greatest count in the state being
+    /// encoded.
+    ranges: Vec<(u32, u64, u64)>,
+    /// Whether the state being computed depends on the current state's
+    /// offsets, so that its move cannot be kept.
+    sensitive: bool,
+    /// The current state with its counts made whole ([`Sets::absolute`]).
+    whole_state: Vec<u64>,
 }
+
+/// The margin between a count kept relative to an offset and any bound of
+/// its repetition: one move changes a count by at most one, so every
+/// comparison a move makes is decided the same way at every offset.
+const MARGIN: u64 = 4;
 
 /// No position.
 const NONE: usize = usize::MAX;
@@ -360,6 +401,7 @@ impl Sets {
                 index: Vec::new(),
                 moves: Vec::new(),
                 moves_held: 0,
+                offsets: Vec::new(),
             },
             epoch: 0,
             marks: Marks {
@@ -380,6 +422,13 @@ impl Sets {
                 cached: 0,
             },
             spacing: (CHECKPOINT, COVER_CELLS),
+            normal: None,
+            offsets: Vec::new(),
+            next_offsets: Vec::new(),
+            next_moves: Vec::new(),
+            ranges: Vec::new(),
+            sensitive: false,
+            whole_state: Vec::new(),
         }
     }
 
@@ -395,7 +444,7 @@ impl Sets {
     /// Whether a match starts at or after `start`.
     pub(super) fn is_match(&mut self, ctx: &mut Ctx<'_>, start: usize) -> Result<bool, Error> {
         let found = self.forward(ctx, start);
-        self.release(ctx);
+        self.release(ctx)?;
         found
     }
 
@@ -489,7 +538,7 @@ impl Sets {
                 continue;
             }
             probes += 1 + own_key + count;
-            if compatible(program, node, set_index, key, intervals, counters) {
+            if compatible(ctx, node, set_index, key, intervals, counters) {
                 live = true;
                 break;
             }
@@ -516,7 +565,7 @@ impl Sets {
 
     /// Release every scan buffer and the cache; the kept reverse states
     /// remain.
-    fn release(&mut self, ctx: &mut Ctx<'_>) {
+    fn release(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
         let cells = self.keys.capacity() as u128
             + self.intervals.capacity() as u128 * INTERVAL_CELLS
             + self.work.capacity() as u128 * ITEM_CELLS
@@ -526,11 +575,40 @@ impl Sets {
             + self.state.capacity() as u128
             + self.next.capacity() as u128
             + self.order.capacity() as u128
-            + self.cache.cells() as u128;
+            + self.cache.cells() as u128
+            + self.normal.as_ref().map_or(0, Vec::capacity) as u128
+            + self.offsets.capacity() as u128 * 2
+            + self.next_offsets.capacity() as u128 * 2
+            + self.next_moves.capacity() as u128
+            + self.ranges.capacity() as u128 * 3
+            + self.whole_state.capacity() as u128;
         ctx.live_slots -= cells;
         let (marks, spacing) = (std::mem::take(&mut self.marks), self.spacing);
-        *self = Self::new();
+        let old = std::mem::replace(self, Self::new());
+        ctx.budget.release_vec(old.keys)?;
+        ctx.budget.release_vec(old.intervals)?;
+        ctx.budget.release_vec(old.work)?;
+        ctx.budget.release_vec(old.entries)?;
+        ctx.budget.release_vec(old.table)?;
+        ctx.budget.release_vec(old.parked)?;
+        ctx.budget.release_vec(old.state)?;
+        ctx.budget.release_vec(old.next)?;
+        ctx.budget.release_vec(old.order)?;
+        ctx.budget.release_vec(old.cache.contents)?;
+        ctx.budget.release_vec(old.cache.spans)?;
+        ctx.budget.release_vec(old.cache.index)?;
+        ctx.budget.release_vec(old.cache.moves)?;
+        ctx.budget.release_vec(old.cache.offsets)?;
+        if let Some(normal) = old.normal {
+            ctx.budget.release_vec(normal)?;
+        }
+        ctx.budget.release_vec(old.offsets)?;
+        ctx.budget.release_vec(old.next_offsets)?;
+        ctx.budget.release_vec(old.next_moves)?;
+        ctx.budget.release_vec(old.ranges)?;
+        ctx.budget.release_vec(old.whole_state)?;
         (self.marks, self.spacing) = (marks, spacing);
+        Ok(())
     }
 
     /// Scan forwards from `start` until a match ends or no start remains.
@@ -614,6 +692,74 @@ impl Sets {
 
     /// Keep the interned state `current` as the checkpoint at `position`,
     /// below every checkpoint kept so far.
+    /// Append the interned state `current` to the kept checkpoints with its
+    /// offsets: how many there are, the offsets, then the encoding. Returns
+    /// where it begins and how many cells it holds.
+    fn save(&mut self, ctx: &mut Ctx<'_>, current: u32) -> Result<(usize, usize), Error> {
+        let (start, len) = self.cache.spans[current as usize];
+        let held = self.offsets.len();
+        let marks = &mut self.marks;
+        let at = marks.saved.len();
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(1 + held + len))?;
+        reserve(ctx, &mut marks.saved, at + 1 + held + len, 1)?;
+        marks.saved.push(held as u64);
+        marks
+            .saved
+            .extend(self.offsets.iter().map(|&(_, offset)| offset));
+        marks
+            .saved
+            .extend_from_slice(&self.cache.contents[start..start + len]);
+        Ok((at, 1 + held + len))
+    }
+
+    /// Write the interned state `current` with its counts made whole at the
+    /// current offsets, and a trailer that names no repetition, to
+    /// `whole_state`: the encoding an equal state that keeps no offset has.
+    fn absolute(&mut self, ctx: &mut Ctx<'_>, current: u32) -> Result<(), Error> {
+        let (start, len) = self.cache.spans[current as usize];
+        let held = self.offsets.len();
+        let entries = len - 1 - 2 * held;
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(len))?;
+        reserve(ctx, &mut self.whole_state, entries + 1, 1)?;
+        self.whole_state.clear();
+        self.whole_state
+            .extend_from_slice(&self.cache.contents[start..start + entries]);
+        self.whole_state.push(0);
+        let links = &ctx.program.links.nodes;
+        let mut at = 2;
+        for _ in 0..self.whole_state[1] {
+            let node = self.whole_state[at] as usize;
+            let key = at + 1;
+            let key_len = key_len(links[node].counters);
+            let count = self.whole_state[key + key_len] as usize;
+            let intervals = key + key_len + 1;
+            at = intervals + count * 2;
+            let set = links[node].set;
+            if set != ROOT
+                && let Some(offset) = self.offset(set as u32)
+            {
+                for cell in &mut self.whole_state[intervals..at] {
+                    *cell += offset;
+                }
+            }
+            let depth = if set == ROOT { 0 } else { links[set].counters };
+            let mut outer = links[node].outer;
+            while outer != ROOT {
+                ctx.budget.charge(Resource::MatchSteps, 1)?;
+                if outer != set
+                    && let Some(offset) = self.offset(outer as u32)
+                {
+                    let level = links[outer].counters;
+                    self.whole_state[key + (level - u32::from(level > depth)) as usize] += offset;
+                }
+                outer = links[outer].outer;
+            }
+        }
+        Ok(())
+    }
+
     fn keep(
         &mut self,
         ctx: &mut Ctx<'_>,
@@ -621,15 +767,8 @@ impl Sets {
         current: u32,
         lowest: usize,
     ) -> Result<(), Error> {
-        let (start, len) = self.cache.spans[current as usize];
+        let (at, len) = self.save(ctx, current)?;
         let marks = &mut self.marks;
-        let at = marks.saved.len();
-        ctx.budget
-            .charge_wide(Resource::MatchSteps, copy_steps(len))?;
-        reserve(ctx, &mut marks.saved, at + len, 1)?;
-        marks
-            .saved
-            .extend_from_slice(&self.cache.contents[start..start + len]);
         let needed = marks.points.len() + 1;
         reserve(ctx, &mut marks.points, needed, 3)?;
         marks.points.push((position, at, len));
@@ -656,15 +795,24 @@ impl Sets {
             above
         };
         let (top, start, len) = self.marks.points[point];
-        // Load the checkpoint as the current state.
+        // Load the checkpoint as the current state, with its offsets.
         ctx.budget
             .charge_wide(Resource::MatchSteps, copy_steps(len))?;
-        reserve(ctx, &mut self.state, len, 1)?;
+        let held = self.marks.saved[start] as usize;
+        let content = start + 1 + held..start + len;
+        reserve(ctx, &mut self.state, content.len(), 1)?;
         self.state.clear();
-        self.state
-            .extend_from_slice(&self.marks.saved[start..start + len]);
+        self.state.extend_from_slice(&self.marks.saved[content]);
         self.next.clear();
         std::mem::swap(&mut self.state, &mut self.next);
+        reserve(ctx, &mut self.next_offsets, held, 2)?;
+        self.next_offsets.clear();
+        let trailer = self.next.len() - 1 - 2 * held;
+        for index in 0..held {
+            let repeat = self.next[trailer + 2 * index] as u32;
+            self.next_offsets
+                .push((repeat, self.marks.saved[start + 1 + index]));
+        }
         let mut current = self.intern(ctx)?;
         self.reset_cover(ctx, from, top)?;
         self.record(ctx, top, current)?;
@@ -699,13 +847,8 @@ impl Sets {
         if length > old {
             let required = ctx.live_slots - old.div_ceil(2) as u128 + length.div_ceil(2) as u128;
             ctx.budget.limits().admit(Resource::MatchSlots, required)?;
-            marks
-                .ids
-                .try_reserve_exact(length)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: length as u64,
-                })?;
+            ctx.budget
+                .reserve_match(&mut marks.ids, length, length as u64)?;
             ctx.live_slots =
                 ctx.live_slots - old.div_ceil(2) as u128 + marks.ids.capacity().div_ceil(2) as u128;
         }
@@ -718,13 +861,7 @@ impl Sets {
         marks.spans.clear();
         marks.by_cache.clear();
         if marks.index.is_empty() {
-            marks
-                .index
-                .try_reserve_exact(16)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: 8,
-                })?;
+            ctx.budget.reserve_match(&mut marks.index, 16, 8)?;
             ctx.live_slots += marks.index.capacity().div_ceil(2) as u128;
             marks.index.resize(16, u32::MAX);
         } else {
@@ -744,12 +881,21 @@ impl Sets {
             self.marks.by_cache.clear();
             self.marks.cached = self.epoch;
         }
-        let known = self
-            .marks
-            .by_cache
-            .get(current as usize)
-            .copied()
-            .unwrap_or(u32::MAX);
+        // A state that keeps counts relative to offsets is recorded whole:
+        // the same interned state stands for other counts at other offsets.
+        let relative = !self.offsets.is_empty();
+        if relative {
+            self.absolute(ctx, current)?;
+        }
+        let known = if relative {
+            u32::MAX
+        } else {
+            self.marks
+                .by_cache
+                .get(current as usize)
+                .copied()
+                .unwrap_or(u32::MAX)
+        };
         if known != u32::MAX {
             // Within the step of the cached transition that reached it.
             let marks = &mut self.marks;
@@ -762,7 +908,11 @@ impl Sets {
             return Ok(true);
         }
         let (start, len) = self.cache.spans[current as usize];
-        let content = &self.cache.contents[start..start + len];
+        let (content, len) = if relative {
+            (&self.whole_state[..], self.whole_state.len())
+        } else {
+            (&self.cache.contents[start..start + len], len)
+        };
         let marks = &mut self.marks;
         ctx.budget
             .charge_wide(Resource::MatchSteps, 1 + copy_steps(len))?;
@@ -798,6 +948,9 @@ impl Sets {
         marks.ids[offset] = id;
         if content[0] != 0 {
             marks.accepts[offset / 64] |= 1 << (offset % 64);
+        }
+        if relative {
+            return Ok(true);
         }
         let slot = current as usize;
         if slot >= marks.by_cache.len() {
@@ -840,14 +993,7 @@ impl Sets {
         } else {
             NONE
         };
-        let (start, len) = self.cache.spans[current as usize];
-        let at = self.marks.saved.len();
-        ctx.budget
-            .charge_wide(Resource::MatchSteps, copy_steps(len))?;
-        reserve(ctx, &mut self.marks.saved, at + len, 1)?;
-        self.marks
-            .saved
-            .extend_from_slice(&self.cache.contents[start..start + len]);
+        let (at, len) = self.save(ctx, current)?;
         let needed = self.marks.points.len() + 1;
         reserve(ctx, &mut self.marks.points, needed, 3)?;
         reserve(ctx, &mut self.marks.lows, needed, 1)?;
@@ -874,9 +1020,13 @@ impl Sets {
             0
         };
         let key = u64::from(current) << 24 | u64::from(ch) << 2 | anchors;
-        if let Some(next) = self.cache.lookup(key) {
+        let kept = self.cache.lookup(key);
+        if let Some((next, offsets)) = kept
+            && (self.offsets.is_empty() || Self::far(ctx, self.cache.state(current), &self.offsets))
+        {
             ctx.budget.charge(Resource::MatchSteps, 1)?;
             self.fresh = false;
+            self.follow(ctx, next, offsets)?;
             return Ok(next);
         }
         if !self.fresh {
@@ -889,17 +1039,108 @@ impl Sets {
             self.state
                 .extend_from_slice(&self.cache.contents[start..start + len]);
         }
+        // A move from counts near a bound depends on their offsets.
+        let far = self.offsets.is_empty() || Self::far(ctx, &self.state, &self.offsets);
         self.begin(ctx)?;
         self.seed(ctx, ch)?;
         self.inject(ctx)?;
         self.closure(ctx, position)?;
         self.settle(ctx)?;
         let epoch = self.epoch;
+        let sensitive = self.sensitive || !far;
         let next = self.intern(ctx)?;
-        if epoch == self.epoch {
+        // A move that depended on the offsets holds only at these offsets.
+        if epoch == self.epoch && kept.is_none() && !sensitive {
             self.remember(ctx, key, next)?;
         }
         Ok(next)
+    }
+
+    /// The repetitions whose counts a state may keep relative to an offset:
+    /// those with a large count that can decide a choice on this input
+    /// ([`Ctx::large`]), whose body cannot match the empty string and whose
+    /// bounds fit `u64`. Every count of such a repetition changes by at most
+    /// one per move, and only by consuming, so a state whose counts are all
+    /// far from every bound makes the same moves whatever their values.
+    fn normal(&mut self, ctx: &mut Ctx<'_>) -> Result<&[u32], Error> {
+        if self.normal.is_none() {
+            let program = ctx.program;
+            let mut normal = Vec::new();
+            for &node in &program.links.normal {
+                ctx.budget.charge(Resource::MatchSteps, 1)?;
+                if ctx.large(node as usize) {
+                    let needed = normal.len() + 1;
+                    reserve(ctx, &mut normal, needed, 1)?;
+                    normal.push(node);
+                }
+            }
+            self.normal = Some(normal);
+        }
+        Ok(self.normal.as_deref().expect("the repetitions are known"))
+    }
+
+    /// The current state's offset of the repetition `repeat`, if its counts
+    /// are kept relative to one.
+    fn offset(&self, repeat: u32) -> Option<u64> {
+        self.offsets
+            .binary_search_by_key(&repeat, |&(node, _)| node)
+            .ok()
+            .map(|index| self.offsets[index].1)
+    }
+
+    /// Whether the counts of `repeat` from `low` to `high` are all far below
+    /// its minimum, or all far above it and far below its maximum.
+    fn far_counts(ctx: &Ctx<'_>, repeat: usize, low: u64, high: u64) -> bool {
+        let (min, max) = ctx.bounds(repeat);
+        let Count::Finite(min) = min else {
+            return false;
+        };
+        let below = high.saturating_add(MARGIN) < min;
+        let above = low >= min.saturating_add(MARGIN)
+            && matches!(max, Some(Count::Finite(max)) if high.saturating_add(MARGIN) < max);
+        below || above
+    }
+
+    /// Whether every count the encoded `state` keeps relative to an offset is
+    /// far from its bounds at `offsets`, its offsets.
+    fn far(ctx: &Ctx<'_>, state: &[u64], offsets: &[(u32, u64)]) -> bool {
+        let held = state[state.len() - 1] as usize;
+        let trailer = &state[state.len() - 1 - 2 * held..state.len() - 1];
+        trailer
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(offsets)
+            .all(|(&[_, spread], &(repeat, offset))| {
+                Self::far_counts(ctx, repeat as usize, offset, offset + spread)
+            })
+    }
+
+    /// Take the offsets of the interned state `next`, reached by a kept move
+    /// whose offset cells begin at `at`.
+    fn follow(&mut self, ctx: &mut Ctx<'_>, next: u32, at: u32) -> Result<(), Error> {
+        self.next_offsets.clear();
+        if at != NO_OFFSETS {
+            let state = self.cache.state(next);
+            let held = state[state.len() - 1] as usize;
+            ctx.budget
+                .charge_wide(Resource::MatchSteps, copy_steps(held * 2))?;
+            reserve(ctx, &mut self.next_offsets, held, 2)?;
+            let trailer = &state[state.len() - 1 - 2 * held..state.len() - 1];
+            for (index, &[repeat, _]) in trailer.as_chunks::<2>().0.iter().enumerate() {
+                let cell = self.cache.offsets[at as usize + index];
+                let offset = if cell & RELATIVE == 0 {
+                    cell
+                } else {
+                    self.offset(repeat as u32)
+                        .expect("a relative offset follows a kept one")
+                        + (cell & !RELATIVE)
+                };
+                self.next_offsets.push((repeat as u32, offset));
+            }
+        }
+        std::mem::swap(&mut self.offsets, &mut self.next_offsets);
+        Ok(())
     }
 
     fn accepting(&self, current: u32) -> bool {
@@ -912,6 +1153,7 @@ impl Sets {
 
     /// Forget the previous position's entries and work.
     fn begin(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
+        self.sensitive = false;
         self.keys.clear();
         self.intervals.clear();
         self.work.clear();
@@ -999,6 +1241,10 @@ impl Sets {
             for pair in self.state[intervals..at].as_chunks::<2>().0 {
                 self.intervals.push(<(u64, u64)>::from(*pair));
             }
+            if !self.offsets.is_empty() {
+                // The counts kept relative to an offset, made whole.
+                self.whole(ctx, node, start, first)?;
+            }
             self.push(
                 ctx,
                 Item {
@@ -1012,6 +1258,178 @@ impl Sets {
                 },
             )?;
         }
+        Ok(())
+    }
+
+    /// Add the current offsets to the counts of the entry at character node
+    /// `node` whose key was copied to `key` and whose set to the intervals
+    /// from `first` on.
+    fn whole(
+        &mut self,
+        ctx: &mut Ctx<'_>,
+        node: usize,
+        key: usize,
+        first: usize,
+    ) -> Result<(), Error> {
+        let links = &ctx.program.links.nodes;
+        let set = links[node].set;
+        if set != ROOT
+            && let Some(offset) = self.offset(set as u32)
+        {
+            for interval in &mut self.intervals[first..] {
+                interval.0 += offset;
+                interval.1 += offset;
+            }
+        }
+        let depth = if set == ROOT { 0 } else { links[set].counters };
+        let mut outer = links[node].outer;
+        while outer != ROOT {
+            ctx.budget.charge(Resource::MatchSteps, 1)?;
+            if outer != set
+                && let Some(offset) = self.offset(outer as u32)
+            {
+                let level = links[outer].counters;
+                self.keys[key + (level - u32::from(level > depth)) as usize] += offset;
+            }
+            outer = links[outer].outer;
+        }
+        Ok(())
+    }
+
+    /// Encode the counts of the state in `next` that are far from their
+    /// bounds relative to an offset each, and append the trailer naming them:
+    /// each such repetition and the spread of its counts, then how many there
+    /// are. Records the offsets and the move cells that derive them from the
+    /// current offsets, and whether the state depends on those offsets.
+    fn normalize(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
+        self.next_offsets.clear();
+        self.next_moves.clear();
+        if self.normal(ctx)?.is_empty() {
+            return Ok(());
+        }
+        let links = &ctx.program.links.nodes;
+        self.ranges.clear();
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(self.next.len()))?;
+        // Every count of every such repetition, entry by entry.
+        let mut at = 2;
+        for _ in 0..self.next[1] {
+            let node = self.next[at] as usize;
+            let key = at + 1;
+            let len = key_len(links[node].counters);
+            let count = self.next[key + len] as usize;
+            let intervals = key + len + 1;
+            at = intervals + count * 2;
+            let set = links[node].set;
+            if set != ROOT && self.is_normal(set) {
+                for index in 0..count {
+                    let (low, high) = (
+                        self.next[intervals + 2 * index],
+                        self.next[intervals + 2 * index + 1],
+                    );
+                    self.note(ctx, set as u32, low, high)?;
+                }
+            }
+            let depth = if set == ROOT { 0 } else { links[set].counters };
+            let mut outer = links[node].outer;
+            while outer != ROOT {
+                ctx.budget.charge(Resource::MatchSteps, 1)?;
+                if outer != set && self.is_normal(outer) {
+                    let level = links[outer].counters;
+                    let value = self.next[key + (level - u32::from(level > depth)) as usize];
+                    self.note(ctx, outer as u32, value, value)?;
+                }
+                outer = links[outer].outer;
+            }
+        }
+        self.ranges.sort_unstable_by_key(|&(node, ..)| node);
+        let held = self.ranges.len();
+        reserve(ctx, &mut self.next_offsets, held, 2)?;
+        reserve(ctx, &mut self.next_moves, held, 1)?;
+        for index in 0..held {
+            let (repeat, low, high) = self.ranges[index];
+            let current = self.offset(repeat);
+            if Self::far_counts(ctx, repeat as usize, low, high) {
+                self.next_offsets.push((repeat, low));
+                self.next_moves.push(match current {
+                    Some(offset) if low >= offset => RELATIVE | (low - offset),
+                    Some(_) => {
+                        self.sensitive = true;
+                        low
+                    }
+                    None => low,
+                });
+            } else if current.is_some() {
+                // Counts kept relative to an offset are now kept whole: the
+                // state depends on the offset.
+                self.sensitive = true;
+            }
+        }
+        if !self.next_offsets.is_empty() {
+            let mut at = 2;
+            for _ in 0..self.next[1] {
+                let node = self.next[at] as usize;
+                let key = at + 1;
+                let len = key_len(links[node].counters);
+                let count = self.next[key + len] as usize;
+                let intervals = key + len + 1;
+                at = intervals + count * 2;
+                let set = links[node].set;
+                if set != ROOT
+                    && let Some(offset) =
+                        assoc::get_sorted(&self.next_offsets, &(set as u32)).copied()
+                {
+                    for cell in &mut self.next[intervals..at] {
+                        *cell -= offset;
+                    }
+                }
+                let depth = if set == ROOT { 0 } else { links[set].counters };
+                let mut outer = links[node].outer;
+                while outer != ROOT {
+                    if outer != set
+                        && let Some(offset) =
+                            assoc::get_sorted(&self.next_offsets, &(outer as u32)).copied()
+                    {
+                        let level = links[outer].counters;
+                        self.next[key + (level - u32::from(level > depth)) as usize] -= offset;
+                    }
+                    outer = links[outer].outer;
+                }
+            }
+        }
+        let at = self.next.len();
+        reserve(ctx, &mut self.next, at + 1 + 2 * self.next_offsets.len(), 1)?;
+        for &(repeat, low) in &self.next_offsets {
+            let high = self
+                .ranges
+                .iter()
+                .find(|&&(node, ..)| node == repeat)
+                .expect("a kept repetition has counts")
+                .2;
+            self.next.push(u64::from(repeat));
+            self.next.push(high - low);
+        }
+        self.next.push(self.next_offsets.len() as u64);
+        Ok(())
+    }
+
+    /// Whether the counts of `repeat` may be kept relative to an offset.
+    fn is_normal(&self, repeat: usize) -> bool {
+        self.normal
+            .as_deref()
+            .is_some_and(|normal| normal.binary_search(&(repeat as u32)).is_ok())
+    }
+
+    /// Widen the range of counts of `repeat` in the state being encoded.
+    fn note(&mut self, ctx: &mut Ctx<'_>, repeat: u32, low: u64, high: u64) -> Result<(), Error> {
+        if let Some(range) = self.ranges.iter_mut().find(|range| range.0 == repeat) {
+            range.1 = range.1.min(low);
+            range.2 = range.2.max(high);
+            return Ok(());
+        }
+        let needed = self.ranges.len() + 1;
+        reserve(ctx, &mut self.ranges, needed, 3)?;
+        self.ranges.push((repeat, low, high));
         Ok(())
     }
 
@@ -1151,6 +1569,10 @@ impl Sets {
         };
         let depth = links[repeat].counters as usize;
         let pc = Pc::Iterate(repeat);
+        if self.offset(repeat as u32).is_some() {
+            // A count of zero beside counts kept relative to an offset.
+            self.sensitive = true;
+        }
         if depth == 0 {
             let key = self.keys.len();
             let set = self.zero(ctx)?;
@@ -1187,9 +1609,10 @@ impl Sets {
     ) -> Result<(), Error> {
         let program = ctx.program;
         let links = &program.links.nodes;
-        let Node::Repeat { body, min, max, .. } = program.nodes[repeat] else {
+        let Node::Repeat { body, .. } = program.nodes[repeat] else {
             unreachable!("only a repetition is counted");
         };
+        let (min, max) = ctx.bounds(repeat);
         let bounds = Bounds { min, max };
         let depth = links[repeat].counters as usize;
         if links[body].set == repeat {
@@ -1446,12 +1869,7 @@ impl Sets {
             (size + self.entries.len() * 2) as u128,
         )?;
         let mut table = Vec::new();
-        table
-            .try_reserve_exact(size)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: size as u64,
-            })?;
+        ctx.budget.reserve_match(&mut table, size, size as u64)?;
         table.resize(size, (0, 0));
         let mask = size - 1;
         for (index, entry) in self.entries.iter().enumerate() {
@@ -1474,7 +1892,8 @@ impl Sets {
         }
         ctx.live_slots =
             ctx.live_slots - old as u128 * SLOT_CELLS + table.capacity() as u128 * SLOT_CELLS;
-        self.table = table;
+        ctx.budget
+            .release_vec(std::mem::replace(&mut self.table, table))?;
         Ok(())
     }
 
@@ -1653,10 +2072,8 @@ impl Sets {
                 self.next[held] = 1;
                 continue;
             }
-            let Node::Repeat { min, max, .. } = program.nodes[repeat] else {
-                unreachable!("only a repetition is counted");
-            };
-            let written = if min == Count::AboveU64 && program.window(repeat) < DOWN_SPAN {
+            let (min, max) = ctx.bounds(repeat);
+            let written = if min == Count::AboveU64 && ctx.window(repeat) < DOWN_SPAN {
                 // A window above an unrepresented minimum: the counts are
                 // kept exactly, since a count beyond the minimum is bounded.
                 for &pair in &self.intervals[entry.set.range()] {
@@ -1668,7 +2085,7 @@ impl Sets {
             };
             self.next[held] = written as u64;
         }
-        Ok(())
+        self.normalize(ctx)
     }
 
     /// Append the counts of `set` whose futures differ to the encoding, and
@@ -1718,6 +2135,7 @@ impl Sets {
     /// Make the encoded next state current and intern it.
     fn intern(&mut self, ctx: &mut Ctx<'_>) -> Result<u32, Error> {
         std::mem::swap(&mut self.state, &mut self.next);
+        std::mem::swap(&mut self.offsets, &mut self.next_offsets);
         self.fresh = true;
         let len = self.state.len();
         ctx.budget
@@ -1741,9 +2159,10 @@ impl Sets {
         let used = self.cache.contents.len()
             + self.cache.spans.len() * 2
             + self.cache.index.len()
-            + self.cache.moves.len() * 2;
+            + self.cache.moves.len() * 2
+            + self.cache.offsets.len();
         if used + len + 2 > CACHE_CELLS {
-            self.clear_cache(ctx);
+            self.clear_cache(ctx)?;
         }
         let id = self.cache.spans.len();
         let start = self.cache.contents.len();
@@ -1765,10 +2184,16 @@ impl Sets {
     }
 
     /// Empty the cache.
-    fn clear_cache(&mut self, ctx: &mut Ctx<'_>) {
+    fn clear_cache(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
         ctx.live_slots -= self.cache.cells() as u128;
-        self.cache = Cache::default();
+        let old = std::mem::take(&mut self.cache);
+        ctx.budget.release_vec(old.contents)?;
+        ctx.budget.release_vec(old.spans)?;
+        ctx.budget.release_vec(old.index)?;
+        ctx.budget.release_vec(old.moves)?;
+        ctx.budget.release_vec(old.offsets)?;
         self.epoch += 1;
+        Ok(())
     }
 
     /// Rebuild the state index at twice the size, with every interned state.
@@ -1783,12 +2208,7 @@ impl Sets {
             (size + self.cache.contents.len()) as u128,
         )?;
         let mut index = Vec::new();
-        index
-            .try_reserve_exact(size)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: size as u64,
-            })?;
+        ctx.budget.reserve_match(&mut index, size, size as u64)?;
         index.resize(size, u32::MAX);
         let mask = size - 1;
         for id in 0..self.cache.spans.len() {
@@ -1800,7 +2220,8 @@ impl Sets {
             index[slot] = id as u32;
         }
         ctx.live_slots = ctx.live_slots - old as u128 + index.capacity() as u128;
-        self.cache.index = index;
+        ctx.budget
+            .release_vec(std::mem::replace(&mut self.cache.index, index))?;
         Ok(())
     }
 
@@ -1817,15 +2238,11 @@ impl Sets {
                 (size + self.cache.moves.len()) as u128,
             )?;
             let mut moves = Vec::new();
-            moves
-                .try_reserve_exact(size)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: size as u64 * 2,
-                })?;
-            moves.resize(size, (NO_MOVE, 0));
+            ctx.budget
+                .reserve_match(&mut moves, size, size as u64 * 2)?;
+            moves.resize(size, (NO_MOVE, 0, NO_OFFSETS));
             let mask = size - 1;
-            for &(stored, target) in &self.cache.moves {
+            for &(stored, target, offsets) in &self.cache.moves {
                 if stored == NO_MOVE {
                     continue;
                 }
@@ -1833,17 +2250,30 @@ impl Sets {
                 while moves[slot].0 != NO_MOVE {
                     slot = (slot + 1) & mask;
                 }
-                moves[slot] = (stored, target);
+                moves[slot] = (stored, target, offsets);
             }
             ctx.live_slots = ctx.live_slots - old as u128 * 2 + moves.capacity() as u128 * 2;
-            self.cache.moves = moves;
+            ctx.budget
+                .release_vec(std::mem::replace(&mut self.cache.moves, moves))?;
         }
+        // The cells that derive the new state's offsets, if it keeps any.
+        let offsets = if self.offsets.is_empty() {
+            NO_OFFSETS
+        } else {
+            let at = self.cache.offsets.len();
+            let Ok(start) = u32::try_from(at) else {
+                return Ok(());
+            };
+            reserve(ctx, &mut self.cache.offsets, at + self.next_moves.len(), 1)?;
+            self.cache.offsets.extend_from_slice(&self.next_moves);
+            start
+        };
         let mask = self.cache.moves.len() - 1;
         let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
         while self.cache.moves[slot].0 != NO_MOVE {
             slot = (slot + 1) & mask;
         }
-        self.cache.moves[slot] = (key, next);
+        self.cache.moves[slot] = (key, next, offsets);
         self.cache.moves_held += 1;
         Ok(())
     }
@@ -1860,12 +2290,7 @@ fn grow_states(ctx: &mut Ctx<'_>, marks: &mut Marks) -> Result<(), Error> {
     ctx.budget
         .charge_wide(Resource::MatchSteps, (size + marks.states.len()) as u128)?;
     let mut index = Vec::new();
-    index
-        .try_reserve_exact(size)
-        .map_err(|_| Error::Allocation {
-            resource: Resource::MatchSlots,
-            units: size as u64,
-        })?;
+    ctx.budget.reserve_match(&mut index, size, size as u64)?;
     index.resize(size, u32::MAX);
     let mask = size - 1;
     for (id, &(at, len)) in marks.spans.iter().enumerate() {
@@ -1877,7 +2302,8 @@ fn grow_states(ctx: &mut Ctx<'_>, marks: &mut Marks) -> Result<(), Error> {
     }
     ctx.live_slots =
         ctx.live_slots - old.div_ceil(2) as u128 + index.capacity().div_ceil(2) as u128;
-    marks.index = index;
+    ctx.budget
+        .release_vec(std::mem::replace(&mut marks.index, index))?;
     Ok(())
 }
 
@@ -1887,21 +2313,19 @@ fn grow_states(ctx: &mut Ctx<'_>, marks: &mut Marks) -> Result<(), Error> {
 /// one and those the reverse entry completed after it add up to an admitted
 /// total.
 fn compatible(
-    program: &super::compile::CompiledPattern,
+    ctx: &Ctx<'_>,
     node: usize,
     set_index: Option<usize>,
     key: &[u64],
     intervals: &[u64],
     counters: &[u64],
 ) -> bool {
-    let links = &program.links.nodes;
+    let links = &ctx.program.links.nodes;
     let mut repeat = links[node].outer;
     while repeat != ROOT {
-        let Node::Repeat { min, .. } = program.nodes[repeat] else {
-            unreachable!("only a repetition is counted");
-        };
+        let (min, _) = ctx.bounds(repeat);
         let index = links[repeat].counters as usize;
-        let Some((low, high)) = super::pike::needed(min, program.window(repeat), counters[index])
+        let Some((low, high)) = super::pike::needed(min, ctx.window(repeat), counters[index])
         else {
             return false;
         };

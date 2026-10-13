@@ -159,6 +159,15 @@ pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
 pub(crate) fn dependency_edges(
     rules: &[DlClause],
 ) -> (BTreeSet<String>, Vec<(String, String, bool)>) {
+    dependency_edges_with(rules, |_, head, body, negative| (head, body, negative))
+}
+
+/// The original dependency walk, with each authored edge's producing rule.
+/// Wildcard coupling is graph structure rather than an authored rule and has no index.
+pub(crate) fn dependency_edges_with<T>(
+    rules: &[DlClause],
+    mut edge: impl FnMut(Option<usize>, String, String, bool) -> T,
+) -> (BTreeSet<String>, Vec<T>) {
     // Every predicate symbol, heads and body atoms alike.
     let mut preds: BTreeSet<String> = BTreeSet::new();
     let mut wildcard_head = false;
@@ -187,19 +196,25 @@ pub(crate) fn dependency_edges(
     }
 
     // Edges: (head predicate, body predicate, negative?).
-    let mut edges: Vec<(String, String, bool)> = Vec::new();
-    for rule in rules {
+    let mut edges = Vec::new();
+    for (rule_index, rule) in rules.iter().enumerate() {
         for head in rule.head_atoms() {
             let head_symbol = predicate_symbol(head);
             for atom in rule.body() {
-                edges.push((
+                edges.push(edge(
+                    Some(rule_index),
                     head_symbol.clone(),
                     predicate_symbol(atom),
                     atom.is_negated(),
                 ));
             }
             for atom in rule.negations().iter().flat_map(Negation::atoms) {
-                edges.push((head_symbol.clone(), predicate_symbol(atom), true));
+                edges.push(edge(
+                    Some(rule_index),
+                    head_symbol.clone(),
+                    predicate_symbol(atom),
+                    true,
+                ));
             }
         }
     }
@@ -214,10 +229,10 @@ pub(crate) fn dependency_edges(
         .collect();
     for symbol in &concrete {
         if wildcard_body {
-            edges.push((ANY_PREDICATE.to_owned(), symbol.clone(), false));
+            edges.push(edge(None, ANY_PREDICATE.to_owned(), symbol.clone(), false));
         }
         if wildcard_head {
-            edges.push((symbol.clone(), ANY_PREDICATE.to_owned(), false));
+            edges.push(edge(None, symbol.clone(), ANY_PREDICATE.to_owned(), false));
         }
     }
 
@@ -1285,11 +1300,31 @@ impl RulePlan {
 /// calls without borrowing a caller's scratch buffer.
 #[derive(Debug, Clone)]
 pub struct Parsed {
+    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause]>,
 }
 
 impl Parsed {
+    /// Admit the complete clause IR under every supplied declaration source.
+    /// # Errors
+    /// Returns exact admission or ordinary Datalog fragment refusal.
+    pub fn with_declarations(
+        rules: Vec<DlClause>,
+        declarations: &crate::admission::NeverDeriveDeclarations,
+    ) -> Result<Self, crate::seminaive::EvalError> {
+        let certificate = declarations
+            .admit(&rules)
+            .map_err(crate::seminaive::EvalError::NeverDerive)?;
+        let mut parsed =
+            Self::new(rules).map_err(|error| crate::seminaive::EvalError::NonDatalogHead {
+                rule: error.clause(),
+                form: error.form(),
+            })?;
+        parsed.admission = Some(Arc::new(certificate));
+        Ok(parsed)
+    }
+
     /// Enter the pipeline with a parsed rule program, or refuse a clause the semi-naive
     /// evaluator has no semantics for.
     ///
@@ -1316,6 +1351,7 @@ impl Parsed {
         }
         Ok(Self {
             rules: Arc::from(rules),
+            admission: None,
         })
     }
 
@@ -1342,6 +1378,7 @@ impl Parsed {
         }
 
         Some(Stratified {
+            admission: self.admission,
             rules: self.rules,
             strata,
         })
@@ -1365,6 +1402,7 @@ pub(crate) fn datalog_head(rule: &DlClause) -> &ClauseAtom {
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
 pub struct Stratified {
+    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
@@ -1376,6 +1414,7 @@ impl Stratified {
     pub fn plan(self) -> Planned {
         let plans: Vec<RulePlan> = self.rules.iter().map(RulePlan::for_rule).collect();
         Planned {
+            admission: self.admission,
             rules: self.rules,
             strata: self.strata,
             plans,
@@ -1386,6 +1425,7 @@ impl Stratified {
 /// Stage 3: a stratified program with its per-rule join plans memoized.
 #[derive(Debug, Clone)]
 pub struct Planned {
+    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
@@ -1404,6 +1444,7 @@ impl Planned {
             .map(|r| predicate_symbol(datalog_head(r)))
             .collect();
         Executable {
+            admission: self.admission,
             rules: self.rules,
             strata: self.strata,
             plans: self.plans,
@@ -1419,6 +1460,7 @@ impl Planned {
 /// the program was stratified (stage 1 → 2) and planned (stage 2 → 3).
 #[derive(Debug, Clone)]
 pub struct Executable {
+    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
@@ -1430,6 +1472,16 @@ pub struct Executable {
 }
 
 impl Executable {
+    /// Every declaration source admitted with this immutable program.
+    #[must_use]
+    pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
+        self.admission
+            .as_deref()
+            .map(crate::admission::NeverDeriveCertificate::declarations)
+    }
+
+    crate::admission::program_declarations!();
+
     /// The number of strata (a completion frontier's total).
     pub fn stratum_count(&self) -> usize {
         self.strata.len()

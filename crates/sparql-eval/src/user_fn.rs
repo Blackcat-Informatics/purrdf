@@ -60,11 +60,13 @@ use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
+use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
 use crate::registry_id::{RegistryId, append_framed_part};
 use crate::witness::RelationWitness;
+use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
 
 /// The result form of a function body: a `sh:select` returns the projected value of
 /// its one solution (a second solution is an error); a `sh:ask` returns an
@@ -414,6 +416,156 @@ impl UserFunctionAdmission for DeferredFunctionAdmission {
 pub type NativeFnBody =
     Arc<dyn Fn(&[&TermValue]) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
+/// A native producer sharing the invocation's physical admission capability.
+///
+/// The body admits every temporary before allocating it and returns its original
+/// output owner. An operational refusal must stop production immediately.
+pub type AdmittedNativeFnBody = Arc<
+    dyn Fn(&[&TermValue], &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send
+        + Sync,
+>;
+
+/// An admitted native body with internal work and cancellation checkpoints.
+/// The result keeps its original physical allocation, including across clones.
+pub type MeteredNativeFnBody =
+    Arc<dyn Fn(&NativeFnCall<'_>) -> Result<Option<WorkspaceTerm>, EvalError> + Send + Sync>;
+
+/// Arguments and immutable capabilities of one native function invocation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct NativeFnCall<'a> {
+    /// The actual call-position IRI.
+    pub iri: &'a str,
+    /// Values borrowed from the evaluator's original argument owners.
+    pub args: &'a [&'a TermValue],
+    /// Work charging and stop checks, with no evaluator or dataset access.
+    pub context: &'a NativeFnContext<'a>,
+    /// Actual physical admission shared with the invoking query.
+    pub workspace: &'a WorkspaceCapability,
+    /// Caller-selected immutable geographic bindings and numerical policy.
+    pub geo: &'a purrdf_geo_kernel::GeoProfile,
+}
+
+#[derive(Clone, Copy)]
+enum NativeCharge {
+    Work(u64),
+    WorkspaceGrowth(u64),
+    Checkpoint,
+}
+
+/// A borrowed native body's restricted work and cancellation capability.
+/// Numerical code releases its floating environment guard before invoking it.
+pub struct NativeFnContext<'a> {
+    charge: &'a dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
+    stopped: core::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+    workspace: &'a WorkspaceCapability,
+    physical_failure: core::cell::RefCell<Option<EvalError>>,
+}
+purrdf_hash::debug_non_exhaustive!(NativeFnContext<'_> { stopped });
+
+impl NativeFnContext<'_> {
+    /// Borrow the actual query's physical admission capability.
+    #[must_use]
+    pub const fn workspace(&self) -> &WorkspaceCapability {
+        self.workspace
+    }
+
+    /// Preserve the first actual physical failure without rendering a second
+    /// diagnostic or replacing the governor's original stop cause.
+    pub(crate) fn record_physical_failure(&self, error: EvalError) {
+        let mut failure = self.physical_failure.borrow_mut();
+        if failure.is_none() {
+            *failure = Some(error);
+        }
+    }
+
+    /// Charge the operation law's documented units before the next work chunk.
+    /// # Errors
+    /// Returns the first governor that refused work or stopped this invocation.
+    pub fn charge_work(&self, units: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::Work(units))
+    }
+    /// Report additional numerical-policy workspace to the scratch governor.
+    /// Physical ownership must also use [`NativeFnCall::workspace`] before birth.
+    /// # Errors
+    /// Returns the original refusing governor; this never acquires a physical grant.
+    pub fn charge_workspace_growth(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::WorkspaceGrowth(bytes))
+    }
+    /// Poll the selected host stop law without consuming fuel.
+    /// # Errors
+    /// Returns the governor that stopped the call.
+    pub fn checkpoint(&self) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::Checkpoint)
+    }
+    fn apply(&self, charge: NativeCharge) -> Result<(), purrdf_core::TrippedGovernor> {
+        if let Some(stopped) = self.stopped.get() {
+            return Err(stopped);
+        }
+        let result = (self.charge)(charge);
+        if let Err(stopped) = result {
+            self.stopped.set(Some(stopped));
+        }
+        result
+    }
+}
+
+pub(crate) fn metered_native_call<D: DatasetView + Sync, T>(
+    ctx: &EvalCtx<'_, D>,
+    work_point: crate::governor::ChargePoint,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
+    let charge = |point| match point {
+        NativeCharge::Work(units) => ctx.charge_occurrences(work_point, units),
+        NativeCharge::WorkspaceGrowth(bytes) => {
+            if let Some(stopped) = ctx.stop_check() {
+                return Err(stopped);
+            }
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+        }
+        NativeCharge::Checkpoint => ctx.stop_check().map_or(Ok(()), Err),
+    };
+    native_call(&ctx.growth, &charge, body)
+}
+
+fn native_call<T>(
+    workspace: &WorkspaceCapability,
+    charge: &dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
+    let context = NativeFnContext {
+        charge,
+        stopped: core::cell::Cell::new(None),
+        workspace,
+        physical_failure: core::cell::RefCell::new(None),
+    };
+    let result = body(&context);
+    let failure = context.physical_failure.into_inner();
+    (result, context.stopped.get(), failure)
+}
+
+pub(crate) fn unmetered_native_call<T>(
+    workspace: &WorkspaceCapability,
+    body: impl FnOnce(&NativeFnContext<'_>) -> Result<T, EvalError>,
+) -> Result<T, EvalError> {
+    let (result, _, failure) = native_call(workspace, &|_| Ok(()), body);
+    if let Some(error) = failure {
+        drop(result);
+        Err(error)
+    } else {
+        result
+    }
+}
+
+#[derive(Clone)]
+enum NativeBody {
+    Resident(NativeFnBody),
+    Admitted(AdmittedNativeFnBody),
+    Metered(MeteredNativeFnBody),
+    Standard(crate::geo::functions::GeofFunction),
+}
+
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
 /// the calling query is running over, and the current user-function call depth.
@@ -482,6 +634,20 @@ pub struct ExprFnCall<'a> {
 pub type ExprFnBody =
     Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
+/// A dataset-aware producer using the same physical capability as its caller.
+/// Temporary allocations and the returned term retain their original grants.
+pub type AdmittedExprFnBody = Arc<
+    dyn Fn(&ExprFnCall<'_>, &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+enum ExprBody {
+    Resident(ExprFnBody),
+    Admitted(AdmittedExprFnBody),
+}
+
 impl ExprFnCall<'_> {
     /// Record what the relations this body invoked attested, so it reaches the
     /// CALLING query's receipt.
@@ -514,7 +680,7 @@ impl ExprFnCall<'_> {
 /// declaration either way would be a distinction without a difference.
 #[derive(Clone)]
 pub struct ExprFunction {
-    pub(crate) body: ExprFnBody,
+    body: ExprBody,
     pub(crate) arity: Arity,
 }
 
@@ -611,11 +777,22 @@ impl Arity {
     /// happen: it is a variant tag plus its numeric fields, with no wording to
     /// drift.
     pub(crate) fn stable_encoding(self) -> String {
-        match self {
-            Self::Exact(n) => format!("exact:{n}"),
-            Self::Range { min, max } => format!("range:{min}:{max}"),
-            Self::AtLeast(n) => format!("atleast:{n}"),
+        self.stable_display().to_string()
+    }
+
+    /// The stable identity encoding, borrowing no allocated rendering.
+    pub(crate) fn stable_display(self) -> impl core::fmt::Display {
+        struct Encoding(Arity);
+        impl core::fmt::Display for Encoding {
+            fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self.0 {
+                    Arity::Exact(n) => write!(out, "exact:{n}"),
+                    Arity::Range { min, max } => write!(out, "range:{min}:{max}"),
+                    Arity::AtLeast(n) => write!(out, "atleast:{n}"),
+                }
+            }
         }
+        Encoding(self)
     }
 }
 
@@ -638,9 +815,102 @@ impl core::fmt::Display for Arity {
 /// itself must uphold.
 #[derive(Clone)]
 pub struct NativeFunction {
-    pub(crate) body: NativeFnBody,
+    body: NativeBody,
     pub(crate) arity: Arity,
     pub(crate) volatility: Volatility,
+}
+
+macro_rules! standard_native_population {
+    ($($index:literal),* $(,)?) => { [$(NativeFunction {
+        body: NativeBody::Standard(crate::geo::functions::GeofFunction::ALL[$index]),
+        arity: crate::geo::functions::GeofFunction::ALL[$index].arity(),
+        volatility: Volatility::Stable,
+    }),*] };
+}
+static STANDARD_NATIVE: [NativeFunction; crate::geo::functions::GeofFunction::COUNT] = standard_native_population!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+);
+
+fn standard_native(iri: &str) -> Option<&'static NativeFunction> {
+    let local = iri.strip_prefix(purrdf_iri::vocab::ogc::geof::NS)?;
+    crate::geo::functions::GeofFunction::ALL
+        .iter()
+        .position(|function| function.local_name() == local)
+        .map(|index| &STANDARD_NATIVE[index])
+}
+
+/// A parser namespace cannot intercept an immutable standard scalar function.
+pub(crate) fn validate_standard_parser(
+    options: &purrdf_sparql_algebra::ParserOptions,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut conflict: Option<&str> = None;
+    for function in crate::geo::functions::GeofFunction::ALL {
+        // A namespace may end within either the official prefix or local name;
+        // compare the borrowed split spelling without constructing a String.
+        for namespace in &options.extension_fn_namespaces {
+            let prefix = purrdf_iri::vocab::ogc::geof::NS;
+            let intercepts = prefix.starts_with(namespace)
+                || namespace
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| function.local_name().starts_with(suffix));
+            if intercepts && conflict.is_none_or(|old| function.local_name() < old) {
+                conflict = Some(function.local_name());
+            }
+        }
+    }
+    if let Some(local) = conflict {
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::StandardFunctionConflict,
+            format_args!(
+                "extension parser namespace intercepts immutable standard function <{}{local}>",
+                purrdf_iri::vocab::ogc::geof::NS
+            ),
+            workspace,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_standard_algebra_with_memory(
+    pattern: &purrdf_sparql_algebra::GraphPattern,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    use purrdf_sparql_algebra::{Expression, Flow, Function, NodeRef, Visit};
+    let mut conflict = None;
+    purrdf_sparql_algebra::walk::walk_pre_post_with_memory(
+        NodeRef::Pattern(pattern),
+        |visit, node, _| -> Result<Flow, purrdf_lex::allocation::StorageError> {
+            if visit == Visit::Enter
+                && let NodeRef::Expr(Expression::FunctionCall(Function::Purrdf(call), _)) = node
+                && standard_native(&call.iri).is_some()
+            {
+                conflict = Some(call.iri.as_str());
+                return Ok(Flow::Stop);
+            }
+            Ok(Flow::Descend)
+        },
+        memory,
+    )
+    .map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "standard scalar validation walk")
+    })?;
+    // The shared walk's temporary grant must cover the work-list until it dies.
+    // Its owner callback is the lower Memory scope, not a post-traversal fee.
+    if let Some(iri) = conflict {
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::StandardFunctionConflict,
+            format_args!(
+                "closed function annotation intercepts immutable standard function <{iri}>"
+            ),
+            memory.admission_mut().workspace(),
+        ));
+    }
+    Ok(())
 }
 
 purrdf_hash::debug_non_exhaustive!(
@@ -742,7 +1012,23 @@ impl UserFunctionRegistry {
     /// a [`NativeFunction`] â see [`Self::insert`]'s panic doc for the rationale
     /// (symmetric guard).
     pub fn register_expr(&mut self, iri: impl Into<String>, arity: Arity, body: ExprFnBody) {
-        let iri = iri.into();
+        self.register_expr_body(iri.into(), arity, ExprBody::Resident(body));
+    }
+
+    /// Register a dataset-aware producer with physical ownership of its output.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_expr`] does.
+    pub fn register_expr_admitted(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        body: AdmittedExprFnBody,
+    ) {
+        self.register_expr_body(iri.into(), arity, ExprBody::Admitted(body));
+    }
+
+    fn register_expr_body(&mut self, iri: String, arity: Arity, body: ExprBody) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as expression-bodied"
@@ -780,7 +1066,86 @@ impl UserFunctionRegistry {
         volatility: Volatility,
         body: NativeFnBody,
     ) {
-        let iri = iri.into();
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Resident(body));
+    }
+
+    /// Register a native producer that admits its allocations before production.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_native`] does.
+    pub fn register_native_admitted(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: AdmittedNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Admitted(body));
+    }
+
+    /// Register a producer that admits its own allocations and meters native work.
+    pub fn register_native_metered(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: MeteredNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Metered(body));
+    }
+
+    pub(crate) fn register_standard_geo(
+        &mut self,
+        iri: String,
+        function: crate::geo::functions::GeofFunction,
+    ) {
+        self.register_native_body(
+            iri,
+            function.arity(),
+            Volatility::Stable,
+            NativeBody::Standard(function),
+        );
+    }
+
+    /// Reject any non-identical shadow of the immutable official scalar set.
+    /// The minimum conflicting IRI makes the refusal independent of map order.
+    pub(crate) fn validate_standard(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let nonnative = self
+            .fns
+            .keys()
+            .chain(self.exprs.keys())
+            .filter(|iri| standard_native(iri).is_some());
+        let native = self.native.iter().filter_map(|(iri, native)| {
+            let standard = standard_native(iri)?;
+            let same_body = matches!((&native.body, &standard.body),
+                (NativeBody::Standard(left), NativeBody::Standard(right)) if left == right);
+            (!same_body
+                || native.arity != standard.arity
+                || native.volatility != standard.volatility)
+                .then_some(iri)
+        });
+        if let Some(iri) = nonnative.chain(native).min() {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::StandardFunctionConflict,
+                format_args!(
+                    "caller registration conflicts with immutable standard function <{iri}>"
+                ),
+                workspace,
+            ));
+        }
+        Ok(())
+    }
+
+    fn register_native_body(
+        &mut self,
+        iri: String,
+        arity: Arity,
+        volatility: Volatility,
+        body: NativeBody,
+    ) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as native"
@@ -821,7 +1186,7 @@ impl UserFunctionRegistry {
     /// Resolve a call-position IRI to its declared native function, if any.
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
-        self.native.get(iri)
+        standard_native(iri).or_else(|| self.native.get(iri))
     }
 
     /// Resolve a call-position IRI to its declared dataset-aware
@@ -1350,6 +1715,20 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
+    eval_user_function_evidence(func, body, iri, args, ctx, &mut None)
+}
+
+/// Return a body's original evidence beside its value from the same execution.
+/// The caller owns the suspension slot; no context-global last-result is used.
+pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
+    func: &UserFunction,
+    body: &crate::engine::PreparedQuery,
+    iri: &str,
+    args: &[Option<TermValue>],
+    ctx: &mut EvalCtx<'_, D>,
+    evidence: &mut Option<crate::evidence_exec::RowEvidence>,
+) -> Result<Option<TermValue>, EvalError> {
+    *evidence = None;
     if args.len() < func.required || args.len() > func.params.len() {
         return Err(EvalError::function(format!(
             "SHACL-AF function <{iri}> expects {}..={} argument(s), got {}",
@@ -1405,7 +1784,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // test includes nested SPARQL functions; only a body that can mint needs the
     // parent's concrete identity reservations in its fresh computed-term table.
     if !child.pattern_is_parallel_safe(crate::eval::query_pattern(body.query())) {
-        child.scratch = ctx.scratch.fresh_for_user_function();
+        child.scratch = ctx.scratch.fresh_for_user_function_admitted(&ctx.growth)?;
         // Lazy indexing grows the parent and the copy retains its own labels.
         // Each arena owns a separate watermark against the same request budget.
         if let Err(tripped) = ctx
@@ -1448,10 +1827,12 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             // The body's attestations survive the truncation for the same reason the
             // minted identity state does: a relation the body invoked really did serve
             // this query, and the caller's receipt is the only place that fact can land.
-            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
+            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
             return Ok(None);
         }
     };
+
+    let body_evidence = function_body_evidence(&outcome, &child)?;
 
     let result: Option<TermValue> = match (func.kind, outcome) {
         (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::boolean(value)),
@@ -1502,16 +1883,18 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // listConcat remain reachable in the enclosing query's results.
     ctx.bnode_counter = child.bnode_counter;
     ctx.rng_state = child.rng_state;
-    ctx.constructed.append(&mut child.constructed);
+    ctx.constructed
+        .append_admitted(&mut child.constructed, &ctx.growth)?;
     // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
     // other and may invoke a registered relation, so what that relation attested belongs
     // on the CALLING query's receipt â there is no second receipt for a function body.
-    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
+    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
 
     // `sh:returnType` is informational (SHACL-AF Â§5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
     // runtime datatype constraint would spuriously reject IRI/blank-node returns,
     // so it is retained on `UserFunction` for callers but NOT enforced here.
+    *evidence = body_evidence;
     Ok(result)
 }
 
@@ -1540,19 +1923,25 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 /// An arity violation stays hard on purpose: the call
 /// as written cannot be evaluated at all, which is a defect in the query text
 /// rather than a value this row happens not to have.
-pub(crate) fn eval_native_function(
+pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     native: &NativeFunction,
     iri: &str,
     args: &[Option<TermValue>],
-) -> Result<Option<TermValue>, EvalError> {
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let workspace = &ctx.growth;
     // Fail-fast: a wrong-count call never reaches the host closure with a short
     // or long slice.
     if !native.arity.accepts(args.len()) {
-        return Err(EvalError::function(format!(
-            "native function <{iri}> expects {} argument(s), got {}",
-            native.arity,
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "native function <{iri}> expects {} argument(s), got {}",
+                native.arity,
+                args.len()
+            ),
+            workspace,
+        ));
     }
 
     // A native function declares no per-parameter optionality: any unbound
@@ -1562,21 +1951,72 @@ pub(crate) fn eval_native_function(
     }
     // Lend the closure borrows into the caller's argument buffer â no per-call
     // deep clone of the (heap-string-owning) TermValues on the scoring hot path.
-    let values: Vec<&TermValue> = args
-        .iter()
-        .map(|arg| arg.as_ref().expect("checked all-Some above"))
-        .collect();
+    if workspace.is_bounded() && matches!(native.body, NativeBody::Resident(_)) {
+        return Err(EvalError::WorkspaceUnpriced(
+            "native function allocation contract",
+        ));
+    }
+    let mut values = AdmittedVec::with_capacity(args.len(), workspace)?;
+    for arg in args {
+        values.push(arg.as_ref().expect("checked all-Some above"))?;
+    }
 
     // Guard the host closure with catch_unwind: a panicking closure (dim
     // mismatch, unwrap, OOB index) must not abort a rayon worker or otherwise
     // surface nondeterministically. The error message is fixed and
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
-    match catch_unwind(AssertUnwindSafe(|| (native.body)(&values))) {
+    if let Err(stopped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
+        ctx.expression_barrier.record(stopped);
+        return Ok(None);
+    }
+    let (result, stopped, physical_failure) = metered_native_call(
+        ctx,
+        crate::governor::ChargePoint::NativeFunctionWork,
+        |context| {
+            let call = NativeFnCall {
+                iri,
+                args: &values,
+                context,
+                workspace,
+                geo: ctx.geo,
+            };
+            catch_unwind(AssertUnwindSafe(|| match &native.body {
+                NativeBody::Resident(body) => {
+                    body(&values).map(|value| value.map(WorkspaceTerm::resident))
+                }
+                NativeBody::Admitted(body) => body(&values, workspace),
+                NativeBody::Metered(body) => body(&call),
+                NativeBody::Standard(function) => {
+                    crate::geo::functions::evaluate_standard(*function, &call)
+                }
+            }))
+        },
+    );
+    // The actual physical account's first failure outranks an observed governor.
+    // Never render a second diagnostic after admission has already stopped.
+    if let Some(error) = physical_failure {
+        drop(result);
+        return Err(error);
+    }
+    if workspace.has_failed() {
+        return match result {
+            Ok(Err(error)) => Err(error),
+            _ => Err(EvalError::WorkspaceStopped),
+        };
+    }
+    if let Some(stopped) = stopped {
+        drop(result);
+        ctx.expression_barrier.record(stopped);
+        return Ok(None);
+    }
+    match result {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "native function <{iri}> panicked"
-        ))),
+        Err(_) => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!("native function <{iri}> panicked"),
+            workspace,
+        )),
     }
 }
 
@@ -1619,27 +2059,45 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     iri: &str,
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<TermValue>, EvalError> {
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let workspace = ctx.workspace.capability();
     if !func.arity.accepts(args.len()) {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> expects {} argument(s), got {}",
-            func.arity,
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "expression-bodied function <{iri}> expects {} argument(s), got {}",
+                func.arity,
+                args.len()
+            ),
+            &workspace,
+        ));
     }
     let Some(focus_graph) = ctx.focus_graph else {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
              against, and this query supplied none (QueryOptions::focus_graph); the call is \
              refused rather than answered from a graph it never read"
-        )));
+            ),
+            &workspace,
+        ));
     };
     let depth = ctx.udf_depth.saturating_add(1);
     if depth > crate::eval::MAX_UDF_DEPTH {
-        return Err(EvalError::function_operational(format!(
-            "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
-            crate::eval::MAX_UDF_DEPTH
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!(
+                "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
+                crate::eval::MAX_UDF_DEPTH
+            ),
+            &workspace,
+        ));
+    }
+    if workspace.is_bounded() && matches!(func.body, ExprBody::Resident(_)) {
+        return Err(EvalError::WorkspaceUnpriced(
+            "expression function allocation contract",
+        ));
     }
     let relations = core::cell::RefCell::new(RelationWitness::default());
     let call = ExprFnCall {
@@ -1652,11 +2110,16 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // The same `catch_unwind` contract the native path documents: a panicking host
     // closure must not abort a worker or surface nondeterministically, and the
     // message is fixed and payload-free so it does not depend on which thread ran.
-    let result = match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
+    let result = match catch_unwind(AssertUnwindSafe(|| match &func.body {
+        ExprBody::Resident(body) => body(&call).map(|value| value.map(WorkspaceTerm::resident)),
+        ExprBody::Admitted(body) => body(&call, &workspace),
+    })) {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "expression-bodied function <{iri}> panicked"
-        ))),
+        Err(_) => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!("expression-bodied function <{iri}> panicked"),
+            &workspace,
+        )),
     };
 
     // Whatever the body recorded reaches the caller's receipt, and it does so on
@@ -1666,10 +2129,45 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // attestation because the call errored would be the silent-drop this channel
     // exists to prevent, arriving through the failure path instead of the happy one.
     let witness = relations.into_inner();
-    if !witness.is_empty() {
-        ctx.absorb_worker_witnesses([witness]);
+    let witness_result = if witness.is_empty() {
+        Ok(())
+    } else {
+        ctx.absorb_worker_witnesses([witness])
+    };
+    // The original function failure wins over a derived receipt refusal.
+    result.and_then(|value| witness_result.map(|()| value))
+}
+
+fn function_body_evidence<D: DatasetView + Sync>(
+    outcome: &Outcome<D::Id>,
+    child: &EvalCtx<'_, D>,
+) -> Result<Option<crate::RowEvidence>, EvalError> {
+    let rows = match outcome {
+        Outcome::Solutions(rows) => Some(rows),
+        Outcome::Boolean(_) => child.evidence_answer.as_ref(),
+        Outcome::Graph(_) => None,
+    };
+    let Some(rows) = rows else {
+        return if child.evidence_input.is_some() {
+            Err(EvalError::internal(
+                "SPARQL function lost its original evidence rows",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    if !child.may_have_evidence()
+        && !rows.rows.may_have_evidence_attachment()
+        && rows.rows.search_evidence().is_virtual()
+    {
+        return Ok(None);
     }
-    result
+    child
+        .existential_evidence(
+            rows.rows.iter().map(crate::solution::RetainedRow::evidence),
+            rows.rows.search_evidence(),
+        )
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -1687,6 +2185,49 @@ mod tests {
         GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
         QueryOptions,
     };
+
+    #[test]
+    fn native_empty_ask_body_keeps_original_incomplete_search_like_exists() {
+        use purrdf_core::evidence::{
+            EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
+        };
+        use purrdf_lex::allocation::{Memory, Resident};
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let mut child = EvalCtx::new(&dataset);
+        let query = crate::QueryEvidence::new(&child.growth).unwrap();
+        let search = query
+            .retain(
+                &EvidenceRecord::from_parts(
+                    &InformationMap::default(),
+                    SearchCompleteness::Undetermined,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    &mut Memory::new(&mut Resident),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let schema = crate::solution::VarSchema::default()
+            .shared_admitted(&child.growth)
+            .unwrap();
+        let mut rows = crate::solution::SolutionSeq::empty(schema);
+        rows.rows.retain_search_evidence(search.clone());
+        child.evidence_answer = Some(rows);
+        assert!(child.evidence_input.is_none());
+        let body = function_body_evidence(&Outcome::Boolean(false), &child)
+            .unwrap()
+            .unwrap();
+        let direct = child
+            .existential_evidence(std::iter::empty(), &search)
+            .unwrap();
+        assert!(body.same_attachment(&direct));
+        body.with_record(|record| {
+            assert_eq!(record.information().fallback(), Information::Neither);
+            assert_eq!(record.completeness(), SearchCompleteness::Undetermined);
+        })
+        .unwrap();
+    }
 
     const EX_INC: &str = "http://example.org/ns#inc";
     const EX_EVEN: &str = "http://example.org/ns#isEven";
@@ -2320,7 +2861,11 @@ mod tests {
                         crate::parallel::par_chunk_try_map_init(
                             false,
                             &queries,
-                            || parent.fork_for_worker(),
+                            || {
+                                parent
+                                    .fork_for_worker()
+                                    .expect("resident worker owner admission")
+                            },
                             |child, _rows, query| {
                                 evaluate_query_evaluated(query, child)?;
                                 Ok(())
@@ -2383,7 +2928,11 @@ mod tests {
                     crate::parallel::par_chunk_try_map_init(
                         false,
                         &queries,
-                        || parent.fork_for_worker(),
+                        || {
+                            parent
+                                .fork_for_worker()
+                                .expect("resident worker owner admission")
+                        },
                         |child, _rows, query| {
                             evaluate_query_evaluated(query, child)?;
                             Ok(())

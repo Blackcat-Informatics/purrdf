@@ -37,7 +37,7 @@
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDiagnostic, TermValue};
-use purrdf_sparql_algebra::{GroundTerm, Query, Variable};
+use purrdf_sparql_algebra::{Query, Variable};
 
 use crate::engine::PreparedQuery;
 use crate::prebind_memo::{PrebindMemo, ValueShape};
@@ -131,20 +131,20 @@ fn memo_verification_enabled() -> bool {
 pub struct PreparedExecution {
     /// The admitted plan. Held by `Arc`, so it stays valid for this execution's
     /// lifetime even if the engine's cache evicts it.
-    pub(crate) prepared: Arc<PreparedQuery>,
+    pub(crate) prepared: crate::SharedWorkspace<PreparedQuery>,
     /// The declared parameters, interned once, in declaration order.
-    pub(crate) parameters: Box<[Variable]>,
+    pub(crate) parameters: crate::WorkspaceArray<Variable>,
     /// The current value of each parameter, positionally. `None` until bound;
     /// running with any parameter still `None` is refused rather than defaulted.
     ///
     /// A [`ParameterValue`] rather than a bare [`TermValue`] because a slot may have
     /// been filled through either door — see that type for what each one holds and
     /// why the id door stores a resolved term rather than the id it was given.
-    pub(crate) values: Vec<Option<ParameterValue>>,
+    pub(crate) values: crate::WorkspaceArray<Option<ParameterValue>>,
     /// This run's bindings as the rewrite consumes them, in a buffer this execution
     /// keeps. The list has the same length on every run and only its cells change,
     /// so refilling it costs nothing where a fresh `Vec` cost one allocation per run.
-    probes: Vec<(Variable, GroundTerm)>,
+    probes: crate::substitute::PreparedProbes,
     /// The substituted algebra, once one has been built and checked — see
     /// [`crate::prebind_memo`].
     memo: Option<PrebindMemo>,
@@ -321,6 +321,12 @@ pub(crate) enum Substituted<'a> {
     /// variant's, so an unboxed `Query` here would make every `Retained` — the
     /// hot, memoized path — carry room for a tree it never holds.
     Fresh(Box<Query>),
+    Native(NativeSubstitution),
+}
+
+pub(crate) struct NativeSubstitution {
+    query: Box<Query>,
+    _allocation: Option<crate::WorkspaceAllocation>,
 }
 
 impl Substituted<'_> {
@@ -329,6 +335,7 @@ impl Substituted<'_> {
         match self {
             Self::Retained(query, _) => query,
             Self::Fresh(query) => query.as_ref(),
+            Self::Native(query) => query.query.as_ref(),
         }
     }
 
@@ -337,7 +344,7 @@ impl Substituted<'_> {
     pub(crate) const fn plan(&self) -> Option<&crate::plan::PlanCache> {
         match self {
             Self::Retained(_, plan) => Some(plan),
-            Self::Fresh(_) => None,
+            Self::Fresh(_) | Self::Native(_) => None,
         }
     }
 }
@@ -351,11 +358,43 @@ impl PreparedExecution {
     /// the admission whose result this value then carries.
     pub(crate) fn new(prepared: Arc<PreparedQuery>, parameters: Box<[Variable]>) -> Self {
         let values = vec![None; parameters.len()];
+        Self::with_storage(
+            prepared.into(),
+            crate::WorkspaceArray::Caller(parameters.into_vec()),
+            crate::WorkspaceArray::Caller(values),
+        )
+    }
+
+    pub(crate) fn new_admitted(
+        prepared: crate::SharedWorkspace<PreparedQuery>,
+        parameters: &[&str],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        let names = crate::AdmittedVec::try_from_iter_admitted(
+            parameters
+                .iter()
+                .map(|name| workspace.authored_text(*name).map(Variable::from_admitted)),
+            workspace,
+        )?;
+        let values =
+            crate::AdmittedVec::from_iter_admitted((0..parameters.len()).map(|_| None), workspace)?;
+        Ok(Self::with_storage(
+            prepared,
+            crate::WorkspaceArray::Native(names),
+            crate::WorkspaceArray::Native(values),
+        ))
+    }
+
+    fn with_storage(
+        prepared: crate::SharedWorkspace<PreparedQuery>,
+        parameters: crate::WorkspaceArray<Variable>,
+        values: crate::WorkspaceArray<Option<ParameterValue>>,
+    ) -> Self {
         Self {
             prepared,
             parameters,
             values,
-            probes: Vec::new(),
+            probes: crate::substitute::PreparedProbes::default(),
             memo: None,
             pending: None,
             workspace: ExecutionWorkspace::default(),
@@ -564,6 +603,30 @@ impl PreparedExecution {
         self.write(slot, ParameterValue::Value(value))
     }
 
+    /// Bind a native-produced value without copying or detaching its admission.
+    ///
+    /// # Errors
+    /// Returns a typed refusal if the slot is not a declared parameter.
+    pub fn bind_admitted(
+        &mut self,
+        slot: usize,
+        value: crate::SharedWorkspace<crate::WorkspaceTerm>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        let Some(cell) = self.values.get_mut(slot) else {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Data,
+                format_args!(
+                    "no parameter in slot {slot}: this execution declares {}",
+                    ParameterList(&self.parameters)
+                ),
+                workspace,
+            ));
+        };
+        *cell = Some(ParameterValue::AdmittedValue(value));
+        Ok(())
+    }
+
     /// Bind the parameter in `slot` to the term `dataset` interns at `id` — the **id
     /// door**.
     ///
@@ -579,7 +642,8 @@ impl PreparedExecution {
     ///
     /// It is an ADDITIONAL door, not a replacement: [`Self::bind`] is unchanged and
     /// remains the door for a caller with a term and no dataset. The two agree by
-    /// construction, because they converge on the same [`GroundTerm`] before anything
+    /// construction, because they converge on the same
+    /// [`GroundTerm`](purrdf_sparql_algebra::GroundTerm) before anything
     /// reads them — `crates/sparql-eval/tests/prepared_execution.rs` pins that
     /// agreement on the substituted plan itself rather than asserting it.
     ///
@@ -628,6 +692,89 @@ impl PreparedExecution {
         }
         let ground = crate::substitute::ground_term_from_id(dataset, id)?;
         self.write(slot, ParameterValue::Ground(ground))
+    }
+
+    /// Ground an infallible view's id under the enclosing native lookup account.
+    /// The binding retains its original lexical payload and shared-control grant.
+    ///
+    /// # Errors
+    /// Returns the original lexical or physical refusal without a resident copy.
+    pub fn bind_id_admitted<D: DatasetView<ReadError = std::convert::Infallible>>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        if slot >= self.values.len() {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Data,
+                format_args!(
+                    "no parameter in slot {slot}: this execution declares {}",
+                    ParameterList(&self.parameters)
+                ),
+                workspace,
+            ));
+        }
+        let value =
+            ParameterValue::from_id_admitted(dataset, id, workspace, |never| match never {})
+                .map_err(crate::substitute::GroundFailure::into_eval_error)?;
+        self.values[slot] = Some(value);
+        Ok(())
+    }
+
+    /// Bind a persistent dataset id through the storage provider's owned account.
+    ///
+    /// The stored ground term retains its original payload admission across
+    /// subsequent runs and ordinary binding replacement. The slot is checked
+    /// before the id is resolved.
+    ///
+    /// # Errors
+    /// Returns the original typed storage refusal, a retained lexical diagnostic,
+    /// or a checked physical allocation failure with the final storage evidence.
+    pub fn bind_id_fallible<D>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+    ) -> crate::FallibleScopedResult<(), D::Error, D::Evidence>
+    where
+        D: purrdf_core::FallibleDatasetView + Sync,
+    {
+        let result = (|| {
+            crate::engine::preflight_fallible_view(dataset)?;
+            let reporting = crate::engine::reserve_fallible_reporting(dataset)?;
+            let workspace = reporting.execution();
+            let evaluation = (|| {
+                if slot >= self.values.len() {
+                    return Err(crate::engine::EvaluationFailure::native_diagnostic(
+                        "native-sparql-execution-parameter",
+                        &format_args!(
+                            "no parameter in slot {slot}: this execution declares {}",
+                            ParameterList(&self.parameters)
+                        ),
+                        &workspace.capability(),
+                    ));
+                }
+                let value = ParameterValue::from_id_admitted(
+                    dataset,
+                    id,
+                    &workspace.capability(),
+                    |error| {
+                        crate::substitute::GroundFailure::Operational(workspace.source_error(error))
+                    },
+                )?;
+                Ok(value)
+            })();
+            let (value, evidence) =
+                crate::engine::finish_fallible_read(dataset, evaluation, Some(&workspace))?;
+            self.values[slot] = Some(value);
+            Ok(((), evidence))
+        })();
+        if result.is_err() {
+            self.reset_after_failure(&crate::WorkspaceCapability::resident());
+        }
+        result
     }
 
     /// Bind the parameter called `name` to `value`.
@@ -725,13 +872,8 @@ impl PreparedExecution {
     }
 
     /// The names of every parameter still unbound.
-    pub(crate) fn unbound(&self) -> Vec<&str> {
-        self.parameters
-            .iter()
-            .zip(&self.values)
-            .filter(|(_, value)| value.is_none())
-            .map(|(parameter, _)| parameter.as_str())
-            .collect()
+    pub(crate) const fn unbound(&self) -> UnboundParameters<'_> {
+        UnboundParameters(self)
     }
 
     /// The algebra this run evaluates: the current bindings, pre-bound into the plan
@@ -756,6 +898,91 @@ impl PreparedExecution {
     /// IRI that is not a valid IRI, or a language tag the concrete syntaxes would not
     /// have lexed. That refusal is the rewrite's own and is unchanged by the memo: it
     /// happens while the values are being grounded, before any tree is touched.
+    pub(crate) fn reset_after_failure(&mut self, capability: &crate::WorkspaceCapability) {
+        self.probes.reset_after_failure(capability);
+        if capability.is_bounded() {
+            self.pending = None;
+        }
+    }
+
+    pub(crate) fn substituted_admitted(
+        &mut self,
+        capability: &crate::WorkspaceCapability,
+    ) -> Result<Substituted<'_>, crate::engine::EvaluationFailure> {
+        if !capability.is_bounded() {
+            return self.substituted().map_err(Into::into);
+        }
+        crate::substitute::build_prepared_probes(
+            &mut self.probes,
+            crate::substitute::Prebindings::Paired(&self.parameters, &self.values),
+            capability,
+        )?;
+        if self.probes.entries().is_empty() {
+            return Ok(Substituted::Retained(
+                self.prepared.query(),
+                &self.prepared.plan,
+            ));
+        }
+        let mut frame = crate::workspace::LexicalFrame::new(capability);
+        let query = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            let query = self
+                .prepared
+                .query()
+                .clone_with_memory(&mut memory)
+                .map_err(|error| {
+                    crate::engine::EvaluationFailure::Evaluation(
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "prepared execution query clone"),
+                    )
+                })?;
+            let query = crate::substitute::apply_shacl_probes_with_memory(
+                query,
+                self.probes.entries(),
+                &mut memory,
+            )?;
+            let retained = query
+                .raw_owned_bytes_with_memory(&mut memory)
+                .map_err(|error| {
+                    crate::engine::EvaluationFailure::Evaluation(
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "prepared execution query ownership"),
+                    )
+                })?;
+            let dead = memory
+                .admitted_bytes()
+                .checked_sub(retained)
+                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            memory.release_bytes(dead).map_err(|error| {
+                crate::engine::EvaluationFailure::Evaluation(
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "prepared execution scratch release"),
+                )
+            })?;
+            memory
+                .add_bytes(std::alloc::Layout::new::<Query>().size())
+                .map_err(|error| {
+                    crate::engine::EvaluationFailure::Evaluation(
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "prepared execution query control"),
+                    )
+                })?;
+            purrdf_core::small::try_boxed(query).map_err(|_| {
+                crate::EvalError::AllocationFailed {
+                    construct: "prepared execution query control",
+                }
+            })?
+        };
+        Ok(Substituted::Native(NativeSubstitution {
+            query,
+            _allocation: frame.into_allocation(),
+        }))
+    }
+
     pub(crate) fn substituted(&mut self) -> Result<Substituted<'_>, RdfDiagnostic> {
         // Destructured so the probe buffer, the memo and the parameter slices are
         // three disjoint borrows rather than three borrows of one `self`.
@@ -772,10 +999,13 @@ impl PreparedExecution {
             // decided about here.
             workspace: _,
         } = self;
-        crate::substitute::build_probes_into(
+        crate::substitute::build_prepared_probes(
             probes,
             crate::substitute::Prebindings::Paired(parameters, values),
-        )?;
+            &crate::WorkspaceCapability::resident(),
+        )
+        .map_err(crate::substitute::GroundFailure::into_resident_diagnostic)?;
+        let probes = probes.entries();
         if probes.is_empty() {
             return Ok(Substituted::Retained(prepared.query(), &prepared.plan));
         }
@@ -843,7 +1073,7 @@ impl PreparedExecution {
             // allocations) and for the scope it is deliberately narrow about.
             #[cfg(debug_assertions)]
             if memo_verification_enabled() {
-                let fresh = crate::prebind_memo::rewrite(prepared.query().clone(), probes.clone());
+                let fresh = crate::prebind_memo::rewrite(prepared.query().clone(), probes.to_vec());
                 assert_eq!(
                     bound, &fresh,
                     "a prepared execution's memoized substituted plan disagrees with the \
@@ -855,7 +1085,52 @@ impl PreparedExecution {
         }
         Ok(Substituted::Fresh(Box::new(crate::prebind_memo::rewrite(
             prepared.query().clone(),
-            probes.clone(),
+            probes.to_vec(),
         ))))
+    }
+}
+
+struct ParameterList<'a>(&'a [Variable]);
+impl std::fmt::Display for ParameterList<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("none");
+        }
+        for (index, parameter) in self.0.iter().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "?{}", parameter.as_str())?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct UnboundParameters<'a>(&'a PreparedExecution);
+
+impl UnboundParameters<'_> {
+    fn names(&self) -> impl Iterator<Item = &str> {
+        self.0
+            .parameters
+            .iter()
+            .zip(&self.0.values)
+            .filter(|(_, value)| value.is_none())
+            .map(|(parameter, _)| parameter.as_str())
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.names().next().is_none()
+    }
+}
+
+impl std::fmt::Display for UnboundParameters<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, parameter) in self.names().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(parameter)?;
+        }
+        Ok(())
     }
 }

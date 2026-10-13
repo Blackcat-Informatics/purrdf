@@ -8,26 +8,29 @@
 //! absolute (§5.2.1) — a relative base is a hard [`IriError::NonAbsoluteBase`].
 
 use crate::error::{IriError, Result};
-use crate::parse::{Iri, parse};
+use crate::parse::Iri;
+use crate::parse::{IriReadError, parse_owned_with_memory, parse_with_memory};
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use std::borrow::Cow;
 
 /// Owned component view used by the resolution algorithm. `None` = "undefined" in
 /// RFC terms (distinct from an empty string, which is "defined but empty").
-struct Parts {
-    scheme: Option<String>,
-    authority: Option<String>,
-    path: String,
-    query: Option<String>,
-    fragment: Option<String>,
+struct Parts<'a> {
+    scheme: Option<&'a str>,
+    authority: Option<&'a str>,
+    path: Cow<'a, str>,
+    query: Option<&'a str>,
+    fragment: Option<&'a str>,
 }
 
-impl Parts {
-    fn of(iri: &Iri) -> Self {
+impl<'a> Parts<'a> {
+    fn of(iri: &'a Iri) -> Self {
         Self {
-            scheme: iri.scheme().map(str::to_owned),
-            authority: iri.authority().map(str::to_owned),
-            path: iri.path().to_owned(),
-            query: iri.query().map(str::to_owned),
-            fragment: iri.fragment().map(str::to_owned),
+            scheme: iri.scheme(),
+            authority: iri.authority(),
+            path: Cow::Borrowed(iri.path()),
+            query: iri.query(),
+            fragment: iri.fragment(),
         }
     }
 
@@ -37,22 +40,35 @@ impl Parts {
         Self {
             scheme: None,
             authority: None,
-            path: String::new(),
+            path: Cow::Borrowed(""),
             query: None,
             fragment: None,
         }
     }
 
     /// §5.3 component recomposition.
-    fn recompose(&self) -> String {
+    fn recompose<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<String, StorageError> {
         // Exact-fit buffer from the known part lengths: one allocation per
         // recompose instead of the amortized-doubling reallocs of `String::new()`.
-        let capacity = self.scheme.as_ref().map_or(0, |s| s.len() + 1)
-            + self.authority.as_ref().map_or(0, |a| a.len() + 2)
-            + self.path.len()
-            + self.query.as_ref().map_or(0, |q| q.len() + 1)
-            + self.fragment.as_ref().map_or(0, |f| f.len() + 1);
-        let mut out = String::with_capacity(capacity);
+        let mut capacity = self.path.len();
+        for (part, delimiter) in [
+            (self.scheme, 1),
+            (self.authority, 2),
+            (self.query, 1),
+            (self.fragment, 1),
+        ] {
+            if let Some(part) = part {
+                capacity = capacity
+                    .checked_add(part.len())
+                    .and_then(|bytes| bytes.checked_add(delimiter))
+                    .ok_or(StorageError::SizeOverflow)?;
+            }
+        }
+        let mut out = String::new();
+        memory.reserve_string(&mut out, capacity)?;
         if let Some(s) = &self.scheme {
             out.push_str(s);
             out.push(':');
@@ -70,7 +86,7 @@ impl Parts {
             out.push('#');
             out.push_str(f);
         }
-        out
+        Ok(out)
     }
 }
 
@@ -99,16 +115,36 @@ impl Iri {
     /// # Ok::<(), purrdf_iri::IriError>(())
     /// ```
     pub fn resolve(&self, reference: &str) -> Result<Self> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        resident_result(self.resolve_with_memory(reference, &mut memory))
+    }
+
+    /// Resolve through the same RFC algorithm under original physical admission.
+    ///
+    /// Returned text and lexical errors remain charged to `memory` until their
+    /// caller destroys them or transfers its original account into publication.
+    ///
+    /// # Errors
+    /// Returns the original IRI error or typed physical storage refusal.
+    pub fn resolve_with_memory<S: Admission + ?Sized>(
+        &self,
+        reference: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, IriReadError> {
         if !self.has_scheme() {
-            return Err(IriError::NonAbsoluteBase(self.as_str().to_owned()));
+            return Err(IriError::NonAbsoluteBase(memory.string(self.as_str())?).into());
         }
         // An EMPTY reference is the valid "same-document reference" (RFC-3986
         // §4.4 / §5.4.1 `"" = base`) — it is not a standalone IRI, so `parse`
         // (rightly) rejects it, but resolution must accept it as all-undefined.
         if reference.is_empty() {
-            return self.transform_and_reparse(&Parts::same_document());
+            return self.transform_and_reparse(&Parts::same_document(), memory);
         }
-        self.resolve_iri(&parse(reference)?)
+        let parsed = parse_with_memory(reference, memory)?;
+        let result = self.resolve_iri_with_memory(&parsed, memory);
+        memory.release_string(parsed.text)?;
+        result
     }
 
     /// [`resolve`](Self::resolve) for a reference the caller has **already parsed**.
@@ -119,10 +155,20 @@ impl Iri {
     /// and re-parsing it afterwards would double the parse cost of every relative
     /// IRI in a Turtle document.
     pub(crate) fn resolve_iri(&self, r: &Self) -> Result<Self> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        resident_result(self.resolve_iri_with_memory(r, &mut memory))
+    }
+
+    pub(crate) fn resolve_iri_with_memory<S: Admission + ?Sized>(
+        &self,
+        r: &Self,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, IriReadError> {
         if !self.has_scheme() {
-            return Err(IriError::NonAbsoluteBase(self.as_str().to_owned()));
+            return Err(IriError::NonAbsoluteBase(memory.string(self.as_str())?).into());
         }
-        self.transform_and_reparse(&Parts::of(r))
+        self.transform_and_reparse(&Parts::of(r), memory)
     }
 
     /// §5.2.2 transform + §5.3 recomposition, then re-parse.
@@ -130,69 +176,117 @@ impl Iri {
     /// Recomposing and re-parsing is what makes the returned `Iri` carry correct
     /// spans and be itself validated: a resolution that produced something malformed
     /// is a hard error, never a silently-returned bad IRI.
-    fn transform_and_reparse(&self, r: &Parts) -> Result<Self> {
-        parse(&transform(&Parts::of(self), r).recompose())
+    fn transform_and_reparse<S: Admission + ?Sized>(
+        &self,
+        r: &Parts<'_>,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, IriReadError> {
+        let transformed = transform(&Parts::of(self), r, memory)?;
+        let text = transformed.recompose(memory);
+        if let Cow::Owned(path) = transformed.path {
+            memory.release_string(path)?;
+        }
+        parse_owned_with_memory(text?, memory)
+    }
+}
+
+pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(IriReadError::Lexical(error)) => Err(error),
+        Err(IriReadError::Storage(error)) => panic!("resident IRI storage failed: {error}"),
     }
 }
 
 /// RFC-3986 §5.2.2 transform-references (strict mode: a reference scheme is never
 /// ignored, even when equal to the base scheme).
-fn transform(base: &Parts, r: &Parts) -> Parts {
+fn transform<'a, S: Admission + ?Sized>(
+    base: &Parts<'a>,
+    r: &Parts<'a>,
+    memory: &mut Memory<'_, S>,
+) -> core::result::Result<Parts<'a>, StorageError> {
     if r.scheme.is_some() {
-        return Parts {
-            scheme: r.scheme.clone(),
-            authority: r.authority.clone(),
-            path: remove_dot_segments(&r.path),
-            query: r.query.clone(),
-            fragment: r.fragment.clone(),
-        };
+        return Ok(Parts {
+            scheme: r.scheme,
+            authority: r.authority,
+            path: Cow::Owned(remove_dot_segments_with_memory(&r.path, memory)?),
+            query: r.query,
+            fragment: r.fragment,
+        });
     }
     if r.authority.is_some() {
-        return Parts {
-            scheme: base.scheme.clone(),
-            authority: r.authority.clone(),
-            path: remove_dot_segments(&r.path),
-            query: r.query.clone(),
-            fragment: r.fragment.clone(),
-        };
+        return Ok(Parts {
+            scheme: base.scheme,
+            authority: r.authority,
+            path: Cow::Owned(remove_dot_segments_with_memory(&r.path, memory)?),
+            query: r.query,
+            fragment: r.fragment,
+        });
     }
     let (path, query) = if r.path.is_empty() {
         let q = if r.query.is_some() {
-            r.query.clone()
+            r.query
         } else {
-            base.query.clone()
+            base.query
         };
-        (base.path.clone(), q)
+        let path = match &base.path {
+            Cow::Borrowed(path) => Cow::Borrowed(*path),
+            Cow::Owned(path) => Cow::Owned(memory.string(path)?),
+        };
+        (path, q)
     } else if r.path.starts_with('/') {
-        (remove_dot_segments(&r.path), r.query.clone())
+        (
+            Cow::Owned(remove_dot_segments_with_memory(&r.path, memory)?),
+            r.query,
+        )
     } else {
-        let merged = merge(base, &r.path);
-        (remove_dot_segments(&merged), r.query.clone())
+        let merged = merge(base, &r.path, memory)?;
+        let path = remove_dot_segments_with_memory(&merged, memory);
+        memory.release_string(merged)?;
+        (Cow::Owned(path?), r.query)
     };
-    Parts {
-        scheme: base.scheme.clone(),
-        authority: base.authority.clone(),
+    Ok(Parts {
+        scheme: base.scheme,
+        authority: base.authority,
         path,
         query,
-        fragment: r.fragment.clone(),
-    }
+        fragment: r.fragment,
+    })
 }
 
 /// RFC-3986 §5.2.3 merge: combine a relative-reference path with the base path.
-fn merge(base: &Parts, ref_path: &str) -> String {
+fn merge<S: Admission + ?Sized>(
+    base: &Parts<'_>,
+    ref_path: &str,
+    memory: &mut Memory<'_, S>,
+) -> core::result::Result<String, StorageError> {
     if base.authority.is_some() && base.path.is_empty() {
-        let mut s = String::with_capacity(ref_path.len() + 1);
+        let mut s = String::new();
+        memory.reserve_string(
+            &mut s,
+            ref_path
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?,
+        )?;
         s.push('/');
         s.push_str(ref_path);
-        s
+        Ok(s)
     } else {
         match base.path.rfind('/') {
             Some(slash) => {
-                let mut s = base.path[..=slash].to_owned();
+                let mut s = String::new();
+                memory.reserve_string(
+                    &mut s,
+                    (slash + 1)
+                        .checked_add(ref_path.len())
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
+                s.push_str(&base.path[..=slash]);
                 s.push_str(ref_path);
-                s
+                Ok(s)
             }
-            None => ref_path.to_owned(),
+            None => memory.string(ref_path),
         }
     }
 }
@@ -205,8 +299,18 @@ fn merge(base: &Parts, ref_path: &str) -> String {
 /// `/`, so each transition is a slice — zero allocations per resolve where the
 /// owned-buffer form paid O(segments) `String` reallocs/`drain`s.
 pub(crate) fn remove_dot_segments(path: &str) -> String {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    remove_dot_segments_with_memory(path, &mut memory).expect("resident path storage")
+}
+
+fn remove_dot_segments_with_memory<S: Admission + ?Sized>(
+    path: &str,
+    memory: &mut Memory<'_, S>,
+) -> core::result::Result<String, StorageError> {
     let mut input: &str = path;
-    let mut out = String::with_capacity(path.len());
+    let mut out = String::new();
+    memory.reserve_string(&mut out, path.len())?;
     while !input.is_empty() {
         // A: leading "../" or "./" -> drop the prefix.
         if let Some(rest) = input.strip_prefix("../") {
@@ -244,7 +348,7 @@ pub(crate) fn remove_dot_segments(path: &str) -> String {
             input = &input[seg_end..];
         }
     }
-    out
+    Ok(out)
 }
 
 /// Pop the trailing segment (and its preceding '/') from the output buffer — the

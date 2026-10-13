@@ -4,6 +4,7 @@
 # Payloads and receipt paths are data; the freeze algorithm stays in check-corpus-frozen.py.
 
 [roots]
+"crates/mime/tests/corpus/cpython" = "scripts/conformance-frozen/mime-cpython.sha256"
 "vectors/rdf12-canon" = "scripts/conformance-frozen/vectors-rdf12-canon.sha256"
 "vectors/sparql-governors" = "scripts/conformance-frozen/vectors-sparql-governors.sha256"
 "vectors/shacl" = "scripts/conformance-frozen/vectors-shacl.sha256"
