@@ -1215,7 +1215,7 @@ pub(crate) fn geometry_n_with_memory<S: purrdf_lex::allocation::Admission + ?Siz
             .map(|point| {
                 arithmetic.geometry(
                     dim,
-                    GeometryBody::Point(point.as_ref().map(&mut *copy).transpose()?),
+                    GeometryBody::Point(point.as_ref().map(*copy).transpose()?),
                 )
             })
             .transpose(),
