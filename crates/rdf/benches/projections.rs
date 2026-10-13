@@ -192,11 +192,17 @@ fn lpg_limits() -> ProjectionLimits {
     ProjectionLimits::new(64, 128_000_000, 512_000_000, 576_000_000, 16).expect("LPG limits")
 }
 
-fn push_iri(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, object: &str) {
-    let subject = builder.intern_iri(subject).unwrap();
-    let predicate = builder.intern_iri(predicate).unwrap();
-    let object = builder.intern_iri(object).unwrap();
-    builder.push_quad(subject, predicate, object, None).unwrap();
+fn push_iri(
+    builder: &mut RdfDatasetBuilder,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    let subject = builder.intern_iri(subject)?;
+    let predicate = builder.intern_iri(predicate)?;
+    let object = builder.intern_iri(object)?;
+    builder.push_quad(subject, predicate, object, None)?;
+    Ok(())
 }
 
 fn push_literal(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, value: &str) {
@@ -216,13 +222,15 @@ fn graph_dataset() -> Arc<RdfDataset> {
             &subject,
             &format!("{EX}type"),
             &format!("{EX}Class-{}", index % 8),
-        );
+        )
+        .expect("graph type triple");
         push_iri(
             &mut builder,
             &subject,
             &format!("{EX}relation-{}", index % 11),
             &object,
-        );
+        )
+        .expect("graph relation triple");
         push_literal(
             &mut builder,
             &subject,
@@ -283,7 +291,8 @@ fn obo_dataset() -> Arc<RdfDataset> {
         &format!("{EX}ontology"),
         &format!("{RDF}type"),
         &format!("{OWL}Ontology"),
-    );
+    )
+    .expect("ontology type triple");
     for index in 0..ROWS {
         let class = format!("{EX}class-{index}");
         push_iri(
@@ -291,7 +300,8 @@ fn obo_dataset() -> Arc<RdfDataset> {
             &class,
             &format!("{RDF}type"),
             &format!("{OWL}Class"),
-        );
+        )
+        .expect("class type triple");
         push_literal(
             &mut builder,
             &class,
@@ -304,7 +314,8 @@ fn obo_dataset() -> Arc<RdfDataset> {
                 &class,
                 &format!("{RDFS}subClassOf"),
                 &format!("{EX}class-{}", index - 1),
-            );
+            )
+            .expect("subclass triple");
         }
     }
     builder.freeze().expect("OBO dataset")
@@ -318,7 +329,8 @@ fn skos_dataset() -> Arc<RdfDataset> {
         &scheme,
         &format!("{RDF}type"),
         &format!("{SKOS_SOURCE}ConceptScheme"),
-    );
+    )
+    .expect("scheme type triple");
     for index in 0..ROWS {
         let concept = format!("{EX}concept-{index}");
         push_iri(
@@ -326,13 +338,15 @@ fn skos_dataset() -> Arc<RdfDataset> {
             &concept,
             &format!("{RDF}type"),
             &format!("{SKOS_SOURCE}Concept"),
-        );
+        )
+        .expect("concept type triple");
         push_iri(
             &mut builder,
             &concept,
             &format!("{SKOS_SOURCE}inScheme"),
             &scheme,
-        );
+        )
+        .expect("concept scheme triple");
         push_literal(
             &mut builder,
             &concept,
@@ -345,7 +359,8 @@ fn skos_dataset() -> Arc<RdfDataset> {
                 &concept,
                 &format!("{SKOS_SOURCE}broader"),
                 &format!("{EX}concept-{}", index - 1),
-            );
+            )
+            .expect("broader concept triple");
         }
     }
     builder.freeze().expect("SKOS dataset")
