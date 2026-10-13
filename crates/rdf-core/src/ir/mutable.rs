@@ -1327,7 +1327,36 @@ impl MutableDataset {
     /// (the `attach_location` contract). Delta-added quads were minted in memory, not
     /// parsed from a source, so they carry no location.
     pub fn freeze(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
-        let view = self.snapshot_view()?;
+        self.freeze_with_limits(super::view_accounting::ViewLimits::default())
+    }
+
+    /// Compact the effective set under caller-selected view retention ceilings.
+    ///
+    /// This performs the same compaction as [`Self::freeze`], using `limits` for
+    /// the intermediate immutable snapshot instead of the default ceilings.
+    /// Callers can use the same limits for snapshot publication and compaction.
+    /// These limits do not replace the builder's RDF validity or capacity checks.
+    ///
+    /// ```
+    /// use purrdf_core::{MutableDataset, RdfDatasetBuilder, ViewLimits};
+    ///
+    /// let mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze()?);
+    /// let limits = ViewLimits {
+    ///     max_auxiliary_bytes: 1_073_741_824,
+    ///     ..ViewLimits::default()
+    /// };
+    /// let compacted = mutable.freeze_with_limits(limits)?;
+    /// assert_eq!(compacted.quad_count(), 0);
+    /// # Ok::<(), purrdf_core::RdfDiagnostic>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Refuses retention overflow or invalid RDF records before publication.
+    pub fn freeze_with_limits(
+        &self,
+        limits: super::view_accounting::ViewLimits,
+    ) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
+        let view = self.snapshot_view_with_limits(limits)?;
         let mut builder = self.base.rebuild_builder();
         super::import::DatasetImporter::new(&mut builder, &view).append();
         let mut ordinal = 0;
