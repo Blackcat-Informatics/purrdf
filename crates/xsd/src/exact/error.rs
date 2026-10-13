@@ -208,14 +208,7 @@ impl fmt::Display for ExactParseError {
     }
 }
 
-impl std::error::Error for ExactParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_lex::error_source!(ExactParseError { Storage });
 
 /// A fallible native operation's semantic error or physical destination refusal.
 /// Physical errors do not acquire an F&O code.

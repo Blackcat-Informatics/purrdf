@@ -85,6 +85,29 @@
 //! invalidation below sound.
 
 use purrdf_hash::Domain;
+
+// Both carrier forms expose the same attach contract. Their graph_digest methods
+// select the backing canonicalizer; the check and publication are declared once.
+macro_rules! pin_handle_method {
+    ($handle:ty; $(#[$meta:meta])*) => {
+        $(#[$meta])*
+        pub fn pin_handle(
+            &mut self,
+            graph: impl Into<HandleKey>,
+            payload: $handle,
+            content_digest: ContentDigest,
+        ) -> Result<(), PipelineBundleError> {
+            let graph = graph.into();
+            let actual = self.graph_digest(&graph)?;
+            BundleCore::<$handle>::verify_pin(&graph, content_digest, actual)?;
+            self.core
+                .handles
+                .insert(graph, HandleEntry::new(payload, content_digest));
+            Ok(())
+        }
+    };
+}
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -973,6 +996,7 @@ impl<H> PipelineBundle<H> {
         iri_named_graphs(&*self.dataset)
     }
 
+    pin_handle_method! { H;
     /// Attach a typed handle for the named graph `graph`, pinning `payload` to the
     /// canonical digest of that graph's subgraph.
     ///
@@ -985,19 +1009,6 @@ impl<H> PipelineBundle<H> {
     ///
     /// [`PipelineBundleError::HandleDigestMismatch`] if the pinned digest disagrees
     /// with the backing graph.
-    pub fn pin_handle(
-        &mut self,
-        graph: impl Into<HandleKey>,
-        payload: H,
-        content_digest: ContentDigest,
-    ) -> Result<(), PipelineBundleError> {
-        let graph = graph.into();
-        let actual = self.graph_digest(&graph)?;
-        BundleCore::<H>::verify_pin(&graph, content_digest, actual)?;
-        self.core
-            .handles
-            .insert(graph, HandleEntry::new(payload, content_digest));
-        Ok(())
     }
 
     /// Detach the typed handle for `graph`, returning it if present. Detaching does
@@ -1587,6 +1598,7 @@ impl<H> PipelineViewBundle<H> {
         Ok(self.core.pipeline_root_over(&leaves, residue))
     }
 
+    pin_handle_method! { H;
     /// Attach a typed handle for the named graph `graph`. See
     /// [`PipelineBundle::pin_handle`] — identical contract, fallible
     /// canonicalization.
@@ -1596,19 +1608,6 @@ impl<H> PipelineViewBundle<H> {
     /// [`PipelineBundleError::HandleDigestMismatch`] if the pinned digest disagrees
     /// with the backing graph; [`PipelineBundleError::Canonicalization`] if that
     /// graph cannot be canonicalized.
-    pub fn pin_handle(
-        &mut self,
-        graph: impl Into<HandleKey>,
-        payload: H,
-        content_digest: ContentDigest,
-    ) -> Result<(), PipelineBundleError> {
-        let graph = graph.into();
-        let actual = self.graph_digest(&graph)?;
-        BundleCore::<H>::verify_pin(&graph, content_digest, actual)?;
-        self.core
-            .handles
-            .insert(graph, HandleEntry::new(payload, content_digest));
-        Ok(())
     }
 
     /// Detach the typed handle for `graph`, returning it if present.

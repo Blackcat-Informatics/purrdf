@@ -215,14 +215,7 @@ impl std::fmt::Display for SegmentedError {
         }
     }
 }
-impl std::error::Error for SegmentedError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_lex::error_source!(SegmentedError { Storage });
 
 purrdf_lex::variant_from!(SegmentedError { Storage(purrdf_lex::allocation::StorageError) });
 

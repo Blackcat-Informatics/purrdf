@@ -106,13 +106,6 @@ impl fmt::Display for ColumnarError {
     }
 }
 
-impl std::error::Error for ColumnarError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_lex::error_source!(ColumnarError { Storage });
 
 purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });

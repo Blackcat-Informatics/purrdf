@@ -24,6 +24,25 @@ pub struct RdfStoreCapabilities {
     pub lookaside: bool,
 }
 
+/// Declare a dataset view's fixed capability getter from its enabled flags.
+///
+/// Invoke inside a `DatasetView` implementation with the enabled field names,
+/// for example `fixed_store_capabilities!(quoted_triples)`. Every omitted flag
+/// remains false. Views whose capabilities depend on stored data implement their
+/// getter directly instead.
+#[macro_export]
+macro_rules! fixed_store_capabilities {
+    ($(#[$meta:meta])* $($capability:ident),* $(,)?) => {
+        $(#[$meta])*
+        fn capabilities(&self) -> $crate::RdfStoreCapabilities {
+            $crate::RdfStoreCapabilities {
+                $($capability: true,)*
+                ..$crate::RdfStoreCapabilities::plain_rdf()
+            }
+        }
+    };
+}
+
 impl RdfStoreCapabilities {
     /// The plain-RDF baseline: every capability flag off.
     pub const fn plain_rdf() -> Self {

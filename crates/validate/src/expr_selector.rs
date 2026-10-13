@@ -200,14 +200,7 @@ impl fmt::Display for ExprSelectorError {
     }
 }
 
-impl std::error::Error for ExprSelectorError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_lex::error_source!(ExprSelectorError { Storage });
 
 purrdf_lex::variant_from!(ExprSelectorError { Storage(purrdf_lex::allocation::StorageError) });
 

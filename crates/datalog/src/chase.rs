@@ -825,14 +825,7 @@ impl fmt::Display for ChaseError {
     }
 }
 
-impl std::error::Error for ChaseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_lex::error_source!(ChaseError { Storage });
 
 purrdf_lex::variant_from!(ChaseError { Storage(purrdf_lex::allocation::StorageError) });
 

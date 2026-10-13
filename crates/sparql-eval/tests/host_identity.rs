@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds,
-    RdfStoreCapabilities, SparqlRequest, TermGuard, TermRef, TermValue, ViewOperationStatus,
-    ViewTermId, WorkspaceReservation,
+    SparqlRequest, TermGuard, TermRef, TermValue, ViewOperationStatus, ViewTermId,
+    WorkspaceReservation,
 };
 use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine, QueryOptions};
 
@@ -275,12 +275,7 @@ impl DatasetView for Host {
         })
     }
 
-    fn capabilities(&self) -> RdfStoreCapabilities {
-        RdfStoreCapabilities {
-            quoted_triples: true,
-            ..RdfStoreCapabilities::plain_rdf()
-        }
-    }
+    purrdf_core::fixed_store_capabilities!(quoted_triples);
 
     fn certified_value_order(
         &self,

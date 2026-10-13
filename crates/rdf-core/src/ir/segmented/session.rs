@@ -16,6 +16,21 @@ use super::build::fixed_records;
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
 use super::{SegmentedError, SegmentedProvider, SegmentedReceipt, SegmentedSnapshot};
 
+// Both owners reserve through the same admission home after their own readiness
+// check; a session additionally verifies its provider's snapshot identity.
+macro_rules! reserve_workspace_method {
+    ($(#[$meta:meta])* $visibility:vis) => {
+        $(#[$meta])*
+        $visibility fn reserve_workspace(
+            &self,
+            bytes: u64,
+        ) -> Result<SegmentedReservation, SegmentedError> {
+            self.ready()?;
+            reserve_workspace(&self.state, &self.budget, &self.base, bytes)
+        }
+    };
+}
+
 /// Caller-selected inclusive ceilings for one operational read session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentedReadLimits {
@@ -562,13 +577,7 @@ impl SegmentedOperation {
         latch_error(&self.state, error)
     }
 
-    pub(super) fn reserve_workspace(
-        &self,
-        bytes: u64,
-    ) -> Result<SegmentedReservation, SegmentedError> {
-        self.ready()?;
-        reserve_workspace(&self.state, &self.budget, &self.base, bytes)
-    }
+    reserve_workspace_method!(pub(super));
 
     pub(super) fn open(
         &self,
@@ -739,14 +748,13 @@ impl SegmentedSession {
         Ok(())
     }
 
-    /// Reserve query scratch, output staging, or a host batch BEFORE allocating it.
-    /// Storage cache admission observes the same ceiling while this guard is alive.
-    ///
-    /// # Errors
-    /// Refuses a sticky read failure or capacity blocked by live cache/pins.
-    pub fn reserve_workspace(&self, bytes: u64) -> Result<SegmentedReservation, SegmentedError> {
-        self.ready()?;
-        reserve_workspace(&self.state, &self.budget, &self.base, bytes)
+    reserve_workspace_method! {
+        /// Reserve query scratch, output staging, or a host batch BEFORE allocating it.
+        /// Storage cache admission observes the same ceiling while this guard is alive.
+        ///
+        /// # Errors
+        /// Refuses a sticky read failure or capacity blocked by live cache/pins.
+        pub
     }
 
     fn make_room(&self, state: &mut State, charge: u64, slot: bool) -> Result<(), SegmentedError> {

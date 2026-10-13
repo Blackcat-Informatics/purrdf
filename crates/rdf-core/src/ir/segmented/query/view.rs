@@ -429,7 +429,32 @@ impl DatasetView for SegmentedStackQuery<'_> {
     }
 
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
+        let metadata = self
+            .snapshot
+            .layers
+            .iter()
+            .map(|layer| &layer.metadata)
+            .chain(self.snapshot.head.iter().map(|head| &head.metadata));
+        let resident_bounds = metadata
+            .flat_map(|metadata| {
+                metadata
+                    .removals()
+                    .into_iter()
+                    .chain(metadata.declarations())
+            })
+            .map(DatasetView::triple_term_nesting_bound)
+            .chain(
+                self.snapshot
+                    .head
+                    .iter()
+                    .map(|head| head.dataset.triple_term_nesting_bound()),
+            );
+        crate::dataset_view::widest_nesting_bound(
+            self.sessions
+                .iter()
+                .map(DatasetView::triple_term_nesting_bound)
+                .chain(resident_bounds),
+        )
     }
 
     fn reserve_owned_workspace(

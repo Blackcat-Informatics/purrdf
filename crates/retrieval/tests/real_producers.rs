@@ -2308,18 +2308,7 @@ impl PropertyFunction for CountingTextRelation {
         self.inner.rows_per_invocation(mode)
     }
 
-    fn open(
-        &self,
-        args: &PfArgs<'_>,
-        ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.open_admitted(
-            args,
-            ceiling,
-            purrdf_sparql_eval::WorkspaceCapability::resident(),
-        )
-        .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
-    }
+    purrdf_sparql_eval::resident_property_open! {}
 }
 
 struct PrefixRefusalCursor {

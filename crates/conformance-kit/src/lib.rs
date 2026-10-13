@@ -48,14 +48,7 @@ impl fmt::Display for GradeError {
     }
 }
 
-impl std::error::Error for GradeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_lex::error_source!(GradeError { Storage });
 
 purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
 
