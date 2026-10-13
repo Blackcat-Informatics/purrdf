@@ -2104,6 +2104,29 @@ pub trait DictionaryBatch: Send + Sync {
     ) -> Result<WorkspaceCursor, EvalError>;
 }
 
+/// Declare the resident cursor bridge for an admitted-first property function.
+///
+/// Use this only in a [`PropertyFunction`] implementation that overrides
+/// [`PropertyFunction::open_admitted`]. The trait's default admitted method calls
+/// `open`, so using this bridge with that default would recurse. The bridge opens
+/// with a resident workspace and extracts through [`WorkspaceCursor::into_resident`],
+/// preserving the implementation's arguments, errors and cursor ownership.
+/// Method documentation or attributes may be supplied inside the invocation.
+#[macro_export]
+macro_rules! resident_property_open {
+    ($(#[$meta:meta])*) => {
+        $(#[$meta])*
+        fn open(
+            &self,
+            args: &$crate::PfArgs<'_>,
+            ceiling: ::core::option::Option<u64>,
+        ) -> ::core::result::Result<::std::boxed::Box<dyn $crate::PfCursor>, $crate::EvalError> {
+            self.open_admitted(args, ceiling, $crate::WorkspaceCapability::resident())
+                .and_then($crate::WorkspaceCursor::into_resident)
+        }
+    };
+}
+
 /// A host-injected relation invoked from predicate position.
 ///
 /// Object-safe and shared behind an [`Arc`] across the whole evaluation (including
