@@ -61,7 +61,7 @@
 //! # Work accounting
 //!
 //! The cursor reports one unit per candidate distance actually evaluated, through
-//! [`PfCursor::take_work`]. The search is lazy — it runs on the first pull, not in
+//! [`PfCursor::take_work`](purrdf_sparql_eval::PfCursor::take_work). The search is lazy — it runs on the first pull, not in
 //! [`PropertyFunction::open`] — so a call whose ceiling is already exhausted performs no
 //! work and is charged none, and the count resets only when the engine takes it.
 
@@ -82,7 +82,7 @@ use purrdf_sparql_eval::knn::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
-    ExclusionBasis, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor, PropertyFunction,
+    ExclusionBasis, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PropertyFunction,
     PropertyFunctionRegistry, RankArithmetic, RankFidelity, Ranked, RankedDeclaration,
     RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
@@ -350,7 +350,7 @@ impl<A: Arithmetic> HnswSpace<A> {
     /// The generation of this space: a content digest of everything that decides
     /// which rows a search can return and in what order.
     ///
-    /// Declared through [`PfCursor::generation`] so a fused answer can say which
+    /// Declared through [`PfCursor::generation`](purrdf_sparql_eval::PfCursor::generation) so a fused answer can say which
     /// version of this index answered it, and so two answers drawn from two
     /// different graphs are distinguishable even when every other identity
     /// matches.
@@ -815,6 +815,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
         }
     }
 
+    purrdf_sparql_eval::resident_property_open! {
     /// Begin one approximate nearest-neighbour invocation.
     ///
     /// # A free `k` asks a different question, and is answered by membership
@@ -861,17 +862,6 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     /// the beam would have produced for that pair. What a point lookup cannot produce is
     /// a *rank* — one plus the number of rows nearer the seed is a fact about every other
     /// row — and this relation does not claim one.
-    fn open(
-        &self,
-        args: &PfArgs<'_>,
-        ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        self.open_admitted(
-            args,
-            ceiling,
-            purrdf_sparql_eval::WorkspaceCapability::resident(),
-        )
-        .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
     }
 
     fn open_admitted(
@@ -1170,6 +1160,7 @@ pub fn register_hnsw_relation<A: Arithmetic>(
 #[cfg(test)]
 mod tests {
     use purrdf_core::DistanceMetric;
+    use purrdf_sparql_eval::PfCursor;
 
     use super::*;
     use crate::{Params, VectorMatrix};
