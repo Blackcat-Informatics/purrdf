@@ -11,6 +11,7 @@ use crate::dataset_view::{
 };
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
+use purrdf_lex::allocation::shared::{Shared, SharedCloneError};
 
 use super::build::fixed_records;
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
@@ -72,32 +73,67 @@ impl SegmentedReadLimits {
 }
 
 /// One exact host read, retained even when the provider refuses it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentedRequest {
-    snapshot: SegmentedSnapshot,
+    snapshot: Shared<RequestIdentity>,
     position: u64,
     bytes: u32,
     completed: bool,
 }
+#[derive(Debug)]
+struct RequestIdentity {
+    snapshot: SegmentedSnapshot,
+    _reservation: SegmentedReservation,
+}
+impl std::fmt::Debug for SegmentedRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SegmentedRequest")
+            .field("snapshot", &self.snapshot.snapshot)
+            .field("position", &self.position)
+            .field("bytes", &self.bytes)
+            .field("completed", &self.completed)
+            .finish()
+    }
+}
+impl PartialEq for SegmentedRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.snapshot.snapshot == other.snapshot.snapshot
+            && self.position == other.position
+            && self.bytes == other.bytes
+            && self.completed == other.completed
+    }
+}
+impl Eq for SegmentedRequest {}
 impl SegmentedRequest {
+    /// Retain an exact request without allocating or copying its shared identity.
+    ///
+    /// # Errors
+    /// Refuses checked shared-owner count overflow before retaining the request.
+    pub fn try_clone(&self) -> Result<Self, SharedCloneError> {
+        Ok(Self {
+            snapshot: self.snapshot.try_clone()?,
+            position: self.position,
+            bytes: self.bytes,
+            completed: self.completed,
+        })
+    }
     /// Certified source identity qualifying this provider-local byte address.
     #[must_use]
-    pub const fn snapshot(self) -> SegmentedSnapshot {
-        self.snapshot
+    pub fn snapshot(&self) -> SegmentedSnapshot {
+        self.snapshot.snapshot
     }
     /// Global encoded byte position, independent of pointer width.
     #[must_use]
-    pub const fn position(self) -> u64 {
+    pub const fn position(&self) -> u64 {
         self.position
     }
     /// Requested local range length.
     #[must_use]
-    pub const fn bytes(self) -> u32 {
+    pub const fn bytes(&self) -> u32 {
         self.bytes
     }
     /// Whether the provider filled that range successfully.
     #[must_use]
-    pub const fn completed(self) -> bool {
+    pub const fn completed(&self) -> bool {
         self.completed
     }
 }
@@ -598,9 +634,21 @@ impl SegmentedOperation {
             self.budget.reserve(bytes)
         })()
         .or_else(|error| latch_error(&self.state, error))?;
+        let identity = (|| {
+            let bytes = u64::try_from(Shared::<RequestIdentity>::allocation_layout().size())
+                .map_err(|_| SegmentedError::AddressExhausted)?;
+            let reservation = self.reserve_workspace(bytes)?;
+            Shared::try_new(RequestIdentity {
+                snapshot: receipt.snapshot,
+                _reservation: reservation,
+            })
+            .map_err(|_| SegmentedError::AllocationFailed("request identity"))
+        })()
+        .or_else(|error| latch_error(&self.state, error))?;
         let mut session = SegmentedSession {
             provider,
             receipt: receipt.clone(),
+            identity,
             limits: self.limits,
             header: Header {
                 block_bytes: receipt.block_bytes,
@@ -649,6 +697,7 @@ fn latch_error<T>(state: &Mutex<State>, error: SegmentedError) -> Result<T, Segm
 pub struct SegmentedSession {
     provider: Arc<dyn SegmentedProvider>,
     receipt: SegmentedReceipt,
+    identity: Shared<RequestIdentity>,
     limits: SegmentedReadLimits,
     header: Header,
     state: Arc<Mutex<State>>,
@@ -800,7 +849,10 @@ impl SegmentedSession {
             return Err(SegmentedError::Corrupt("range escapes certified provider"));
         }
         state.requests.push(SegmentedRequest {
-            snapshot: self.receipt.snapshot,
+            snapshot: self
+                .identity
+                .try_clone()
+                .map_err(SegmentedError::SharedOwnership)?,
             position,
             bytes,
             completed: false,
@@ -1627,6 +1679,43 @@ impl FallibleDatasetView for SegmentedSession {
 mod operation_tests {
     use super::*;
     use crate::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
+
+    #[test]
+    fn escaped_request_retains_its_identity_and_original_charge() {
+        let (image, _) = image("urn:escaped-request");
+        let session = SegmentedSession::open(
+            Arc::new(image.provider()),
+            image.receipt(),
+            SegmentedReadLimits::new(2_000_000, 1, 50_000, 1_000_000, 2),
+        )
+        .unwrap();
+        assert!(size_of::<SegmentedRequest>() <= 24);
+        let budget = Arc::downgrade(&session.budget);
+        let retained = session.base.bytes
+            + u64::try_from(Shared::<RequestIdentity>::allocation_layout().size()).unwrap();
+        let evidence = session.evidence();
+        let request = evidence.with_requests(|requests| requests[0].try_clone().unwrap());
+        let duplicate = request.try_clone().unwrap();
+        assert_eq!(request, duplicate);
+        assert!(std::ptr::eq(
+            &raw const *request.snapshot,
+            &raw const *duplicate.snapshot,
+        ));
+        drop(duplicate);
+        assert_eq!(request.snapshot(), image.receipt().snapshot());
+        assert!(request.completed());
+        let debug = format!("{request:?}");
+        assert!(debug.starts_with("SegmentedRequest { snapshot: SegmentedSnapshot("));
+        assert!(!debug.contains("reservation"));
+        drop(session);
+        drop(evidence);
+        let original = budget.upgrade().unwrap();
+        assert_eq!(lock_read_state(&original.state).live, retained);
+        drop(request);
+        assert_eq!(lock_read_state(&original.state).live, 0);
+        drop(original);
+        assert!(budget.upgrade().is_none());
+    }
 
     #[test]
     fn workspace_outlives_session_with_original_budget_control_charge() {

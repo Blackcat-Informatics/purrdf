@@ -146,6 +146,8 @@ pub enum SegmentedError {
     AddressExhausted,
     /// An admitted local buffer was refused by the host allocator.
     AllocationFailed(&'static str),
+    /// Checked shared request-identity ownership could not be retained.
+    SharedOwnership(purrdf_lex::allocation::shared::SharedCloneError),
     /// The requested live residency exceeds the caller's ceiling.
     Residency {
         /// Proposed live/cumulative charge at the admission boundary.
@@ -200,6 +202,7 @@ impl std::fmt::Display for SegmentedError {
             Self::AllocationFailed(construct) => {
                 write!(f, "segmented allocation failed for {construct}")
             }
+            Self::SharedOwnership(error) => error.fmt(f),
             Self::Residency { requested, limit } => {
                 write!(f, "segmented live residency {requested} exceeds {limit}")
             }
@@ -215,7 +218,10 @@ impl std::fmt::Display for SegmentedError {
         }
     }
 }
-purrdf_lex::error_source!(SegmentedError { Storage });
+purrdf_lex::error_source!(SegmentedError {
+    Storage,
+    SharedOwnership
+});
 
 purrdf_lex::variant_from!(SegmentedError { Storage(purrdf_lex::allocation::StorageError) });
 
