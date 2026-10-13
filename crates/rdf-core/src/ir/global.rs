@@ -502,8 +502,9 @@ impl GlobalDictionary {
     ///
     /// # Errors
     ///
-    /// [`IriError`] when `iri` is not an absolute IRI. The rule has one owner, the
-    /// crate-private `ir::absolute` module, which every ingress reaches.
+    /// [`IriReadError::Lexical`] when `iri` is not an absolute IRI. The rule has
+    /// one owner, the crate-private `ir::absolute` module, which every ingress
+    /// reaches. [`IriReadError::Storage`] preserves capacity or allocation refusal.
     pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriReadError> {
         let lookup = GlobalTermLookup::Iri(iri);
         let hash = hash_lookup_value(&lookup);
@@ -653,8 +654,9 @@ impl GlobalDictionary {
     ///
     /// # Errors
     ///
-    /// [`IriError`] when any IRI the value carries — its own, a literal's datatype, or
-    /// one nested inside a triple term — is not absolute. See
+    /// [`IriReadError::Lexical`] when any IRI the value carries — its own, a literal's
+    /// datatype, or one nested inside a triple term — is not absolute.
+    /// [`IriReadError::Storage`] preserves capacity or allocation refusal. See
     /// [`intern_iri`](Self::intern_iri).
     ///
     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,

@@ -41,7 +41,7 @@
 //!   predicates) a completion frontier reads.
 //!
 //! Term and partition resolution is deliberately NOT hoisted here: a
-//! [`TermId`] and a [`PartitionId`](crate::id::PartitionId) are per-store handles minted
+//! [`TermId`](crate::id::TermId) and a [`PartitionId`](crate::id::PartitionId) are per-store handles minted
 //! at load/derivation time in insertion order, so they are meaningless against a store
 //! that does not yet exist at plan time. That is why a constant position lowers to its
 //! lexical SURFACE and not to an id. The plan is store-independent; resolving ids here
