@@ -156,16 +156,16 @@ impl GraphRoles {
 /// use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let sub_class_of = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph");
-/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph");
-/// let module = b.intern_iri("http://example.org/Module");
-/// let a = b.intern_iri("http://example.org/a");
-/// let d = b.intern_iri("http://example.org/d");
-/// b.push_quad(module, sub_class_of, shapes_graph, None);
-/// b.push_quad(a, rdf_type, module, None);
-/// b.push_quad(d, rdf_type, data_graph, None);
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let sub_class_of = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph")?;
+/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph")?;
+/// let module = b.intern_iri("http://example.org/Module")?;
+/// let a = b.intern_iri("http://example.org/a")?;
+/// let d = b.intern_iri("http://example.org/d")?;
+/// b.push_quad(module, sub_class_of, shapes_graph, None)?;
+/// b.push_quad(a, rdf_type, module, None)?;
+/// b.push_quad(d, rdf_type, data_graph, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// let roles = GraphRoleIndex::classify(graph.as_ref());
@@ -175,6 +175,7 @@ impl GraphRoles {
 /// assert_eq!(roles.roles(d), GraphRoles::DATA_GRAPH);
 /// assert!(!roles.roles(d).is_import_anchor());
 /// assert!(roles.roles(d).declares_implicit_prefixes());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphRoleIndex<I> {

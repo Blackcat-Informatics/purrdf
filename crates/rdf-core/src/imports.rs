@@ -233,18 +233,19 @@ impl std::error::Error for ImportKeyError {}
 /// use purrdf_core::imports::ImportMap;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let ontology = b.intern_iri("http://example.org/o");
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let owl_ontology = b.intern_iri("http://www.w3.org/2002/07/owl#Ontology");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let other = b.intern_iri("http://example.org/other");
-/// b.push_quad(ontology, rdf_type, owl_ontology, None);
-/// b.push_quad(ontology, imports, other, None);
+/// let ontology = b.intern_iri("http://example.org/o")?;
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let owl_ontology = b.intern_iri("http://www.w3.org/2002/07/owl#Ontology")?;
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+/// let other = b.intern_iri("http://example.org/other")?;
+/// b.push_quad(ontology, rdf_type, owl_ontology, None)?;
+/// b.push_quad(ontology, imports, other, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // An import nobody supplied is named.
 /// let closure = ImportMap::default().closure(&graph);
 /// assert_eq!(closure.unresolved(), ["http://example.org/other".to_owned()]);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct ImportMap {
@@ -407,10 +408,10 @@ impl ImportMap {
     /// use purrdf_core::imports::ImportMap;
     ///
     /// let mut b = RdfDatasetBuilder::new();
-    /// let node = b.intern_iri("http://example.org/node");
-    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-    /// let lib = b.intern_iri("http://example.org/lib");
-    /// b.push_quad(node, imports, lib, None);
+    /// let node = b.intern_iri("http://example.org/node")?;
+    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+    /// let lib = b.intern_iri("http://example.org/lib")?;
+    /// b.push_quad(node, imports, lib, None)?;
     /// let graph = b.freeze().expect("freeze");
     ///
     /// let listed = ImportMap::default().unanchored_imports(&graph);
@@ -422,6 +423,7 @@ impl ImportMap {
     /// let mut map = ImportMap::default();
     /// map.declare_loaded("http://example.org/node");
     /// assert!(map.unanchored_imports(&graph).is_empty());
+    /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
     /// ```
     #[must_use]
     pub fn unanchored_imports(&self, graph: &RdfDataset) -> Vec<UnanchoredImport> {
@@ -528,10 +530,10 @@ impl ImportMap {
     /// use purrdf_core::imports::ImportMap;
     ///
     /// let mut b = RdfDatasetBuilder::new();
-    /// let ontology = b.intern_iri("http://example.org/o");
-    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-    /// let other = b.intern_iri("http://example.org/other");
-    /// b.push_quad(ontology, imports, other, None);
+    /// let ontology = b.intern_iri("http://example.org/o")?;
+    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+    /// let other = b.intern_iri("http://example.org/other")?;
+    /// b.push_quad(ontology, imports, other, None)?;
     /// let graph = b.freeze().expect("freeze");
     ///
     /// // Read under `ex:o`, the graph imports `ex:other`, and nothing supplies it.
@@ -543,6 +545,7 @@ impl ImportMap {
     /// );
     /// // Read under no IRI, `ex:o` is no anchor and the triple imports nothing.
     /// assert!(ImportMap::default().unresolved_imports(&graph).is_empty());
+    /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
     /// ```
     #[must_use]
     pub fn unresolved_imports(&self, graph: &RdfDataset) -> Vec<String> {
@@ -800,19 +803,20 @@ fn version_conflicts(
 /// use purrdf_core::imports::declared_import_targets;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph");
-/// let version_iri = b.intern_iri("http://www.w3.org/2002/07/owl#versionIRI");
-/// let g = b.intern_iri("http://example.org/g");
-/// let v1 = b.intern_iri("http://example.org/g/1");
-/// b.push_quad(g, rdf_type, shapes_graph, None);
-/// b.push_quad(g, version_iri, v1, None);
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph")?;
+/// let version_iri = b.intern_iri("http://www.w3.org/2002/07/owl#versionIRI")?;
+/// let g = b.intern_iri("http://example.org/g")?;
+/// let v1 = b.intern_iri("http://example.org/g/1")?;
+/// b.push_quad(g, rdf_type, shapes_graph, None)?;
+/// b.push_quad(g, version_iri, v1, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// let targets = declared_import_targets(&graph);
 /// assert!(targets.contains("http://example.org/g"));
 /// assert!(targets.contains("http://example.org/g/1"));
 /// assert_eq!(targets.len(), 2);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn declared_import_targets(graph: &RdfDataset) -> BTreeSet<String> {
@@ -936,19 +940,20 @@ pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
 /// use purrdf_core::imports::imported_iris;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let doc = b.intern_iri("http://example.org/doc");
-/// let other = b.intern_iri("http://example.org/other");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let lib = b.intern_iri("http://example.org/lib");
-/// let data = b.intern_iri("http://example.org/data");
-/// b.push_quad(doc, imports, lib, None);
-/// b.push_quad(other, imports, data, None);
+/// let doc = b.intern_iri("http://example.org/doc")?;
+/// let other = b.intern_iri("http://example.org/other")?;
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+/// let lib = b.intern_iri("http://example.org/lib")?;
+/// let data = b.intern_iri("http://example.org/data")?;
+/// b.push_quad(doc, imports, lib, None)?;
+/// b.push_quad(other, imports, data, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // Read under `doc`, the document imports `lib`; `other`'s triple is data.
 /// assert_eq!(imported_iris(&graph, &["http://example.org/doc"]), ["http://example.org/lib"]);
 /// // Read under no IRI, and with no ontology header, it imports nothing.
 /// assert!(imported_iris(&graph, &[]).is_empty());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn imported_iris<D: DatasetView<ReadError = Infallible>>(
@@ -997,17 +1002,18 @@ pub fn try_imported_iris<D: DatasetView>(
 /// use purrdf_core::imports::unanchored_import_triples;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let data = b.intern_iri("http://example.org/data");
-/// let lib = b.intern_iri("http://example.org/lib");
-/// b.push_quad(data, rdf_type, data_graph, None);
-/// b.push_quad(data, imports, lib, None);
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph")?;
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+/// let data = b.intern_iri("http://example.org/data")?;
+/// let lib = b.intern_iri("http://example.org/lib")?;
+/// b.push_quad(data, rdf_type, data_graph, None)?;
+/// b.push_quad(data, imports, lib, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // A node whose only graph role is sh:DataGraph anchors no import.
 /// assert_eq!(unanchored_import_triples(graph.as_ref(), &[]), [(data, lib)]);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn unanchored_import_triples<D: DatasetView<ReadError = Infallible>>(
