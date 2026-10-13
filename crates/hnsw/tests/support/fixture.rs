@@ -9,11 +9,27 @@
 // subset. Matches the sibling `support/purremb.rs`.
 #![allow(dead_code, unreachable_pub, unused_imports)]
 
-use purrdf_core::distance::{Arithmetic, Exact};
-use purrdf_hnsw::{Kernel, Ranked, VectorMatrix};
+use purrdf_core::distance::{Arithmetic, Exact, FloatEnvironmentError, FloatEnvironmentEvidence};
+use purrdf_hnsw::{HnswError, Kernel, Ranked, VectorMatrix};
 use purrdf_sparql_eval::{EmbeddingKnnRelation, EvalError, PfArgs, PfRow, PropertyFunction};
 
 pub use purrdf_hnsw::fixture::params;
+
+/// Whether `refusal` names the MXCSR flush-to-zero departure used by x86 tests.
+pub fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
+    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
+        return false;
+    };
+    matches!(
+        evidence,
+        FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
+    )
+}
+
+/// Whether an index refuses the MXCSR departure on its computing thread.
+pub fn is_ftz(error: &HnswError) -> bool {
+    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
+}
 
 /// A deterministic `rows x dims` matrix of SplitMix64 draws in `[-1, 1)` from `seed`.
 /// With `zero = Some(substitute)` an exact zero draw is replaced by `substitute`; with
