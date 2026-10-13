@@ -107,7 +107,7 @@ fn serialized_pattern(query: &Query) -> &GraphPattern {
         panic!("every tree here is a SELECT");
     };
     match pattern {
-        GraphPattern::Project { inner, .. } => inner,
+        GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => inner,
         other => other,
     }
 }

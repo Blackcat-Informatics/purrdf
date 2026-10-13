@@ -38,7 +38,9 @@ pub fn triple_bgp(subject: &str, predicate: NamedNode, object: &str) -> GraphPat
 /// pattern itself when there is none.
 pub fn where_body(pattern: &GraphPattern) -> GraphPattern {
     match pattern {
-        GraphPattern::Project { inner, .. } => (**inner).clone(),
+        GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+            (**inner).clone()
+        }
         other => other.clone(),
     }
 }

@@ -667,6 +667,7 @@ fn check_pattern<const APPLICATION: bool, S: Admission + ?Sized>(
                         G::Extend { inner, .. }
                         | G::Filter { inner, .. }
                         | G::Project { inner, .. } => row = inner,
+                        G::ProjectStar { inner, .. } => row = inner,
                         G::Bgp { patterns } if patterns.is_empty() => break,
                         _ => {
                             return Err(invalid(
@@ -763,6 +764,11 @@ fn check_pattern<const APPLICATION: bool, S: Admission + ?Sized>(
         }
         G::Project { variables, .. } => {
             // Repeated projection variables are normalized by the result schema.
+            for value in variables {
+                variable(value, memory)?;
+            }
+        }
+        G::ProjectStar { variables, .. } => {
             for value in variables {
                 variable(value, memory)?;
             }

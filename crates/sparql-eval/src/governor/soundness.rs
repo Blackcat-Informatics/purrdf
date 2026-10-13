@@ -590,7 +590,10 @@ where
         GraphPattern::Project {
             inner,
             variables: _,
-        } => visit(PatternPart::Child(inner, ChildEdge::MONOTONE)),
+        }
+        | GraphPattern::ProjectStar { inner, .. } => {
+            visit(PatternPart::Child(inner, ChildEdge::MONOTONE))
+        }
         // `S ⊑ T ⇒ dedup S ⊑ dedup T`: de-duplication keeps each value's first
         // occurrence, and a prefix's first occurrences are the true bag's first
         // occurrences. Classifying `DISTINCT` non-monotone would void every
@@ -1088,6 +1091,10 @@ pub(crate) const fn child_row_ceiling(
         | GraphPattern::Project {
             inner: _,
             variables: _,
+        }
+        | GraphPattern::ProjectStar {
+            inner: _,
+            variables: _,
         } => {
             if ordinal == 0 {
                 Some(ceiling)
@@ -1485,7 +1492,8 @@ pub(crate) const fn pattern_label_index(pattern: &GraphPattern) -> usize {
         GraphPattern::Project {
             inner: _,
             variables: _,
-        } => 13,
+        }
+        | GraphPattern::ProjectStar { .. } => 13,
         GraphPattern::Distinct { inner: _ } => 14,
         GraphPattern::Reduced { inner: _ } => 15,
         GraphPattern::Slice {
@@ -2073,6 +2081,7 @@ fn push_pattern_parts<'a>(
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => steps.push(AnalysisStep::EnterPattern(inner))?,
@@ -2456,6 +2465,20 @@ fn assemble_pattern(
             }
         }
         GraphPattern::Project { variables, .. } => {
+            let inner = values.pattern();
+            let projected = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+            NodeAnalysis {
+                free_vars: inner
+                    .free_vars
+                    .intersection_admitted(&projected, workspace)?,
+                certainly_bound: inner
+                    .certainly_bound
+                    .intersection_admitted(&projected, workspace)?,
+                has_stateful_builtin: inner.has_stateful_builtin,
+                can_hard_error: inner.can_hard_error,
+            }
+        }
+        GraphPattern::ProjectStar { variables, .. } => {
             let inner = values.pattern();
             let projected = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
             NodeAnalysis {
@@ -2940,6 +2963,7 @@ fn pattern_probe_step<'p, 't>(
         }
         GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner } => {
             pending.push(ProbeStep::Pattern(inner))?;
@@ -3125,6 +3149,18 @@ pub(crate) fn exists_row_collision_admitted<'a>(
                             ))?;
                         }
                     }
+                    GraphPattern::ProjectStar { inner, variables } => {
+                        let projected =
+                            VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+                        let inner_scope = in_scope.intersection_admitted(&projected, workspace)?;
+                        if !inner_scope.is_empty() {
+                            narrowed.push(inner_scope)?;
+                            pending.push(CollisionStep::Row(
+                                inner,
+                                CollisionScope::Narrowed(narrowed.len() - 1),
+                            ))?;
+                        }
+                    }
                     GraphPattern::Group {
                         inner,
                         variables,
@@ -3189,6 +3225,7 @@ pub(crate) fn exists_row_collision_admitted<'a>(
                     | GraphPattern::PropertyFunction(_)
                     | GraphPattern::Values { .. }
                     | GraphPattern::Project { .. }
+                    | GraphPattern::ProjectStar { .. }
                     | GraphPattern::Group { .. } => {}
                 }
             }
@@ -4812,7 +4849,8 @@ mod iterative_walks {
                     can_hard_error: hard_error,
                 }
             }
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let i = reference_analyze_pattern(inner, table);
                 let proj: DetHashSet<Variable> = variables.iter().cloned().collect();
                 ReferenceAnalysis {
@@ -5083,6 +5121,7 @@ mod iterative_walks {
             }
             GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner } => {
                 reference_admissible(inner, current_row_vars, table)
@@ -5196,7 +5235,8 @@ mod iterative_walks {
                 .iter()
                 .find(|v| row_scope.contains(v))
                 .map(|v| (v, RowCollisionIntro::Values)),
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let narrowed: DetHashSet<Variable> = row_scope
                     .iter()
                     .filter(|v| variables.contains(v))
@@ -5268,6 +5308,7 @@ mod iterative_walks {
             | GraphPattern::PropertyFunction(_)
             | GraphPattern::Values { .. }
             | GraphPattern::Project { .. }
+            | GraphPattern::ProjectStar { .. }
             | GraphPattern::Group { .. } => None,
         }
     }

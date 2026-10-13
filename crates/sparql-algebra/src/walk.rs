@@ -93,6 +93,9 @@ impl NodeRef<'_> {
                 | GraphPattern::Project { variables, .. } => {
                     variables.iter().for_each(&mut visit);
                 }
+                GraphPattern::ProjectStar { variables, .. } => {
+                    variables.iter().for_each(&mut visit);
+                }
                 GraphPattern::Group {
                     variables,
                     aggregates,
@@ -227,6 +230,7 @@ impl NodeRef<'_> {
                 G::Graph { inner, .. }
                 | G::Service { inner, .. }
                 | G::Project { inner, .. }
+                | G::ProjectStar { inner, .. }
                 | G::Distinct { inner }
                 | G::Reduced { inner }
                 | G::Slice { inner, .. } => visit(Self::Pattern(inner)),

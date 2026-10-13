@@ -482,7 +482,7 @@ pub(crate) fn is_placeholder(pattern: &GraphPattern) -> bool {
 
 /// Whether `pattern` has the shape [`lateral_placeholder_with_memory`] builds.
 pub(crate) fn is_lateral_placeholder(pattern: &GraphPattern) -> bool {
-    matches!(pattern, GraphPattern::Project { inner, .. } if is_placeholder(inner))
+    matches!(pattern, GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } if is_placeholder(inner))
 }
 
 /// The sites of every `EXISTS` body and every deferrable `LATERAL` right operand
@@ -1000,8 +1000,8 @@ fn endpoint_uses(
                         uses.push(v.clone())?;
                     }
                 }
-                GraphPattern::Project { inner, variables } => {
-                    scopes.push(variables)?;
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    scopes.push(pattern.projected_names().expect("projection names"))?;
                     scope_of.push(scope)?;
                     pending.push(Node::Pattern(inner, scopes.len() - 1))?;
                 }
@@ -1057,7 +1057,12 @@ fn endpoint_uses(
 /// Whether every `SELECT` list enclosing a node in scope `scope` names `variable`.
 /// `scope` indexes `scopes`; `scope_of[i]` is the scope enclosing scope `i`, and
 /// `usize::MAX` is the body itself.
-fn visible(scopes: &[&[Variable]], scope_of: &[usize], scope: usize, variable: &Variable) -> bool {
+fn visible(
+    scopes: &[purrdf_sparql_algebra::ProjectionNames<'_>],
+    scope_of: &[usize],
+    scope: usize,
+    variable: &Variable,
+) -> bool {
     let mut at = scope;
     while at != usize::MAX {
         if !scopes[at].contains(variable) {

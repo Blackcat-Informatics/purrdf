@@ -1796,6 +1796,10 @@ fn collect_vars_admitted<'a>(
                         out.try_extend(variables.iter().cloned())?;
                         pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
+                    GraphPattern::ProjectStar { inner, variables } => {
+                        out.try_extend(variables.iter().cloned())?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
+                    }
                 }
             }
         }
@@ -4301,6 +4305,31 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                     variables: memory
                         .collect(variables.iter().cloned())
                         .map_err(|e| correlated_storage_error(memory, e))?,
+                },
+                pattern,
+                map,
+                memory,
+            )?
+        }
+        GraphPattern::ProjectStar { inner, variables } => {
+            let inner_sub = if PRESERVE {
+                substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?
+            } else {
+                let names = memory
+                    .collect(variables.iter().cloned())
+                    .map_err(|error| correlated_storage_error(memory, error))?;
+                let narrowed = row.narrow_to(&names, memory.admission_mut().workspace())?;
+                let result =
+                    substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer, memory);
+                memory
+                    .release_vec(names)
+                    .map_err(|error| correlated_storage_error(memory, error))?;
+                result?
+            };
+            boxed_and_mapped(
+                GraphPattern::ProjectStar {
+                    inner: inner_sub.into(),
+                    variables: variables.clone(),
                 },
                 pattern,
                 map,
@@ -13154,6 +13183,10 @@ mod walk_tests {
                 reference_pattern_vars_outside(inner, endpoint, out);
             }
             GraphPattern::Project { inner, variables } => {
+                out.extend(variables.iter().cloned());
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
                 out.extend(variables.iter().cloned());
                 reference_pattern_vars_outside(inner, endpoint, out);
             }

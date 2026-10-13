@@ -331,6 +331,7 @@ fn visit_pattern(pattern: &mut GraphPattern, visit: &mut DropVisit) -> bool {
         G::Graph { inner, .. }
         | G::Service { inner, .. }
         | G::Project { inner, .. }
+        | G::ProjectStar { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
         | G::Slice { inner, .. } => visit.child_edge(inner, DropOwner::pattern),
@@ -851,6 +852,10 @@ fn assemble_pattern<S: Admission + ?Sized>(
         G::Project { variables, .. } => G::Project {
             inner: Child::try_new(kids.pattern(), memory)?,
             variables: clone_shallow_vec_with_memory(variables, memory)?,
+        },
+        G::ProjectStar { variables, .. } => G::ProjectStar {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            variables: variables.clone(),
         },
         G::Distinct { .. } => G::Distinct {
             inner: Child::try_new(kids.pattern(), memory)?,

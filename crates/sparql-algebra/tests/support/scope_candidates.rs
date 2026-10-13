@@ -381,7 +381,9 @@ pub fn repeated_input(evidence: &Evidence, copies: usize) -> Evidence {
     let mut out = evidence.clone();
     match &mut out.query {
         Query::Select { pattern, .. } => {
-            let GraphPattern::Project { inner, .. } = pattern else {
+            let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+                pattern
+            else {
                 panic!("configured SELECT projection");
             };
             *inner = repeated.into();
@@ -771,11 +773,11 @@ fn summary(evidence: &Evidence) -> Summary {
 }
 
 fn visible(query: &Query) -> Vec<Identity> {
-    if let GraphPattern::Project { variables, .. } = query.pattern() {
-        variables.iter().map(Identity::variable).collect()
-    } else {
-        vec![]
-    }
+    query
+        .pattern()
+        .projected_names()
+        .map(|names| names.iter().map(Identity::variable).collect())
+        .unwrap_or_default()
 }
 
 /// What actual current admission proves, without any candidate metadata.

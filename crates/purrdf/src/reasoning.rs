@@ -1190,8 +1190,15 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
 fn find_projection(mut pattern: &GraphPattern) -> Option<BTreeSet<String>> {
     loop {
         match pattern {
-            GraphPattern::Project { variables, .. } => {
-                return Some(variables.iter().map(|v| v.as_str().to_owned()).collect());
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                return Some(
+                    pattern
+                        .projected_names()
+                        .expect("projection names")
+                        .iter()
+                        .map(|v| v.as_str().to_owned())
+                        .collect(),
+                );
             }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Graph { inner, .. }
@@ -1273,6 +1280,7 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
             | GraphPattern::Service { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => pending.push(inner),
@@ -1364,6 +1372,10 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
                 if let GraphPattern::Project { inner, .. } = pattern {
                     pending.push(inner);
                 }
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
+                names.extend(variables.iter().map(|v| v.as_str().to_owned()));
+                pending.push(inner);
             }
             GraphPattern::Join { left, right }
             | GraphPattern::Minus { left, right }
@@ -1622,6 +1634,10 @@ fn restrict_pattern(
             inner: recurse(inner),
             variables: variables.clone(),
         },
+        GraphPattern::ProjectStar { inner, variables } => GraphPattern::ProjectStar {
+            inner: recurse(inner),
+            variables: variables.clone(),
+        },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
             inner: recurse(inner),
         },
@@ -1851,6 +1867,7 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
             | GraphPattern::Service { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }

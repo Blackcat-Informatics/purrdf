@@ -271,7 +271,7 @@ macro_rules! eval_project_sequence {
 pub(crate) fn eval_project<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let workspace = ctx.growth.clone();
@@ -280,7 +280,14 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
             VarSchema::from_vars_admitted(variables.iter().cloned(), &workspace)?
                 .shared_admitted(&workspace)
         } else {
-            Ok(VarSchema::interned(variables))
+            Ok(match variables {
+                purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
+                    VarSchema::interned(names)
+                }
+                purrdf_sparql_algebra::ProjectionNames::Star(names) => {
+                    VarSchema::from_vars(names.iter().cloned()).shared_resident()
+                }
+            })
         }
     };
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
@@ -300,7 +307,7 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     node: &GraphPattern,
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -314,7 +321,14 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
                     VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
                         .shared_admitted(&ctx.growth)?
                 } else {
-                    VarSchema::interned(variables)
+                    match variables {
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
+                            VarSchema::interned(names)
+                        }
+                        purrdf_sparql_algebra::ProjectionNames::Star(names) => {
+                            VarSchema::from_vars(names.iter().cloned()).shared_resident()
+                        }
+                    }
                 };
                 let lift = Lift::at_admitted(node, &ctx.growth)?;
                 let projected =
@@ -1030,6 +1044,7 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
                     inner,
                     variables: _,
                 }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::OrderBy {
@@ -9088,6 +9103,7 @@ mod emptiness_proof_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::OrderBy { inner, .. }

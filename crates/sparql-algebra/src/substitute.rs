@@ -203,6 +203,7 @@ pub(crate) fn map_core_pattern_mut(pattern: &mut GraphPattern, f: impl FnOnce(&m
     // unbound, denotes no composite, and the constraint quietly reports nothing
     // rather than reporting a violation.
     while let GraphPattern::Project { inner, .. }
+    | GraphPattern::ProjectStar { inner, .. }
     | GraphPattern::Distinct { inner, .. }
     | GraphPattern::Reduced { inner, .. }
     | GraphPattern::Slice { inner, .. }
@@ -287,6 +288,26 @@ mod tests {
         assert_eq!(variables, vec![this()], "?this still projected");
         let GraphPattern::Join { left, .. } = inner.into_inner() else {
             panic!("seed join injected below projection");
+        };
+        assert_seed(&left, "this", "http://ex/focus");
+    }
+
+    #[test]
+    fn wildcard_select_injects_seed_below_persistent_projection() {
+        let q = parse("SELECT * WHERE { ?this <http://ex/p> ?o }");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/focus"));
+        let Query::Select { pattern, .. } = out else {
+            panic!("still a SELECT");
+        };
+        let GraphPattern::ProjectStar { inner, variables } = pattern else {
+            panic!("wildcard projection preserved");
+        };
+        assert_eq!(
+            variables.iter().cloned().collect::<Vec<_>>(),
+            [this(), Variable::new("o")]
+        );
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
+            panic!("seed join injected below the wildcard");
         };
         assert_seed(&left, "this", "http://ex/focus");
     }

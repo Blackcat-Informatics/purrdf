@@ -827,6 +827,7 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
         match node {
             GraphPattern::OrderBy { .. } => return true,
             GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => node = inner,
