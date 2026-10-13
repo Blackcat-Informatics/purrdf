@@ -32,6 +32,14 @@ name = "purrdf_rdf"
 crate-type = ["rlib"]
 path = "src/lib.rs"
 
+[[test]]
+name = "turtle_chains"
+harness = false
+
+[[bench]]
+name = "turtle_chains"
+harness = false
+
 [dependencies]
 # The ring-fenced kernel: owns the IR, value
 # model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,
@@ -140,6 +148,11 @@ purrdf-cdt = { workspace = true }
 # property harness. Path-only and unpublished, so it is stripped from the
 # packaged manifest.
 purrdf-testkit = { workspace = true }
+
+[[test]]
+# Real composite compaction/certification runs natively and in wasm/Node.
+name = "gts_composite_compaction"
+harness = false
 
 [[bench]]
 # One-pass selected GTS import against the two-reader path it replaces: the

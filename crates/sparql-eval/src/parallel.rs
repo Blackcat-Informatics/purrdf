@@ -11,7 +11,7 @@
 //! 1. **Fork.** [`crate::eval::EvalCtx::fork_for_worker`] gives each worker a
 //!    `Send` child context with its own scratch/constructed state, so workers
 //!    never contend on a lock or share mutable evaluation state.
-//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_chunk_map`]/[`par_retain`] run
+//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_retain`] run
 //!    the workers via rayon's *indexed* `par_chunks`/`par_iter` (never
 //!    `par_sort`/`par_bridge`, which are not order-stable) and then reduce
 //!    strictly in source-index order: successes concatenate in chunk (hence
@@ -106,7 +106,7 @@ pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 /// the parser's chunk geometry, just in item-count terms.
 const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
 
-/// The chunk size for a [`par_chunk_map`]/[`par_chunk_map_metered`]/
+/// The chunk size for a [`par_chunk_map_metered`]/
 /// [`par_chunk_try_map_init`]/[`par_retain`] run over `len` items: aim for
 /// roughly four chunks per rayon worker thread, so work-stealing has enough
 /// slices to balance ragged per-item costs (a BGP pattern whose candidate
@@ -121,7 +121,7 @@ const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
 /// for why the within-group aggregate fold needs a chunk plan that does NOT
 /// track the live thread count. Every caller this function DOES serve is safe
 /// to scale with `rayon::current_num_threads()` because none of them folds
-/// chunk-local state back together: [`par_chunk_map`]/[`par_chunk_try_map_init`]/
+/// chunk-local state back together: [`par_chunk_try_map_init`]/
 /// [`par_retain`] each emit one independent output row per input item (a chunk
 /// boundary changes scheduling, never the result), and [`par_chunk_map_metered`]
 /// charges its governor **per item**, not per chunk (see that function's docs),
@@ -229,6 +229,44 @@ std::thread_local! {
 pub(crate) fn force_parallel_for_test(force: bool) -> ForceParallelGuard {
     let previous = FORCE_PARALLEL.with(|cell| cell.replace(Some(force)));
     ForceParallelGuard { previous }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only: hold every governed `FILTER`/`BIND`/`GROUP BY`/`OPTIONAL`-filter loop on
+    /// its direct, unforked loop.
+    static DIRECT_ROW_LOOPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Hold every governed `FILTER`/`BIND`/`GROUP BY`/`OPTIONAL`-filter loop on the current
+/// thread on its in-order loop on the evaluation's own context until the returned guard
+/// drops.
+/// Test-only.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn force_direct_row_loops_for_test() -> DirectRowLoopsGuard {
+    DirectRowLoopsGuard {
+        previous: DIRECT_ROW_LOOPS.with(|cell| cell.replace(true)),
+    }
+}
+
+/// Whether [`force_direct_row_loops_for_test`] holds the current thread's row loops.
+#[cfg(test)]
+pub(crate) fn direct_row_loops_forced_for_test() -> bool {
+    DIRECT_ROW_LOOPS.with(std::cell::Cell::get)
+}
+
+/// RAII guard restoring the prior [`DIRECT_ROW_LOOPS`] setting on drop.
+#[cfg(test)]
+pub(crate) struct DirectRowLoopsGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for DirectRowLoopsGuard {
+    fn drop(&mut self) {
+        DIRECT_ROW_LOOPS.with(|cell| cell.set(self.previous));
+    }
 }
 
 /// The override [`force_parallel_for_test`] installed on the current thread, if any.
@@ -376,7 +414,7 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'
 /// A judgment of one `EXISTS` body the fork-safety walks consult before walking it:
 /// `Some(unsafe)` decides the body without entering it, `None` walks it as written. See
 /// [`is_parallel_safe_with`]. A lateral placeholder
-/// (`crate::deferred_exists::lateral_placeholder`) is offered to it too, and one it
+/// (`crate::deferred_exists::lateral_placeholder_with_memory`) is offered to it too, and one it
 /// answers `None` for is unsafe: there is nothing behind a placeholder to walk.
 pub(crate) type ExistsVerdict<'h> = &'h dyn Fn(&GraphPattern) -> Option<bool>;
 
@@ -530,63 +568,13 @@ fn reaches_unsafe_builtin(
     registries: SafetyRegistries<'_>,
     verdict: ExistsVerdict<'_>,
 ) -> bool {
-    let mut pending: purrdf_core::SmallVec<[Reach<'_>; 16]> = purrdf_core::smallvec![root];
-    while let Some(item) = pending.pop() {
-        match item {
-            Reach::Expression(expr) => {
-                let first = pending.len();
-                visit_expression_parts(expr, &mut |part| {
-                    pending.push(match part {
-                        ExpressionPart::Sub(sub) => Reach::Expression(sub),
-                        ExpressionPart::Call(f) => Reach::Call(f),
-                        ExpressionPart::Exists(body) => Reach::Exists(body),
-                    });
-                    // `false` keeps the visit going; every part is collected.
-                    false
-                });
-                pending[first..].reverse();
-            }
-            Reach::Pattern(GraphPattern::PropertyFunction(call)) => {
-                if property_function_is_unsafe(&call.iri, registries.relations) {
-                    return true;
-                }
-            }
-            // Each SERVICE response receives fresh local blank identities, even
-            // when its endpoint body is pure. The response therefore advances
-            // the same mint state as BNODE and cannot run from a forked counter.
-            Reach::Pattern(GraphPattern::Service { .. }) => return true,
-            // A substituted copy's placeholder for a `LATERAL` right operand stands for an
-            // operand the walk cannot see: `verdict` answers for it, and one it cannot
-            // answer for is judged unsafe rather than safe by omission.
-            Reach::Pattern(pattern) if crate::deferred_exists::is_lateral_placeholder(pattern) => {
-                if verdict(pattern).unwrap_or(true) {
-                    return true;
-                }
-            }
-            Reach::Pattern(pattern) => {
-                let first = pending.len();
-                visit_pattern_parts(pattern, &mut |part| {
-                    pending.push(match part {
-                        PatternPart::Child(child, _edge) => Reach::Pattern(child),
-                        PatternPart::Expression(expr) => Reach::Expression(expr),
-                    });
-                    false
-                });
-                pending[first..].reverse();
-            }
-            Reach::Call(f) => {
-                if function_is_unsafe(f, registries.functions) {
-                    return true;
-                }
-            }
-            Reach::Exists(body) => match verdict(body) {
-                Some(true) => return true,
-                Some(false) => {}
-                None => pending.push(Reach::Pattern(body)),
-            },
-        }
-    }
-    false
+    reaches_unsafe_builtin_admitted(
+        root,
+        registries,
+        verdict,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident safety scan allocation failed")
 }
 
 /// Whether `f` is one of the engine's OWN stateful-mint builtins — the
@@ -850,61 +838,6 @@ pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> 
     )
 }
 
-/// Chunk-based, infallible parallel collect: split `items` into index-ordered
-/// chunks (never `par_sort`/`par_bridge`), give each chunk worker ONE `Vec<R>`
-/// accumulator (`push` is called once per item, appending into it), and
-/// concatenate the per-chunk accumulators in chunk order. This is the
-/// allocation shape [`purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`]
-/// uses for its phase 1: one allocation per CHUNK, not one per item — the
-/// per-item shape (a fresh `Vec` returned by every worker call, flattened
-/// afterwards) this replaces cost an extra small allocation for every row of
-/// an N-row BGP/join/filter loop, pure overhead the chunk shape avoids.
-///
-/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`]
-/// this is a single sequential pass pushing into one `Vec` (bit-identical to a
-/// hand-written loop, no rayon hand-off); above it, `items.par_chunks(..)` (an
-/// *indexed*, order-preserving split) runs `push` over each chunk into its own
-/// accumulator, and the chunk accumulators are concatenated strictly in chunk
-/// (hence source) order — so the result is byte-identical to the sequential
-/// pass regardless of chunk geometry or worker scheduling.
-pub(crate) fn par_chunk_map<T, R>(
-    sequential: bool,
-    items: &[T],
-    push: impl Fn(&mut Vec<R>, &T) + Sync,
-) -> Vec<R>
-where
-    T: Sync,
-    R: Send,
-{
-    if !should_parallelize(sequential, items.len()) {
-        let mut out = Vec::new();
-        for item in items {
-            push(&mut out, item);
-        }
-        return out;
-    }
-
-    use rayon::prelude::*;
-
-    let size = chunk_size_for(items.len());
-    let chunk_outs: Vec<Vec<R>> = items
-        .par_chunks(size)
-        .map(|chunk| {
-            let mut acc = Vec::new();
-            for item in chunk {
-                push(&mut acc, item);
-            }
-            acc
-        })
-        .collect();
-
-    let mut out = Vec::with_capacity(chunk_outs.iter().map(Vec::len).sum());
-    for chunk_out in chunk_outs {
-        out.extend(chunk_out);
-    }
-    out
-}
-
 /// The output accumulator an operator's row loop pushes into, carrying the row ceiling the
 /// answer-cap pushdown put on this node.
 ///
@@ -922,7 +855,7 @@ where
 #[derive(Debug)]
 pub(crate) struct RowSink<'a, R> {
     /// The rows accumulated for the current chunk.
-    out: &'a mut Vec<R>,
+    out: &'a mut crate::workspace::AdmittedVec<R>,
     /// The total this sink will accept. `usize::MAX` is "no ceiling".
     ceiling: usize,
     /// Whether reaching the ceiling itself closes the sink (semantic LIMIT/answer-cap
@@ -932,38 +865,42 @@ pub(crate) struct RowSink<'a, R> {
     stop_when_full: bool,
     /// A qualifying row was offered after `ceiling` rows were already stored.
     overflowed: bool,
+    failure: Option<EvalError>,
 }
 
 impl<'a, R> RowSink<'a, R> {
     /// A sink that accepts every row.
-    fn unbounded(out: &'a mut Vec<R>) -> Self {
+    fn unbounded(out: &'a mut crate::workspace::AdmittedVec<R>) -> Self {
         Self {
             out,
             ceiling: usize::MAX,
             stop_when_full: true,
             overflowed: false,
+            failure: None,
         }
     }
 
     /// A sink that accepts rows until `out` holds `ceiling` of them.
-    fn bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
+    fn bounded(out: &'a mut crate::workspace::AdmittedVec<R>, ceiling: usize) -> Self {
         Self {
             out,
             ceiling,
             stop_when_full: true,
             overflowed: false,
+            failure: None,
         }
     }
 
     /// A sink for an inclusive allocation ceiling: retain at most `ceiling` rows, but keep
     /// probing until a qualifying row beyond it is offered. The refused row is never
     /// stored, and its existence is the proof that the exactly-full bag was not complete.
-    fn overflow_bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
+    fn overflow_bounded(out: &'a mut crate::workspace::AdmittedVec<R>, ceiling: usize) -> Self {
         Self {
             out,
             ceiling,
             stop_when_full: false,
             overflowed: false,
+            failure: None,
         }
     }
 
@@ -975,8 +912,13 @@ impl<'a, R> RowSink<'a, R> {
     /// different bag.
     #[inline]
     pub(crate) fn push(&mut self, row: R) {
+        if self.failure.is_some() {
+            return;
+        }
         if self.out.len() < self.ceiling {
-            self.out.push(row);
+            if let Err(error) = self.out.push(row) {
+                self.fail(error);
+            }
         } else {
             self.overflowed = true;
         }
@@ -985,6 +927,9 @@ impl<'a, R> RowSink<'a, R> {
     /// Whether this sink has reached its ceiling, so the loop feeding it may stop.
     #[inline]
     pub(crate) fn is_full(&self) -> bool {
+        if self.failure.is_some() {
+            return true;
+        }
         if self.stop_when_full {
             self.out.len() >= self.ceiling
         } else {
@@ -997,6 +942,62 @@ impl<'a, R> RowSink<'a, R> {
     fn overflowed(&self) -> bool {
         self.overflowed
     }
+
+    pub(crate) fn fail(&mut self, error: EvalError) {
+        if self.failure.is_none() {
+            self.failure = Some(error);
+        }
+    }
+}
+
+type MeteredRows<R> = (
+    crate::workspace::AdmittedVec<R>,
+    crate::workspace::AdmittedVec<ItemCharge>,
+    bool,
+);
+
+/// One ordered driver for semantic caps, inclusive governor caps and an
+/// unbounded chunk. Local failure outranks ledger/partial construction.
+fn sequential_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    ceiling: usize,
+    stop_when_full: bool,
+    workspace: &crate::WorkspaceCapability,
+    push: &impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
+) -> Result<MeteredRows<R>, EvalError> {
+    let mut out = crate::workspace::AdmittedVec::new(workspace);
+    let mut ledger = crate::workspace::AdmittedVec::new(workspace);
+    let mut overflowed = false;
+    for item in items {
+        if stop_when_full && out.len() >= ceiling {
+            break;
+        }
+        let before = out.len();
+        let mut fuel = 0;
+        let mut sink = if ceiling == usize::MAX {
+            RowSink::unbounded(&mut out)
+        } else if stop_when_full {
+            RowSink::bounded(&mut out, ceiling)
+        } else {
+            RowSink::overflow_bounded(&mut out, ceiling)
+        };
+        push(&mut sink, &mut fuel, item);
+        if let Some(error) = sink.failure.take() {
+            return Err(error);
+        }
+        overflowed = sink.overflowed();
+        if metered {
+            ledger.push(ItemCharge {
+                fuel,
+                committed: (out.len() - before) as u64,
+            })?;
+        }
+        if overflowed {
+            break;
+        }
+    }
+    Ok((out, ledger, overflowed))
 }
 
 /// The **bounded, sequential** sibling of [`par_chunk_map_metered`]: fold `items` in source
@@ -1015,25 +1016,17 @@ pub(crate) fn bounded_chunk_map_metered<T, R>(
     items: &[T],
     metered: bool,
     ceiling: usize,
+    workspace: &crate::WorkspaceCapability,
     push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
-) -> (Vec<R>, Vec<ItemCharge>) {
-    let mut out = Vec::new();
-    let mut ledger = Vec::with_capacity(if metered { items.len() } else { 0 });
-    for item in items {
-        if out.len() >= ceiling {
-            break;
-        }
-        let before = out.len();
-        let mut fuel = 0_u64;
-        push(&mut RowSink::bounded(&mut out, ceiling), &mut fuel, item);
-        if metered {
-            ledger.push(ItemCharge {
-                fuel,
-                committed: (out.len() - before) as u64,
-            });
-        }
-    }
-    (out, ledger)
+) -> Result<
+    (
+        crate::workspace::AdmittedVec<R>,
+        crate::workspace::AdmittedVec<ItemCharge>,
+    ),
+    EvalError,
+> {
+    sequential_chunk_map_metered(items, metered, ceiling, true, workspace, &push)
+        .map(|(rows, ledger, _)| (rows, ledger))
 }
 
 /// The allocation-ceiling sibling of [`bounded_chunk_map_metered`]. It is sequential for
@@ -1045,31 +1038,13 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
     items: &[T],
     metered: bool,
     ceiling: usize,
+    workspace: &crate::WorkspaceCapability,
     push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
-) -> (Vec<R>, Vec<ItemCharge>, bool) {
-    let mut out = Vec::with_capacity(ceiling.min(items.len()));
-    let mut ledger = Vec::with_capacity(if metered { items.len() } else { 0 });
-    let mut overflowed = false;
-    for item in items {
-        let before = out.len();
-        let mut fuel = 0_u64;
-        let mut sink = RowSink::overflow_bounded(&mut out, ceiling);
-        push(&mut sink, &mut fuel, item);
-        overflowed = sink.overflowed();
-        if metered {
-            ledger.push(ItemCharge {
-                fuel,
-                committed: (out.len() - before) as u64,
-            });
-        }
-        if overflowed {
-            break;
-        }
-    }
-    (out, ledger, overflowed)
+) -> Result<MeteredRows<R>, EvalError> {
+    sequential_chunk_map_metered(items, metered, ceiling, false, workspace, &push)
 }
 
-/// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,
+/// Chunk-based parallel collect with a **deterministic charge meter**: alongside its output rows,
 /// each chunk worker records what every input item spent, so a governed caller can find
 /// the exact item at which a ceiling is crossed.
 ///
@@ -1086,8 +1061,8 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
 ///
 /// `metered` is the caller's short-circuit. When it is `false` — an ungoverned execution,
 /// or one whose fuel dimension carries no ceiling — the returned ledger is empty and this
-/// function is [`par_chunk_map`] exactly: the `&mut u64` handed to `push` is a stack
-/// local, so no per-item record is written and nothing is allocated.
+/// function keeps the same indexed chunk geometry and row order: the `&mut u64`
+/// handed to `push` is a stack local, so no per-item record or ledger allocation is made.
 ///
 /// The ledger costs two `u64` per input item on the metered path, which is why it is a
 /// dedicated compact record rather than a full per-item resource vector — see
@@ -1096,56 +1071,58 @@ pub(crate) fn par_chunk_map_metered<T, R>(
     sequential: bool,
     items: &[T],
     metered: bool,
+    workspace: &crate::WorkspaceCapability,
     push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync,
-) -> (Vec<R>, Vec<ItemCharge>)
+) -> Result<
+    (
+        crate::workspace::AdmittedVec<R>,
+        crate::workspace::AdmittedVec<ItemCharge>,
+    ),
+    EvalError,
+>
 where
     T: Sync,
     R: Send,
 {
-    /// Fold one chunk, recording each item's charge when `metered`.
-    fn run_chunk<T, R>(
-        chunk: &[T],
-        metered: bool,
-        push: &(impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync),
-    ) -> (Vec<R>, Vec<ItemCharge>) {
-        let mut out = Vec::new();
-        let mut ledger = Vec::with_capacity(if metered { chunk.len() } else { 0 });
-        for item in chunk {
-            let before = out.len();
-            let mut fuel = 0_u64;
-            push(&mut RowSink::unbounded(&mut out), &mut fuel, item);
-            if metered {
-                ledger.push(ItemCharge {
-                    fuel,
-                    committed: (out.len() - before) as u64,
-                });
-            }
-        }
-        (out, ledger)
-    }
-
-    if !should_parallelize(sequential, items.len()) {
-        return run_chunk(items, metered, &push);
+    if workspace.is_bounded() || !should_parallelize(sequential, items.len()) {
+        return sequential_chunk_map_metered(items, metered, usize::MAX, true, workspace, &push)
+            .map(|(rows, ledger, _)| (rows, ledger));
     }
 
     use rayon::prelude::*;
 
     let size = chunk_size_for(items.len());
-    let per_chunk: Vec<(Vec<R>, Vec<ItemCharge>)> = items
+    let per_chunk: Vec<MeteredRows<R>> = items
         .par_chunks(size)
-        .map(|chunk| run_chunk(chunk, metered, &push))
-        .collect();
+        .map(|chunk| {
+            sequential_chunk_map_metered(chunk, metered, usize::MAX, true, workspace, &push)
+        })
+        .collect::<Result<_, _>>()?;
 
-    let mut rows = Vec::with_capacity(per_chunk.iter().map(|(out, _)| out.len()).sum());
-    let mut ledger = Vec::with_capacity(per_chunk.iter().map(|(_, l)| l.len()).sum());
-    for (chunk_rows, chunk_ledger) in per_chunk {
-        rows.extend(chunk_rows);
-        ledger.extend(chunk_ledger);
+    let mut rows = crate::workspace::AdmittedVec::new(workspace);
+    let mut ledger = crate::workspace::AdmittedVec::new(workspace);
+    for (chunk_rows, chunk_ledger, _) in per_chunk {
+        for row in chunk_rows {
+            rows.push(row)?;
+        }
+        for charge in chunk_ledger {
+            ledger.push(charge)?;
+        }
     }
-    (rows, ledger)
+    Ok((rows, ledger))
 }
 
-/// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon
+/// The position of `item` in `items`, for a [`par_chunk_try_map_init`] step that must know
+/// which item it was handed: the items are borrowed from `items` itself, so the address
+/// difference is the index.
+pub(crate) fn index_in<T>(items: &[T], item: &T) -> usize {
+    let offset = core::ptr::from_ref(item)
+        .addr()
+        .wrapping_sub(items.as_ptr().addr());
+    offset / size_of::<T>().max(1)
+}
+
+/// Fallible, fork-per-worker chunk collection: each rayon
 /// *chunk* worker first runs `init` **once** to build its own `S` (e.g. an
 /// `EvalCtx::fork_for_worker` child), then folds `push` over every item of its
 /// chunk into one `Vec<R>` accumulator, short-circuiting the chunk on the
@@ -1223,49 +1200,88 @@ where
     R: Send,
     H: Send,
 {
-    let run_sequentially = || {
-        let mut state = init();
-        let mut out = Vec::new();
-        for item in items {
-            push(&mut state, &mut out, item)?;
-        }
-        let harvested = harvest(&mut state);
-        Ok((out, purrdf_core::smallvec![harvested]))
-    };
-    if !should_parallelize(sequential, items.len()) {
-        return run_sequentially();
+    par_chunk_try_map_init_fallible(sequential, items, || Ok(init()), push, harvest)
+}
+
+/// Join successful outputs in source order. A known operational error takes precedence
+/// over allocating the joined bag; only an all-successful run reserves its checked size.
+fn concatenate_chunks<R, H>(
+    mut chunks: Vec<Result<(Vec<R>, H), EvalError>>,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+    if let Some(index) = chunks.iter().position(Result::is_err) {
+        let Err(error) = chunks.swap_remove(index) else {
+            unreachable!("the first error was just selected");
+        };
+        return Err(error);
     }
-
-    use rayon::prelude::*;
-
-    let size = chunk_size_for(items.len());
-    let per_chunk: Vec<Result<(Vec<R>, H), EvalError>> = items
-        .par_chunks(size)
-        .map(|chunk| {
-            let mut state = init();
-            let mut acc = Vec::new();
-            for item in chunk {
-                push(&mut state, &mut acc, item)?;
-            }
-            let harvested = harvest(&mut state);
-            Ok((acc, harvested))
-        })
-        .collect();
-
-    let mut out = Vec::with_capacity(
-        per_chunk
-            .iter()
-            .map(|r| r.as_ref().map_or(0, |(rows, _)| rows.len()))
-            .sum(),
-    );
-    let mut harvests = purrdf_core::SmallVec::with_capacity(per_chunk.len());
-    for chunk_result in per_chunk {
+    let mut out = reserve_concatenated_rows(
+        Vec::new(),
+        chunks.iter().map(|chunk| {
+            let Ok((rows, _)) = chunk else {
+                unreachable!("operational errors returned before output allocation");
+            };
+            rows.len()
+        }),
+    )?;
+    let mut harvests = purrdf_core::SmallVec::with_capacity(chunks.len());
+    for chunk_result in chunks {
         let (rows, harvested) = chunk_result?;
         out.extend(rows);
         harvests.push(harvested);
     }
     Ok((out, harvests))
 }
+
+/// Reserve the joined output using actual chunk lengths, reusing a typed buffer
+/// when it already has enough capacity. Its old contents are cleared only after
+/// checked sizing and successful reservation. Overflow, an unrepresentable layout
+/// or an allocator refusal returns a typed failure.
+pub(crate) fn reserve_concatenated_rows<R>(
+    mut out: Vec<R>,
+    lengths: impl IntoIterator<Item = usize>,
+) -> Result<Vec<R>, EvalError> {
+    let total = lengths.into_iter().try_fold(0_usize, |total, len| {
+        total.checked_add(len).ok_or(EvalError::AllocationFailed {
+            construct: "parallel solutions",
+        })
+    })?;
+    out.try_reserve_exact(total.saturating_sub(out.len()))
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "parallel solutions",
+        })?;
+    out.clear();
+    Ok(out)
+}
+
+/// [`par_blocks_try_map_init_fallible`] under a caller's fuel or scratch ceiling,
+/// [`par_chunk_try_map_init`] otherwise. Cancellation and unlimited metering keep the
+/// chunked fork; their checkpoints and ordered ledgers still observe each item.
+#[cfg(test)]
+pub(crate) fn par_loop_try_map_init<T, S, R, H>(
+    bounded: bool,
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> S + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    par_loop_try_map_init_fallible(bounded, sequential, items, || Ok(init()), push, harvest)
+}
+
+/// One block's outcome in [`par_blocks_try_map_init_fallible`], once a worker has run it.
+type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
+
+/// Blocks per worker [`par_blocks_try_map_init_fallible`] cuts its items into.
+const ORDERED_BLOCKS_PER_THREAD: usize = 64;
+
+/// Enough items to amortize a block's context, program links and harvest. Workers still
+/// settle and check shared headroom at every item; this does not delay bounded stopping.
+const ORDERED_MIN_BLOCK_LEN: usize = 64;
 
 /// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
 /// every chunk's pushed items into one `Vec<R>`, each chunk folds down to
@@ -1339,6 +1355,31 @@ where
     T: Sync,
     S: Send,
 {
+    par_chunk_reduce_init_admitted(
+        sequential,
+        items,
+        &crate::WorkspaceCapability::resident(),
+        init,
+        step,
+        combine,
+    )
+}
+
+/// The same indexed fold with execution-owned native chunk collection.
+/// The preallocated array is admitted before rayon writes it and remains owned
+/// through ordered reduction, including the first chunk-index error.
+pub(crate) fn par_chunk_reduce_init_admitted<T, S>(
+    sequential: bool,
+    items: &[T],
+    workspace: &crate::WorkspaceCapability,
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    step: impl Fn(&mut S, &T) -> Result<(), EvalError> + Sync,
+    combine: impl Fn(&mut S, S) -> Result<(), EvalError>,
+) -> Result<S, EvalError>
+where
+    T: Sync,
+    S: Send,
+{
     let run_sequentially = || {
         let mut state = init()?;
         for item in items {
@@ -1353,7 +1394,15 @@ where
     use rayon::prelude::*;
 
     let size = aggregate_chunk_size_for(items.len());
-    let per_chunk: Vec<Result<S, EvalError>> = items
+    let count = items.chunks(size).len();
+    let layout = std::alloc::Layout::array::<Result<S, EvalError>>(count)
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    // Declared before the array/iterator so their complete payload dies first.
+    let _collection = workspace
+        .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut per_chunk: Vec<Result<S, EvalError>> =
+        crate::workspace::vector(count, "aggregate chunk collection")?;
+    items
         .par_chunks(size)
         .map(|chunk| {
             let mut state = init()?;
@@ -1362,7 +1411,7 @@ where
             }
             Ok(state)
         })
-        .collect();
+        .collect_into_vec(&mut per_chunk);
 
     // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
     // wins (via `?` on the sequential `for` below), regardless of which worker
@@ -1496,7 +1545,12 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
 /// nothing) or a `MIN`/`MAX`/`SAMPLE` group (whose result is an existing bound
 /// value passed through) — `BIND`/most aggregates mint a genuinely new value
 /// and always take the `Portable` arm, exactly as before this fast path.
-pub(crate) enum MintedRow<I = TermId> {
+pub(crate) struct MintedRow<I = TermId> {
+    cells: MintedCells<I>,
+    evidence: crate::evidence_exec::RowEvidence,
+}
+
+enum MintedCells<I = TermId> {
     /// No cell of this row is a post-fork mint — pass it through untouched.
     Direct(Solution<I>),
     /// At least one cell was freshly minted by the child after the fork;
@@ -1511,16 +1565,20 @@ pub(crate) enum MintedRow<I = TermId> {
 pub(crate) fn minted_row<I: ViewTermId>(
     local: &ScratchInterner,
     base: usize,
-    row: Solution<I>,
-) -> MintedRow<I> {
+    row: crate::solution::RetainedRow<I>,
+) -> Result<MintedRow<I>, EvalError> {
+    let (row, evidence) = row.into_resident_parts().map_err(|_| {
+        EvalError::WorkspaceUnpriced("forked worker cell transport requires resident cells")
+    })?;
     let has_fresh_mint = row
         .iter()
         .any(|cell| matches!(cell, Some(SolutionTerm::Computed(sid)) if sid.index() >= base));
-    if has_fresh_mint {
-        MintedRow::Portable(portable_row(local, base, &row))
+    let cells = if has_fresh_mint {
+        MintedCells::Portable(portable_row(local, base, &row))
     } else {
-        MintedRow::Direct(row)
-    }
+        MintedCells::Direct(row)
+    };
+    Ok(MintedRow { cells, evidence })
 }
 
 /// Re-intern one [`MintedRow`] back into the parent (`main`) scratch: a
@@ -1533,11 +1591,13 @@ pub(crate) fn reintern_minted_row<D: DatasetView>(
     main: &mut ScratchInterner,
     dataset: &D,
     row: MintedRow<D::Id>,
-) -> Result<Solution<D::Id>, EvalError> {
-    match row {
-        MintedRow::Direct(solution) => Ok(solution),
-        MintedRow::Portable(prow) => reintern_portable_row(main, dataset, prow),
-    }
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::solution::RetainedRow<D::Id>, EvalError> {
+    let cells = match row.cells {
+        MintedCells::Direct(solution) => solution,
+        MintedCells::Portable(prow) => reintern_portable_row(main, dataset, prow)?,
+    };
+    crate::solution::RetainedRow::from_resident(cells).with_evidence(row.evidence, workspace)
 }
 
 #[cfg(test)]
@@ -2171,60 +2231,150 @@ mod tests {
         assert!(aggregate_is_unsafe(AGG_IRI, &empty));
     }
 
-    // ---- par_chunk_map ----------------------------------------------------
-
-    #[test]
-    fn par_chunk_map_matches_sequential_one_chunk() {
-        // A chunk size far bigger than the input: everything lands in a
-        // single chunk, exercising the "one chunk" boundary.
-        let _parallel_guard = force_parallel_for_test(true);
-        let _chunk_guard = force_chunk_size_for_test(1000);
-        let items: Vec<usize> = (0..64).collect();
-        let result = par_chunk_map(false, &items, |acc, &item| {
-            if item % 7 != 0 {
-                std::thread::yield_now();
-            }
-            acc.push(item * 2);
-        });
-        let expected: Vec<usize> = (0..64).map(|i| i * 2).collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn par_chunk_map_matches_sequential_many_chunks() {
-        // A tiny chunk size over a larger input spans many chunk boundaries
-        // (100 items / chunk size 7 ⇒ 15 chunks, several ragged).
-        let _parallel_guard = force_parallel_for_test(true);
-        let _chunk_guard = force_chunk_size_for_test(7);
-        let items: Vec<usize> = (0..100).collect();
-        let result = par_chunk_map(false, &items, |acc, &item| {
-            if item % 3 == 0 {
-                std::thread::yield_now();
-            }
-            acc.push(item * 2);
-        });
-        let expected: Vec<usize> = (0..100).map(|i| i * 2).collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn par_chunk_map_forced_sequential_matches_forced_parallel() {
-        let items: Vec<usize> = (0..100).collect();
-        let push = |acc: &mut Vec<usize>, &item: &usize| acc.push(item * 2);
-
-        let sequential = {
-            let _guard = force_parallel_for_test(false);
-            par_chunk_map(false, &items, push)
-        };
-        let parallel = {
-            let _parallel_guard = force_parallel_for_test(true);
-            let _chunk_guard = force_chunk_size_for_test(9);
-            par_chunk_map(false, &items, push)
-        };
-        assert_eq!(sequential, parallel);
-    }
-
     // ---- par_chunk_try_map_init ---------------------------------------------
+
+    #[test]
+    fn parallel_concatenation_capacity_overflow_is_typed_without_allocating() {
+        // A zero-sized vector can represent these lengths without allocating host
+        // memory. Their joined row count still has to fit usize.
+        let chunks = vec![Ok((vec![(); usize::MAX], ())), Ok((vec![()], ()))];
+        assert_eq!(
+            concatenate_chunks(chunks).expect_err("joined length overflows"),
+            EvalError::AllocationFailed {
+                construct: "parallel solutions",
+            }
+        );
+        assert_eq!(
+            reserve_concatenated_rows::<Solution>(Vec::new(), [usize::MAX])
+                .expect_err("solution layout is unrepresentable"),
+            EvalError::AllocationFailed {
+                construct: "parallel solutions",
+            }
+        );
+    }
+
+    #[test]
+    fn parallel_concatenation_selects_source_error_before_capacity_overflow() {
+        let chunks = vec![
+            Ok((vec![(); usize::MAX], ())),
+            Ok((vec![()], ())),
+            Err(EvalError::internal("first source error")),
+            Err(EvalError::internal("later source error")),
+        ];
+        assert_eq!(
+            concatenate_chunks(chunks).expect_err("source error outranks allocation"),
+            EvalError::internal("first source error")
+        );
+    }
+
+    #[test]
+    fn bounded_loop_selection_preserves_unlimited_metering_and_stop_only_forks() {
+        use crate::{CancellationFlag, GovernorState, QueryGovernors};
+        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        for (governors, bounded, may_fork) in [
+            (QueryGovernors::UNBOUNDED, false, true),
+            (QueryGovernors::METERED, false, true),
+            (
+                QueryGovernors::UNBOUNDED
+                    .with_stop_signal(std::sync::Arc::new(CancellationFlag::new())),
+                false,
+                true,
+            ),
+            (QueryGovernors::UNBOUNDED.with_fuel(17), true, true),
+            (
+                QueryGovernors::METERED.with_max_scratch_bytes(17),
+                true,
+                true,
+            ),
+            (
+                QueryGovernors::METERED.with_max_intermediate_cells(17),
+                false,
+                false,
+            ),
+        ] {
+            let ctx = crate::eval::EvalCtx::new(&ds)
+                .with_governors(std::sync::Arc::new(GovernorState::new(&governors)));
+            assert_eq!(ctx.needs_bounded_loop_blocks(), bounded, "{governors:?}");
+            assert_eq!(ctx.may_fork_governed_loop(), may_fork, "{governors:?}");
+        }
+    }
+
+    /// Scheduling geometry changes only the number of worker contexts; every item and
+    /// every harvest remains in input order at the floor and worker-count neighbours.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bounded_blocks_amortize_contexts_without_reordering_items_or_harvests() {
+        for threads in [1, 4, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("pool");
+            for len in [127_usize, 128, 129, 1_025, 16_384] {
+                pool.install(|| {
+                    let _guard = force_parallel_for_test(true);
+                    let calls = std::sync::atomic::AtomicUsize::new(0);
+                    let items: Vec<_> = (0..len).collect();
+                    let (out, harvests) = par_loop_try_map_init(
+                        true,
+                        false,
+                        &items,
+                        || {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            Vec::new()
+                        },
+                        |state, out, &item| {
+                            if item % 7 == 0 {
+                                std::thread::yield_now();
+                            }
+                            state.push(item);
+                            out.push(item);
+                            Ok(())
+                        },
+                        core::mem::take,
+                    )
+                    .expect("all items admitted");
+                    assert_eq!(out, items);
+                    assert_eq!(
+                        harvests.iter().flatten().copied().collect::<Vec<_>>(),
+                        items
+                    );
+                    assert_eq!(
+                        harvests.len(),
+                        calls.load(std::sync::atomic::Ordering::Relaxed)
+                    );
+                    assert!(harvests.len() <= len.div_ceil(ORDERED_MIN_BLOCK_LEN));
+                });
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bounded_blocks_return_the_first_input_error_under_later_worker_failure() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(32)
+            .build()
+            .expect("pool");
+        pool.install(|| {
+            let _guard = force_parallel_for_test(true);
+            let items: Vec<_> = (0..16_384).collect();
+            let result = par_loop_try_map_init(
+                true,
+                false,
+                &items,
+                || (),
+                |(), out, &item| {
+                    if item == 129 || item == 6_000 {
+                        return Err(EvalError::internal(format!("error at {item}")));
+                    }
+                    out.push(item);
+                    Ok(())
+                },
+                |()| (),
+            );
+            assert_eq!(result.unwrap_err(), EvalError::internal("error at 129"));
+        });
+    }
 
     #[test]
     fn par_chunk_try_map_init_flattens_in_index_order_one_chunk() {
@@ -2431,7 +2581,9 @@ mod tests {
         let pre_fork_term = parent.scratch.intern(&ds, pre_fork_value.clone());
         let base = parent.scratch.computed_count();
 
-        let mut child = parent.fork_for_worker();
+        let mut child = parent
+            .fork_for_worker()
+            .expect("resident worker owner admission");
         assert_eq!(
             child.scratch.value_of(&ds, pre_fork_term),
             pre_fork_value,
@@ -2472,8 +2624,12 @@ mod tests {
         let mut parent = crate::eval::EvalCtx::new(&ds);
         let base = parent.scratch.computed_count();
 
-        let mut child_a = parent.fork_for_worker();
-        let mut child_b = parent.fork_for_worker();
+        let mut child_a = parent
+            .fork_for_worker()
+            .expect("resident worker owner admission");
+        let mut child_b = parent
+            .fork_for_worker()
+            .expect("resident worker owner admission");
         let shared_value = lit("same value from two workers");
         let term_a = child_a.scratch.intern(&ds, shared_value.clone());
         let term_b = child_b.scratch.intern(&ds, shared_value);
@@ -2930,4 +3086,247 @@ mod walk_tests {
         .expect("spawn");
         assert_eq!(answers, [true, false, true, false, true, false, false]);
     }
+}
+
+fn reaches_unsafe_builtin_admitted(
+    root: Reach<'_>,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let mut pending = purrdf_lex::walk::WorkList::<Reach<'_>, 16>::new();
+    pending.try_push_admitted(root, &mut memory).map_err(|e| {
+        memory
+            .admission_mut()
+            .storage_error(e, "correlated fork-safety worklist")
+    })?;
+    while let Some(item) = pending.pop() {
+        match item {
+            Reach::Expression(expr) => {
+                let first = pending.len();
+                let mut failure = None;
+                visit_expression_parts(expr, &mut |part| {
+                    if let Err(error) = pending.try_push_admitted(
+                        match part {
+                            ExpressionPart::Sub(sub) => Reach::Expression(sub),
+                            ExpressionPart::Call(f) => Reach::Call(f),
+                            ExpressionPart::Exists(body) => Reach::Exists(body),
+                        },
+                        &mut memory,
+                    ) {
+                        failure = Some(
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "correlated fork-safety worklist"),
+                        );
+                        return true;
+                    }
+                    // `false` keeps the visit going; every part is collected.
+                    false
+                });
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                pending.reverse_top(pending.len() - first);
+            }
+            Reach::Pattern(GraphPattern::PropertyFunction(call)) => {
+                if property_function_is_unsafe(&call.iri, registries.relations) {
+                    return Ok(true);
+                }
+            }
+            // Each SERVICE response receives fresh local blank identities, even
+            // when its endpoint body is pure. The response therefore advances
+            // the same mint state as BNODE and cannot run from a forked counter.
+            Reach::Pattern(GraphPattern::Service { .. }) => return Ok(true),
+            // A substituted copy's placeholder for a `LATERAL` right operand stands for an
+            // operand the walk cannot see: `verdict` answers for it, and one it cannot
+            // answer for is judged unsafe rather than safe by omission.
+            Reach::Pattern(pattern) if crate::deferred_exists::is_lateral_placeholder(pattern) => {
+                if verdict(pattern).unwrap_or(true) {
+                    return Ok(true);
+                }
+            }
+            Reach::Pattern(pattern) => {
+                let first = pending.len();
+                let mut failure = None;
+                visit_pattern_parts(pattern, &mut |part| {
+                    if let Err(error) = pending.try_push_admitted(
+                        match part {
+                            PatternPart::Child(child, _edge) => Reach::Pattern(child),
+                            PatternPart::Expression(expr) => Reach::Expression(expr),
+                        },
+                        &mut memory,
+                    ) {
+                        failure = Some(
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "correlated fork-safety worklist"),
+                        );
+                        return true;
+                    }
+                    false
+                });
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                pending.reverse_top(pending.len() - first);
+            }
+            Reach::Call(f) => {
+                if function_is_unsafe(f, registries.functions) {
+                    return Ok(true);
+                }
+            }
+            Reach::Exists(body) => match verdict(body) {
+                Some(true) => return Ok(true),
+                Some(false) => {}
+                None => pending
+                    .try_push_admitted(Reach::Pattern(body), &mut memory)
+                    .map_err(|e| {
+                        memory
+                            .admission_mut()
+                            .storage_error(e, "correlated fork-safety worklist")
+                    })?,
+            },
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn is_parallel_safe_pattern_with_admitted(
+    pattern: &GraphPattern,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    reaches_unsafe_builtin_admitted(Reach::Pattern(pattern), registries, verdict, workspace)
+        .map(|unsafe_| !unsafe_)
+}
+
+/// Original ordered worker law with a fallible initial owner.
+pub(crate) fn par_chunk_try_map_init_fallible<T, S, R, H>(
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    let run_sequentially = || {
+        let mut state = init()?;
+        let mut out = Vec::new();
+        for item in items {
+            push(&mut state, &mut out, item)?;
+        }
+        let harvested = harvest(&mut state);
+        Ok((out, purrdf_core::smallvec![harvested]))
+    };
+    if !should_parallelize(sequential, items.len()) {
+        return run_sequentially();
+    }
+
+    use rayon::prelude::*;
+
+    let size = chunk_size_for(items.len());
+    let per_chunk: Vec<Result<(Vec<R>, H), EvalError>> = items
+        .par_chunks(size)
+        .map(|chunk| {
+            let mut state = init()?;
+            let mut acc = Vec::new();
+            for item in chunk {
+                push(&mut state, &mut acc, item)?;
+            }
+            let harvested = harvest(&mut state);
+            Ok((acc, harvested))
+        })
+        .collect();
+
+    concatenate_chunks(per_chunk)
+}
+
+/// Original ordered worker law with a fallible initial owner.
+pub(crate) fn par_loop_try_map_init_fallible<T, S, R, H>(
+    bounded: bool,
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    if bounded {
+        par_blocks_try_map_init_fallible(sequential, items, init, push, harvest)
+    } else {
+        par_chunk_try_map_init_fallible(sequential, items, init, push, harvest)
+    }
+}
+
+/// Original ordered worker law with a fallible initial owner.
+pub(crate) fn par_blocks_try_map_init_fallible<T, S, R, H>(
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    if !should_parallelize(sequential, items.len()) {
+        return par_chunk_try_map_init_fallible(true, items, init, push, harvest);
+    }
+    use rayon::prelude::*;
+    let threads = rayon::current_num_threads().max(1);
+    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(ORDERED_MIN_BLOCK_LEN);
+    let blocks: Vec<&[T]> = items.chunks(block).collect();
+    let slots: Vec<BlockSlot<R, H>> = blocks.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    (0..threads.min(blocks.len()))
+        .into_par_iter()
+        .for_each(|_| {
+            loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(block) = blocks.get(index) else {
+                    return;
+                };
+                // Fresh per block, as a chunk's is: a block's state (a worker's arena,
+                // the ids its program cached) is its own, and goes with its harvest.
+                let outcome = (|| {
+                    let mut state = init()?;
+                    let mut acc = Vec::new();
+                    block
+                        .iter()
+                        .try_for_each(|item| push(&mut state, &mut acc, item))
+                        .map(|()| (acc, harvest(&mut state)))
+                })();
+                let failed = outcome.is_err();
+                *slots[index]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+                if failed {
+                    return;
+                }
+            }
+        });
+    // A block no worker reached lies after a block that failed. Retain indexed order
+    // while selecting the first operational error before allocating the joined bag.
+    let outcomes = slots
+        .into_iter()
+        .filter_map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+        .collect();
+    concatenate_chunks(outcomes)
 }

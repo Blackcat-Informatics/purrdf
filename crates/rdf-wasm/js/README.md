@@ -220,14 +220,39 @@ ownership, and all limits. Complete examples are in
   Kept scope labels are deterministic: inserting the returned terms into a new
   dataset, serializing and parsing preserves the same blank identity, including
   blank nodes inside quoted triple terms.
+- `xpathRegex` — every evaluating `QueryEngine` method and its asynchronous twin accept
+  this option: the stable name of the dated native XPath law `REGEX` and `REPLACE`
+  evaluate under, `"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"` (typed as
+  `XPathRegexLaw`). Both laws admit backreferences; only 3.1 admits non-capturing groups
+  and the `q` flag. `Dataset.query(sparql, base?, xpathRegex?)`, `queryRawConfigured` and
+  `queryRawWithContext` take it as a trailing argument; `shaclValidateToSarif`,
+  `shaclValidateChangesToSarif` and the four `shaclProductValidateToSarif…` entries take
+  it as their trailing argument too, where it governs `sh:pattern` and the SPARQL-based
+  targets, constraints and SHACL-AF functions; so do `shaclEntail`, `shaclApplyRules`
+  (SHACL rules and SPARQL 1.2 RL rule sets alike) and `shaclEvalNodeExpr`, where it
+  governs every `REGEX`/`REPLACE` a rule, function, node expression or rule-set filter
+  evaluates and every `sh:pattern` a rule condition or filter shape decides
+  (`shaclLintShapes` matches no pattern and takes none). Every one of their asynchronous
+  twins takes it in its options object (`AsyncShaclValidationOptions`). Absent, the compatibility regex is
+  unchanged. Names match exactly: `"xpath-3.1"` or `"XPATH-3.1-2017-03-21"` throws with
+  the code `purrdf-wasm-options`, listing the accepted names. A pattern the selected law's
+  grammar refuses is an ordinary expression error (a SHACL finding under `sh:pattern`); a
+  resource refusal under the law's finite production bounds throws, or rejects, with the
+  resource's own code (`xpath-pattern-bytes`, `xpath-match-steps`, …) — never an unbound,
+  `false`, partial or conforming answer. That code is the refusal's identity on every
+  entry: the thrown `Error`'s `code` on a SPARQL or shapes-graph entry (a SHACL-SPARQL
+  query's refusal included), on either lane, and the `code` of the `ShaclProductRefusal`
+  a product entry throws (its `dimension` is `undefined`).
 - `QueryEngine.divisionPolicy` — the precision of every `xsd:integer`/`xsd:decimal`
   quotient (`/` and `AVG`) the engine forms: `"exact"`, `"N"` (`N` fractional digits
   truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
   `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
   `half-toward-zero`, `half-ceiling` or `half-floor` — the CLI's `--division` text.
-  The default is `"18:toward-zero"`. Under `"exact"`, `1/8` answers `0.125` while `1/3`,
-  which has no finite decimal expansion, throws an error with the code
-  `native-sparql-numeric` naming `err:FOAR0002`; `"5:half-even"` answers `2/3` as
+  The default is `"exact-or-18:half-even"`: terminating quotients stay exact,
+  and repeating ones are rounded. Under `"exact"`, `1/8` answers `0.125` while `1/3`,
+  which has no finite decimal expansion, is a SPARQL expression error: unbound, like
+  `1/0`, and counted as `err:FOAR0002` in a governed outcome's
+  `evidence.expressionErrors`; `"5:half-even"` answers `2/3` as
   `0.66667`. It applies to every query, update, explain, governed and entailment entry
   of the engine, and an asynchronous job takes the policy in force when it begins;
   `Dataset.query` runs under the default. An unreadable value throws with the code
@@ -858,7 +883,9 @@ pieces:
   comfortably covers even a large one) bounds the request body — a `Content-Length`
   above it is refused before anything is read, and a missing or understated one is still
   caught by counting bytes as the body streams in, so a lying header never buys a larger
-  body than an honest one would. An error's `detail` is the engine's own words only when
+  body than an honest one would. `xpathRegex` selects the dated native XPath law every
+  query and update's `REGEX`/`REPLACE` evaluates under, exactly as on `QueryEngine`; a
+  resource refusal under it is the operation's evaluation failure. An error's `detail` is the engine's own words only when
   the failure is the query's — a refusal to evaluate it as written, its evaluation, a
   tripped governor: a SPARQL client is owed the reason its request failed. A `403` or
   `502` gets a fixed `detail` for its code instead, because the engine's message would

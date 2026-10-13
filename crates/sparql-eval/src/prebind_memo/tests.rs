@@ -11,7 +11,7 @@
 //! about the wrong focus node.
 //!
 //! So the oracle is enumerated rather than argued. Every query in [`QUERIES`] is run
-//! against every binding set in [`BINDINGS`] on both lanes, and for each combination
+//! against every binding set in [`BINDINGS`], and for each combination
 //! the memo's answer — the retained tree after its values are written — is compared
 //! against the tree [`super::rewrite`] builds from scratch for those same bindings.
 //! Equality is over the whole [`Query`], node for node, so nothing is projected away.
@@ -45,12 +45,6 @@ use purrdf_sparql_algebra::{
 };
 
 use super::{PrebindMemo, ValueShape, rewrite};
-use crate::engine::ShaclPrebinding;
-
-/// Both lanes. The SHACL lane adds the expression-position walk on top of the plain
-/// lane's pushdown and seed, so a position only one of them writes is a position only
-/// one of them can leave stale.
-const LANES: [ShaclPrebinding; 2] = [ShaclPrebinding::Applied, ShaclPrebinding::None];
 
 /// Parse `text` as a query, or fail the test naming it.
 fn parse(text: &str) -> Query {
@@ -156,7 +150,7 @@ fn bindings() -> Vec<Vec<(&'static str, GroundTerm)>> {
     ]
 }
 
-/// **The oracle.** For every query, lane and binding set, a memo built for that
+/// **The oracle.** For every query and binding set, a memo built for that
 /// binding set's shapes and then bound to a binding set must hold exactly the tree
 /// the rewrite builds from scratch.
 ///
@@ -171,31 +165,29 @@ fn a_memo_holds_what_the_rewrite_builds() {
     }
 }
 
-/// The oracle's body for one parsed query: every lane, every binding set it builds
+/// The oracle's body for one parsed query: every binding set it builds
 /// from, every binding set of matching shape it is then bound to.
 fn memo_agrees_with_rewrite(parsed: &Query, text: &str) {
-    for lane in LANES {
-        for built_from in bindings() {
-            let build_probes = probes(&built_from);
-            let Some(mut memo) = PrebindMemo::build(parsed, lane, &build_probes) else {
-                // A declined memo is a performance decision, never an answer: the run
-                // takes the ordinary rewrite. The only shape declined here is a
-                // quoted-triple value, and the case below pins that.
+    for built_from in bindings() {
+        let build_probes = probes(&built_from);
+        let Some(mut memo) = PrebindMemo::build(parsed, &build_probes) else {
+            // A declined memo is a performance decision, never an answer: the run
+            // takes the full rewrite. The only shape declined here is a
+            // quoted-triple value, and the case below pins that.
+            continue;
+        };
+        for bound_to in bindings() {
+            let run_probes = probes(&bound_to);
+            if !memo.matches(&run_probes) {
                 continue;
-            };
-            for bound_to in bindings() {
-                let run_probes = probes(&bound_to);
-                if !memo.matches(lane, &run_probes) {
-                    continue;
-                }
-                let expected = rewrite(parsed.clone(), lane, run_probes.clone());
-                assert_eq!(
-                    memo.bind(&run_probes).0,
-                    &expected,
-                    "memo built from {built_from:?} and bound to {bound_to:?} disagrees with \
-                     the rewrite\n  lane: {lane:?}\n  query: {text}"
-                );
             }
+            let expected = rewrite(parsed.clone(), run_probes.clone());
+            assert_eq!(
+                memo.bind(&run_probes).0,
+                &expected,
+                "memo built from {built_from:?} and bound to {bound_to:?} disagrees with \
+                 the rewrite\n  query: {text}"
+            );
         }
     }
 }
@@ -205,12 +197,11 @@ const RELATION: &str = "http://example.org/purrdf/prebind#relation";
 
 /// Property-function call shapes, parsed with [`RELATION`] declared as a call.
 ///
-/// A call is a leaf the plain lane's pushdown WRITES into — the pre-bound constant
-/// replaces the argument, so the relation is invoked with that position bound — and
-/// the memo's cells for it must be the call's argument positions. Three placements:
-/// at the core, where the seed alone re-binds the column; beside a pattern, where a
-/// restoring `VALUES` does; and in an `OPTIONAL`'s right arm, which the pushdown must
-/// not enter.
+/// A call is a leaf the rewrite WRITES into — the pre-bound constant replaces the
+/// argument, so the relation is invoked with that position bound — and the memo's
+/// cells for it must be the call's argument positions. Three placements: at the core,
+/// where the seed alone re-binds the column; beside a pattern, where a restoring
+/// `VALUES` does; and in an `OPTIONAL`'s right arm, which the rewrite reaches too.
 const CALL_QUERIES: &[&str] = &[
     "SELECT ?o WHERE { ( $this ) <http://example.org/purrdf/prebind#relation> ( ?o ) }",
     "SELECT ?o WHERE { ?s <http://example.org/purrdf/prebind#p> ?o . \
@@ -285,7 +276,7 @@ fn a_memo_holds_what_the_rewrite_builds_through_a_property_function_call() {
         | Query::Describe { pattern, .. }
         | Query::Ask { pattern, .. } => pattern.clone(),
     };
-    for (at, text) in CALL_QUERIES.iter().enumerate() {
+    for text in CALL_QUERIES {
         let parsed = parse_calls(text);
         assert!(
             call_carries(
@@ -297,16 +288,14 @@ fn a_memo_holds_what_the_rewrite_builds_through_a_property_function_call() {
         memo_agrees_with_rewrite(&parsed, text);
 
         let run = probes(&[("this", this.clone()), ("other", iri("b"))]);
-        let rewritten = rewrite(parsed.clone(), ShaclPrebinding::None, run.clone());
-        let in_optional = at == 2;
-        assert_eq!(
+        let rewritten = rewrite(parsed.clone(), run.clone());
+        assert!(
             call_carries(&pattern_of(&rewritten), &pushed),
-            !in_optional,
-            "the pushdown writes the constant into a call it reaches, and into no call in an \
-             `OPTIONAL`'s right arm: {text}"
+            "the rewrite writes the constant into every call that names it, an \
+             `OPTIONAL`'s right arm included: {text}"
         );
         assert!(
-            PrebindMemo::build(&parsed, ShaclPrebinding::None, &run).is_some(),
+            PrebindMemo::build(&parsed, &run).is_some(),
             "an IRI-shaped binding list over a call is memoizable: {text}"
         );
     }
@@ -324,24 +313,20 @@ fn a_memo_refuses_a_shape_it_was_not_built_for() {
     let as_iri = probes(&[("this", iri("a")), ("other", iri("b"))]);
     let as_blank = probes(&[("this", blank("b0")), ("other", iri("b"))]);
 
-    let memo = PrebindMemo::build(&parsed, ShaclPrebinding::None, &as_iri)
-        .expect("an IRI-shaped binding list is memoizable");
-    assert!(memo.matches(ShaclPrebinding::None, &as_iri));
+    let memo =
+        PrebindMemo::build(&parsed, &as_iri).expect("an IRI-shaped binding list is memoizable");
+    assert!(memo.matches(&as_iri));
     assert!(
-        !memo.matches(ShaclPrebinding::None, &as_blank),
+        !memo.matches(&as_blank),
         "a blank-node value is bound by the seed alone, so it occupies different cells"
-    );
-    assert!(
-        !memo.matches(ShaclPrebinding::Applied, &as_iri),
-        "the two lanes rewrite the same query into different trees"
     );
 
     // And the neighbouring case really is valid: the blank-shaped list memoizes on
     // its own, so the refusal above is about the SHAPE and not about blank nodes
     // being unsupported.
-    let blank_memo = PrebindMemo::build(&parsed, ShaclPrebinding::None, &as_blank)
+    let blank_memo = PrebindMemo::build(&parsed, &as_blank)
         .expect("a blank-node binding list is memoizable in its own right");
-    assert!(blank_memo.matches(ShaclPrebinding::None, &as_blank));
+    assert!(blank_memo.matches(&as_blank));
 }
 
 /// A quoted-triple value is declined, and declining it is not a refusal of the query.
@@ -351,12 +336,12 @@ fn a_quoted_triple_value_declines_the_memo_and_still_rewrites() {
     let nested = probes(&[("this", quoted("a")), ("other", iri("b"))]);
     assert_eq!(ValueShape::of(&nested[0].1), ValueShape::NestedTriple);
     assert!(
-        PrebindMemo::build(&parsed, ShaclPrebinding::None, &nested).is_none(),
+        PrebindMemo::build(&parsed, &nested).is_none(),
         "a value that changes how many term positions a pattern holds is declined"
     );
-    // The ordinary rewrite still answers for it, unchanged — the decline costs the
+    // The full rewrite still answers for it, unchanged — the decline costs the
     // run its memo and nothing else.
-    let rewritten = rewrite(parsed.clone(), ShaclPrebinding::None, nested);
+    let rewritten = rewrite(parsed.clone(), nested);
     assert_ne!(rewritten, parsed, "the rewrite still pre-binds the value");
 }
 
@@ -367,13 +352,13 @@ fn a_repeated_name_declines_the_memo() {
     let parsed = parse(QUERIES[0]);
     let repeated = probes(&[("this", iri("a")), ("this", iri("b"))]);
     assert!(
-        PrebindMemo::build(&parsed, ShaclPrebinding::None, &repeated).is_none(),
+        PrebindMemo::build(&parsed, &repeated).is_none(),
         "a repeated name takes the per-variable path, which builds a different tree"
     );
     // And the per-variable path is still what runs: two seeds binding one variable to
     // two different terms are incompatible, which is the defined answer rather than
     // an error.
-    let rewritten = rewrite(parsed, ShaclPrebinding::None, repeated);
+    let rewritten = rewrite(parsed, repeated);
     assert!(
         format!("{rewritten:?}").matches("Values").count() >= 2,
         "the per-variable path plants one seed per pre-binding"

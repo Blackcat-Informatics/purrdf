@@ -206,6 +206,13 @@ impl Reads {
                 Flow::Descend
             }
             GraphPattern::Values { .. } => Flow::Skip,
+            // Contextual assignment does not carry the ordinary SHACL focus
+            // substitution proof. Inspect its reads, but never reuse this rule
+            // from an analysis that assumes every `$this` remains the focus.
+            GraphPattern::Apply { .. } => {
+                self.volatile = true;
+                Flow::Descend
+            }
             GraphPattern::Service { .. } | GraphPattern::PropertyFunction(_) => {
                 self.any();
                 Flow::Skip
@@ -479,6 +486,41 @@ mod tests {
             predicate: predicate.map(iri),
             object,
         }
+    }
+
+    #[test]
+    fn contextual_application_reads_both_sides_without_focus_reuse_certification() {
+        use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+        use purrdf_sparql_algebra::tree::Child;
+
+        let Query::Ask { pattern: left, .. } = SparqlParser::new()
+            .parse_query("ASK { ?this <http://example.org/left> ?o }")
+            .unwrap()
+        else {
+            panic!("ASK fixture")
+        };
+        let Query::Ask { pattern: right, .. } = SparqlParser::new()
+            .parse_query("ASK { FILTER EXISTS { ?s <http://example.org/right> ?o } }")
+            .unwrap()
+        else {
+            panic!("ASK fixture")
+        };
+        let application = GraphPattern::Apply {
+            left: Child::new(left),
+            right: Child::new(right),
+            policy: Box::new(ApplicationPolicy {
+                dataset_required: false,
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: None,
+                inputs: Vec::new(),
+                optional: None,
+            }),
+        };
+        let mut reads = Reads::default();
+        reads.pattern(&application);
+        assert_eq!(reads.patterns.len(), 2);
+        assert_eq!(reads.finish(), RuleReads::Volatile);
     }
 
     #[test]

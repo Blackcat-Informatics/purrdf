@@ -52,10 +52,17 @@
 //! assert_eq!(ccc('\u{301}'), 230);
 //! ```
 
+// Full lowercase shares the selected Unicode context properties; native callers
+// retain output storage admitted before construction, including final sigma.
 use crate::unicode_tables as tables;
 
 mod aligned;
-pub use aligned::{TaggedScalar, compose_tagged, decompose_tagged};
+mod case_tables;
+mod casing;
+pub use aligned::{
+    TaggedScalar, compose_tagged, decompose_tagged, decompose_tagged_preallocated, decomposed_len,
+};
+pub use casing::{Lowercase, lowercase, lowercase_len, lowercase_with_memory};
 
 /// The Unicode version every generated Unicode table in the workspace comes
 /// from. The tables of `purrdf-iri`, `purrdf-text` and `purrdf-jsonschema`
@@ -466,6 +473,45 @@ fn canonical_order<T>(run: &mut [T], class: impl Fn(&T) -> u8) {
         while j > 0 && class(&run[j - 1]) > class(&run[j]) {
             run.swap(j - 1, j);
             j -= 1;
+        }
+    }
+}
+
+/// Stable canonical ordering through a caller-preallocated index permutation.
+/// Sorting `(class, original ordinal)` is stable in meaning while its unstable
+/// in-place sort allocates nothing. A permutation cycle moves metadata too.
+fn canonical_order_by_index<T>(run: &mut [T], indices: &mut Vec<usize>, class: impl Fn(&T) -> u8) {
+    assert!(
+        indices.capacity() >= run.len(),
+        "canonical-order caller must preallocate indices"
+    );
+    indices.clear();
+    indices.extend(0..run.len());
+    indices.sort_unstable_by_key(|&at| (class(&run[at]), at));
+    // Invert destination->source in place. The admitted usize array layout puts
+    // ordinals below isize::MAX, so bitwise-negated visited entries are distinct.
+    for start in 0..indices.len() {
+        if indices[start] >= indices.len() {
+            continue;
+        }
+        let mut previous = start;
+        let mut at = indices[start];
+        while at != start {
+            let next = indices[at];
+            indices[at] = !previous;
+            previous = at;
+            at = next;
+        }
+        indices[start] = !previous;
+    }
+    for index in indices.iter_mut() {
+        *index = !*index;
+    }
+    for start in 0..run.len() {
+        while indices[start] != start {
+            let next = indices[start];
+            run.swap(start, next);
+            indices.swap(start, next);
         }
     }
 }

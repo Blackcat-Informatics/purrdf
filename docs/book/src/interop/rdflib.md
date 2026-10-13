@@ -26,6 +26,13 @@ This is the recommended path for new code that wants an rdflib-shaped API on
 the PurRDF engine: the import name is honest, and it coexists with a genuine
 `rdflib` installation.
 
+`Graph.query`, the SPARQL processor, `Dataset` and `ConjunctiveGraph` use
+contextual initial-binding semantics compiled into the native evaluator. Query
+assignments can replace an initial value while the initial mapping remains
+available to enclosing operations. Named graph views and `default_union` select
+the query's graph scope. The direct `purrdf.Store.query` and `Store.prepare`
+interfaces retain native pre-binding rules.
+
 ## Tier 2: the `purrdf[rdflib]` shadow distribution
 
 For a literal, zero-change `import rdflib`, install the opt-in extra:
@@ -57,11 +64,9 @@ single conformance matrix
 
 Both use strict expected-failure ledgers: every known divergence is listed
 with a per-test reason, an unexpected failure breaks the build, and a silently
-fixed divergence also breaks the build until the ledger shrinks. The ledgered
-residuals cover corners like Graph-subclass identity through set operators,
-`rdf:List`/Collection mutation, `Result.bindings` / `SELECT *` subselect
-projection, graph-prefix forwarding, and legacy `ConjunctiveGraph` semantics —
-consult the ledgers for the current, exact list.
+fixed divergence also breaks the build until the ledger shrinks. The ledgers
+state the current divergences and distinguish unsupported configured execution
+from deliberate term and query admission differences.
 
 ## Performance
 

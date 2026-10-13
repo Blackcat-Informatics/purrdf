@@ -64,6 +64,11 @@
 //! * the governor report to **stderr** — which governor stopped the run, what the rows
 //!   bound, and the whole consumption/ceiling vector — written FIRST, so that a trip is
 //!   announced even if serializing the rows then fails;
+//! * after it, and on a complete governed run too, the expression-error block
+//!   (`purrdf-expression-errors 1`, one `absorbed CODE COUNT` line per XPath F&O code)
+//!   when the run absorbed any expression error into an unbound value — the codes of
+//!   [`GovernorEvidence::expression_errors`](purrdf_sparql_eval::GovernorEvidence::expression_errors).
+//!   An ungoverned run keeps no evidence, so it writes no block;
 //! * the certified rows to **stdout**, through the same [`emit_result`] a complete result
 //!   goes through, in the requested `--results-format`.
 //!
@@ -124,6 +129,7 @@ use std::sync::Arc;
 
 use purrdf::{ClosureRelations, EntailmentClosure, GovernedEntailment};
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_entail::ImportMap;
@@ -188,6 +194,8 @@ struct QueryOp<'a> {
 /// is read, exactly as it was before this flag existed.
 #[derive(Clone, Copy)]
 struct RelationSpecs<'a> {
+    /// The same geographic profile used for initial admission and execution.
+    geo: &'a purrdf_validate::geo::GeoProfile,
     /// The parsed specs, empty when `--path-relation` was not given.
     specs: &'a [PathRelationSpec],
     /// The query text, re-prepared against the registry when there is one.
@@ -217,7 +225,9 @@ impl<'a> RelationSpecs<'a> {
         let prepared = engine.prepare_query_with_options(
             self.query,
             self.base,
-            EngineQueryOptions::new().with_env(&engine_env(aggregates, Some(&registry))?),
+            EngineQueryOptions::new()
+                .with_geo(self.geo)
+                .with_env(&engine_env(aggregates, Some(&registry))?),
         )?;
         Ok((Some(registry), Some(prepared)))
     }
@@ -244,8 +254,13 @@ fn engine_env(
 }
 
 /// The evaluation options a lane runs under, over an environment the caller holds.
-fn engine_options(env: &ExtensionEnv, division: DivisionPolicy) -> EngineQueryOptions<'_> {
+fn engine_options<'a>(
+    env: &'a ExtensionEnv,
+    geo: &'a purrdf_validate::geo::GeoProfile,
+    division: DivisionPolicy,
+) -> EngineQueryOptions<'a> {
     EngineQueryOptions::new()
+        .with_geo(geo)
         .with_env(env)
         .with_division(division)
 }
@@ -261,7 +276,7 @@ impl ViewOp for QueryOp<'_> {
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division);
         Ok(self.engine.query_prepared_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -330,7 +345,7 @@ impl ViewOp for GovernedQueryOp<'_> {
         // `property_functions` from the re-prepare `prepare_against` just did over this
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division);
         Ok(self.engine.query_prepared_governed_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -379,7 +394,7 @@ impl ViewOp for ExplainOp<'_> {
         // registered.
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.division);
+        let options = engine_options(&env, self.relations.geo, self.division);
         Ok(self
             .engine
             .explain_query_with_options_view(view, self.query, self.base, options)?)
@@ -733,6 +748,7 @@ impl ViewOp for EntailedQueryOp<'_> {
             self.governors,
             engine_options(
                 &engine_env(self.aggregates, admitted.as_ref())?,
+                self.relations.geo,
                 self.division,
             ),
             &relations,
@@ -748,6 +764,8 @@ impl ViewOp for EntailedQueryOp<'_> {
 /// dispatcher hands over one borrow rather than a dozen positional arguments whose order
 /// is the only thing keeping them apart.
 pub(crate) struct QueryOptions<'a> {
+    /// The immutable geographic profile selected by `--geo-profile`.
+    pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     /// `--data`: the data-source path.
     pub(crate) data: &'a str,
     /// `--base`: the parse and query base IRI.
@@ -789,14 +807,18 @@ pub(crate) struct QueryOptions<'a> {
     /// value, so a query naming one of these IRIs is an ordinary triple pattern reading
     /// the data — exactly as before this flag existed.
     pub(crate) path_relations: &'a [PathRelationSpec],
+    /// `--xpath-regex`: the dated native XPath pattern law `REGEX`/`REPLACE` evaluate
+    /// under. `None` (the default) keeps the compatibility pattern engine, exactly as
+    /// before this flag existed.
+    pub(crate) xpath_regex: Option<Profile>,
     /// `--division`: the precision an `xsd:integer`/`xsd:decimal` quotient is formed
-    /// at, for `/` and `AVG` alike. The default is eighteen fractional digits,
-    /// truncated toward zero.
+    /// at, for `/` and `AVG` alike. The default is exact for terminating quotients,
+    /// otherwise eighteen fractional digits rounded half to even.
     pub(crate) division: DivisionPolicy,
 }
 
 /// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
-/// `N:ROUNDING`.
+/// `N:ROUNDING`, or `exact-or-N[:ROUNDING]`.
 pub(crate) fn parse_division(text: &str) -> Result<DivisionPolicy, String> {
     text.parse::<DivisionPolicy>()
         .map_err(|error| error.to_string())
@@ -821,7 +843,9 @@ pub(crate) fn run(
     // are now distinguishable, which is what lets `--explain` refuse the former.
     let results_format = options.results_format.unwrap_or(QueryFormat::DEFAULT);
 
-    let engine = NativeSparqlEngine::new();
+    // The selection is the ENGINE's, so every lane below — plain, governed, `--explain`
+    // and the `--entailment` closure query — evaluates under the one law the flag named.
+    let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
 
     // Built ONCE, before the parse, and reused verbatim by every lane below (including
     // `--explain`): a `Custom` aggregate IRI is admitted (registered, correct arity)
@@ -839,6 +863,7 @@ pub(crate) fn run(
     // an abort.
     path_relation::refuse_duplicate_iris(options.path_relations)?;
     let relations = RelationSpecs {
+        geo: options.geo,
         specs: options.path_relations,
         query: options.query,
         base: options.base,
@@ -884,7 +909,9 @@ pub(crate) fn run(
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
-        EngineQueryOptions::new().with_env(&engine_env(aggregates.as_ref(), None)?),
+        EngineQueryOptions::new()
+            .with_geo(options.geo)
+            .with_env(&engine_env(aggregates.as_ref(), None)?),
     )?;
 
     if let Some(regime) = options.entailment {
@@ -1200,12 +1227,19 @@ fn emit_governed(
         )
     };
     match outcome {
-        GovernedOutcome::Complete { result, .. } => {
+        GovernedOutcome::Complete {
+            result, evidence, ..
+        } => {
+            eprint!("{}", governors::render_expression_errors(evidence));
             emit(result)?;
             Ok(CliOutcome::Complete)
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {
             eprint!("{}", governors::render_trip(exhausted));
+            eprint!(
+                "{}",
+                governors::render_expression_errors(&exhausted.evidence)
+            );
             if let Some(partial) = exhausted.partial.result() {
                 emit(partial.result())?;
             }

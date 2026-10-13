@@ -12,13 +12,13 @@
 //! so the plan cache is never poisoned by a focus-node-specific binding.
 //!
 //! The rewrite has two halves. The `VALUES` seed BINDS the variable; the pushdown in
-//! [`push_probe_constants`] makes the pattern MATCH on it, by writing the constant
+//! [`push_probe_constants_with_memory`] makes the pattern MATCH on it, by writing the constant
 //! into the triple-pattern positions that can carry it. Without the second half the
 //! seed join is the only thing narrowing the answer, and a join evaluates both of its
 //! operands in full — so a pre-bound `$this` used to cost a scan of the whole graph
 //! per focus node. See that function for the measurement and the soundness argument.
 //!
-//! [`substitute_in_graph_pattern`]'s walk below is a DIFFERENT, DELIBERATELY DIVERGENT
+//! [`substitute_in_graph_pattern_with_memory`]'s walk below is a DIFFERENT, DELIBERATELY DIVERGENT
 //! substitution from `crate::expr`'s `Replace`/Values-Insertion walk (SEP-0007's
 //! mechanism, which [`crate::expr::exists`]'s per-row definition path and `LATERAL`'s
 //! per-row evaluation both use) — see `crate::enf`'s module doc, "The SHACL pre-binding
@@ -26,12 +26,14 @@
 //! rather than an inconsistency.
 
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
-use purrdf_sparql_algebra::Child;
+#[cfg(test)]
+use purrdf_sparql_algebra::AggregateExpression;
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateParts, BlankNode, Expression, GraphPattern, GroundTerm,
-    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
-    Query, TermPattern, TriplePattern, Variable,
+    BlankNode, Expression, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode,
+    NamedNodePattern, OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern,
+    Variable,
 };
+use purrdf_sparql_algebra::{Chain, Child};
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
 ///
@@ -71,7 +73,7 @@ pub(crate) enum Prebindings<'a> {
 /// dataset's OWN id for a term it already interns, and [`ground_term_from_id`]
 /// resolves it straight into the algebra term the rewrite wants. Without that door a
 /// caller holding an id had to spell the term out as a `TermValue` (an owned `String`
-/// per component) purely so [`ground_term_from_value`] could allocate it a SECOND
+/// per component) purely so [`ground_term_from_value_with_memory`] could allocate it a SECOND
 /// time into the algebra, and so `crate::bgp`'s `compile_term` could then hash it
 /// back to the very id the caller started from.
 ///
@@ -93,8 +95,12 @@ pub(crate) enum Prebindings<'a> {
 pub(crate) enum ParameterValue {
     /// A caller-owned term, carrying no dataset-local identity.
     Value(TermValue),
+    /// A native producer's value retains its original payload and control grants.
+    AdmittedValue(crate::SharedWorkspace<crate::WorkspaceTerm>),
     /// The algebra term a dataset's own entry resolved to, already grounded.
     Ground(GroundTerm),
+    /// An admitted id-door binding keeps its original child grant with its payload.
+    AdmittedGround(crate::workspace::SharedWorkspace<AdmittedGroundTerm>),
 }
 
 impl<'a> Prebindings<'a> {
@@ -142,7 +148,7 @@ impl<'a> Prebindings<'a> {
     ///
     /// # Errors
     ///
-    /// As [`ground_term_from_value`], and only for a value-door binding: an id-door
+    /// As [`ground_term_from_value_with_memory`], and only for a value-door binding: an id-door
     /// binding did its refusing at the door.
     ///
     /// # Panics
@@ -151,30 +157,41 @@ impl<'a> Prebindings<'a> {
     /// unbound — which
     /// [`NativeSparqlEngine::execute`](crate::NativeSparqlEngine::execute) refuses
     /// before it reaches this.
-    fn ground(self, index: usize) -> Result<GroundTerm, RdfDiagnostic> {
+    fn ground_with_memory(
+        self,
+        index: usize,
+        memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    ) -> Result<GroundTerm, GroundFailure> {
         match self {
-            Self::Owned(list) => ground_term_from_value(&list[index].1),
-            Self::Borrowed(list) => ground_term_from_value(&list[index].value),
+            Self::Owned(list) => ground_term_from_value_with_memory(&list[index].1, memory),
+            Self::Borrowed(list) => ground_term_from_value_with_memory(&list[index].value, memory),
             Self::Paired(_, values) => match values[index]
                 .as_ref()
                 .expect("a prepared execution refuses to run with a parameter unbound")
             {
-                ParameterValue::Value(value) => ground_term_from_value(value),
-                ParameterValue::Ground(ground) => Ok(ground.clone()),
+                ParameterValue::Value(value) => ground_term_from_value_with_memory(value, memory),
+                ParameterValue::AdmittedValue(value) => {
+                    ground_term_from_value_with_memory(value, memory)
+                }
+                ParameterValue::Ground(ground) => clone_ground_with_memory(ground, memory),
+                ParameterValue::AdmittedGround(ground) => {
+                    clone_ground_with_memory(&ground.term, memory)
+                }
             },
         }
     }
 
-    /// [`Self::ground`], sharing what it can of `previous` — the term this position
+    /// [`Self::ground_with_memory`], sharing what it can of `previous` — the term this position
     /// held when the list was last grounded: the whole term when the value is the same
     /// IRI or the same typed literal, and a typed literal's datatype IRI when only the
     /// datatype is the same. An IRI already validated and wrapped is shared rather than
-    /// validated and copied again; the term is equal to the one [`Self::ground`] builds.
-    fn ground_reusing(
+    /// validated and copied again; the term is equal to the one [`Self::ground_with_memory`] builds.
+    fn ground_reusing_with_memory(
         self,
         index: usize,
         previous: Option<&GroundTerm>,
-    ) -> Result<GroundTerm, RdfDiagnostic> {
+        memory: &mut RewriteMemory<'_>,
+    ) -> RewriteResult<GroundTerm> {
         match (previous, self.value(index)) {
             (Some(GroundTerm::NamedNode(before)), Some(TermValue::Iri(iri)))
                 if before.as_str() == iri =>
@@ -193,14 +210,17 @@ impl<'a> Prebindings<'a> {
                 if before.value() == lexical_form {
                     return Ok(GroundTerm::Literal(before.clone()));
                 }
-                return Ok(GroundTerm::Literal(Literal::new_typed(
-                    lexical_form.as_str(),
+                let workspace = rewrite_workspace(memory);
+                return Ok(GroundTerm::Literal(Literal::from_admitted(
+                    workspace.authored_text(lexical_form)?,
                     before.datatype().clone(),
+                    None,
+                    None,
                 )));
             }
             _ => {}
         }
-        self.ground(index)
+        self.ground_with_memory(index, memory)
     }
 
     /// The `index`-th pre-binding's value, when it arrived as a [`TermValue`] rather
@@ -211,7 +231,8 @@ impl<'a> Prebindings<'a> {
             Self::Borrowed(list) => Some(&list[index].value),
             Self::Paired(_, values) => match values[index].as_ref()? {
                 ParameterValue::Value(value) => Some(value),
-                ParameterValue::Ground(_) => None,
+                ParameterValue::AdmittedValue(value) => Some(value),
+                ParameterValue::Ground(_) | ParameterValue::AdmittedGround(_) => None,
             },
         }
     }
@@ -227,36 +248,6 @@ impl<'a> Prebindings<'a> {
             _ => interned_variable(self.name(index)),
         }
     }
-}
-
-/// Apply every `(name, value)` substitution to `query` as a pre-binding rewrite,
-/// returning the rewritten query. Each value is mapped to the algebra's
-/// [`GroundTerm`] (blank-node focus nodes ride the injection-only
-/// [`GroundTerm::BlankNode`]) and injected as a single-row `VALUES` join at the core
-/// `WHERE` pattern, beneath the solution-modifier stack but visible to the projected
-/// variable list.
-///
-/// # Errors
-///
-/// Returns a [`RdfDiagnostic`] if a literal substitution carries a datatype IRI that
-/// is not a syntactically valid IRI, or a language tag the RDF concrete syntaxes
-/// would not have lexed (the two ways a [`TermValue`] cannot become a
-/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
-/// component that cannot be made into a term is reported to the caller rather than
-/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
-pub(crate) fn apply_substitutions(
-    query: Query,
-    substitutions: Prebindings<'_>,
-) -> Result<Query, RdfDiagnostic> {
-    let probes = build_probes(substitutions)?;
-    if probes.is_empty() {
-        // Nothing to push and nothing to seed. [`push_probe_constants`] returns its
-        // argument untouched for an empty probe list and a `map_core_pattern` whose
-        // body is the identity rebuilds the query it was handed, so descending at all
-        // here would be a walk with no rewrite in it.
-        return Ok(query);
-    }
-    Ok(apply_probes(query, probes))
 }
 
 /// Take the pattern in `slot` out, leaving [`hole`] in its place.
@@ -334,7 +325,7 @@ pub(crate) fn interned_variable(name: &str) -> Variable {
 /// Ground every pre-binding once: one [`Variable`] per name, one [`GroundTerm`] per
 /// value.
 ///
-/// Separate from [`apply_probes`] because [`apply_shacl_prebinding`] needs the
+/// Separate from [`apply_probes_with_memory`] because [`apply_shacl_prebinding`] needs the
 /// grounded values for its expression-position rewrite as well as for the seed, and
 /// deriving them twice from the same [`TermValue`]s was a measured per-focus-node
 /// cost: the conversion allocates, and SHACL runs it once per focus node, per value
@@ -342,120 +333,64 @@ pub(crate) fn interned_variable(name: &str) -> Variable {
 ///
 /// # Errors
 ///
-/// As [`apply_substitutions`]: a datatype IRI that is not a valid IRI, or a language
-/// tag the concrete syntaxes would not have lexed.
-fn build_probes(
+/// A datatype IRI that is not a valid IRI, or a language tag the concrete syntaxes
+/// would not have lexed (the two ways a [`TermValue`] cannot become a
+/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
+/// component that cannot be made into a term is reported to the caller rather than
+/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
+pub(crate) fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
-    let mut probes = Vec::with_capacity(substitutions.len());
-    build_probes_into(&mut probes, substitutions)?;
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    build_probes_with_memory(substitutions, &mut memory)
+        .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Ground a fresh request directly into its enclosing original query grant.
+/// Paired names share their intrinsic owner; caller names acquire their actual
+/// immutable spelling before publication rather than a guessed interner fee.
+pub(crate) fn build_probes_with_memory(
+    substitutions: Prebindings<'_>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<Vec<(Variable, GroundTerm)>, GroundFailure> {
+    let mut probes = Vec::new();
+    memory
+        .reserve(&mut probes, substitutions.len())
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "prebinding probe buffer")
+        })?;
+    for index in 0..substitutions.len() {
+        let ground = substitutions.ground_with_memory(index, memory)?;
+        let workspace = memory.admission_mut().workspace();
+        let variable = match substitutions {
+            Prebindings::Paired(names, _) => names[index].clone(),
+            _ if workspace.is_bounded() => {
+                Variable::from_admitted(workspace.authored_text(&substitutions.name(index))?)
+            }
+            _ => substitutions.variable(index),
+        };
+        probes.push((variable, ground));
+    }
     Ok(probes)
 }
 
-/// [`build_probes`], into a buffer the caller keeps.
-///
-/// A [`PreparedExecution`](crate::PreparedExecution) runs the same query over and
-/// over, so the probe list has the same LENGTH every time and only its cells change.
-/// Filling a retained buffer therefore costs no allocation at all after the first
-/// run, where `build_probes`' fresh `Vec` charged one per run — on a path whose whole
-/// purpose is to stop allocating per run.
-///
-/// Each cell is overwritten in place, and a typed literal whose datatype is the one its
-/// cell held before shares that datatype IRI ([`Prebindings::ground_reusing`]).
-///
-/// # Errors
-///
-/// As [`build_probes`]: a datatype IRI that is not a valid IRI, or a language tag the
-/// concrete syntaxes would not have lexed. The buffer is cleared when a value is
-/// refused, so a refused pre-binding leaves no earlier run's terms behind for a caller
-/// that ignores the error to read.
-pub(crate) fn build_probes_into(
-    probes: &mut Vec<(Variable, GroundTerm)>,
-    substitutions: Prebindings<'_>,
-) -> Result<(), RdfDiagnostic> {
-    for index in 0..substitutions.len() {
-        let previous = probes.get(index).map(|(_, ground)| ground);
-        let ground = match substitutions.ground_reusing(index, previous) {
-            Ok(ground) => ground,
-            Err(refused) => {
-                probes.clear();
-                return Err(refused);
-            }
-        };
-        let entry = (substitutions.variable(index), ground);
-        match probes.get_mut(index) {
-            Some(cell) => *cell = entry,
-            None => probes.push(entry),
-        }
-    }
-    probes.truncate(substitutions.len());
-    Ok(())
-}
-
-/// [`apply_substitutions`]'s rewrite, over probes that are already grounded and
-/// already known to be non-empty.
+/// The first half of the one pre-binding rewrite ([`apply_shacl_probes`]), over
+/// probes that are already grounded and already known to be non-empty: every value is
+/// pushed into the leaves the pushdown reaches and injected as a single-row `VALUES`
+/// join at the core `WHERE` pattern, beneath the solution-modifier stack but visible
+/// to the projected variable list.
+#[cfg(test)]
 pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
-    // ONE seed carrying every pre-binding, not one seed per pre-binding.
-    //
-    // `Query::substitute_variable` joins a single-row `VALUES` binding ONE variable
-    // onto the core, descending the whole solution-modifier wrapper stack to find
-    // it. Calling it once per substitution therefore rebuilt that wrapper stack, and
-    // minted a fresh `Join` and a fresh single-row `VALUES`, once per pre-bound
-    // variable — three times over for a `sh:ask` validator's `$this`/`$value`/
-    // parameter set, on every value node of every focus node. A single row binding
-    // {a, b, c} and three successive single-row joins binding a, then b, then c are
-    // the same solution mapping (each row is compatible with the next by
-    // construction, the variables being distinct), so the whole set rides one node.
-    //
-    // A REPEATED variable name is the one case where that equivalence fails: two
-    // seeds binding the same variable to different terms are incompatible and yield
-    // the empty solution, while one `VALUES` row cannot even spell the second
-    // binding. That case keeps the original per-variable path — its own pushdown
-    // descent, then one `substitute_variable` per pre-binding — so its behaviour is
-    // unchanged rather than approximated.
-    let mut query = query;
-    if has_repeated_variable(&probes) {
-        query.map_core_pattern_mut(|core| push_probe_constants(core, &probes));
-        for (var, ground) in probes {
-            query.substitute_variable_mut(&var, ground);
-        }
-        return query;
-    }
-    // ONE descent doing both rewrites, in the order the two separate descents ran
-    // them.
-    //
-    // Pushdown FIRST, seed second: the pushdown's `at_core_root` peephole is stated
-    // about the node the seed is going to wrap. Running the seed first would put a
-    // `Values` mentioning the pre-bound variable between the core and this rewrite,
-    // and the peephole would be describing the seed rather than the pattern. That
-    // ordering is preserved here exactly — `push_probe_constants` is applied to the
-    // core, and the `Join` is built AROUND its result — and now costs one descent
-    // instead of two, because both walks reached the same node through the same
-    // `map_core_pattern` descent and the pushdown leaves that node's variant alone
-    // (`push_probes` maps every arm onto its own variant, and `at_core_root`
-    // suppresses the restoring `Values` there), so the second descent could only
-    // ever have stopped where the first one did.
-    query.map_core_pattern_mut(move |core| {
-        push_probe_constants(core, &probes);
-        let mut variables = Vec::with_capacity(probes.len());
-        let mut row = Vec::with_capacity(probes.len());
-        for (var, ground) in probes {
-            variables.push(var);
-            row.push(Some(ground));
-        }
-        purrdf_sparql_algebra::substitute::take_and_replace(core, |core| GraphPattern::Join {
-            left: Child::new(GraphPattern::Values {
-                variables,
-                bindings: vec![row],
-            }),
-            right: Child::new(core),
-        });
-    });
-    query
+    let rewritten = resident_rewrite(|memory| apply_probes_with_memory(query, &probes, memory));
+    drop(probes);
+    rewritten
 }
 
 /// Whether any variable is pre-bound twice, which is the one shape the combined
-/// seed in [`apply_substitutions`] cannot represent.
+/// seed in [`apply_probes_with_memory`] cannot represent.
 ///
 /// Quadratic on purpose: a pre-binding list is the handful of variables one shape
 /// names (`$this`, `$value`, `$shapesGraph`, `$currentShape`, the component's
@@ -468,97 +403,7 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
         .any(|(index, (var, _))| probes[..index].iter().any(|(seen, _)| seen == var))
 }
 
-/// Push each pre-binding's constant into the triple-pattern positions that can
-/// match it, so the pattern is an **index probe on the bound position** instead of
-/// a scan the single-row `VALUES` join filters afterwards.
-///
-/// # The defect this closes
-///
-/// [`Query::substitute_variable`] binds a pre-bound variable by joining a
-/// single-row `VALUES` seed onto the core `WHERE` pattern, and NOTHING else — the
-/// triple patterns keep the variable. `crate::binop::eval_join` evaluates both
-/// operands in full and then hash-joins, so `$this <p> ?o` with `$this` pre-bound
-/// enumerated EVERY `<p>` quad in the graph and discarded all but one subject's.
-/// Per focus node that is O(|graph|), and SHACL runs one query per focus node, so a
-/// validation was O(focus nodes x |graph|) in a place whose whole cost should have
-/// been the size of one subject's fan-out. Measured on a `sh:sparql` node shape at a
-/// fixed 64 focus nodes, the per-focus-node cost tracked the data graph exactly:
-/// 383 allocations over a 768-quad graph, 8,324 over a 24,576-quad graph — a
-/// doubling of the graph doubled the per-focus-node cost. It is a planning defect,
-/// not the honest price of running a query.
-///
-/// After this rewrite the pattern carries the constant, so `crate::bgp`'s
-/// `compile_pattern` resolves it to a [`Pos::Bound`](crate::bgp) and the
-/// index-nested-loop join probes the permutation index directly.
-///
-/// # Why it is sound
-///
-/// Joining a SINGLE-ROW `VALUES` binding `var = c` onto a pattern `P` keeps exactly
-/// those solutions of `P` that bind `var` to `c` or leave it unbound, and adds
-/// `var = c` to each. Replacing `var` with `c` inside a `Bgp`/`Path` leaf produces
-/// exactly the leaf's `var = c` solutions — with the `var` COLUMN dropped, which is
-/// the only observable difference. [`restore_probed_bindings`] puts that column
-/// back with its own single-row `VALUES`, so every enclosing operator sees an
-/// unchanged schema and a restricted row set, and "restrict the leaf" and "restrict
-/// the subtree" coincide.
-///
-/// The walk therefore descends only the operators for which restricting an
-/// operand restricts the node's output the same way:
-///
-/// * `Join`, `Union`, `Graph`, `Filter`, `Extend` — both/inner operands;
-/// * a property-function call — a leaf like a `Bgp`, written into and restored the
-///   same way, so the relation is invoked with the pre-bound position bound;
-/// * `Lateral` — both operands. The right one is re-evaluated once per left row and
-///   INNER-joined with it, so a right row that binds `var` to some other `d` yields
-///   only output rows carrying `var = d`, which the seed join drops — removing it
-///   first changes nothing else. A call that IS the right operand (the shape the parser
-///   gives every call following another atom) is written into in place, so the
-///   evaluator keeps driving it per left row; any other right operand is entered by
-///   this same rule;
-/// * a sub-`SELECT`, for the variables its projection carries — each is the same
-///   variable inside, and its rows' bindings of it pass out unchanged — and `DISTINCT`,
-///   `REDUCED` and `ORDER BY`, which keep, drop or reorder whole rows;
-/// * a `GROUP BY`, for the variables that are its keys: the rows the restriction
-///   removes are exactly the rows of the groups keyed by some other term, whole, and
-///   those groups' output rows are the ones the seed join drops — see
-///   [`group_key_carries`];
-/// * `LeftJoin`, `Minus` — the LEFT operand only. Restricting the right
-///   arm of an `OPTIONAL` is NOT the same rewrite: a left row whose only match
-///   binds `var` to some other `d` is a MATCH before the rewrite (and its `var = d`
-///   output row is then dropped by the seed join, taking the left row with it) and
-///   a MISS after it (so the left row survives, null-padded). `MINUS` diverges the
-///   same way through its compatibility test. Both keep their right arms untouched.
-///
-/// Every other operator stops the descent. Three are worth naming: a `var` inside a
-/// sub-`SELECT` whose projection does not carry it is a DIFFERENT variable that the seed
-/// join cannot correlate with; a slice keeps rows by their position, so which rows
-/// `LIMIT` keeps beneath a restriction is not which it keeps above one; and a
-/// `GROUP BY` for a `var` that is not one of its keys — read only by an aggregate, or
-/// only by an expression key such as `(STR(?q) AS ?k)` — folds rows into groups whose
-/// values the removed rows would have changed.
-///
-/// `Extend` binds `var` itself when `var` is its target, so that variable is dropped
-/// from the candidate set for its operand rather than pushed into a subtree where it
-/// does not yet exist.
-///
-/// # What is not pushed
-///
-/// A [`GroundTerm::BlankNode`] pre-binding. A blank node in a query pattern is a
-/// non-distinguished VARIABLE (SPARQL 1.2 §4.1.4), not a request to match a
-/// particular dataset blank, so writing one into a triple pattern would widen the
-/// match to every term rather than narrow it to the focus node. Blank-node focus
-/// nodes keep the `VALUES`-join path, which interns the blank as the term it is. A
-/// property-function call that names one as an argument is driven by a one-row
-/// `VALUES` of its own instead, so the relation is still invoked with that argument
-/// bound — see [`drive_call_arguments`].
-fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm)]) {
-    if probes.is_empty() {
-        return;
-    }
-    push_probes(core, probes, true);
-}
-
-/// [`push_probe_constants`]'s walk.
+/// [`push_probe_constants_with_memory`]'s walk.
 ///
 /// `at_core_root` is true only for the node the single-row seed will be joined
 /// directly onto. A leaf THERE needs no restoring `VALUES` of its own: the seed is
@@ -573,35 +418,12 @@ fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm
 /// any depth is rewritten without a machine-stack frame per level. Operands are
 /// entered in source order, and every rewrite of a node happens once its operands
 /// are back in it.
+#[cfg(test)]
 fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at_core_root: bool) {
-    let mut open: Vec<PushFrame<'_>> = Vec::new();
-    let mut next = (take_child(pattern), ProbeList::Whole(probes), at_core_root);
-    loop {
-        let (node, probes, at_core_root) = next;
-        let mut finished = match enter_push(node, probes, at_core_root, &mut open) {
-            Step::Descend(child) => {
-                next = child;
-                continue;
-            }
-            Step::Finished(node) => node,
-        };
-        loop {
-            let Some(frame) = open.pop() else {
-                *pattern = finished;
-                return;
-            };
-            match resume_push(frame, finished, &mut open) {
-                Step::Descend(child) => {
-                    next = child;
-                    break;
-                }
-                Step::Finished(node) => finished = node,
-            }
-        }
-    }
+    resident_rewrite(|memory| push_probes_with_memory(pattern, probes, at_core_root, memory));
 }
 
-/// The pre-binding list a [`push_probes`] node is rewritten with: the whole list, or
+/// The pre-binding list a [`push_probes_with_memory`] node is rewritten with: the whole list, or
 /// the part of it an `Extend`, a projection or a `GROUP BY` lets through to its
 /// operand, shared by every node beneath.
 #[derive(Clone)]
@@ -609,7 +431,7 @@ enum ProbeList<'p> {
     /// Every pre-binding.
     Whole(&'p [(Variable, GroundTerm)]),
     /// The pre-bindings a node above lets through.
-    Narrowed(std::rc::Rc<[(Variable, GroundTerm)]>),
+    Narrowed(crate::workspace::SharedWorkspace<PreparedProbes>),
 }
 
 impl ProbeList<'_> {
@@ -617,23 +439,30 @@ impl ProbeList<'_> {
     fn as_slice(&self) -> &[(Variable, GroundTerm)] {
         match self {
             Self::Whole(probes) => probes,
-            Self::Narrowed(probes) => probes,
+            Self::Narrowed(probes) => probes.entries(),
         }
     }
 
     /// The list `keep` admits of this one: this list when it admits every entry, `None`
     /// when it admits none, and otherwise a narrowed list.
-    fn narrowed(&self, keep: impl Fn(&Variable) -> bool) -> Option<Self> {
-        let probes = self.as_slice();
-        if probes.iter().all(|(var, _)| keep(var)) {
-            return Some(self.clone());
+    fn narrowed(
+        &self,
+        keep: impl Fn(&Variable) -> bool,
+        memory: &mut RewriteMemory<'_>,
+    ) -> RewriteResult<Option<Self>> {
+        let entries = self.as_slice();
+        if entries.iter().all(|(variable, _)| keep(variable)) {
+            return Ok(Some(self.clone()));
         }
-        let kept: Vec<(Variable, GroundTerm)> = probes
-            .iter()
-            .filter(|(var, _)| keep(var))
-            .cloned()
-            .collect();
-        (!kept.is_empty()).then(|| Self::Narrowed(kept.into()))
+        let entries = entries.iter().filter(|(variable, _)| keep(variable));
+        if entries.clone().next().is_none() {
+            return Ok(None);
+        }
+        let workspace = rewrite_workspace(memory);
+        let copied = PreparedProbes::copy_entries(entries, &workspace)?;
+        Ok(Some(Self::Narrowed(
+            crate::workspace::SharedWorkspace::new_admitted(copied, &workspace)?,
+        )))
     }
 }
 
@@ -670,245 +499,10 @@ enum PushStage {
 /// The operand `pattern` hands to `push_probes`' walk, and its probe list.
 type PushDescent<'p> = (GraphPattern, ProbeList<'p>, bool);
 
-/// Enter `node`: rewrite it in place when it is a leaf, or take its first operand out
-/// and hold the node open until the operand comes back.
-fn enter_push<'p>(
-    mut node: GraphPattern,
-    probes: ProbeList<'p>,
-    at_core_root: bool,
-    open: &mut Vec<PushFrame<'p>>,
-) -> Step<PushDescent<'p>, GraphPattern> {
-    // The operand taken out of the node, which operand it is, and the probes it is
-    // rewritten with — or `None` once the node is rewritten in full.
-    let descent: Option<(GraphPattern, PushStage, ProbeList<'p>)> = match &mut node {
-        GraphPattern::Bgp { patterns } => {
-            let mut probed = Vec::new();
-            for triple in patterns.iter_mut() {
-                probe_triple_pattern(triple, probes.as_slice(), &mut probed);
-            }
-            restore_probed_bindings(&mut node, &probed, probes.as_slice(), at_core_root);
-            None
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => {
-            let mut probed = Vec::new();
-            probe_term_pattern(subject, probes.as_slice(), &mut probed);
-            probe_term_pattern(object, probes.as_slice(), &mut probed);
-            restore_probed_bindings(&mut node, &probed, probes.as_slice(), at_core_root);
-            None
-        }
-        GraphPattern::Join { left, .. } => {
-            Some((take_child(left), PushStage::Left, probes.clone()))
-        }
-        GraphPattern::Union { arms } => arms
-            .first_mut()
-            .map(|first| (take_child(first), PushStage::Arm(0), probes.clone())),
-        GraphPattern::Graph { inner, .. } | GraphPattern::Filter { inner, .. } => {
-            Some((take_child(inner), PushStage::Inner, probes.clone()))
-        }
-        // A relation call is a leaf like the two above, and it is the leaf where
-        // the difference between an index probe and a scan is largest. Left alone, the
-        // call keeps the variable, the relation is invoked with that position
-        // FREE, and it generates every row it holds for the single-row `VALUES`
-        // seed to discard all but one of — which for a ranked producer is its
-        // whole index, once per pre-bound candidate. With the constant pushed in,
-        // the relation is invoked with the position BOUND and answers the one
-        // question that was asked.
-        //
-        // The access pattern can only get more bound, so nothing a prepare
-        // admitted becomes infeasible here: a declared mode subsumes an
-        // invocation when its bound positions are a SUBSET of the invocation's,
-        // and this rewrite only adds to that set.
-        GraphPattern::PropertyFunction(call) => {
-            let probed = probe_call_arguments(call, probes.as_slice());
-            // A value the pattern cannot carry — a blank node — is driven into the
-            // call instead; see [`drive_call_arguments`].
-            drive_call_arguments(&mut node, probes.as_slice(), Unwritable::InPattern);
-            restore_probed_bindings(&mut node, &probed, probes.as_slice(), at_core_root);
-            None
-        }
-        // `variable` is this node's own binding, so it is not bound in `inner` and
-        // there is nothing there to narrow. Narrowing the candidate set is only ever
-        // needed for an ill-formed query the parser would reject, and costs one
-        // allocation on a branch no well-formed query takes.
-        GraphPattern::Extend {
-            inner, variable, ..
-        } => probes
-            .narrowed(|var| var != &*variable)
-            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
-        // Left operand only — see [`push_probe_constants`]'s soundness note. The
-        // right arms are not merely left unentered: they are never reached through
-        // this match at all, which is what makes the boundary a property of the
-        // shape of this function rather than of remembering to stop.
-        GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
-            Some((take_child(left), PushStage::Left, probes.clone()))
-        }
-        // A `Lateral` whose right operand is a property-function call is how the
-        // parser writes every call that follows another atom in its group, and the
-        // call is the one right operand the rewrite may enter. It is driven once per
-        // left row and inner-joined with it, so restricting it restricts the node
-        // exactly as restricting either operand of a `Join` does: a left row that
-        // binds the variable to some other term matched a call row carrying that
-        // term before the rewrite and is dropped by the seed join; after it, the
-        // call is invoked with the pre-bound constant, and the restoring `VALUES`
-        // row is incompatible with that left row, so it is dropped there instead.
-        //
-        // The restoring `VALUES` wraps the whole `Lateral`, never the call inside
-        // it. The evaluator drives a call that is a `Lateral`'s DIRECT right operand
-        // with each left row in hand, which is what hands it a literal, blank-node
-        // or quoted-triple binding from the left as a bound argument; wrapping the
-        // call in a join would demote it to the generic correlated path, where those
-        // bindings arrive free. Any other right operand keeps its correlated
-        // re-evaluation untouched.
-        //
-        // A value the pattern cannot carry — a blank node — reaches the call through
-        // that same per-row drive: the left operand is joined with a one-row `VALUES`
-        // binding it, so every left row hands the call its term as a bound argument.
-        // See [`drive_call_arguments`]. The left operand is rewritten first; the call
-        // is written into, driven and restored once it is back ([`resume_push`]).
-        GraphPattern::Lateral { left, .. } => {
-            Some((take_child(left), PushStage::Left, probes.clone()))
-        }
-        // A sub-`SELECT` projecting the variable passes each of its rows' binding of it
-        // out unchanged, so restricting its inner rows restricts its output the same
-        // way; a variable it does NOT project is a different variable inside it, and is
-        // not pushed. `DISTINCT`, `REDUCED` and `ORDER BY` keep, drop or reorder whole
-        // rows, so a row they would have passed with the variable bound to another term
-        // is simply absent. A slice is not entered, and a `GROUP BY` only for its keys —
-        // see [`push_probe_constants`].
-        GraphPattern::Project { inner, variables } => probes
-            .narrowed(|var| variables.contains(var))
-            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
-        GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::OrderBy { inner, .. } => {
-            Some((take_child(inner), PushStage::Inner, probes.clone()))
-        }
-        // A `GROUP BY` is entered for the pre-bound variables that are its keys, and
-        // for no other — see [`group_key_carries`] and [`push_probe_constants`].
-        GraphPattern::Group {
-            inner, variables, ..
-        } => probes
-            .narrowed(|var| group_key_carries(variables, var))
-            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
-        GraphPattern::Values { .. }
-        | GraphPattern::Service { .. }
-        | GraphPattern::Slice { .. }
-        | GraphPattern::Unfold { .. } => None,
-    };
-    match descent {
-        Some((child, stage, child_probes)) => {
-            open.push(PushFrame {
-                node,
-                probes,
-                at_core_root,
-                stage,
-            });
-            Step::Descend((child, child_probes, false))
-        }
-        None => Step::Finished(node),
-    }
-}
-
-/// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
-/// next operand, or finish the node.
-fn resume_push<'p>(
-    mut frame: PushFrame<'p>,
-    operand: GraphPattern,
-    open: &mut Vec<PushFrame<'p>>,
-) -> Step<PushDescent<'p>, GraphPattern> {
-    let probes = frame.probes.as_slice();
-    let next = match (&mut frame.node, frame.stage) {
-        (GraphPattern::Join { left, right }, PushStage::Left) => {
-            **left = operand;
-            Some((take_child(right), PushStage::Right))
-        }
-        (GraphPattern::Join { right, .. }, PushStage::Right) => {
-            **right = operand;
-            None
-        }
-        (GraphPattern::Union { arms }, PushStage::Arm(index)) => {
-            arms[index] = operand;
-            arms.get_mut(index + 1)
-                .map(|arm| (take_child(arm), PushStage::Arm(index + 1)))
-        }
-        (
-            GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. },
-            PushStage::Left,
-        ) => {
-            **left = operand;
-            None
-        }
-        (GraphPattern::Lateral { left, right }, PushStage::Left) => {
-            **left = operand;
-            match lateral_call_mut(right) {
-                // Any other right operand is re-evaluated once per left row and
-                // inner-joined with it, and every operator this walk enters keeps a
-                // restricted row's variable in its output — so restricting a leaf
-                // inside it restricts the node exactly as restricting a leaf inside a
-                // `Join`'s operand does. See [`push_probe_constants`].
-                None => Some((take_child(right), PushStage::Right)),
-                Some(call) => {
-                    let probed = probe_call_arguments(call, probes);
-                    drive_call_arguments(&mut frame.node, probes, Unwritable::InPattern);
-                    restore_probed_bindings(&mut frame.node, &probed, probes, frame.at_core_root);
-                    None
-                }
-            }
-        }
-        (GraphPattern::Lateral { right, .. }, PushStage::Right) => {
-            **right = operand;
-            None
-        }
-        (
-            GraphPattern::Graph { inner, .. }
-            | GraphPattern::Filter { inner, .. }
-            | GraphPattern::Extend { inner, .. }
-            | GraphPattern::Project { inner, .. }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::OrderBy { inner, .. }
-            | GraphPattern::Group { inner, .. },
-            PushStage::Inner,
-        ) => {
-            **inner = operand;
-            None
-        }
-        _ => unreachable!("a pushdown frame is opened only at the operand it holds out"),
-    };
-    match next {
-        Some((child, stage)) => {
-            frame.stage = stage;
-            let child_probes = frame.probes.clone();
-            open.push(frame);
-            Step::Descend((child, child_probes, false))
-        }
-        None => Step::Finished(frame.node),
-    }
-}
-
-/// Write the pre-bound constants into `call`'s arguments, returning the indices of the
-/// probes written.
-fn probe_call_arguments(
-    call: &mut PropertyFunctionCall,
-    probes: &[(Variable, GroundTerm)],
-) -> Vec<usize> {
-    let mut probed = Vec::new();
-    for argument in call
-        .subject_args
-        .iter_mut()
-        .chain(call.object_args.iter_mut())
-    {
-        probe_term_pattern(argument, probes, &mut probed);
-    }
-    probed
-}
-
 /// Whether the pushdown enters a `GROUP BY` whose keys are `keys` for the pre-bound
 /// `variable` — which it does exactly when `variable` IS one of the keys.
 ///
-/// This is the single definition of that reach: [`push_probes`] writes through a
+/// This is the single definition of that reach: [`push_probes_with_memory`] writes through a
 /// `GROUP BY` by it, and the prepare-time planner (`crate::property_fn_plan`'s
 /// `Planner`) promises a pre-bound parameter bound beneath one by it too.
 ///
@@ -939,12 +533,12 @@ pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool 
 /// right operand the pushdown writes a pre-bound value into IN PLACE, rather than by
 /// entering it.
 ///
-/// This is the single definition of that position. [`push_probes`] writes into it and
-/// wraps the whole `Lateral` in the restoring `VALUES`, [`drive_call_arguments`] and
+/// This is the single definition of that position. [`push_probes_with_memory`] writes into it and
+/// wraps the whole `Lateral` in the restoring `VALUES`, [`drive_call_arguments_with_memory`] and
 /// the SHACL walk drive into it, the evaluator drives a call there once per left row
 /// with that row in hand, and the prepare-time planner (`crate::property_fn_plan`'s
 /// `collect_chain`) makes a call a member of the enclosing chain exactly when the plan
-/// it produces puts the call here. Any other right operand is one [`push_probes`]
+/// it produces puts the call here. Any other right operand is one [`push_probes_with_memory`]
 /// enters by its ordinary rule, and the planner hands it the same promise
 /// (`crate::property_fn_plan`'s `Planner`); the planner's drift guard holds the
 /// two to the same reach, shape by shape.
@@ -958,26 +552,48 @@ const fn lateral_call_mut(right: &mut GraphPattern) -> Option<&mut PropertyFunct
 }
 
 /// Which pre-bound values a rewrite cannot WRITE into a property-function argument
-/// and must therefore DRIVE into it — see [`drive_call_arguments`].
+/// and must therefore DRIVE into it — see [`drive_call_arguments_with_memory`].
 #[derive(Clone, Copy, Debug)]
 enum Unwritable {
     /// The pushdown's rule: every value [`term_pattern_from_ground`] refuses — a blank
     /// node, or a quoted triple with one inside it.
     InPattern,
-    /// The SHACL walk's rule, which is [`substitute_in_term_pattern`]'s: every value
+    /// The SHACL walk's rule, which is [`substitute_in_term_pattern_with_memory`]'s: every value
     /// with no expression form — a blank node or any quoted triple.
     InArgument,
 }
 
 impl Unwritable {
     /// Whether `ground` is a value this rule cannot write, and so must drive.
+    #[cfg(test)]
     fn holds(self, ground: &GroundTerm) -> bool {
+        resident_rewrite(|memory| self.holds_with_memory(ground, memory))
+    }
+
+    fn holds_with_memory(
+        self,
+        ground: &GroundTerm,
+        memory: &mut RewriteMemory<'_>,
+    ) -> RewriteResult<bool> {
         match self {
-            Self::InPattern => term_pattern_from_ground(ground).is_none(),
-            Self::InArgument => match Pushability::of(ground) {
+            Self::InPattern => {
+                let before = memory.admitted_bytes();
+                let result = term_pattern_from_ground_with_memory(ground, memory);
+                let pattern = native_storage(memory, result)?;
+                let unwritable = pattern.is_none();
+                drop(pattern);
+                let bytes = memory
+                    .admitted_bytes()
+                    .checked_sub(before)
+                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+                let result = memory.release_bytes(bytes);
+                native_storage(memory, result)?;
+                Ok(unwritable)
+            }
+            Self::InArgument => Ok(match Pushability::of(ground) {
                 Pushability::Iri(_) | Pushability::Literal(_) => false,
                 Pushability::QuotedTriple(_) | Pushability::SeedOnly => true,
-            },
+            }),
         }
     }
 }
@@ -990,44 +606,21 @@ impl Unwritable {
 /// then be invoked with that position FREE. A variable nested inside a quoted-triple
 /// argument counts too: the drive binds the variable, wherever the argument mentions
 /// it.
+#[cfg(test)]
 fn driven_arguments(
     call: &PropertyFunctionCall,
     probes: &[(Variable, GroundTerm)],
     rule: Unwritable,
     already: Option<&GraphPattern>,
 ) -> Vec<usize> {
-    let mut driven = Vec::new();
-    // The argument positions, over a work list: each argument in written order, and
-    // within a quoted-triple argument its subject's positions before its object's.
-    let mut pending: Vec<&TermPattern> = call
-        .subject_args
-        .iter()
-        .chain(call.object_args.iter())
-        .rev()
-        .collect();
-    while let Some(term) = pending.pop() {
-        match term {
-            TermPattern::Variable(var) => {
-                if let Some(index) = probes.iter().position(|(candidate, _)| candidate == var)
-                    && rule.holds(&probes[index].1)
-                    && !driven.contains(&index)
-                    && !already.is_some_and(|left| drives(left, var))
-                {
-                    driven.push(index);
-                }
-            }
-            TermPattern::Triple(triple) => {
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
-        }
-    }
-    driven
+    resident_rewrite(|memory| {
+        driven_arguments_with_memory(call, probes, rule, already, memory)
+            .map(|values| values.try_into_resident().expect("resident driver indices"))
+    })
 }
 
 /// Whether `left` — a `Lateral`'s left operand — is already a driver for `var`: the
-/// one-row `VALUES` [`drive_call_arguments`] builds, alone or joined onto the operand.
+/// one-row `VALUES` [`drive_call_arguments_with_memory`] builds, alone or joined onto the operand.
 ///
 /// This is what makes the drive idempotent. The SHACL rewrite runs the pushdown and
 /// then its own walk, and both drive calls; a call the pushdown already drove is
@@ -1045,114 +638,66 @@ fn drives(left: &GraphPattern, var: &Variable) -> bool {
 }
 
 /// A one-row `VALUES` binding the probes at `driven`.
+#[cfg(test)]
 fn seed_row(driven: &[usize], probes: &[(Variable, GroundTerm)]) -> GraphPattern {
-    GraphPattern::Values {
-        variables: driven.iter().map(|&i| probes[i].0.clone()).collect(),
-        bindings: vec![driven.iter().map(|&i| Some(probes[i].1.clone())).collect()],
-    }
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    seed_entries_with_memory(driven.iter().map(|&index| &probes[index]), &mut memory)
+        .expect("resident prebinding seed allocation failed")
 }
 
-/// Drive every pre-bound value `rule` cannot write into the property-function call at
-/// `pattern` — a stand-alone call, or a `Lateral` whose right operand is one — so the
-/// relation is invoked with that argument BOUND.
-///
-/// A call's arguments are invocation inputs, and a relation that serves only the bound
-/// mode refuses a free one. A prepared execution admitted the call on the promise that
-/// its parameter is bound there (`crate::property_fn_plan`'s `Promise`), so leaving
-/// the position free would turn that admission into a refusal on every run bound to,
-/// say, a blank node.
-///
-/// The distinction the rewrite draws is kept exactly. A blank node written into the
-/// query text is a non-distinguished variable, and is never written there by this
-/// rewrite. A blank node BOUND as a value is a term identity — the dataset's own blank
-/// node — and the evaluator already has a door that carries it as one: a call that is
-/// the DIRECT right operand of a `Lateral` is driven per left row with that row in
-/// hand, and a blank node in the row is handed to the relation as a bound argument.
-/// The `VALUES` row interns the value as the term it is, which is how the seed itself
-/// already binds a blank node. So:
-///
-/// * a stand-alone call becomes the right operand of a `Lateral` over a one-row
-///   `VALUES` binding the driven values;
-/// * a call that is already a `Lateral`'s right operand keeps that position — wrapping
-///   it would demote it to the generic correlated path, where such bindings arrive
-///   free — and the one-row `VALUES` is joined onto its left operand instead, so every
-///   left row carries the values in.
-///
-/// Sound for the same reason the pushdown is: joining the one-row `var = b` onto the
-/// call keeps exactly the call's rows that bind `var` to `b`, and a call driven with
-/// `var = b` produces exactly those rows. In a scope the seed does not reach — the
-/// SHACL walk's `OPTIONAL` arms and unprojected sub-`SELECT`s — it binds `var` to `b`
-/// in the call's own group, which is what writing the value there would have done had
-/// it a spelling. The variable is still in the call, so its column survives and needs
-/// no restoring `VALUES`. An `EXISTS` body is the exception: the row it filters may
-/// already bind `var`, so the SHACL walk drives a call there inside a projection that
-/// does not carry `var` out — see [`plant_scoped_driver`].
-///
-/// Idempotent: a value the left operand already drives is not driven again (see
-/// [`drives`]), so the SHACL walk passing over a call the pushdown already drove
-/// leaves it as it is.
-///
-/// Which values are driven, and the one-row `VALUES` that drives them, are
-/// [`call_driver`]'s decision; this function only plants that driver in place. The
-/// correlated per-row walk (`crate::expr`'s `substitute_pattern_impl`) plants the SAME
-/// driver, decided by the same function through [`bind_call_arguments`], in the same
-/// two positions — it builds the nodes itself only because each one it builds must
-/// also be mapped back to the plan node it stands for.
-fn drive_call_arguments(
-    pattern: &mut GraphPattern,
-    probes: &[(Variable, GroundTerm)],
-    rule: Unwritable,
-) {
-    match pattern {
-        GraphPattern::PropertyFunction(call) => {
-            if let Some(seed) = call_driver(call, probes, rule, None) {
-                plant_stand_alone_driver(pattern, seed);
-            }
-        }
-        GraphPattern::Lateral { left, right } => {
-            let Some(call) = lateral_call(right) else {
-                return;
-            };
-            if let Some(seed) = call_driver(call, probes, rule, Some(left)) {
-                plant_left_driver(left, seed);
-            }
-        }
-        _ => {}
+/// One native VALUES construction for all prebinding and driver seeds. The
+/// original query memory owns every array and newly cloned ground child box;
+/// lexical leaves retain their intrinsic original owners through shallow clones.
+fn seed_entries_with_memory<'a>(
+    entries: impl Iterator<Item = &'a (Variable, GroundTerm)> + Clone,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<GraphPattern, GroundFailure> {
+    let count = entries.clone().count();
+    let mut variables = Vec::new();
+    let mut row = Vec::new();
+    let mut bindings = Vec::new();
+    memory.reserve(&mut variables, count).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "prebinding seed variables")
+    })?;
+    memory.reserve(&mut row, count).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "prebinding seed row")
+    })?;
+    memory.reserve(&mut bindings, 1).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "prebinding seed bindings")
+    })?;
+    for (variable, ground) in entries {
+        let ground = clone_ground_with_memory(ground, memory)?;
+        variables.push(variable.clone());
+        row.push(Some(ground));
     }
-}
-
-/// The one-row `VALUES` that must drive `call` — every value of `values` that `rule`
-/// cannot write into an argument `call` names, less any `already` (the left operand
-/// of the `Lateral` `call` is the right operand of) drives — or `None` when there is
-/// nothing to drive. See [`drive_call_arguments`].
-fn call_driver(
-    call: &PropertyFunctionCall,
-    values: &[(Variable, GroundTerm)],
-    rule: Unwritable,
-    already: Option<&GraphPattern>,
-) -> Option<GraphPattern> {
-    let driven = driven_arguments(call, values, rule, already);
-    (!driven.is_empty()).then(|| seed_row(&driven, values))
+    bindings.push(row);
+    Ok(GraphPattern::Values {
+        variables,
+        bindings,
+    })
 }
 
 /// A stand-alone call, driven: `Lateral(seed, call)`.
+#[cfg(test)]
 fn plant_stand_alone_driver(call: &mut GraphPattern, seed: GraphPattern) {
-    purrdf_sparql_algebra::substitute::take_and_replace(call, |call| GraphPattern::Lateral {
-        left: Child::new(seed),
-        right: Child::new(call),
-    });
+    resident_rewrite(|memory| plant_stand_alone_driver_with_memory(call, seed, memory));
 }
 
 /// A `Lateral`'s left operand, carrying the driver of the call on its right:
 /// `Join(seed, left)` — the shape [`drives`] recognizes.
+#[cfg(test)]
 fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
-    purrdf_sparql_algebra::substitute::take_and_replace(left, |left| GraphPattern::Join {
-        left: Child::new(seed),
-        right: Child::new(left),
-    });
+    resident_rewrite(|memory| plant_left_driver_with_memory(left, seed, memory));
 }
 
-/// Where the SHACL walk ([`substitute_in_graph_pattern`]) is: above the `VALUES` seed,
+/// Where the SHACL walk ([`substitute_in_graph_pattern_with_memory`]) is: above the `VALUES` seed,
 /// beneath it, or inside an `EXISTS` body — which decides where a call's driver may be
 /// planted, and whether an expression that reads a value it cannot spell needs one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1165,7 +710,7 @@ enum WalkScope {
     /// through — and when it carries one, it carries the pre-bound term itself,
     /// because every row beneath is joined with the seed. So an expression here reads
     /// the row where the row carries the value and has the value driven in where it
-    /// does not (see [`drive_expression_reads`]). A call is never reached here: the
+    /// does not (see [`drive_expression_reads_with_memory`]). A call is never reached here: the
     /// first node that is not such a wrapper is the seed's own `Join`, and everything
     /// beneath it is [`Self::Group`].
     Descent,
@@ -1173,7 +718,7 @@ enum WalkScope {
     /// driven variable where the call is, as the `VALUES` seed binds it.
     Group,
     /// Inside an `EXISTS` or `NOT EXISTS` body, at any depth: the driver is planted in
-    /// a scope of its own — see [`plant_scoped_driver`].
+    /// a scope of its own — see [`plant_scoped_driver_with_memory`].
     ExistsBody,
 }
 
@@ -1191,7 +736,7 @@ impl WalkScope {
 
 /// A call inside an `EXISTS` body, driven in a scope of its own:
 /// `Project(kept, Lateral(seed, call))`, where `kept` is every variable the call names
-/// except the ones `seed` drives ([`undriven_variables`]).
+/// except the ones `seed` drives ([`undriven_variables_with_memory`]).
 ///
 /// # Why the driver cannot bind the driven variable here
 ///
@@ -1214,68 +759,21 @@ impl WalkScope {
 /// for an IRI focus node. Every other variable the call names, including a predicate
 /// variable inside a quoted-triple argument, is carried out unchanged, so what the
 /// call binds for the rest of the body, and what it correlates with, is unchanged.
+#[cfg(test)]
 fn plant_scoped_driver(call: &mut GraphPattern, seed: GraphPattern, kept: Vec<Variable>) {
-    purrdf_sparql_algebra::substitute::take_and_replace(call, |call| GraphPattern::Project {
-        inner: Child::new(GraphPattern::Lateral {
-            left: Child::new(seed),
-            right: Child::new(call),
-        }),
-        variables: kept,
-    });
+    resident_rewrite(|memory| plant_scoped_driver_with_memory(call, seed, kept, memory));
 }
 
 /// Every variable `call` names in an argument — a predicate variable inside a
 /// quoted-triple argument included — that `seed` does not drive, in first-mention
-/// order: what [`plant_scoped_driver`]'s projection carries out.
+/// order: what [`plant_scoped_driver_with_memory`]'s projection carries out.
 ///
 /// A `seed` that is not the one-row `VALUES` [`seed_row`] builds drives nothing, so
 /// every variable is kept: the collision check then refuses the rebinding loudly,
 /// rather than a variable the call binds being hidden from the rest of the body.
+#[cfg(test)]
 fn undriven_variables(call: &PropertyFunctionCall, seed: &GraphPattern) -> Vec<Variable> {
-    /// A position still to read: a term, or the predicate of a quoted triple whose
-    /// subject has been read and whose object is next.
-    enum Position<'a> {
-        Term(&'a TermPattern),
-        Predicate(&'a NamedNodePattern),
-    }
-    let driven: &[Variable] = match seed {
-        GraphPattern::Values { variables, .. } => variables,
-        _ => &[],
-    };
-    let mut kept: Vec<Variable> = Vec::new();
-    let mut keep = |var: &Variable| {
-        if !driven.contains(var) && !kept.contains(var) {
-            kept.push(var.clone());
-        }
-    };
-    // The positions, over a work list, in first-mention order: each argument in
-    // written order, and within a quoted-triple argument its subject's positions, then
-    // its predicate, then its object's.
-    let mut pending: Vec<Position<'_>> = call
-        .subject_args
-        .iter()
-        .chain(call.object_args.iter())
-        .rev()
-        .map(Position::Term)
-        .collect();
-    while let Some(position) = pending.pop() {
-        match position {
-            Position::Term(TermPattern::Variable(var))
-            | Position::Predicate(NamedNodePattern::Variable(var)) => {
-                keep(var);
-            }
-            Position::Term(TermPattern::Triple(triple)) => {
-                pending.push(Position::Term(&triple.object));
-                pending.push(Position::Predicate(&triple.predicate));
-                pending.push(Position::Term(&triple.subject));
-            }
-            Position::Term(
-                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
-            )
-            | Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
-        }
-    }
-    kept
+    resident_rewrite(|memory| undriven_variables_with_memory(call, seed, memory))
 }
 
 /// Write a row's values into a property-function call's arguments, and return the
@@ -1285,82 +783,59 @@ fn undriven_variables(call: &PropertyFunctionCall, seed: &GraphPattern) -> Vec<V
 ///
 /// An IRI or a literal is written into the argument as the constant it is, so the
 /// relation reads it exactly as if the query had spelled it
-/// ([`substitute_in_term_pattern`]). A blank node and a quoted triple are not: a blank
+/// ([`substitute_in_term_pattern_with_memory`]). A blank node and a quoted triple are not: a blank
 /// node in a query is an anonymous variable, and a quoted triple has no argument
 /// spelling this rule admits (the pre-binding walk shares the EXPRESSION rule,
 /// [`Unwritable::InArgument`]). Those are DRIVEN instead — the returned `VALUES` row
-/// carries them into the call as the terms they are (see [`drive_call_arguments`]),
+/// carries them into the call as the terms they are (see [`drive_call_arguments_with_memory`]),
 /// placed by the caller as the left operand of a `Lateral` over the call when `call`
 /// stands alone, or joined onto `already` — the left operand of the `Lateral` whose
 /// right operand `call` is — when it does not.
 ///
 /// A value no argument names is neither written nor driven, so a row carrying
 /// unrelated bindings leaves `call` as it was and returns `None`.
+#[cfg(test)]
 pub(crate) fn bind_call_arguments(
     call: &mut PropertyFunctionCall,
     values: &[(Variable, GroundTerm)],
     already: Option<&GraphPattern>,
 ) -> Option<GraphPattern> {
-    for term in call
-        .subject_args
-        .iter_mut()
-        .chain(call.object_args.iter_mut())
-    {
-        substitute_in_term_pattern(term, values);
-    }
-    call_driver(call, values, Unwritable::InArgument, already)
+    resident_rewrite(|memory| bind_call_arguments_with_memory(call, values, already, memory))
 }
 
 /// Re-bind the columns a leaf rewrite consumed, unless the seed is about to.
 ///
 /// `probed` holds the indices into `probes` of the variables this leaf really
 /// replaced, so a leaf that matched none is returned untouched and costs nothing.
+#[cfg(test)]
 fn restore_probed_bindings(
     leaf: &mut GraphPattern,
     probed: &[usize],
     probes: &[(Variable, GroundTerm)],
     at_core_root: bool,
 ) {
-    if probed.is_empty() || at_core_root {
-        return;
-    }
-    let variables = probed.iter().map(|&i| probes[i].0.clone()).collect();
-    let row = probed.iter().map(|&i| Some(probes[i].1.clone())).collect();
-    purrdf_sparql_algebra::substitute::take_and_replace(leaf, |leaf| GraphPattern::Join {
-        left: Child::new(leaf),
-        right: Child::new(GraphPattern::Values {
-            variables,
-            bindings: vec![row],
-        }),
+    resident_rewrite(|memory| {
+        restore_probed_bindings_with_memory(leaf, probed, probes, at_core_root, memory)
     });
-}
-
-/// Push constants into a triple pattern's subject and object, recording which
-/// candidates were consumed. Ordinary pushdown leaves predicate positions alone;
-/// [`complete_shacl_leaf`] also writes IRI predicates and restores their bindings.
-fn probe_triple_pattern(
-    triple: &mut TriplePattern,
-    probes: &[(Variable, GroundTerm)],
-    probed: &mut Vec<usize>,
-) {
-    probe_term_pattern(&mut triple.subject, probes, probed);
-    probe_term_pattern(&mut triple.object, probes, probed);
 }
 
 /// Replace one term position with its pre-bound constant, entering a quoted triple's
 /// own positions — its subject's, then its object's — over a work list. A position
 /// that is not a candidate variable is left unchanged.
+#[cfg(test)]
 fn probe_term_pattern(
     term: &mut TermPattern,
     probes: &[(Variable, GroundTerm)],
     probed: &mut Vec<usize>,
 ) {
-    probe_positions(
-        vec![ProbePosition::Term(term)],
-        probes,
-        probed,
-        ProbeRule::Pushdown,
-    );
+    resident_rewrite(|memory| {
+        let bytes = std::alloc::Layout::array::<usize>(probed.capacity())
+            .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?
+            .size();
+        let result = memory.add_bytes(bytes);
+        native_storage(memory, result)?;
+        probe_term_pattern_with_memory(term, probes, probed, memory)
+    });
 }
 
 /// A matched position, including predicates nested inside quoted triples.
@@ -1377,19 +852,20 @@ enum ProbeRule {
     Shacl,
 }
 
-/// The shared iterative matched-position walk. SHACL predicates are written only
-/// for IRIs; every other value remains a variable whose local VALUES binding cannot
-/// match an RDF predicate, yielding no solution without constructing invalid algebra.
-fn probe_positions<'a>(
+fn probe_positions_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
     positions: impl IntoIterator<Item = ProbePosition<'a>>,
     probes: &[(Variable, GroundTerm)],
     probed: &mut Vec<usize>,
     rule: ProbeRule,
-) {
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
     // The common matched leaf fits inline. Completing an already-probed SHACL
     // leaf must not allocate once per focus merely to discover no remaining name.
-    let mut pending: purrdf_core::SmallVec<[ProbePosition<'a>; 8]> =
-        positions.into_iter().collect();
+    let mut pending: purrdf_lex::walk::WorkList<ProbePosition<'a>, 8> =
+        purrdf_lex::walk::WorkList::new();
+    for position in positions {
+        pending.try_push_admitted(position, memory)?;
+    }
     while let Some(position) = pending.pop() {
         match position {
             ProbePosition::Term(term) => match term {
@@ -1398,11 +874,11 @@ fn probe_positions<'a>(
                     else {
                         continue;
                     };
-                    let constant = term_pattern_from_ground(&probes[index].1);
+                    let constant = term_pattern_from_ground_with_memory(&probes[index].1, memory)?;
                     if (constant.is_some() || matches!(rule, ProbeRule::Shacl))
                         && !probed.contains(&index)
                     {
-                        probed.push(index);
+                        memory.push(probed, index)?;
                     }
                     if let Some(constant) = constant {
                         *term = constant;
@@ -1414,11 +890,11 @@ fn probe_positions<'a>(
                         predicate,
                         object,
                     } = &mut **triple;
-                    pending.push(ProbePosition::Term(object));
+                    pending.try_push_admitted(ProbePosition::Term(object), memory)?;
                     if matches!(rule, ProbeRule::Shacl) {
-                        pending.push(ProbePosition::Predicate(predicate));
+                        pending.try_push_admitted(ProbePosition::Predicate(predicate), memory)?;
                     }
-                    pending.push(ProbePosition::Term(subject));
+                    pending.try_push_admitted(ProbePosition::Term(subject), memory)?;
                 }
                 TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
                 }
@@ -1431,7 +907,7 @@ fn probe_positions<'a>(
                     continue;
                 };
                 if !probed.contains(&index) {
-                    probed.push(index);
+                    memory.push(probed, index)?;
                 }
                 if let Some(constant) = named_node_from_ground(&probes[index].1) {
                     *predicate = NamedNodePattern::NamedNode(constant);
@@ -1439,6 +915,7 @@ fn probe_positions<'a>(
             }
         }
     }
+    pending.release_admitted(memory)
 }
 
 /// Complete SHACL pre-binding at a matched leaf before its enclosing operators run.
@@ -1448,68 +925,26 @@ fn probe_positions<'a>(
 /// slices, aggregates, and every blank-bearing value. A local VALUES join restores
 /// written columns and constrains unwritable identities at the leaf itself. A leaf
 /// with no remaining occurrence is untouched, avoiding duplicate seeds.
+#[cfg(test)]
 fn complete_shacl_leaf(
     leaf: &mut GraphPattern,
     probes: &[(Variable, GroundTerm)],
     scope: WalkScope,
 ) {
-    let mut bound = Vec::new();
-    match leaf {
-        GraphPattern::Bgp { patterns } => {
-            for triple in patterns {
-                probe_positions(
-                    [
-                        ProbePosition::Term(&mut triple.object),
-                        ProbePosition::Predicate(&mut triple.predicate),
-                        ProbePosition::Term(&mut triple.subject),
-                    ],
-                    probes,
-                    &mut bound,
-                    ProbeRule::Shacl,
-                );
-            }
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => probe_positions(
-            [ProbePosition::Term(object), ProbePosition::Term(subject)],
-            probes,
-            &mut bound,
-            ProbeRule::Shacl,
-        ),
-        _ => unreachable!("only BGP and path leaves hold matched positions"),
-    }
-    restore_shacl_bindings(leaf, &bound, probes, scope);
+    resident_rewrite(|memory| complete_shacl_leaf_with_memory(leaf, probes, scope, memory));
 }
 
 /// Restore SHACL-local bindings, hiding their names from EXISTS row correlation.
+#[cfg(test)]
 fn restore_shacl_bindings(
     leaf: &mut GraphPattern,
     bound: &[usize],
     probes: &[(Variable, GroundTerm)],
     scope: WalkScope,
 ) {
-    if bound.is_empty() {
-        return;
-    }
-    // An EXISTS row may already bind these names. Keep the leaf's prebindings
-    // inside their own projection, the same scope boundary used for call drivers,
-    // so correlated SPARQL substitution cannot interpret their seed as rebinding.
-    let kept = (scope == WalkScope::ExistsBody).then(|| {
-        crate::eval::syntactic_schema(leaf)
-            .vars()
-            .iter()
-            .filter(|var| !bound.iter().any(|&index| &probes[index].0 == *var))
-            .cloned()
-            .collect()
+    resident_rewrite(|memory| {
+        restore_shacl_bindings_with_memory(leaf, bound, probes, scope, memory)
     });
-    restore_probed_bindings(leaf, bound, probes, false);
-    if let Some(variables) = kept {
-        purrdf_sparql_algebra::substitute::take_and_replace(leaf, |leaf| GraphPattern::Project {
-            inner: Child::new(leaf),
-            variables,
-        });
-    }
 }
 
 /// What a grounded pre-binding may be USED for — decided once, in one place.
@@ -1520,7 +955,7 @@ fn restore_shacl_bindings(
 /// to re-decide this question over its OWN subset of [`GroundTerm`]:
 /// [`term_pattern_from_ground`] recursed through a quoted triple and refused a blank;
 /// [`expression_from_ground`] refused a blank AND a quoted triple;
-/// [`substitute_in_term_pattern`] admitted an IRI and a literal and fell through on
+/// [`substitute_in_term_pattern_with_memory`] admitted an IRI and a literal and fell through on
 /// everything else; [`named_node_from_ground`] — the `GRAPH`/`SERVICE` name — admitted
 /// an IRI alone. Three of the four spelled the refusal as a catch-all, so a
 /// [`GroundTerm`] variant added later COMPILED in three of them and was silently
@@ -1561,8 +996,8 @@ fn restore_shacl_bindings(
 ///   carries only those the pattern can narrow on. A property-function call that names
 ///   a blank-node pre-binding as an argument is the one leaf that still needs it
 ///   BOUND, and it gets it through a `VALUES` row too — the one-row driver
-///   [`drive_call_arguments`] puts on the call's left, which hands the relation
-///   the dataset's blank node as the term it is. [`probe_term_pattern`] records no
+///   [`drive_call_arguments_with_memory`] puts on the call's left, which hands the relation
+///   the dataset's blank node as the term it is. [`probe_term_pattern_with_memory`] records no
 ///   probed index for a blank, so no restoring `VALUES` is emitted for a column no
 ///   leaf ever consumed.
 ///
@@ -1605,7 +1040,7 @@ impl<'a> Pushability<'a> {
 ///
 /// [`Pushability::SeedOnly`] is that value — a blank in a pattern is an anonymous
 /// variable, so it would match everything rather than the pre-bound blank. See
-/// [`push_probe_constants`], "What is not pushed", and [`Pushability`]'s own note on
+/// [`push_probe_constants_with_memory`], "What is not pushed", and [`Pushability`]'s own note on
 /// why the pushed set and the seed set differ. A [`Pushability::QuotedTriple`] is
 /// admitted here and nowhere else, and only if every one of its own positions is
 /// admitted too: the first refused position refuses the whole term.
@@ -1614,6 +1049,22 @@ impl<'a> Pushability<'a> {
 /// subject first, then its object — so a term of any depth is spelled without a
 /// machine-stack frame per level.
 pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    term_pattern_from_ground_with_memory(ground, &mut memory)
+        .expect("resident prebinding pattern allocation failed")
+}
+
+/// The same pattern spelling under its caller's original allocation owner.
+/// Shared lexical leaves keep their own immutable grants; newly authored child
+/// boxes remain in `memory` until the enclosing query destroys them. A blank
+/// refuses the complete spelling and releases every temporary before success.
+pub(crate) fn term_pattern_from_ground_with_memory<
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    ground: &GroundTerm,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<Option<TermPattern>, purrdf_lex::allocation::StorageError> {
     /// A quoted triple whose spelling is under way: its subject's spelling once that
     /// is built, with its object's the position being built.
     struct OpenTriple<'a> {
@@ -1621,51 +1072,76 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
         subject: Option<TermPattern>,
     }
     let mut open: Vec<OpenTriple<'_>> = Vec::new();
+    let box_bytes = std::alloc::Layout::new::<TriplePattern>().size();
+    let mut boxes = 0usize;
     let mut next = ground;
     loop {
         let mut built = match Pushability::of(next) {
             Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
             Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
             Pushability::QuotedTriple(triple) => {
-                open.push(OpenTriple {
-                    triple,
-                    subject: None,
-                });
+                memory.push(
+                    &mut open,
+                    OpenTriple {
+                        triple,
+                        subject: None,
+                    },
+                )?;
                 next = &triple.subject;
                 continue;
             }
-            Pushability::SeedOnly => return None,
+            Pushability::SeedOnly => {
+                // Pending subjects own all completed boxes. Destroy them before
+                // releasing either their backing array or their payload layout.
+                memory.release_vec(open)?;
+                memory.release_bytes(boxes)?;
+                return Ok(None);
+            }
         };
         // Hand the spelling up: it is the open triple's subject, whose object is next,
         // or its object, which completes the triple's own spelling.
         loop {
             let Some(mut top) = open.pop() else {
-                return Some(built);
+                memory.release_vec(open)?;
+                return Ok(Some(built));
             };
             match top.subject.take() {
                 None => {
                     top.subject = Some(built);
                     next = &top.triple.object;
-                    open.push(top);
+                    memory.push(&mut open, top)?;
                     break;
                 }
                 Some(subject) => {
-                    built = TermPattern::Triple(Child::new(TriplePattern {
+                    let next_boxes = boxes
+                        .checked_add(box_bytes)
+                        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                    memory.add_bytes(box_bytes)?;
+                    let triple = purrdf_lex::allocation::try_boxed(TriplePattern {
                         subject,
                         predicate: NamedNodePattern::NamedNode(top.triple.predicate.clone()),
                         object: built,
-                    }));
+                    })
+                    .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+                    boxes = next_boxes;
+                    built = TermPattern::Triple(triple.into());
                 }
             }
         }
     }
 }
 
-/// Apply SHACL-SPARQL pre-binding to `query`.
+/// Apply every `(name, value)` pre-binding to `query`: the ONE pre-binding rewrite,
+/// which every lane that binds variables before evaluation takes — a prepared
+/// execution's parameters, a request's substitutions, a SHACL-SPARQL constraint,
+/// validator, rule, target and node expression, and a SPARQL function body's
+/// arguments. A pre-bound variable means one value for the whole evaluation, at
+/// every depth, which is SHACL's pre-binding (SHACL 1.2 SPARQL Extensions, Appendix
+/// A) and what the parser's grouping exemption
+/// (`SparqlParser::with_prebound_variables`) assumes.
 ///
-/// First performs the ordinary VALUES-join rewrite via [`apply_substitutions`]
-/// (so triple-pattern positions and projectable variables work exactly like the
-/// generic pre-binding path). Then completes every BGP/path leaf at every depth,
+/// First performs the VALUES-join seed and pushdown via [`apply_probes_with_memory`]. Then
+/// completes every BGP/path leaf at every depth,
 /// including OPTIONAL and MINUS right arms and nested EXISTS bodies. A leaf-local
 /// VALUES join constrains blank and blank-bearing quoted identities and restores
 /// columns replaced by constants. The full walk also, for every pre-bound variable
@@ -1683,48 +1159,87 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 /// property-function call's arguments they are driven in too, wherever the call is, so
 /// the relation is invoked with them bound — see `drive_call_arguments`.
 ///
-/// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
+/// # Errors
+///
+/// As [`build_probes`].
 pub(crate) fn apply_shacl_prebinding(
     query: Query,
     substitutions: Prebindings<'_>,
 ) -> Result<Query, RdfDiagnostic> {
-    let probes = build_probes(substitutions)?;
-    if probes.is_empty() {
-        // Both halves are the identity over an empty pre-binding list, and the
-        // expression walk below is a full walk-and-REBUILD of every pattern in the
-        // query — so without this the no-substitution case paid for a complete copy
-        // of the algebra to change nothing in it.
-        return Ok(query);
-    }
-    Ok(apply_shacl_probes(query, probes))
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    apply_shacl_prebinding_with_memory(query, substitutions, &mut memory)
+        .map_err(GroundFailure::into_resident_diagnostic)
 }
 
 /// [`apply_shacl_prebinding`]'s rewrite, over probes that are already grounded and
 /// already known to be non-empty.
 ///
-/// Split out for the same reason [`apply_probes`] is: a
+/// Split out for the same reason [`apply_probes_with_memory`] is: a
 /// [`PreparedExecution`](crate::PreparedExecution) grounds its bindings into a
 /// retained buffer rather than through a [`Prebindings`] list, and
 /// [`crate::prebind_memo`] has to be able to run EXACTLY this rewrite — not a second
 /// spelling of it — to check a memo against it.
 pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
-    // The expression-position constants come from the SAME grounded values the seed
-    // is about to carry, not from a second conversion of the same `TermValue`s.
-    // `NamedNode`, `Literal` and `Variable` are all `Arc<str>`-backed, so lifting one
-    // out of a probe is a refcount bump; re-grounding it is a fresh allocation, once
-    // per pre-bound value, per focus node.
-    //
-    // Cloned rather than borrowed because `apply_probes` below CONSUMES the probe
-    // list — it moves each `(Variable, GroundTerm)` into the seed's `Values` row —
-    // and the walk that reads these runs after it, in that order, for the reason
-    // `apply_probes` gives.
-    let expr_subs = ExprSubs(probes.clone());
+    let rewritten =
+        resident_rewrite(|memory| apply_shacl_probes_with_memory(query, &probes, memory));
+    drop(probes);
+    rewritten
+}
 
-    let mut query = apply_probes(query, probes);
-    map_patterns_in_query(&mut query, |pattern| {
-        substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Descent);
-    });
-    query
+/// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
+/// expression walk that writes each value where the seed does not reach.
+pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+    let rewritten =
+        resident_rewrite(|memory| walk_shacl_probes_with_memory(query, &probes, memory));
+    drop(probes);
+    rewritten
+}
+
+/// The slot [`Query::map_core_pattern_mut`]'s descent from `pattern` ends at.
+fn core_slot(pattern: &mut GraphPattern) -> &mut GraphPattern {
+    let mut core = pattern;
+    while let GraphPattern::Project { inner, .. }
+    | GraphPattern::Distinct { inner }
+    | GraphPattern::Reduced { inner }
+    | GraphPattern::Slice { inner, .. }
+    | GraphPattern::OrderBy { inner, .. }
+    | GraphPattern::Group { inner, .. }
+    | GraphPattern::Extend { inner, .. }
+    | GraphPattern::Filter { inner, .. }
+    | GraphPattern::Unfold { inner, .. } = core
+    {
+        core = inner;
+    }
+    core
+}
+
+/// The prefix of the variable both sides of a `MINUS` inside an `EXISTS` body bind,
+/// so they always share one ([`seed_minus_in_with_memory`]).
+const MINUS_PREFIX: &str = "__purrdf_minus_";
+
+/// The constant both sides bind it to; any one term would do.
+const MINUS_MARK: &str = "urn:purrdf:prebinding:minus";
+
+/// Whether the seed [`apply_probes_with_memory`] joins at the core already reaches every place
+/// the query can read a pre-bound variable, so the expression walk would change no
+/// answer.
+///
+/// The walk exists for the places a joined seed does not reach: a `GROUP BY` (which
+/// keeps only its keys), a sub-`SELECT` (whose projection hides the outer row), a
+/// `FILTER` or `BIND` inside a group (which sees only that group's rows), the right
+/// arm of an `OPTIONAL` or `MINUS`, a `LATERAL` or `SERVICE` operand, an `EXISTS`
+/// body, and a property-function call's argument. A query with none of them
+/// — the single-row `SELECT (f(?a0, ?a1) AS ?result) WHERE {}` a SHACL scalar call
+/// runs per focus node is the common case — reads every pre-bound variable from the
+/// seeded row, so it answers alike with the seed alone and skips the walk's rebuild.
+///
+/// A query that assigns a pre-bound name in its head (a `SELECT` expression or
+/// `UNFOLD` target) is not one: the assignment has to join with the bound value
+/// ([`join_assignments_with_prebinding_with_memory`]), which only the full rewrite arranges.
+#[cfg(test)]
+fn seed_reaches_every_read(query: &Query, probes: &[(Variable, GroundTerm)]) -> bool {
+    resident_rewrite(|memory| seed_reaches_every_read_with_memory(query, probes, memory))
 }
 
 /// What each pre-bound variable becomes in an EXPRESSION position, keyed by the
@@ -1745,7 +1260,7 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 ///   without borrowing: it is `Arc<str>`-backed, so the key is a refcount bump on
 ///   the name the probe list already holds, and the list is then free of any
 ///   borrow of the caller's request — which is what lets [`apply_shacl_probes`]
-///   take its probes BY VALUE and hand them straight to [`apply_probes`].
+///   take its probes BY VALUE and hand them straight to [`apply_probes_with_memory`].
 ///
 /// The value each entry carries is the GROUNDED TERM, not a pre-computed constant
 /// expression. That is what lets the three consumers below — an expression position,
@@ -1761,19 +1276,22 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 /// [`substitute_in_expression`]'s `Bound` arm turns on exactly that distinction: a
 /// variable pre-bound to a blank node has no expression form at all and `BOUND()`
 /// must still say `true`.
-struct ExprSubs(Vec<(Variable, GroundTerm)>);
+struct ExprSubs<P = Vec<(Variable, GroundTerm)>>(P);
 
-impl ExprSubs {
+impl<P: AsRef<[(Variable, GroundTerm)]>> ExprSubs<P> {
+    fn entries(&self) -> &[(Variable, GroundTerm)] {
+        self.0.as_ref()
+    }
     /// The entry for `name`, mirroring `HashMap::get`.
     fn get(&self, name: &str) -> Option<&GroundTerm> {
-        self.0
+        self.entries()
             .iter()
             .find_map(|(key, ground)| (key.as_str() == name).then_some(ground))
     }
 
     /// Whether `name` is pre-bound at all, mirroring `HashMap::contains_key`.
     fn contains_key(&self, name: &str) -> bool {
-        self.0.iter().any(|(key, _)| key.as_str() == name)
+        self.entries().iter().any(|(key, _)| key.as_str() == name)
     }
 }
 
@@ -1808,17 +1326,6 @@ pub(crate) fn named_node_from_ground(ground: &GroundTerm) -> Option<NamedNode> {
     }
 }
 
-/// Walk and rebuild the whole [`Query`], applying `f` to every [`GraphPattern`]
-/// contained in it (including sub-queries).
-fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
-    match query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => f(pattern),
-    }
-}
-
 /// Substitute pre-bound variables into a [`GraphPattern`] and everything beneath it,
 /// returning which pre-bound values its output rows carry from the `VALUES` seed
 /// ([`SeedColumns`]).
@@ -1830,36 +1337,15 @@ fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
 /// order the node's arms below name them, and what a node does once its operands are
 /// back — the drivers it plants, the columns it reports — happens over the node with
 /// every operand in it.
+#[cfg(test)]
 fn substitute_in_graph_pattern(
     pattern: &mut GraphPattern,
     expr_subs: &ExprSubs,
     scope: WalkScope,
 ) -> SeedColumns {
-    let mut open: Vec<SubstituteFrame> = Vec::new();
-    let mut next = (take_child(pattern), scope);
-    loop {
-        let (node, scope) = next;
-        let mut finished = match enter_substitution(node, scope, expr_subs, &mut open) {
-            Step::Descend(child) => {
-                next = child;
-                continue;
-            }
-            Step::Finished(finished) => finished,
-        };
-        loop {
-            let Some(frame) = open.pop() else {
-                *pattern = finished.0;
-                return finished.1;
-            };
-            match resume_substitution(frame, finished, expr_subs, &mut open) {
-                Step::Descend(child) => {
-                    next = child;
-                    break;
-                }
-                Step::Finished(node) => finished = node,
-            }
-        }
-    }
+    resident_rewrite(|memory| {
+        substitute_in_graph_pattern_with_memory(pattern, expr_subs, scope, memory)
+    })
 }
 
 /// A node of the substitution walk whose operand is out being substituted.
@@ -1870,13 +1356,11 @@ struct SubstituteFrame {
     stage: SubstituteStage,
     /// What the node's inner pattern carries, once it is back.
     operand: SeedColumns,
-    /// A `GROUP BY`'s aggregates, taken apart while their expressions are substituted.
-    aggregates: Vec<(Variable, AggregateParts)>,
     /// The `EXISTS` bodies of the node's own expressions still to substitute, last
     /// first.
-    pending_bodies: Vec<GraphPattern>,
+    pending_bodies: crate::AdmittedVec<GraphPattern>,
     /// The substituted bodies, in the order the expressions hold them.
-    done_bodies: Vec<GraphPattern>,
+    done_bodies: crate::AdmittedVec<GraphPattern>,
 }
 
 /// Which operand of a [`SubstituteFrame`]'s node is out.
@@ -1895,68 +1379,182 @@ enum SubstituteStage {
 }
 
 impl SubstituteFrame {
-    fn new(node: GraphPattern, scope: WalkScope, stage: SubstituteStage) -> Self {
+    fn new(
+        node: GraphPattern,
+        scope: WalkScope,
+        stage: SubstituteStage,
+        memory: &mut RewriteMemory<'_>,
+    ) -> Self {
+        let workspace = rewrite_workspace(memory);
         Self {
             node,
             scope,
             stage,
             operand: SeedColumns(0),
-            aggregates: Vec::new(),
-            pending_bodies: Vec::new(),
-            done_bodies: Vec::new(),
+            pending_bodies: crate::AdmittedVec::new(&workspace),
+            done_bodies: crate::AdmittedVec::new(&workspace),
         }
     }
 
-    /// Substitute in the node's own expressions, taking their `EXISTS` bodies out; the
-    /// first body to substitute, or `None` when the expressions hold none.
-    fn substitute_own_expressions(&mut self, expr_subs: &ExprSubs) -> Option<GraphPattern> {
-        let mut bodies = Vec::new();
-        substitute_in_expressions(
-            own_expressions(&mut self.node, &mut self.aggregates),
-            expr_subs,
-            &mut bodies,
-        );
-        bodies.reverse();
-        self.pending_bodies = bodies;
-        self.pending_bodies.pop()
+    fn substitute_own_expressions_with_memory(
+        &mut self,
+        expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+        memory: &mut RewriteMemory<'_>,
+    ) -> RewriteResult<Option<GraphPattern>> {
+        let roots = own_expressions_with_memory(&mut self.node, memory)?;
+        substitute_in_expressions_with_memory(roots, expr_subs, &mut self.pending_bodies, memory)?;
+        self.pending_bodies.as_mut_slice().reverse();
+        Ok(self.pending_bodies.pop())
     }
 
-    /// Put the substituted bodies back into the node's own expressions, and a `GROUP
-    /// BY`'s aggregates back together.
-    fn replace_own_bodies(&mut self) {
-        let bodies = std::mem::take(&mut self.done_bodies);
-        replace_exists_bodies(
-            own_expressions(&mut self.node, &mut self.aggregates),
-            bodies,
+    fn replace_own_bodies_with_memory(
+        &mut self,
+        memory: &mut RewriteMemory<'_>,
+    ) -> RewriteResult<()> {
+        let bodies = std::mem::replace(
+            &mut self.done_bodies,
+            crate::AdmittedVec::new(&rewrite_workspace(memory)),
         );
-        if let GraphPattern::Group { aggregates, .. } = &mut self.node {
-            // Collecting back into the same element type reuses the buffer, so the
-            // take and the collect together allocate nothing.
-            *aggregates = std::mem::take(&mut self.aggregates)
-                .into_iter()
-                .map(|(var, (function, args, scalarvals, order_by, distinct))| {
-                    // Substitution rewrites each argument in place and never changes
-                    // the argument COUNT, and rewriting a sort key never removes one,
-                    // so this can never turn a valid aggregate into an invalid one.
-                    let rebuilt =
-                        AggregateExpression::new(function, args, scalarvals, order_by, distinct)
-                            .expect("substitution preserves argument count, so arity stays valid");
-                    (var, rebuilt)
-                })
-                .collect();
+        let roots = own_expressions_with_memory(&mut self.node, memory)?;
+        replace_exists_bodies_with_memory(roots, bodies, memory)
+    }
+}
+/// The operand `pattern` hands to the substitution walk, and the scope it is in.
+type SubstituteDescent = (GraphPattern, WalkScope);
+
+/// Carry every pre-bound value a `GROUP BY` does not keep as a key past it, as one
+/// single-row `VALUES` joined onto the group's output, and report the columns the
+/// result carries: `carried`, plus each value restored.
+///
+/// A `Group` outputs only its keys and its aggregates, so a pre-bound variable that is
+/// not a key would be unbound in every grouped row — read as `None` by the projection
+/// and every solution modifier above (`SELECT $this (COUNT(*) AS ?c)`, `HAVING`, `ORDER
+/// BY`), at the top level and in a sub-`SELECT` alike. A pre-bound variable is one value
+/// for the whole evaluation, which is why the parser admits it above a group without
+/// grouping by it (`SparqlParser::with_prebound_variables`), so carrying it past the
+/// group as a constant column is exactly its meaning: every group reads the same value.
+///
+/// No schema changes where it matters: a group sits beneath its own `SELECT`'s
+/// projection, which keeps the restored column only when it projects the variable — a
+/// column it already named — and drops it otherwise.
+#[cfg(test)]
+fn carry_past_group(
+    node: &mut GraphPattern,
+    expr_subs: &ExprSubs,
+    keys: &[Variable],
+    carried: SeedColumns,
+) -> SeedColumns {
+    resident_rewrite(|memory| carry_past_group_with_memory(node, expr_subs, keys, carried, memory))
+}
+
+/// Which pre-bound values a node's output rows carry from the `VALUES` seed — a bit per
+/// index into the [`ExprSubs`] list.
+///
+/// Meaningful on the [`WalkScope::Descent`] only: every row beneath the seed's `Join`
+/// carries every value, and each wrapper above it passes a column on, or — a `GROUP BY`
+/// that does not group by it, a projection that does not carry it — hides it. Beneath
+/// the seed nothing the seed binds is in any row yet, so nothing is carried. A value
+/// past the sixty-fourth is never counted as carried, which only ever drives a value a
+/// row already held: never wrong, merely not free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SeedColumns(u64);
+
+impl SeedColumns {
+    /// What a node that is not a wrapper carries in `scope`, with `count` values.
+    const fn at_core(scope: WalkScope, count: usize) -> Self {
+        match scope {
+            WalkScope::Descent => Self(if count >= 64 {
+                u64::MAX
+            } else {
+                (1_u64 << count) - 1
+            }),
+            WalkScope::Group | WalkScope::ExistsBody => Self(0),
         }
+    }
+
+    /// Whether the value at `index` is carried.
+    const fn carries(self, index: usize) -> bool {
+        index < 64 && self.0 & (1_u64 << index) != 0
+    }
+
+    /// What survives a node whose output columns are `columns`.
+    fn kept(
+        self,
+        expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+        columns: &[Variable],
+    ) -> Self {
+        let mut kept = self.0;
+        for (index, (var, _)) in expr_subs.entries().iter().enumerate().take(64) {
+            if !columns.contains(var) {
+                kept &= !(1_u64 << index);
+            }
+        }
+        Self(kept)
     }
 }
 
-/// The expressions `node` itself evaluates, in the order the substitution walk reads
-/// them: its `FILTER`, `BIND` or `UNFOLD` expression, its `OPTIONAL` condition, its
-/// sort keys, or — for a `GROUP BY`, whose aggregates are held apart in `aggregates`
-/// while the walk is inside them — each aggregate's arguments and then its own `FOLD`
-/// sort keys, aggregate by aggregate.
-fn own_expressions<'n>(
-    node: &'n mut GraphPattern,
-    aggregates: &'n mut [(Variable, AggregateParts)],
-) -> Vec<&'n mut Expression> {
+/// The prefix of every [`stand_in`] variable. A NUL is no character a SPARQL
+/// variable name can hold, so no query text can name one, and it matches neither of
+/// the evaluator's own internal prefixes (`crate::bgp`'s blank-node variables,
+/// `crate::blank_scope`'s joined blank labels).
+const STAND_IN_PREFIX: &str = "\u{0}prebound:";
+
+/// The variable an expression reads in place of the pre-bound `var` where the value has
+/// no expression form — see [`drive_expression_reads_with_memory`]. One per pre-bound name, so the
+/// tree the rewrite builds depends on the names and never on the value, which is what
+/// [`crate::prebind_memo`] relies on.
+#[cfg(test)]
+fn stand_in(var: &Variable) -> Variable {
+    interned_variable(&format!("{STAND_IN_PREFIX}{}", var.as_str()))
+}
+
+/// What one node's expressions read of the pre-bound values, as indices into the
+/// [`ExprSubs`] list — see [`drive_expression_reads_with_memory`].
+#[derive(Default)]
+struct Reads<R = Vec<usize>> {
+    /// Values an expression names as a variable, which [`substitute_in_expression`]
+    /// left in place because they have no expression form.
+    plain: R,
+    /// Values an `EXISTS` in an expression names in its body.
+    in_exists: R,
+}
+
+/// Record what `expr` reads of the pre-bound values into `reads`. An `EXISTS` body's
+/// own expressions are the body's nodes' business — the walk drives them there — so
+/// only the variables the body NAMES count here, as reads of the rows it is matched
+/// against.
+///
+/// The reads are recorded in the order the expression names them, each position
+/// before the ones it holds, over a work list rather than the machine stack.
+#[cfg(test)]
+fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
+    let mut native = Reads {
+        plain: crate::AdmittedVec::from_resident(std::mem::take(&mut reads.plain)),
+        in_exists: crate::AdmittedVec::from_resident(std::mem::take(&mut reads.in_exists)),
+    };
+    resident_rewrite(|memory| note_reads_with_memory(expr, expr_subs, &mut native, memory));
+    reads.plain = native.plain.try_into_resident().expect("resident reads");
+    reads.in_exists = native
+        .in_exists
+        .try_into_resident()
+        .expect("resident EXISTS reads");
+}
+
+/// Rename every plain read of a `renames` source in `expr` to its stand-in. An `EXISTS`
+/// body is not entered: a variable there is matched against rows, not read as a value,
+/// and the body's own expressions were already driven by the walk.
+#[cfg(test)]
+fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
+    resident_rewrite(|memory| rename_reads_with_memory(expr, renames, memory));
+}
+
+pub(crate) use purrdf_sparql_algebra::walk::for_each_expression_mut;
+
+/// Every expression `node` itself evaluates — its `FILTER`, `BIND` or `UNFOLD`
+/// expression, its `OPTIONAL` condition, its sort keys, or its aggregates' arguments and
+/// `FOLD` sort keys — and no expression of a node beneath it.
+#[cfg(test)]
+fn for_each_node_expression(node: &GraphPattern, f: &mut dyn FnMut(&Expression)) {
     match node {
         GraphPattern::Extend { expression, .. }
         | GraphPattern::Unfold { expression, .. }
@@ -1966,18 +1564,442 @@ fn own_expressions<'n>(
         | GraphPattern::LeftJoin {
             expression: Some(expression),
             ..
-        } => vec![expression],
-        GraphPattern::OrderBy { expression, .. } => expression
-            .iter_mut()
-            .map(OrderExpression::expression_mut)
-            .collect(),
-        GraphPattern::Group { .. } => aggregates
-            .iter_mut()
-            .flat_map(|(_, (_, args, _, order_by, _))| {
-                args.iter_mut()
-                    .chain(order_by.iter_mut().map(OrderExpression::expression_mut))
-            })
-            .collect(),
+        } => f(expression),
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression {
+                f(order.expression());
+            }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for arg in aggregate.args() {
+                    f(arg);
+                }
+                for order in aggregate.order_by() {
+                    f(order.expression());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`for_each_node_expression`], rewriting each expression in place.
+#[cfg(test)]
+fn for_each_node_expression_mut(node: &mut GraphPattern, f: &mut dyn FnMut(&mut Expression)) {
+    resident_rewrite(|memory| {
+        for_each_node_expression_mut_with_memory(node, memory, |expression, _| {
+            f(expression);
+            Ok(())
+        })
+    });
+}
+
+/// The columns of the rows a node's expressions read: a `GROUP BY`'s and each wrapper's
+/// inner pattern, or — for an `OPTIONAL`, whose condition reads the joined rows — the
+/// node's own.
+#[cfg(test)]
+fn operand_schema(node: &GraphPattern) -> crate::solution::SharedSchema {
+    resident_rewrite(|memory| operand_schema_with_memory(node, memory))
+}
+
+/// The projection [`drive_expression_reads_with_memory`] wraps a driven node in: the columns it
+/// exposed before, and — beneath the descent, where the node may be evaluated with a row
+/// substituted into it — every other variable it names, so that substitution reaches
+/// every variable it reached before. A variable driven for an `EXISTS` is left out,
+/// which is what keeps the driven binding inside the node, and a stand-in is never named
+/// by the node before it is driven, so none is carried.
+#[cfg(test)]
+fn carried_columns(
+    node: &GraphPattern,
+    expr_subs: &ExprSubs,
+    reads: &Reads,
+    scope: WalkScope,
+) -> Vec<Variable> {
+    resident_rewrite(|memory| carried_columns_with_memory(node, expr_subs, reads, scope, memory))
+}
+
+/// Replace a pre-bound variable in a property-function argument position with its
+/// constant term.
+///
+/// This position writes a [`TermPattern`] but follows the EXPRESSION rule, not the
+/// matched-term rule, which is why [`Pushability::QuotedTriple`] is refused here and
+/// admitted by [`term_pattern_from_ground`]: a property function's arguments are
+/// invocation INPUTS, evaluated per row like a function call's, rather than terms
+/// matched against the graph. A value with no expression form therefore has nothing
+/// to be substituted with here, and is driven into the call instead — see
+/// [`drive_call_arguments_with_memory`]. A non-variable argument is already a constant and
+/// passes through unchanged.
+///
+/// A quoted-triple argument is entered: its subject and object are argument
+/// positions too, and a variable there is an input of the call exactly as a bare
+/// argument is. Left unwritten, the relation would be handed a triple with that
+/// component free — refused by a relation serving only the bound mode, and answered
+/// from the relation's whole extent by one serving both. [`driven_arguments`] enters
+/// the same two positions for the values it drives, so every variable an argument
+/// names, at any depth, is either written or driven. The predicate is not entered:
+/// it names a predicate, which only an IRI can, and neither rule writes there.
+#[cfg(test)]
+fn substitute_in_term_pattern(term: &mut TermPattern, values: &[(Variable, GroundTerm)]) {
+    resident_rewrite(|memory| substitute_in_term_pattern_with_memory(term, values, memory));
+}
+
+/// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
+///
+/// The decision is [`named_node_from_ground`]'s, which is [`Pushability`]'s: a graph
+/// is named by an IRI, so every other class is left for the `VALUES` seed. (The
+/// earlier spelling asked `contains_key` and then re-asked `get`, which read as two
+/// tests and was one — presence is implied by a `Some` entry.)
+fn substitute_in_named_node_pattern(
+    pattern: &mut NamedNodePattern,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+) {
+    let NamedNodePattern::Variable(var) = pattern else {
+        return;
+    };
+    let Some(node) = expr_subs.get(var.as_str()).and_then(named_node_from_ground) else {
+        return;
+    };
+    *pattern = NamedNodePattern::NamedNode(node);
+}
+
+/// Substitute pre-bound variables into `roots`, in order, each expression before the
+/// ones it holds: a pre-bound variable with an expression form becomes that constant,
+/// and a `BOUND` of any pre-bound variable becomes `true`. Every `EXISTS` body met is
+/// taken out into `bodies`, in the order met, for the caller to substitute in the
+/// body's own scope and put back with [`replace_exists_bodies_with_memory`].
+#[cfg(test)]
+fn substitute_in_expressions<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    expr_subs: &ExprSubs,
+    bodies: &mut Vec<GraphPattern>,
+) {
+    let mut native = crate::AdmittedVec::from_resident(std::mem::take(bodies));
+    resident_rewrite(|memory| {
+        substitute_in_expressions_with_memory(roots, expr_subs, &mut native, memory)
+    });
+    *bodies = native.try_into_resident().expect("resident EXISTS bodies");
+}
+
+/// Put `bodies` back into the `EXISTS` positions of `roots`, in the order
+/// [`substitute_in_expressions_with_memory`] took them out: the substitution leaves every `EXISTS`
+/// where it was, so the same walk meets the same positions in the same order.
+#[cfg(test)]
+fn replace_exists_bodies<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    bodies: Vec<GraphPattern>,
+) {
+    resident_rewrite(|memory| {
+        replace_exists_bodies_with_memory(roots, crate::AdmittedVec::from_resident(bodies), memory)
+    });
+}
+
+/// Substitute pre-bound variables into one [`Expression`], `EXISTS` bodies included.
+#[cfg(test)]
+fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
+    let mut bodies = Vec::new();
+    substitute_in_expressions([&mut *expr], expr_subs, &mut bodies);
+    for body in &mut bodies {
+        substitute_in_graph_pattern(body, expr_subs, WalkScope::ExistsBody);
+    }
+    replace_exists_bodies([expr], bodies);
+}
+
+/// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).
+#[cfg(test)]
+fn true_literal() -> Expression {
+    resident_rewrite(true_literal_with_memory)
+}
+
+type RewriteMemory<'a> = purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
+type RewriteResult<T> = Result<T, GroundFailure>;
+
+impl ParameterValue {
+    pub(crate) fn from_id_admitted<D: DatasetView>(
+        dataset: &D,
+        id: D::Id,
+        workspace: &crate::WorkspaceCapability,
+        source_error: impl FnMut(D::ReadError) -> GroundFailure,
+    ) -> RewriteResult<Self> {
+        let ground = ground_term_from_id_admitted(dataset, id, workspace, source_error)?;
+        Ok(Self::AdmittedGround(
+            crate::workspace::SharedWorkspace::new_admitted(ground, workspace)?,
+        ))
+    }
+}
+
+fn native_storage<T>(
+    memory: &mut RewriteMemory<'_>,
+    result: Result<T, purrdf_lex::allocation::StorageError>,
+) -> RewriteResult<T> {
+    result.map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "prebinding rewrite")
+            .into()
+    })
+}
+
+fn rewrite_workspace(memory: &mut RewriteMemory<'_>) -> crate::WorkspaceCapability {
+    memory.admission_mut().workspace().clone()
+}
+
+fn rewrite_vec<T>(
+    values: impl IntoIterator<Item = T>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Vec<T>> {
+    let mut out = Vec::new();
+    for value in values {
+        let result = memory.push(&mut out, value);
+        native_storage(memory, result)?;
+    }
+    Ok(out)
+}
+
+fn rewrite_scratch<T>(
+    values: impl IntoIterator<Item = T>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<T>> {
+    let mut out = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    for value in values {
+        out.push(value)?;
+    }
+    Ok(out)
+}
+
+fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+    value: T,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Child<T>> {
+    let result = memory.add_bytes(std::alloc::Layout::new::<T>().size());
+    native_storage(memory, result)?;
+    let boxed =
+        purrdf_core::small::try_boxed(value).map_err(|_| crate::EvalError::AllocationFailed {
+            construct: "prebinding algebra child",
+        })?;
+    Ok(Child::from(boxed))
+}
+
+fn rewrite_join(
+    left: GraphPattern,
+    right: GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<GraphPattern> {
+    Ok(GraphPattern::Join {
+        left: rewrite_child(left, memory)?,
+        right: rewrite_child(right, memory)?,
+    })
+}
+
+fn rewrite_variable(
+    text: &impl std::fmt::Display,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Variable> {
+    let workspace = rewrite_workspace(memory);
+    Ok(Variable::from_admitted(workspace.authored_text(text)?))
+}
+
+fn resident_rewrite<T>(f: impl FnOnce(&mut RewriteMemory<'_>) -> RewriteResult<T>) -> T {
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    f(&mut memory).expect("resident prebinding allocation failed")
+}
+
+/// Retained prepared cells destroy their ground payload before its original child
+/// grant. The two backing arrays likewise die before their own metadata grants.
+#[derive(Debug, Default)]
+pub(crate) struct PreparedProbes {
+    entries: Vec<(Variable, GroundTerm)>,
+    children: Vec<Option<crate::WorkspaceAllocation>>,
+    entries_allocation: Option<crate::WorkspaceAllocation>,
+    children_allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl Drop for PreparedProbes {
+    fn drop(&mut self) {
+        // Release ground children first, then their original per-cell grants.
+        // Automatic field drop subsequently frees both empty metadata arrays
+        // before their two original array admission guards.
+        self.entries.clear();
+        self.children.clear();
+    }
+}
+
+impl PreparedProbes {
+    pub(crate) fn entries(&self) -> &[(Variable, GroundTerm)] {
+        &self.entries
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.children.clear();
+    }
+
+    /// Select the run's original failure before invoking this cleanup. A bounded
+    /// carrier cannot retain working payloads or backing arrays for a later run,
+    /// even when the caller now supplies a resident capability.
+    pub(crate) fn reset_after_failure(&mut self, workspace: &crate::WorkspaceCapability) {
+        let bounded = workspace.is_bounded()
+            || self
+                .entries_allocation
+                .as_ref()
+                .is_some_and(crate::WorkspaceAllocation::is_bounded)
+            || self
+                .children_allocation
+                .as_ref()
+                .is_some_and(crate::WorkspaceAllocation::is_bounded)
+            || self
+                .children
+                .iter()
+                .flatten()
+                .any(crate::WorkspaceAllocation::is_bounded);
+        if bounded {
+            *self = Self::default();
+        } else {
+            self.clear();
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        count: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> RewriteResult<()> {
+        workspace.reserve_vec(&mut self.entries, &mut self.entries_allocation, count)?;
+        workspace.reserve_vec(&mut self.children, &mut self.children_allocation, count)?;
+        Ok(())
+    }
+
+    fn put(&mut self, index: usize, variable: Variable, ground: AdmittedGroundTerm) {
+        let AdmittedGroundTerm { term, allocation } = ground;
+        if let Some(entry) = self.entries.get_mut(index) {
+            // The old payload dies while both its old and its replacement grant
+            // are live; only then may its original child grant be released.
+            *entry = (variable, term);
+            self.children[index] = allocation;
+        } else {
+            assert!(self.entries.len() < self.entries.capacity());
+            assert!(self.children.len() < self.children.capacity());
+            self.entries.push((variable, term));
+            self.children.push(allocation);
+        }
+    }
+
+    fn copy_entries<'a>(
+        entries: impl Iterator<Item = &'a (Variable, GroundTerm)> + Clone,
+        workspace: &crate::WorkspaceCapability,
+    ) -> RewriteResult<Self> {
+        let mut out = Self::default();
+        out.reserve(entries.clone().count(), workspace)?;
+        for (index, (variable, ground)) in entries.enumerate() {
+            let mut frame = crate::workspace::LexicalFrame::new(workspace);
+            let term = {
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                clone_ground_with_memory(ground, &mut memory)?
+            };
+            out.put(
+                index,
+                variable.clone(),
+                AdmittedGroundTerm {
+                    term,
+                    allocation: frame.into_allocation(),
+                },
+            );
+        }
+        Ok(out)
+    }
+}
+
+pub(crate) fn build_prepared_probes(
+    probes: &mut PreparedProbes,
+    substitutions: Prebindings<'_>,
+    workspace: &crate::WorkspaceCapability,
+) -> RewriteResult<()> {
+    let result = (|| {
+        probes.reserve(substitutions.len(), workspace)?;
+        for index in 0..substitutions.len() {
+            let mut frame = crate::workspace::LexicalFrame::new(workspace);
+            let term = {
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                substitutions.ground_reusing_with_memory(
+                    index,
+                    probes.entries.get(index).map(|(_, ground)| ground),
+                    &mut memory,
+                )?
+            };
+            let variable = match substitutions {
+                Prebindings::Paired(names, _) => names[index].clone(),
+                _ => Variable::from_admitted(workspace.authored_text(&substitutions.name(index))?),
+            };
+            probes.put(
+                index,
+                variable,
+                AdmittedGroundTerm {
+                    term,
+                    allocation: frame.into_allocation(),
+                },
+            );
+        }
+        // Truncate payload first, then the grants protecting its old children.
+        probes.entries.truncate(substitutions.len());
+        probes.children.truncate(substitutions.len());
+        Ok(())
+    })();
+    if result.is_err() {
+        // The original failure has already been selected in `result`; cleanup
+        // cannot replace it or create another admission attempt.
+        probes.reset_after_failure(workspace);
+    }
+    result
+}
+
+fn for_each_expression_mut_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    memory: &mut RewriteMemory<'_>,
+    visit: impl FnMut(&mut Expression, &mut RewriteMemory<'_>) -> RewriteResult<()>,
+) -> RewriteResult<()> {
+    match purrdf_sparql_algebra::walk::for_each_expression_mut_with_memory(roots, memory, visit) {
+        Ok(()) => Ok(()),
+        Err(purrdf_sparql_algebra::walk::MutationError::Visitor(error)) => Err(error),
+        Err(purrdf_sparql_algebra::walk::MutationError::Storage(error)) => Err(memory
+            .admission_mut()
+            .storage_error(error, "prebinding expression walk")
+            .into()),
+    }
+}
+
+/// The expressions `node` itself evaluates, in the order the substitution walk reads
+/// them: its `FILTER`, `BIND` or `UNFOLD` expression, its `OPTIONAL` condition, its
+/// sort keys, or — for a `GROUP BY`, whose aggregates are held apart in `aggregates`
+/// while the walk is inside them — each aggregate's arguments and then its own `FOLD`
+/// sort keys, aggregate by aggregate.
+fn own_expressions_with_memory<'n>(
+    node: &'n mut GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<&'n mut Expression>> {
+    let mut out = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    match node {
+        GraphPattern::Extend { expression, .. }
+        | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter {
+            expr: expression, ..
+        }
+        | GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => out.push(expression)?,
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression {
+                out.push(order.expression_mut())?;
+            }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for expression in aggregate.expressions_mut() {
+                    out.push(expression)?;
+                }
+            }
+        }
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::Values { .. }
@@ -1985,6 +2007,7 @@ fn own_expressions<'n>(
         | GraphPattern::Minus { .. }
         | GraphPattern::Union { .. }
         | GraphPattern::Lateral { .. }
+        | GraphPattern::Apply { .. }
         | GraphPattern::LeftJoin {
             expression: None, ..
         }
@@ -1994,37 +2017,1933 @@ fn own_expressions<'n>(
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
-        | GraphPattern::PropertyFunction(_) => Vec::new(),
+        | GraphPattern::PropertyFunction(_) => {}
+    }
+    Ok(out)
+}
+
+fn for_each_node_expression_mut_with_memory(
+    node: &mut GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+    mut visit: impl FnMut(&mut Expression, &mut RewriteMemory<'_>) -> RewriteResult<()>,
+) -> RewriteResult<()> {
+    for expression in own_expressions_with_memory(node, memory)? {
+        visit(expression, memory)?;
+    }
+    Ok(())
+}
+
+fn push_child_patterns_with_memory<'p, T>(
+    node: &'p mut GraphPattern,
+    pending: &mut crate::AdmittedVec<T>,
+    mut item: impl FnMut(&'p mut GraphPattern) -> T,
+) -> RewriteResult<()> {
+    // Reserve the exact added population before borrowing the child positions.
+    let count = match &*node {
+        GraphPattern::Join { .. }
+        | GraphPattern::LeftJoin { .. }
+        | GraphPattern::Lateral { .. }
+        | GraphPattern::Apply { .. }
+        | GraphPattern::Minus { .. } => 2,
+        GraphPattern::Union { arms } => arms.len(),
+        GraphPattern::Filter { .. }
+        | GraphPattern::Graph { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::Extend { .. }
+        | GraphPattern::Unfold { .. }
+        | GraphPattern::OrderBy { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Group { .. } => 1,
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => 0,
+    };
+    pending.reserve_additional(count)?;
+    for_each_child_pattern_mut(node, &mut |child| pending.push_reserved(item(child)));
+    Ok(())
+}
+
+fn apply_probes_with_memory(
+    mut query: Query,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    let pattern = query_pattern_mut(&mut query);
+    let core = core_slot(pattern);
+    push_probe_constants_with_memory(core, probes, memory)?;
+    if has_repeated_variable(probes) {
+        // The original per-variable door only joins one seed after pushdown. Keep
+        // that source order, including incompatible repeated bindings.
+        for entry in probes {
+            let seed = seed_entries_with_memory(std::iter::once(entry), memory)?;
+            *core = rewrite_join(seed, take_child(core), memory)?;
+        }
+    } else {
+        let seed = seed_entries_with_memory(probes.iter(), memory)?;
+        *core = rewrite_join(seed, take_child(core), memory)?;
+    }
+    Ok(query)
+}
+
+fn query_pattern_mut(query: &mut Query) -> &mut GraphPattern {
+    match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => pattern,
     }
 }
 
-/// The operand `pattern` hands to the substitution walk, and the scope it is in.
-type SubstituteDescent = (GraphPattern, WalkScope);
+fn probe_term_pattern_with_memory(
+    term: &mut TermPattern,
+    probes: &[(Variable, GroundTerm)],
+    probed: &mut Vec<usize>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let result = probe_positions_with_memory(
+        [ProbePosition::Term(term)],
+        probes,
+        probed,
+        ProbeRule::Pushdown,
+        memory,
+    );
+    native_storage(memory, result)
+}
+
+fn probe_triple_pattern_with_memory(
+    triple: &mut TriplePattern,
+    probes: &[(Variable, GroundTerm)],
+    probed: &mut Vec<usize>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    probe_term_pattern_with_memory(&mut triple.subject, probes, probed, memory)?;
+    probe_term_pattern_with_memory(&mut triple.object, probes, probed, memory)
+}
+
+fn probe_call_arguments_with_memory(
+    call: &mut PropertyFunctionCall,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Vec<usize>> {
+    let mut probed = Vec::new();
+    for term in call
+        .subject_args
+        .iter_mut()
+        .chain(call.object_args.iter_mut())
+    {
+        probe_term_pattern_with_memory(term, probes, &mut probed, memory)?;
+    }
+    Ok(probed)
+}
+
+fn restore_probed_bindings_with_memory(
+    leaf: &mut GraphPattern,
+    probed: &[usize],
+    probes: &[(Variable, GroundTerm)],
+    at_core_root: bool,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if probed.is_empty() || at_core_root {
+        return Ok(());
+    }
+    let seed = seed_entries_with_memory(probed.iter().map(|&index| &probes[index]), memory)?;
+    *leaf = rewrite_join(take_child(leaf), seed, memory)?;
+    Ok(())
+}
+
+fn complete_shacl_leaf_with_memory(
+    leaf: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    scope: WalkScope,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut bound = Vec::new();
+    match leaf {
+        GraphPattern::Bgp { patterns } => {
+            for triple in patterns {
+                let result = probe_positions_with_memory(
+                    [
+                        ProbePosition::Term(&mut triple.object),
+                        ProbePosition::Predicate(&mut triple.predicate),
+                        ProbePosition::Term(&mut triple.subject),
+                    ],
+                    probes,
+                    &mut bound,
+                    ProbeRule::Shacl,
+                    memory,
+                );
+                native_storage(memory, result)?;
+            }
+        }
+        GraphPattern::Path {
+            subject, object, ..
+        } => {
+            let result = probe_positions_with_memory(
+                [ProbePosition::Term(object), ProbePosition::Term(subject)],
+                probes,
+                &mut bound,
+                ProbeRule::Shacl,
+                memory,
+            );
+            native_storage(memory, result)?;
+        }
+        _ => unreachable!("only matched leaves reach SHACL completion"),
+    }
+    restore_shacl_bindings_with_memory(leaf, &bound, probes, scope, memory)?;
+    let result = memory.release_vec(bound);
+    native_storage(memory, result)
+}
+
+fn restore_shacl_bindings_with_memory(
+    leaf: &mut GraphPattern,
+    bound: &[usize],
+    probes: &[(Variable, GroundTerm)],
+    scope: WalkScope,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if bound.is_empty() {
+        return Ok(());
+    }
+    let kept = if scope == WalkScope::ExistsBody {
+        let exposed = crate::eval::syntactic_schema_admitted(leaf, &rewrite_workspace(memory))?;
+        Some(rewrite_vec(
+            exposed
+                .vars()
+                .iter()
+                .filter(|variable| !bound.iter().any(|&index| &probes[index].0 == *variable))
+                .cloned(),
+            memory,
+        )?)
+    } else {
+        None
+    };
+    restore_probed_bindings_with_memory(leaf, bound, probes, false, memory)?;
+    if let Some(variables) = kept {
+        *leaf = GraphPattern::Project {
+            inner: rewrite_child(take_child(leaf), memory)?,
+            variables,
+        };
+    }
+    Ok(())
+}
+
+fn driven_arguments_with_memory(
+    call: &PropertyFunctionCall,
+    probes: &[(Variable, GroundTerm)],
+    rule: Unwritable,
+    already: Option<&GraphPattern>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<usize>> {
+    let mut driven = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    let mut pending = rewrite_scratch(
+        call.subject_args
+            .iter()
+            .chain(call.object_args.iter())
+            .rev(),
+        memory,
+    )?;
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(variable) => {
+                if let Some(index) = probes
+                    .iter()
+                    .position(|(candidate, _)| candidate == variable)
+                    && !driven.contains(&index)
+                    && !already.is_some_and(|left| drives(left, variable))
+                    && rule.holds_with_memory(&probes[index].1, memory)?
+                {
+                    driven.push(index)?;
+                }
+            }
+            TermPattern::Triple(triple) => {
+                pending.push(&triple.object)?;
+                pending.push(&triple.subject)?;
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+    Ok(driven)
+}
+
+fn call_driver_with_memory(
+    call: &PropertyFunctionCall,
+    values: &[(Variable, GroundTerm)],
+    rule: Unwritable,
+    already: Option<&GraphPattern>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Option<GraphPattern>> {
+    let driven = driven_arguments_with_memory(call, values, rule, already, memory)?;
+    if driven.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(seed_entries_with_memory(
+        driven.iter().map(|&index| &values[index]),
+        memory,
+    )?))
+}
+
+fn plant_stand_alone_driver_with_memory(
+    call: &mut GraphPattern,
+    seed: GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    *call = GraphPattern::Lateral {
+        left: rewrite_child(seed, memory)?,
+        right: rewrite_child(take_child(call), memory)?,
+    };
+    Ok(())
+}
+
+fn plant_left_driver_with_memory(
+    left: &mut GraphPattern,
+    seed: GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    *left = rewrite_join(seed, take_child(left), memory)?;
+    Ok(())
+}
+
+fn plant_scoped_driver_with_memory(
+    call: &mut GraphPattern,
+    seed: GraphPattern,
+    variables: Vec<Variable>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let lateral = GraphPattern::Lateral {
+        left: rewrite_child(seed, memory)?,
+        right: rewrite_child(take_child(call), memory)?,
+    };
+    *call = GraphPattern::Project {
+        inner: rewrite_child(lateral, memory)?,
+        variables,
+    };
+    Ok(())
+}
+
+fn drive_call_arguments_with_memory(
+    pattern: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    rule: Unwritable,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    match pattern {
+        GraphPattern::PropertyFunction(call) => {
+            if let Some(seed) = call_driver_with_memory(call, probes, rule, None, memory)? {
+                plant_stand_alone_driver_with_memory(pattern, seed, memory)?;
+            }
+        }
+        GraphPattern::Lateral { left, right } => {
+            if let Some(call) = lateral_call(right)
+                && let Some(seed) = call_driver_with_memory(call, probes, rule, Some(left), memory)?
+            {
+                plant_left_driver_with_memory(left, seed, memory)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn undriven_variables_with_memory(
+    call: &PropertyFunctionCall,
+    seed: &GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Vec<Variable>> {
+    enum Position<'a> {
+        Term(&'a TermPattern),
+        Predicate(&'a NamedNodePattern),
+    }
+    let driven = match seed {
+        GraphPattern::Values { variables, .. } => &variables[..],
+        _ => &[],
+    };
+    let mut kept = Vec::new();
+    let mut pending = rewrite_scratch(
+        call.subject_args
+            .iter()
+            .chain(call.object_args.iter())
+            .rev()
+            .map(Position::Term),
+        memory,
+    )?;
+    while let Some(position) = pending.pop() {
+        match position {
+            Position::Term(TermPattern::Variable(variable))
+            | Position::Predicate(NamedNodePattern::Variable(variable)) => {
+                if !driven.contains(variable) && !kept.contains(variable) {
+                    let result = memory.push(&mut kept, variable.clone());
+                    native_storage(memory, result)?;
+                }
+            }
+            Position::Term(TermPattern::Triple(triple)) => {
+                pending.push(Position::Term(&triple.object))?;
+                pending.push(Position::Predicate(&triple.predicate))?;
+                pending.push(Position::Term(&triple.subject))?;
+            }
+            Position::Term(
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
+            )
+            | Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
+        }
+    }
+    Ok(kept)
+}
+
+pub(crate) fn bind_call_arguments_with_memory(
+    call: &mut PropertyFunctionCall,
+    values: &[(Variable, GroundTerm)],
+    already: Option<&GraphPattern>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Option<GraphPattern>> {
+    for term in call
+        .subject_args
+        .iter_mut()
+        .chain(call.object_args.iter_mut())
+    {
+        substitute_in_term_pattern_with_memory(term, values, memory)?;
+    }
+    call_driver_with_memory(call, values, Unwritable::InArgument, already, memory)
+}
+
+fn substitute_in_term_pattern_with_memory(
+    term: &mut TermPattern,
+    values: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut pending = rewrite_scratch(std::iter::once(term), memory)?;
+    while let Some(term) = pending.pop() {
+        let variable = match term {
+            TermPattern::Variable(variable) => variable,
+            TermPattern::Triple(triple) => {
+                let triple: &mut TriplePattern = triple;
+                pending.push(&mut triple.object)?;
+                pending.push(&mut triple.subject)?;
+                continue;
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                continue;
+            }
+        };
+        let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == variable) else {
+            continue;
+        };
+        *term = match Pushability::of(ground) {
+            Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+            Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+            Pushability::QuotedTriple(_) | Pushability::SeedOnly => continue,
+        };
+    }
+    Ok(())
+}
+
+fn true_literal_with_memory(memory: &mut RewriteMemory<'_>) -> RewriteResult<Expression> {
+    let workspace = rewrite_workspace(memory);
+    Ok(Expression::Literal(Literal::from_admitted(
+        workspace.authored_text(&"true")?,
+        NamedNode::from_admitted(workspace.authored_text(&purrdf_xsd::datatype::XSD_BOOLEAN)?),
+        None,
+        None,
+    )))
+}
+
+fn rewrite_walk<'a>(
+    root: purrdf_sparql_algebra::walk::NodeRef<'a>,
+    mut visit: impl FnMut(
+        purrdf_sparql_algebra::walk::Visit,
+        purrdf_sparql_algebra::walk::NodeRef<'a>,
+    ) -> purrdf_sparql_algebra::walk::Flow,
+    workspace: &crate::WorkspaceCapability,
+) -> RewriteResult<bool> {
+    use purrdf_sparql_algebra::walk::WalkError;
+    match purrdf_sparql_algebra::walk::try_walk_pre_post(
+        root,
+        |when, node| Ok::<_, GroundFailure>(visit(when, node)),
+        |bytes| {
+            Ok(workspace.charge(
+                u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+            )?)
+        },
+    ) {
+        Ok(completed) => Ok(completed),
+        Err(WalkError::Visitor(error)) => Err(error),
+        Err(WalkError::Allocation(_)) => Err(crate::EvalError::AllocationFailed {
+            construct: "prebinding read-only walk",
+        }
+        .into()),
+        Err(WalkError::LayoutOverflow) => Err(crate::EvalError::WorkspaceBoundOverflow.into()),
+    }
+}
+
+fn for_each_expression_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e Expression>,
+    mut visit: impl FnMut(&'e Expression, &mut RewriteMemory<'_>) -> RewriteResult<()>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, WalkError};
+    let workspace = rewrite_workspace(memory);
+    for root in roots {
+        let result = purrdf_sparql_algebra::walk::try_walk_pre_post(
+            NodeRef::Expr(root),
+            |when, node| {
+                if when == Visit::Enter {
+                    let NodeRef::Expr(expression) = node else {
+                        unreachable!("EXISTS body traversal is skipped at the expression")
+                    };
+                    visit(expression, memory)?;
+                    if matches!(expression, Expression::Exists(_)) {
+                        return Ok(Flow::Skip);
+                    }
+                }
+                Ok(Flow::Descend)
+            },
+            |bytes| {
+                Ok(workspace.charge(
+                    u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+                )?)
+            },
+        );
+        match result {
+            Ok(_) => {}
+            Err(WalkError::Visitor(error)) => return Err(error),
+            Err(WalkError::Allocation(_)) => {
+                return Err(crate::EvalError::AllocationFailed {
+                    construct: "prebinding expression reads",
+                }
+                .into());
+            }
+            Err(WalkError::LayoutOverflow) => {
+                return Err(crate::EvalError::WorkspaceBoundOverflow.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn operand_schema_with_memory(
+    node: &GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::solution::SharedSchema> {
+    let source = match node {
+        GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Filter { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. } => &**inner,
+        other => other,
+    };
+    Ok(crate::eval::syntactic_schema_admitted(
+        source,
+        &rewrite_workspace(memory),
+    )?)
+}
+
+fn carried_columns_with_memory(
+    node: &GraphPattern,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    reads: &Reads<impl std::ops::Deref<Target = [usize]>>,
+    scope: WalkScope,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Vec<Variable>> {
+    let workspace = rewrite_workspace(memory);
+    let exposed = crate::eval::syntactic_schema_admitted(node, &workspace)?;
+    let mut carried = rewrite_vec(exposed.vars().iter().cloned(), memory)?;
+    if scope != WalkScope::Descent {
+        let named = crate::expr::pattern_all_vars_admitted(node, &workspace)?;
+        let driven = |variable: &Variable| {
+            reads
+                .in_exists
+                .iter()
+                .any(|&index| &expr_subs.entries()[index].0 == variable)
+        };
+        let mut extra = rewrite_scratch(
+            named
+                .vars()
+                .iter()
+                .filter(|variable| !exposed.contains(variable) && !driven(variable))
+                .cloned(),
+            memory,
+        )?;
+        extra
+            .as_mut_slice()
+            .sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+        for variable in extra {
+            let result = memory.push(&mut carried, variable);
+            native_storage(memory, result)?;
+        }
+    }
+    Ok(carried)
+}
+
+fn note_reads_with_memory(
+    expression: &Expression,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    reads: &mut Reads<crate::AdmittedVec<usize>>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    for_each_expression_with_memory(
+        [expression],
+        |expression, memory| {
+            match expression {
+                Expression::Variable(variable) => {
+                    if let Some(index) = expr_subs
+                        .entries()
+                        .iter()
+                        .position(|(candidate, _)| candidate == variable)
+                        && !reads.plain.contains(&index)
+                    {
+                        reads.plain.push(index)?;
+                    }
+                }
+                Expression::Exists(body) => {
+                    let named =
+                        crate::expr::pattern_all_vars_admitted(body, &rewrite_workspace(memory))?;
+                    for (index, (variable, _)) in expr_subs.entries().iter().enumerate() {
+                        if named.contains(variable) && !reads.in_exists.contains(&index) {
+                            reads.in_exists.push(index)?;
+                        }
+                    }
+                }
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Bound(_)
+                | Expression::Or(_)
+                | Expression::And(_)
+                | Expression::Arithmetic(..)
+                | Expression::Equal(..)
+                | Expression::SameTerm(..)
+                | Expression::Greater(..)
+                | Expression::GreaterOrEqual(..)
+                | Expression::Less(..)
+                | Expression::LessOrEqual(..)
+                | Expression::UnaryPlus(_)
+                | Expression::UnaryMinus(_)
+                | Expression::Not(_)
+                | Expression::In(..)
+                | Expression::If(..)
+                | Expression::Coalesce(_)
+                | Expression::FunctionCall(..) => {}
+            }
+            Ok(())
+        },
+        memory,
+    )
+}
+
+fn rename_reads_with_memory(
+    expression: &mut Expression,
+    renames: &[(Variable, Variable)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    for_each_expression_mut_with_memory([expression], memory, |expression, _| {
+        if let Expression::Variable(variable) = expression
+            && let Some((_, to)) = renames.iter().find(|(from, _)| from == variable)
+        {
+            *variable = to.clone();
+        }
+        Ok(())
+    })
+}
+
+struct StandInText<'a>(&'a Variable);
+impl std::fmt::Display for StandInText<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{STAND_IN_PREFIX}{}", self.0.as_str())
+    }
+}
+
+fn drive_expression_reads_with_memory(
+    node: &mut GraphPattern,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    scope: WalkScope,
+    operand: SeedColumns,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if scope == WalkScope::Descent
+        && (0..expr_subs.entries().len()).all(|index| operand.carries(index))
+    {
+        return Ok(());
+    }
+    let workspace = rewrite_workspace(memory);
+    let mut reads = Reads {
+        plain: crate::AdmittedVec::new(&workspace),
+        in_exists: crate::AdmittedVec::new(&workspace),
+    };
+    let roots = node_expressions_with_memory(node, memory)?;
+    for expression in roots {
+        note_reads_with_memory(expression, expr_subs, &mut reads, memory)?;
+    }
+    if scope == WalkScope::Descent {
+        reads.plain.retain(|&index| !operand.carries(index));
+        reads.in_exists.retain(|&index| !operand.carries(index));
+    } else if !reads.in_exists.is_empty() {
+        let exposed = operand_schema_with_memory(node, memory)?;
+        reads
+            .in_exists
+            .retain(|&index| !exposed.contains(&expr_subs.entries()[index].0));
+    }
+    if reads.plain.is_empty() && reads.in_exists.is_empty() {
+        return Ok(());
+    }
+    let hides_operand = matches!(node, GraphPattern::Group { .. });
+    let carried = if hides_operand {
+        None
+    } else {
+        Some(carried_columns_with_memory(
+            node, expr_subs, &reads, scope, memory,
+        )?)
+    };
+    let mut renames = crate::AdmittedVec::new(&workspace);
+    for &index in &reads.plain {
+        let variable = &expr_subs.entries()[index].0;
+        renames.push((
+            variable.clone(),
+            rewrite_variable(&StandInText(variable), memory)?,
+        ))?;
+    }
+    if !renames.is_empty() {
+        for_each_node_expression_mut_with_memory(node, memory, |expression, memory| {
+            rename_reads_with_memory(expression, &renames, memory)
+        })?;
+    }
+    let mut variables = Vec::new();
+    let mut row = Vec::new();
+    let count = renames
+        .len()
+        .checked_add(reads.in_exists.len())
+        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    let result = memory.reserve(&mut variables, count);
+    native_storage(memory, result)?;
+    let result = memory.reserve(&mut row, count);
+    native_storage(memory, result)?;
+    for (&index, (_, stand_in)) in reads.plain.iter().zip(renames) {
+        variables.push(stand_in);
+        row.push(Some(clone_ground_with_memory(
+            &expr_subs.entries()[index].1,
+            memory,
+        )?));
+    }
+    for &index in &reads.in_exists {
+        variables.push(expr_subs.entries()[index].0.clone());
+        row.push(Some(clone_ground_with_memory(
+            &expr_subs.entries()[index].1,
+            memory,
+        )?));
+    }
+    let bindings = rewrite_vec([row], memory)?;
+    let seed = GraphPattern::Values {
+        variables,
+        bindings,
+    };
+    match node {
+        GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Filter { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. }
+        | GraphPattern::LeftJoin { left: inner, .. } => {
+            plant_left_driver_with_memory(inner, seed, memory)?;
+        }
+        _ => unreachable!("only expression-bearing nodes can record expression reads"),
+    }
+    if let Some(variables) = carried {
+        *node = GraphPattern::Project {
+            inner: rewrite_child(take_child(node), memory)?,
+            variables,
+        };
+    }
+    Ok(())
+}
+
+fn node_expressions_with_memory<'n>(
+    node: &'n GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<&'n Expression>> {
+    let mut out = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    match node {
+        GraphPattern::Extend { expression, .. }
+        | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter {
+            expr: expression, ..
+        }
+        | GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => out.push(expression)?,
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression {
+                out.push(order.expression())?;
+            }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for expression in aggregate
+                    .args()
+                    .iter()
+                    .chain(aggregate.order_by().iter().map(OrderExpression::expression))
+                {
+                    out.push(expression)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+fn carry_past_group_with_memory(
+    node: &mut GraphPattern,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    keys: &[Variable],
+    carried: SeedColumns,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<SeedColumns> {
+    let mut restored = carried.0;
+    let mut indices: crate::AdmittedVec<usize> =
+        crate::AdmittedVec::new(&rewrite_workspace(memory));
+    for (index, (variable, _)) in expr_subs.entries().iter().enumerate() {
+        if keys.contains(variable)
+            || indices
+                .iter()
+                .any(|&seen| expr_subs.entries()[seen].0 == *variable)
+        {
+            continue;
+        }
+        indices.push(index)?;
+        if index < 64 {
+            restored |= 1_u64 << index;
+        }
+    }
+    if indices.is_empty() {
+        return Ok(carried);
+    }
+    let seed = seed_entries_with_memory(
+        indices.iter().map(|&index| &expr_subs.entries()[index]),
+        memory,
+    )?;
+    *node = rewrite_join(seed, take_child(node), memory)?;
+    Ok(SeedColumns(restored))
+}
+
+fn finish_own_expressions_with_memory(
+    frame: &mut SubstituteFrame,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<SeedColumns> {
+    let operand = frame.operand;
+    match &frame.node {
+        GraphPattern::LeftJoin {
+            expression: None, ..
+        } => Ok(operand),
+        GraphPattern::Group { variables, .. } => {
+            let keys = rewrite_scratch(variables.iter().cloned(), memory)?;
+            let carried = operand.kept(expr_subs, &keys);
+            drive_expression_reads_with_memory(
+                &mut frame.node,
+                expr_subs,
+                frame.scope,
+                operand,
+                memory,
+            )?;
+            if frame.scope == WalkScope::ExistsBody {
+                Ok(carried)
+            } else {
+                carry_past_group_with_memory(&mut frame.node, expr_subs, &keys, carried, memory)
+            }
+        }
+        _ => {
+            drive_expression_reads_with_memory(
+                &mut frame.node,
+                expr_subs,
+                frame.scope,
+                operand,
+                memory,
+            )?;
+            Ok(operand)
+        }
+    }
+}
+
+fn substitute_in_expressions_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    bodies: &mut crate::AdmittedVec<GraphPattern>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    for_each_expression_mut_with_memory(roots, memory, |expression, memory| {
+        match expression {
+            Expression::Variable(variable) => {
+                if let Some(replacement) = expr_subs
+                    .get(variable.as_str())
+                    .and_then(expression_from_ground)
+                {
+                    *expression = replacement;
+                }
+            }
+            Expression::Bound(variable) => {
+                if expr_subs.contains_key(variable.as_str()) {
+                    *expression = true_literal_with_memory(memory)?;
+                }
+            }
+            Expression::Exists(inner) => bodies.push(take_child(inner))?,
+            Expression::NamedNode(_)
+            | Expression::Literal(_)
+            | Expression::Or(_)
+            | Expression::And(_)
+            | Expression::Arithmetic(..)
+            | Expression::Equal(..)
+            | Expression::SameTerm(..)
+            | Expression::Greater(..)
+            | Expression::GreaterOrEqual(..)
+            | Expression::Less(..)
+            | Expression::LessOrEqual(..)
+            | Expression::UnaryPlus(_)
+            | Expression::UnaryMinus(_)
+            | Expression::Not(_)
+            | Expression::In(..)
+            | Expression::If(..)
+            | Expression::Coalesce(_)
+            | Expression::FunctionCall(..) => {}
+        }
+        Ok(())
+    })
+}
+
+fn replace_exists_bodies_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    bodies: crate::AdmittedVec<GraphPattern>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut bodies = bodies.into_iter();
+    for_each_expression_mut_with_memory(roots, memory, |expression, _| {
+        if let Expression::Exists(inner) = expression {
+            **inner = bodies
+                .next()
+                .expect("every EXISTS body was taken out in source order");
+        }
+        Ok(())
+    })?;
+    debug_assert_eq!(
+        bodies.size_hint(),
+        (0, Some(0)),
+        "every taken body goes back"
+    );
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ScopeFlags {
+    on_descent: bool,
+    in_exists: bool,
+    joined: bool,
+}
+
+enum ScopeOperation<'a> {
+    Assign {
+        names: &'a [&'a str],
+        fresh: &'a mut usize,
+    },
+    Minus {
+        probes: &'a [(Variable, GroundTerm)],
+        fresh: &'a mut usize,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ScopeStage {
+    Bodies,
+    Children,
+}
+
+struct ScopeFrame {
+    node: GraphPattern,
+    flags: ScopeFlags,
+    stage: ScopeStage,
+    pending: crate::AdmittedVec<GraphPattern>,
+    done: crate::AdmittedVec<GraphPattern>,
+    child_flags: ScopeFlags,
+    skip: usize,
+}
+
+fn take_own_exists_with_memory(
+    node: &mut GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<GraphPattern>> {
+    let mut bodies = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    let roots = own_expressions_with_memory(node, memory)?;
+    for_each_expression_mut_with_memory(roots, memory, |expression, _| {
+        if let Expression::Exists(body) = expression {
+            bodies.push(take_child(body))?;
+        }
+        Ok(())
+    })?;
+    bodies.as_mut_slice().reverse();
+    Ok(bodies)
+}
+
+fn scope_target(node: &mut GraphPattern, skip: usize) -> &mut GraphPattern {
+    let mut target = node;
+    for _ in 0..skip {
+        target = match target {
+            GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => inner,
+            _ => unreachable!("assignment wrappers were just constructed"),
+        };
+    }
+    target
+}
+
+fn scope_begin_children(
+    frame: &mut ScopeFrame,
+    operation: &mut ScopeOperation<'_>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Option<(GraphPattern, ScopeFlags)>> {
+    let roots = own_expressions_with_memory(&mut frame.node, memory)?;
+    let done = std::mem::replace(
+        &mut frame.done,
+        crate::AdmittedVec::new(&rewrite_workspace(memory)),
+    );
+    replace_exists_bodies_with_memory(roots, done, memory)?;
+    let (flags, skip) = scope_process_node(&mut frame.node, frame.flags, operation, memory)?;
+    frame.child_flags = flags;
+    frame.skip = skip;
+    frame.stage = ScopeStage::Children;
+    frame.pending.clear();
+    push_child_patterns_with_memory(
+        scope_target(&mut frame.node, skip),
+        &mut frame.pending,
+        take_child,
+    )?;
+    Ok(frame.pending.pop().map(|child| (child, flags)))
+}
+
+/// The original expression-body-before-node, then reverse-child walk shared by
+/// assignment joining and MINUS seeding, now holding owned frames instead of
+/// recursing through EXISTS levels. Every taken slot stays inside its original box.
+fn scope_walk_with_memory(
+    root: &mut GraphPattern,
+    flags: ScopeFlags,
+    mut operation: ScopeOperation<'_>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let workspace = rewrite_workspace(memory);
+    let mut open = crate::AdmittedVec::new(&workspace);
+    let mut next = (take_child(root), flags);
+    loop {
+        let (mut node, flags) = next;
+        let pending = take_own_exists_with_memory(&mut node, memory)?;
+        let mut frame = ScopeFrame {
+            node,
+            flags,
+            stage: ScopeStage::Bodies,
+            pending,
+            done: crate::AdmittedVec::new(&workspace),
+            child_flags: flags,
+            skip: 0,
+        };
+        if let Some(body) = frame.pending.pop() {
+            next = (
+                body,
+                ScopeFlags {
+                    on_descent: true,
+                    in_exists: true,
+                    joined: false,
+                },
+            );
+            open.push(frame)?;
+            continue;
+        }
+        if let Some(child) = scope_begin_children(&mut frame, &mut operation, memory)? {
+            next = child;
+            open.push(frame)?;
+            continue;
+        }
+        let mut finished = frame.node;
+        loop {
+            let Some(mut frame) = open.pop() else {
+                *root = finished;
+                return Ok(());
+            };
+            frame.done.push(finished)?;
+            if let Some(pending) = frame.pending.pop() {
+                next = match frame.stage {
+                    ScopeStage::Bodies => (
+                        pending,
+                        ScopeFlags {
+                            on_descent: true,
+                            in_exists: true,
+                            joined: false,
+                        },
+                    ),
+                    ScopeStage::Children => (pending, frame.child_flags),
+                };
+                open.push(frame)?;
+                break;
+            }
+            match frame.stage {
+                ScopeStage::Bodies => {
+                    if let Some(child) = scope_begin_children(&mut frame, &mut operation, memory)? {
+                        next = child;
+                        open.push(frame)?;
+                        break;
+                    }
+                }
+                ScopeStage::Children => {
+                    // Original child pushes were left-to-right and pops were last
+                    // first; reverse completed children to restore original slots.
+                    frame.done.as_mut_slice().reverse();
+                    let done =
+                        std::mem::replace(&mut frame.done, crate::AdmittedVec::new(&workspace));
+                    let mut done = done.into_iter();
+                    for_each_child_pattern_mut(
+                        scope_target(&mut frame.node, frame.skip),
+                        &mut |slot| {
+                            *slot = done.next().expect("every taken pattern child returns");
+                        },
+                    );
+                    debug_assert_eq!(done.size_hint(), (0, Some(0)));
+                }
+            }
+            finished = frame.node;
+        }
+    }
+}
+
+struct FreshAssignment<'a> {
+    counter: usize,
+    variable: &'a Variable,
+}
+impl std::fmt::Display for FreshAssignment<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{ASSIGNED_PREFIX}{}_{}",
+            self.counter,
+            self.variable.as_str()
+        )
+    }
+}
+
+struct FreshMinus(usize);
+impl std::fmt::Display for FreshMinus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{MINUS_PREFIX}{}", self.0)
+    }
+}
+
+fn compatible_with_binding_with_memory(
+    name: Variable,
+    to: Variable,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Expression> {
+    let left = Expression::Not(rewrite_child(Expression::Bound(to.clone()), memory)?);
+    let right = Expression::SameTerm(
+        rewrite_child(Expression::Variable(to), memory)?,
+        rewrite_child(Expression::Variable(name), memory)?,
+    );
+    let items = rewrite_vec([left, right], memory)?;
+    Ok(Expression::Or(
+        Chain::try_from(items).unwrap_or_else(|_| unreachable!("two operands")),
+    ))
+}
+
+fn scope_process_node(
+    node: &mut GraphPattern,
+    flags: ScopeFlags,
+    operation: &mut ScopeOperation<'_>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<(ScopeFlags, usize)> {
+    match operation {
+        ScopeOperation::Minus { probes, fresh } => {
+            if let GraphPattern::Minus { left, right } = node {
+                if flags.in_exists {
+                    **fresh = fresh
+                        .checked_add(1)
+                        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+                    let shared = rewrite_variable(&FreshMinus(**fresh), memory)?;
+                    let mark = NamedNode::from_admitted(
+                        rewrite_workspace(memory).authored_text(&MINUS_MARK)?,
+                    );
+                    **left = GraphPattern::Extend {
+                        inner: rewrite_child(take_child(left), memory)?,
+                        variable: shared.clone(),
+                        expression: Expression::NamedNode(mark.clone()),
+                    };
+                    let seed = seed_entries_with_memory(probes.iter(), memory)?;
+                    let right_operand = GraphPattern::Extend {
+                        inner: rewrite_child(take_child(right), memory)?,
+                        variable: shared,
+                        expression: Expression::NamedNode(mark),
+                    };
+                    **right = rewrite_join(seed, right_operand, memory)?;
+                } else {
+                    for side in [&mut **left, &mut **right] {
+                        let seed = seed_entries_with_memory(probes.iter(), memory)?;
+                        *side = rewrite_join(seed, take_child(side), memory)?;
+                    }
+                }
+            }
+            Ok((flags, 0))
+        }
+        ScopeOperation::Assign { names, fresh } => {
+            let mut moved = crate::AdmittedVec::new(&rewrite_workspace(memory));
+            let mut fresh_for =
+                |variable: &mut Variable, memory: &mut RewriteMemory<'_>| -> RewriteResult<()> {
+                    if names.contains(&variable.as_str()) {
+                        **fresh = fresh
+                            .checked_add(1)
+                            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+                        let to = rewrite_variable(
+                            &FreshAssignment {
+                                counter: **fresh,
+                                variable,
+                            },
+                            memory,
+                        )?;
+                        moved.push((variable.clone(), to.clone()))?;
+                        *variable = to;
+                    }
+                    Ok(())
+                };
+            match node {
+                GraphPattern::Extend { variable, .. } => fresh_for(variable, memory)?,
+                GraphPattern::Unfold {
+                    element, companion, ..
+                } => {
+                    fresh_for(element, memory)?;
+                    if let Some(companion) = companion {
+                        fresh_for(companion, memory)?;
+                    }
+                }
+                GraphPattern::Group { aggregates, .. } => {
+                    for (variable, _) in aggregates {
+                        fresh_for(variable, memory)?;
+                    }
+                }
+                GraphPattern::Values { variables, .. } if !flags.joined => {
+                    for variable in variables {
+                        fresh_for(variable, memory)?;
+                    }
+                }
+                _ => {}
+            }
+            let wrapper = matches!(
+                node,
+                GraphPattern::Project { .. }
+                    | GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::OrderBy { .. }
+                    | GraphPattern::Group { .. }
+                    | GraphPattern::Extend { .. }
+                    | GraphPattern::Filter { .. }
+                    | GraphPattern::Unfold { .. }
+            );
+            let child_flags = ScopeFlags {
+                on_descent: flags.in_exists || (flags.on_descent && wrapper),
+                in_exists: flags.in_exists,
+                joined: !flags.in_exists
+                    && ((flags.on_descent && wrapper)
+                        || (flags.joined
+                            && matches!(
+                                node,
+                                GraphPattern::Join { .. }
+                                    | GraphPattern::Union { .. }
+                                    | GraphPattern::Graph { .. }
+                            ))),
+            };
+            if moved.is_empty() {
+                return Ok((child_flags, 0));
+            }
+            let mut condition = None;
+            for (name, to) in &moved {
+                let right = compatible_with_binding_with_memory(name.clone(), to.clone(), memory)?;
+                condition = Some(match condition {
+                    None => right,
+                    Some(left) => Expression::And(
+                        Chain::try_from(rewrite_vec([left, right], memory)?)
+                            .unwrap_or_else(|_| unreachable!("two compatibility conditions")),
+                    ),
+                });
+            }
+            let mut joined = GraphPattern::Filter {
+                expr: condition.expect("nonempty moved assignments"),
+                inner: rewrite_child(take_child(node), memory)?,
+            };
+            let extended = if flags.on_descent { 0 } else { moved.len() };
+            if !flags.on_descent {
+                for (name, to) in moved {
+                    let args = rewrite_vec(
+                        [Expression::Variable(to), Expression::Variable(name.clone())],
+                        memory,
+                    )?;
+                    joined = GraphPattern::Extend {
+                        inner: rewrite_child(joined, memory)?,
+                        variable: name,
+                        expression: Expression::Coalesce(args.into()),
+                    };
+                }
+            }
+            *node = joined;
+            Ok((
+                child_flags,
+                extended
+                    .checked_add(1)
+                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?,
+            ))
+        }
+    }
+}
+
+fn join_assignments_in_with_memory(
+    root: &mut GraphPattern,
+    on_descent: bool,
+    in_exists: bool,
+    names: &[&str],
+    fresh: &mut usize,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    scope_walk_with_memory(
+        root,
+        ScopeFlags {
+            joined: on_descent && !in_exists,
+            on_descent: on_descent || in_exists,
+            in_exists,
+        },
+        ScopeOperation::Assign { names, fresh },
+        memory,
+    )
+}
+
+pub(crate) fn join_assignments_with_prebinding_with_memory(
+    query: &mut Query,
+    names: &[&str],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<bool> {
+    if !needs_assignment_join_with_memory(query, names, memory)? {
+        return Ok(false);
+    }
+    let pattern = query_pattern_mut(query);
+    let mut fresh = highest_index_with_memory(pattern, ASSIGNED_PREFIX, memory)?;
+    join_assignments_in_with_memory(pattern, true, false, names, &mut fresh, memory)?;
+    Ok(true)
+}
+
+pub(crate) fn needs_assignment_join_with_memory(
+    query: &Query,
+    names: &[&str],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<bool> {
+    use purrdf_sparql_algebra::walk::NodeRef;
+    if names.is_empty() {
+        return Ok(false);
+    }
+    let root = ScopeFlags {
+        on_descent: true,
+        in_exists: false,
+        joined: true,
+    };
+    let mut pending = rewrite_scratch([(NodeRef::Pattern(query.pattern()), root)], memory)?;
+    while let Some((node, flags)) = pending.pop() {
+        let child_flags = match node {
+            NodeRef::Pattern(pattern) => {
+                let binds = |variable: &Variable| names.contains(&variable.as_str());
+                let changes = match pattern {
+                    GraphPattern::Extend { variable, .. } => binds(variable),
+                    GraphPattern::Unfold {
+                        element, companion, ..
+                    } => binds(element) || companion.as_ref().is_some_and(binds),
+                    GraphPattern::Group { aggregates, .. } => {
+                        aggregates.iter().any(|(variable, _)| binds(variable))
+                    }
+                    GraphPattern::Values { variables, .. } if !flags.joined => {
+                        variables.iter().any(binds)
+                    }
+                    _ => false,
+                };
+                if changes {
+                    return Ok(true);
+                }
+                let wrapper = matches!(
+                    pattern,
+                    GraphPattern::Project { .. }
+                        | GraphPattern::Distinct { .. }
+                        | GraphPattern::Reduced { .. }
+                        | GraphPattern::Slice { .. }
+                        | GraphPattern::OrderBy { .. }
+                        | GraphPattern::Group { .. }
+                        | GraphPattern::Extend { .. }
+                        | GraphPattern::Filter { .. }
+                        | GraphPattern::Unfold { .. }
+                );
+                ScopeFlags {
+                    on_descent: flags.in_exists || (flags.on_descent && wrapper),
+                    in_exists: flags.in_exists,
+                    joined: !flags.in_exists
+                        && ((flags.on_descent && wrapper)
+                            || (flags.joined
+                                && matches!(
+                                    pattern,
+                                    GraphPattern::Join { .. }
+                                        | GraphPattern::Union { .. }
+                                        | GraphPattern::Graph { .. }
+                                ))),
+                }
+            }
+            NodeRef::Expr(Expression::Exists(_)) => ScopeFlags {
+                on_descent: true,
+                in_exists: true,
+                joined: false,
+            },
+            _ => flags,
+        };
+        let mut count = Some(0_usize);
+        node.for_each_child(|_| count = count.and_then(|count| count.checked_add(1)));
+        pending.reserve_additional(count.ok_or(crate::EvalError::WorkspaceBoundOverflow)?)?;
+        node.for_each_child(|child| pending.push_reserved((child, child_flags)));
+    }
+    Ok(false)
+}
+
+fn seed_minus_in_with_memory(
+    root: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    in_exists: bool,
+    fresh: &mut usize,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if probes.is_empty() {
+        return Ok(());
+    }
+    scope_walk_with_memory(
+        root,
+        ScopeFlags {
+            on_descent: false,
+            in_exists,
+            joined: false,
+        },
+        ScopeOperation::Minus { probes, fresh },
+        memory,
+    )
+}
+
+fn seed_both_minus_operands_with_memory(
+    root: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut fresh = highest_index_with_memory(root, MINUS_PREFIX, memory)?;
+    seed_minus_in_with_memory(root, probes, false, &mut fresh, memory)
+}
+
+fn seed_every_sub_select_with_memory(
+    root: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let seeded: *const GraphPattern = core_slot(root);
+    seed_sub_selects_in_with_memory(root, probes, seeded, memory)
+}
+
+fn seed_sub_selects_in_with_memory(
+    root: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    seeded: *const GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if probes.is_empty() {
+        return Ok(());
+    }
+    let mut pending = rewrite_scratch([(root, true)], memory)?;
+    while let Some((node, top)) = pending.pop() {
+        if !top && matches!(node, GraphPattern::Project { .. }) {
+            let GraphPattern::Project { inner, .. } = node else {
+                unreachable!("Project matched")
+            };
+            if !std::ptr::eq(core_slot(inner), seeded) {
+                let core = core_slot(inner);
+                let seed = seed_entries_with_memory(probes.iter(), memory)?;
+                *core = rewrite_join(seed, take_child(core), memory)?;
+                let GraphPattern::Join { right, .. } = core else {
+                    unreachable!("seed joined here")
+                };
+                pending.push((&mut **right, false))?;
+                continue;
+            }
+            pending.push((&mut **inner, false))?;
+            continue;
+        }
+        let child_top = top
+            && matches!(
+                node,
+                GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::OrderBy { .. }
+            );
+        push_child_patterns_with_memory(node, &mut pending, |child| (child, child_top))?;
+    }
+    Ok(())
+}
+
+fn seed_above_a_lone_sub_select_with_memory(
+    pattern: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut core = pattern;
+    let mut projected = false;
+    loop {
+        match core {
+            GraphPattern::Project { .. } if projected => break,
+            GraphPattern::Project { inner, .. } => {
+                projected = true;
+                core = inner;
+            }
+            GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Filter { inner, .. }
+            | GraphPattern::Unfold { inner, .. } => core = inner,
+            _ => return Ok(()),
+        }
+    }
+    let seed = seed_entries_with_memory(probes.iter(), memory)?;
+    *core = rewrite_join(seed, take_child(core), memory)?;
+    Ok(())
+}
+
+pub(crate) fn apply_shacl_prebinding_with_memory(
+    query: Query,
+    substitutions: Prebindings<'_>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    if substitutions.is_empty() {
+        return Ok(query);
+    }
+    let before = memory.admitted_bytes();
+    let probes = build_probes_with_memory(substitutions, memory)?;
+    let probe_bytes = memory
+        .admitted_bytes()
+        .checked_sub(before)
+        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    let query = apply_shacl_probes_with_memory(query, &probes, memory)?;
+    // Probe children were priced before construction. They are scratch once the
+    // rewritten AST has its own admitted clone boxes; lexical owners are intrinsic.
+    drop(probes);
+    let release = memory.release_bytes(probe_bytes);
+    native_storage(memory, release)?;
+    Ok(query)
+}
+
+pub(crate) fn apply_shacl_probes_with_memory(
+    query: Query,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    if probes.is_empty() {
+        return Ok(query);
+    }
+    if seed_reaches_every_read_with_memory(&query, probes, memory)? {
+        return apply_probes_with_memory(query, probes, memory);
+    }
+    walk_shacl_probes_with_memory(query, probes, memory)
+}
+
+fn walk_shacl_probes_with_memory(
+    mut query: Query,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    let names = rewrite_scratch(probes.iter().map(|(variable, _)| variable.as_str()), memory)?;
+    join_assignments_with_prebinding_with_memory(&mut query, &names, memory)?;
+    let expr_subs = ExprSubs(probes);
+    let mut query = apply_probes_with_memory(query, probes, memory)?;
+    let pattern = query_pattern_mut(&mut query);
+    substitute_in_graph_pattern_with_memory(pattern, &expr_subs, WalkScope::Descent, memory)?;
+    seed_above_a_lone_sub_select_with_memory(pattern, probes, memory)?;
+    seed_both_minus_operands_with_memory(pattern, probes, memory)?;
+    seed_every_sub_select_with_memory(pattern, probes, memory)?;
+    Ok(query)
+}
+
+fn push_probe_constants_with_memory(
+    core: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if probes.is_empty() {
+        return Ok(());
+    }
+    push_probes_with_memory(core, probes, true, memory)?;
+
+    Ok(())
+}
+
+fn push_probes_with_memory(
+    pattern: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    at_core_root: bool,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut open: crate::AdmittedVec<PushFrame<'_>> =
+        crate::AdmittedVec::new(&rewrite_workspace(memory));
+    let mut next = (take_child(pattern), ProbeList::Whole(probes), at_core_root);
+    loop {
+        let (node, probes, at_core_root) = next;
+        let mut finished =
+            match enter_push_with_memory(node, probes, at_core_root, &mut open, memory)? {
+                Step::Descend(child) => {
+                    next = child;
+                    continue;
+                }
+                Step::Finished(node) => node,
+            };
+        loop {
+            let Some(frame) = open.pop() else {
+                *pattern = finished;
+                return Ok(());
+            };
+            match resume_push_with_memory(frame, finished, &mut open, memory)? {
+                Step::Descend(child) => {
+                    next = child;
+                    break;
+                }
+                Step::Finished(node) => finished = node,
+            }
+        }
+    }
+}
+
+/// Enter `node`: rewrite it in place when it is a leaf, or take its first operand out
+/// and hold the node open until the operand comes back.
+fn enter_push_with_memory<'p>(
+    mut node: GraphPattern,
+    probes: ProbeList<'p>,
+    at_core_root: bool,
+    open: &mut crate::AdmittedVec<PushFrame<'p>>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Step<PushDescent<'p>, GraphPattern>> {
+    // The operand taken out of the node, which operand it is, and the probes it is
+    // rewritten with — or `None` once the node is rewritten in full.
+    let descent: Option<(GraphPattern, PushStage, ProbeList<'p>)> = match &mut node {
+        GraphPattern::Bgp { patterns } => {
+            let mut probed = Vec::new();
+            for triple in patterns.iter_mut() {
+                probe_triple_pattern_with_memory(triple, probes.as_slice(), &mut probed, memory)?;
+            }
+            restore_probed_bindings_with_memory(
+                &mut node,
+                &probed,
+                probes.as_slice(),
+                at_core_root,
+                memory,
+            )?;
+            let released = memory.release_vec(probed);
+            native_storage(memory, released)?;
+            None
+        }
+        GraphPattern::Path {
+            subject, object, ..
+        } => {
+            let mut probed = Vec::new();
+            probe_term_pattern_with_memory(subject, probes.as_slice(), &mut probed, memory)?;
+            probe_term_pattern_with_memory(object, probes.as_slice(), &mut probed, memory)?;
+            restore_probed_bindings_with_memory(
+                &mut node,
+                &probed,
+                probes.as_slice(),
+                at_core_root,
+                memory,
+            )?;
+            let released = memory.release_vec(probed);
+            native_storage(memory, released)?;
+            None
+        }
+        GraphPattern::Join { left, .. } => {
+            Some((take_child(left), PushStage::Left, probes.clone()))
+        }
+        GraphPattern::Union { arms } => arms
+            .first_mut()
+            .map(|first| (take_child(first), PushStage::Arm(0), probes.clone())),
+        GraphPattern::Graph { inner, .. } | GraphPattern::Filter { inner, .. } => {
+            Some((take_child(inner), PushStage::Inner, probes.clone()))
+        }
+        // A relation call is a leaf like the two above, and it is the leaf where
+        // the difference between an index probe and a scan is largest. Left alone, the
+        // call keeps the variable, the relation is invoked with that position
+        // FREE, and it generates every row it holds for the single-row `VALUES`
+        // seed to discard all but one of — which for a ranked producer is its
+        // whole index, once per pre-bound candidate. With the constant pushed in,
+        // the relation is invoked with the position BOUND and answers the one
+        // question that was asked.
+        //
+        // The access pattern can only get more bound, so nothing a prepare
+        // admitted becomes infeasible here: a declared mode subsumes an
+        // invocation when its bound positions are a SUBSET of the invocation's,
+        // and this rewrite only adds to that set.
+        GraphPattern::PropertyFunction(call) => {
+            let probed = probe_call_arguments_with_memory(call, probes.as_slice(), memory)?;
+            // A value the pattern cannot carry — a blank node — is driven into the
+            // call instead; see [`drive_call_arguments`].
+            drive_call_arguments_with_memory(
+                &mut node,
+                probes.as_slice(),
+                Unwritable::InPattern,
+                memory,
+            )?;
+            restore_probed_bindings_with_memory(
+                &mut node,
+                &probed,
+                probes.as_slice(),
+                at_core_root,
+                memory,
+            )?;
+            let released = memory.release_vec(probed);
+            native_storage(memory, released)?;
+            None
+        }
+        // `variable` is this node's own binding, so it is not bound in `inner` and
+        // there is nothing there to narrow. Narrowing the candidate set is only ever
+        // needed for an ill-formed query the parser would reject, and costs one
+        // allocation on a branch no well-formed query takes.
+        GraphPattern::Extend {
+            inner, variable, ..
+        } => probes
+            .narrowed(|var| var != &*variable, memory)?
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
+        // Left operand only — see [`push_probe_constants`]'s soundness note. The
+        // right arms are not merely left unentered: they are never reached through
+        // this match at all, which is what makes the boundary a property of the
+        // shape of this function rather than of remembering to stop.
+        GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
+            Some((take_child(left), PushStage::Left, probes.clone()))
+        }
+        // A `Lateral` whose right operand is a property-function call is how the
+        // parser writes every call that follows another atom in its group, and the
+        // call is the one right operand the rewrite may enter. It is driven once per
+        // left row and inner-joined with it, so restricting it restricts the node
+        // exactly as restricting either operand of a `Join` does: a left row that
+        // binds the variable to some other term matched a call row carrying that
+        // term before the rewrite and is dropped by the seed join; after it, the
+        // call is invoked with the pre-bound constant, and the restoring `VALUES`
+        // row is incompatible with that left row, so it is dropped there instead.
+        //
+        // The restoring `VALUES` wraps the whole `Lateral`, never the call inside
+        // it. The evaluator drives a call that is a `Lateral`'s DIRECT right operand
+        // with each left row in hand, which is what hands it a literal, blank-node
+        // or quoted-triple binding from the left as a bound argument; wrapping the
+        // call in a join would demote it to the generic correlated path, where those
+        // bindings arrive free. Any other right operand keeps its correlated
+        // re-evaluation untouched.
+        //
+        // A value the pattern cannot carry — a blank node — reaches the call through
+        // that same per-row drive: the left operand is joined with a one-row `VALUES`
+        // binding it, so every left row hands the call its term as a bound argument.
+        // See [`drive_call_arguments`]. The left operand is rewritten first; the call
+        // is written into, driven and restored once it is back ([`resume_push`]).
+        GraphPattern::Lateral { left, .. } => {
+            Some((take_child(left), PushStage::Left, probes.clone()))
+        }
+        GraphPattern::Apply { .. } => None,
+        // A sub-`SELECT` projecting the variable passes each of its rows' binding of it
+        // out unchanged, so restricting its inner rows restricts its output the same
+        // way; a variable it does NOT project is a different variable inside it, and is
+        // not pushed. `DISTINCT`, `REDUCED` and `ORDER BY` keep, drop or reorder whole
+        // rows, so a row they would have passed with the variable bound to another term
+        // is simply absent. A slice is not entered, and a `GROUP BY` only for its keys —
+        // see [`push_probe_constants`].
+        GraphPattern::Project { inner, variables } => probes
+            .narrowed(|var| variables.contains(var), memory)?
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
+        GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::OrderBy { inner, .. } => {
+            Some((take_child(inner), PushStage::Inner, probes.clone()))
+        }
+        // A `GROUP BY` is entered for the pre-bound variables that are its keys, and
+        // for no other — see [`group_key_carries`] and [`push_probe_constants`].
+        GraphPattern::Group {
+            inner, variables, ..
+        } => probes
+            .narrowed(|var| group_key_carries(variables, var), memory)?
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
+        GraphPattern::Values { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Unfold { .. } => None,
+    };
+    Ok(match descent {
+        Some((child, stage, child_probes)) => {
+            open.push(PushFrame {
+                node,
+                probes,
+                at_core_root,
+                stage,
+            })?;
+            Step::Descend((child, child_probes, false))
+        }
+        None => Step::Finished(node),
+    })
+}
+
+/// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
+/// next operand, or finish the node.
+fn resume_push_with_memory<'p>(
+    mut frame: PushFrame<'p>,
+    operand: GraphPattern,
+    open: &mut crate::AdmittedVec<PushFrame<'p>>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Step<PushDescent<'p>, GraphPattern>> {
+    let probes = frame.probes.as_slice();
+    let next = match (&mut frame.node, frame.stage) {
+        (GraphPattern::Join { left, right }, PushStage::Left) => {
+            **left = operand;
+            Some((take_child(right), PushStage::Right))
+        }
+        (GraphPattern::Join { right, .. }, PushStage::Right) => {
+            **right = operand;
+            None
+        }
+        (GraphPattern::Union { arms }, PushStage::Arm(index)) => {
+            arms[index] = operand;
+            arms.get_mut(index + 1)
+                .map(|arm| (take_child(arm), PushStage::Arm(index + 1)))
+        }
+        (
+            GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. },
+            PushStage::Left,
+        ) => {
+            **left = operand;
+            None
+        }
+        (GraphPattern::Lateral { left, right }, PushStage::Left) => {
+            **left = operand;
+            match lateral_call_mut(right) {
+                // Any other right operand is re-evaluated once per left row and
+                // inner-joined with it, and every operator this walk enters keeps a
+                // restricted row's variable in its output — so restricting a leaf
+                // inside it restricts the node exactly as restricting a leaf inside a
+                // `Join`'s operand does. See [`push_probe_constants`].
+                None => Some((take_child(right), PushStage::Right)),
+                Some(call) => {
+                    let probed = probe_call_arguments_with_memory(call, probes, memory)?;
+                    drive_call_arguments_with_memory(
+                        &mut frame.node,
+                        probes,
+                        Unwritable::InPattern,
+                        memory,
+                    )?;
+                    restore_probed_bindings_with_memory(
+                        &mut frame.node,
+                        &probed,
+                        probes,
+                        frame.at_core_root,
+                        memory,
+                    )?;
+                    let released = memory.release_vec(probed);
+                    native_storage(memory, released)?;
+                    None
+                }
+            }
+        }
+        (GraphPattern::Lateral { right, .. }, PushStage::Right) => {
+            **right = operand;
+            None
+        }
+        (
+            GraphPattern::Graph { inner, .. }
+            | GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. },
+            PushStage::Inner,
+        ) => {
+            **inner = operand;
+            None
+        }
+        _ => unreachable!("a pushdown frame is opened only at the operand it holds out"),
+    };
+    Ok(match next {
+        Some((child, stage)) => {
+            frame.stage = stage;
+            let child_probes = frame.probes.clone();
+            open.push(frame)?;
+            Step::Descend((child, child_probes, false))
+        }
+        None => Step::Finished(frame.node),
+    })
+}
+
+fn substitute_in_graph_pattern_with_memory(
+    pattern: &mut GraphPattern,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    scope: WalkScope,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<SeedColumns> {
+    let mut open: crate::AdmittedVec<SubstituteFrame> =
+        crate::AdmittedVec::new(&rewrite_workspace(memory));
+    let mut next = (take_child(pattern), scope);
+    loop {
+        let (node, scope) = next;
+        let mut finished =
+            match enter_substitution_with_memory(node, scope, expr_subs, &mut open, memory)? {
+                Step::Descend(child) => {
+                    next = child;
+                    continue;
+                }
+                Step::Finished(finished) => finished,
+            };
+        loop {
+            let Some(frame) = open.pop() else {
+                *pattern = finished.0;
+                return Ok(finished.1);
+            };
+            match resume_substitution_with_memory(frame, finished, expr_subs, &mut open, memory)? {
+                Step::Descend(child) => {
+                    next = child;
+                    break;
+                }
+                Step::Finished(node) => finished = node,
+            }
+        }
+    }
+}
 
 /// Enter `node`: substitute in it when it is a leaf, or take its first operand out and
 /// hold the node open until the operand comes back.
-fn enter_substitution(
+fn enter_substitution_with_memory(
     mut node: GraphPattern,
     scope: WalkScope,
-    expr_subs: &ExprSubs,
-    open: &mut Vec<SubstituteFrame>,
-) -> Step<SubstituteDescent, (GraphPattern, SeedColumns)> {
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    open: &mut crate::AdmittedVec<SubstituteFrame>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Step<SubstituteDescent, (GraphPattern, SeedColumns)>> {
     // A node that is not a solution-modifier wrapper hands its children the scope
     // beneath the seed; a wrapper hands its inner pattern its own.
     let beneath = scope.beneath();
     // What a node that is not a wrapper carries: on the descent it is the seed's own
     // `Join`, so every value; beneath the seed, nothing the seed put there.
-    let core = SeedColumns::at_core(scope, expr_subs.0.len());
+    let core = SeedColumns::at_core(scope, expr_subs.entries().len());
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
     let (child, stage, child_scope) = match &mut node {
         // SHACL reaches every matched leaf, including scopes the ordinary parameter
         // pushdown deliberately leaves alone. VALUES cells themselves are data.
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => {
-            complete_shacl_leaf(&mut node, &expr_subs.0, scope);
-            return Step::Finished((node, core));
+            complete_shacl_leaf_with_memory(&mut node, expr_subs.entries(), scope, memory)?;
+            return Ok(Step::Finished((node, core)));
         }
-        GraphPattern::Values { .. } => return Step::Finished((node, core)),
+        GraphPattern::Values { .. } => return Ok(Step::Finished((node, core))),
+        GraphPattern::Apply { .. } => return Ok(Step::Finished((node, core))),
         // BOTH arms, unlike ordinary parameter pushdown: SHACL binds each matched
         // occurrence before this operator evaluates, with leaf-local VALUES retaining
         // every replaced column. A restricted OPTIONAL match becoming a miss is the
@@ -2038,16 +3957,16 @@ fn enter_substitution(
         | GraphPattern::LeftJoin { left, .. } => (take_child(left), SubstituteStage::Left, beneath),
         GraphPattern::Union { arms } => match arms.first_mut() {
             Some(first) => (take_child(first), SubstituteStage::Arm(0), beneath),
-            None => return Step::Finished((node, core)),
+            None => return Ok(Step::Finished((node, core))),
         },
         // The expression first, then the inner pattern, in its own scope.
         GraphPattern::Filter { .. } => {
-            let mut frame = SubstituteFrame::new(node, scope, SubstituteStage::Body);
-            if let Some(body) = frame.substitute_own_expressions(expr_subs) {
-                open.push(frame);
-                return Step::Descend((body, WalkScope::ExistsBody));
+            let mut frame = SubstituteFrame::new(node, scope, SubstituteStage::Body, memory);
+            if let Some(body) = frame.substitute_own_expressions_with_memory(expr_subs, memory)? {
+                open.push(frame)?;
+                return Ok(Step::Descend((body, WalkScope::ExistsBody)));
             }
-            return descend_into_inner(frame, open);
+            return descend_into_inner_with_memory(frame, open, memory);
         }
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             substitute_in_named_node_pattern(name, expr_subs);
@@ -2080,29 +3999,32 @@ fn enter_substitution(
         // bound, exactly as with an IRI. Inside an `EXISTS` body that driver is planted
         // in a scope of its own, for the reason [`plant_scoped_driver`] gives.
         GraphPattern::PropertyFunction(call) => {
-            if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
+            if let Some(seed) =
+                bind_call_arguments_with_memory(call, expr_subs.entries(), None, memory)?
+            {
                 match beneath {
                     WalkScope::Descent | WalkScope::Group => {
-                        plant_stand_alone_driver(&mut node, seed);
+                        plant_stand_alone_driver_with_memory(&mut node, seed, memory)?;
                     }
                     WalkScope::ExistsBody => {
-                        let kept = undriven_variables(call, &seed);
-                        plant_scoped_driver(&mut node, seed, kept);
+                        let kept = undriven_variables_with_memory(call, &seed, memory)?;
+                        plant_scoped_driver_with_memory(&mut node, seed, kept, memory)?;
                     }
                 }
             }
-            return Step::Finished((node, core));
+            return Ok(Step::Finished((node, core)));
         }
     };
-    open.push(SubstituteFrame::new(node, scope, stage));
-    Step::Descend((child, child_scope))
+    open.push(SubstituteFrame::new(node, scope, stage, memory))?;
+    Ok(Step::Descend((child, child_scope)))
 }
 
 /// Take `frame`'s inner pattern out and enter it in the node's own scope.
-fn descend_into_inner(
+fn descend_into_inner_with_memory(
     mut frame: SubstituteFrame,
-    open: &mut Vec<SubstituteFrame>,
-) -> Step<SubstituteDescent, (GraphPattern, SeedColumns)> {
+    open: &mut crate::AdmittedVec<SubstituteFrame>,
+    _memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Step<SubstituteDescent, (GraphPattern, SeedColumns)>> {
     let child = match &mut frame.node {
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Extend { inner, .. }
@@ -2117,23 +4039,28 @@ fn descend_into_inner(
     };
     frame.stage = SubstituteStage::Inner;
     let scope = frame.scope;
-    open.push(frame);
-    Step::Descend((child, scope))
+    open.push(frame)?;
+    Ok(Step::Descend((child, scope)))
 }
 
 /// Put the substituted `operand` back into `frame`'s node, and go on: enter the node's
 /// next operand, or finish the node and report what it carries.
-fn resume_substitution(
+fn resume_substitution_with_memory(
     mut frame: SubstituteFrame,
     operand: (GraphPattern, SeedColumns),
-    expr_subs: &ExprSubs,
-    open: &mut Vec<SubstituteFrame>,
-) -> Step<SubstituteDescent, (GraphPattern, SeedColumns)> {
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    open: &mut crate::AdmittedVec<SubstituteFrame>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Step<SubstituteDescent, (GraphPattern, SeedColumns)>> {
     let (operand, columns) = operand;
     let scope = frame.scope;
     let beneath = scope.beneath();
-    let core = SeedColumns::at_core(scope, expr_subs.0.len());
+    let core = SeedColumns::at_core(scope, expr_subs.entries().len());
     /// What a node does once an operand is back.
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "the next substitution step moves the original admitted tree inline; boxing it would add a separate allocation to the native rewrite"
+    )]
     enum Then {
         /// Enter another operand.
         Descend(GraphPattern, SubstituteStage, WalkScope),
@@ -2184,15 +4111,24 @@ fn resume_substitution(
                 Some(call) => {
                     match beneath {
                         WalkScope::Descent | WalkScope::Group => {
-                            if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left))
-                            {
-                                plant_left_driver(left, seed);
+                            if let Some(seed) = bind_call_arguments_with_memory(
+                                call,
+                                expr_subs.entries(),
+                                Some(left),
+                                memory,
+                            )? {
+                                plant_left_driver_with_memory(left, seed, memory)?;
                             }
                         }
                         WalkScope::ExistsBody => {
-                            if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
-                                let kept = undriven_variables(call, &seed);
-                                plant_scoped_driver(right, seed, kept);
+                            if let Some(seed) = bind_call_arguments_with_memory(
+                                call,
+                                expr_subs.entries(),
+                                None,
+                                memory,
+                            )? {
+                                let kept = undriven_variables_with_memory(call, &seed, memory)?;
+                                plant_scoped_driver_with_memory(right, seed, kept, memory)?;
                             }
                         }
                     }
@@ -2215,7 +4151,7 @@ fn resume_substitution(
             **inner = operand;
             // The expression was substituted before the operand was entered, so the
             // node passes its operand's rows through and drives what they lack.
-            drive_expression_reads(&mut frame.node, expr_subs, scope, columns);
+            drive_expression_reads_with_memory(&mut frame.node, expr_subs, scope, columns, memory)?;
             Then::Finish(columns)
         }
         (GraphPattern::Graph { name, inner }, SubstituteStage::Inner) => {
@@ -2224,13 +4160,19 @@ fn resume_substitution(
             // OPTIONAL consumes it, even when its inner BGP never names that variable.
             let bound = match name {
                 NamedNodePattern::Variable(var) => expr_subs
-                    .0
+                    .entries()
                     .iter()
                     .position(|(candidate, _)| candidate == var),
                 NamedNodePattern::NamedNode(_) => None,
             };
             if let Some(index) = bound {
-                restore_shacl_bindings(&mut frame.node, &[index], &expr_subs.0, scope);
+                restore_shacl_bindings_with_memory(
+                    &mut frame.node,
+                    &[index],
+                    expr_subs.entries(),
+                    scope,
+                    memory,
+                )?;
             }
             Then::Finish(core)
         }
@@ -2266,837 +4208,373 @@ fn resume_substitution(
         // are taken apart through the consuming `into_parts` and held on the frame
         // while their expressions are substituted; the node's own expressions are
         // read from there.
-        (
-            GraphPattern::Group {
-                inner, aggregates, ..
-            },
-            SubstituteStage::Inner,
-        ) => {
+        (GraphPattern::Group { inner, .. }, SubstituteStage::Inner) => {
             **inner = operand;
             frame.operand = columns;
-            frame.aggregates = std::mem::take(aggregates)
-                .into_iter()
-                .map(|(var, aggregate)| (var, aggregate.into_parts()))
-                .collect();
+
             Then::Expressions
         }
         (_, SubstituteStage::Body) => {
-            frame.done_bodies.push(operand);
+            frame.done_bodies.push(operand)?;
             match frame.pending_bodies.pop() {
                 Some(body) => Then::Descend(body, SubstituteStage::Body, WalkScope::ExistsBody),
                 None => {
-                    frame.replace_own_bodies();
+                    frame.replace_own_bodies_with_memory(memory)?;
                     if matches!(frame.node, GraphPattern::Filter { .. }) {
-                        return descend_into_inner(frame, open);
+                        return descend_into_inner_with_memory(frame, open, memory);
                     }
-                    Then::Finish(finish_own_expressions(&mut frame, expr_subs))
+                    Then::Finish(finish_own_expressions_with_memory(
+                        &mut frame, expr_subs, memory,
+                    )?)
                 }
             }
         }
         _ => unreachable!("a substitution frame is opened only at the operand it holds out"),
     };
-    match then {
+    Ok(match then {
         Then::Descend(child, stage, child_scope) => {
             frame.stage = stage;
-            open.push(frame);
+            open.push(frame)?;
             Step::Descend((child, child_scope))
         }
-        Then::Expressions => match frame.substitute_own_expressions(expr_subs) {
+        Then::Expressions => match frame
+            .substitute_own_expressions_with_memory(expr_subs, memory)?
+        {
             Some(body) => {
                 frame.stage = SubstituteStage::Body;
-                open.push(frame);
+                open.push(frame)?;
                 Step::Descend((body, WalkScope::ExistsBody))
             }
             None => {
-                frame.replace_own_bodies();
-                let carried = finish_own_expressions(&mut frame, expr_subs);
+                frame.replace_own_bodies_with_memory(memory)?;
+                let carried = finish_own_expressions_with_memory(&mut frame, expr_subs, memory)?;
                 Step::Finished((frame.node, carried))
             }
         },
         Then::Finish(carried) => Step::Finished((frame.node, carried)),
-    }
+    })
 }
 
-/// Finish a node whose own expressions have been substituted and whose operand is back:
-/// drive the values its expressions read that its rows do not carry, and report what
-/// the node carries.
-fn finish_own_expressions(frame: &mut SubstituteFrame, expr_subs: &ExprSubs) -> SeedColumns {
-    let operand = frame.operand;
-    match &frame.node {
-        // An `OPTIONAL` without a condition reads nothing; every other
-        // expression-bearing node but a `GROUP BY` passes its operand's rows through,
-        // so its operand carries what the node carries.
-        GraphPattern::LeftJoin {
-            expression: None, ..
-        } => operand,
-        GraphPattern::Group { variables, .. } => {
-            let carried = operand.kept(expr_subs, variables);
-            drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
-            carried
-        }
-        _ => {
-            drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
-            operand
-        }
-    }
-}
-
-/// Which pre-bound values a node's output rows carry from the `VALUES` seed — a bit per
-/// index into the [`ExprSubs`] list.
-///
-/// Meaningful on the [`WalkScope::Descent`] only: every row beneath the seed's `Join`
-/// carries every value, and each wrapper above it passes a column on, or — a `GROUP BY`
-/// that does not group by it, a projection that does not carry it — hides it. Beneath
-/// the seed nothing the seed binds is in any row yet, so nothing is carried. A value
-/// past the sixty-fourth is never counted as carried, which only ever drives a value a
-/// row already held: never wrong, merely not free.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SeedColumns(u64);
-
-impl SeedColumns {
-    /// What a node that is not a wrapper carries in `scope`, with `count` values.
-    const fn at_core(scope: WalkScope, count: usize) -> Self {
-        match scope {
-            WalkScope::Descent => Self(if count >= 64 {
-                u64::MAX
-            } else {
-                (1_u64 << count) - 1
-            }),
-            WalkScope::Group | WalkScope::ExistsBody => Self(0),
-        }
-    }
-
-    /// Whether the value at `index` is carried.
-    const fn carries(self, index: usize) -> bool {
-        index < 64 && self.0 & (1_u64 << index) != 0
-    }
-
-    /// What survives a node whose output columns are `columns`.
-    fn kept(self, expr_subs: &ExprSubs, columns: &[Variable]) -> Self {
-        let mut kept = self.0;
-        for (index, (var, _)) in expr_subs.0.iter().enumerate().take(64) {
-            if !columns.contains(var) {
-                kept &= !(1_u64 << index);
+fn seed_reaches_every_read_with_memory(
+    query: &Query,
+    probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<bool> {
+    let probed = |variable: &Variable| probes.iter().any(|(name, _)| name == variable);
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit};
+    // The wrappers above the core — the ones `map_core_pattern_mut` descends to place
+    // the seed beneath them — read the seeded row. Below the first other node, only
+    // nodes that match or combine rows without reading an expression are passed: a
+    // `FILTER` or `BIND` inside a group sees that group's rows alone, and a solution
+    // modifier there is a sub-`SELECT`.
+    //
+    // The query's own modifiers wrap its own projection; a second projection, or a
+    // modifier met after a `FILTER`/`BIND` wrapper, is a sub-`SELECT`'s.
+    let mut in_head = true;
+    let mut projected = false;
+    let mut below_modifiers = false;
+    rewrite_walk(
+        NodeRef::Pattern(query.pattern()),
+        |visit, node| {
+            if visit == Visit::Exit {
+                return Flow::Descend;
             }
-        }
-        Self(kept)
-    }
-}
-
-/// Make every expression of an expression-bearing node read each pre-bound value it
-/// names, wherever the node sits — the SHACL pre-binding law that the value is
-/// substituted for the variable everywhere in the query — for a value that has no
-/// expression form to be written in as.
-///
-/// # The defect this closes
-///
-/// An IRI or a literal is written into every expression as a constant. A blank node
-/// and a quoted triple are not, on the premise that "the `VALUES` seed binds them" —
-/// which holds only where the seed's column reaches. Beneath the core the seed is a
-/// sibling, joined AFTER the node is evaluated, so
-/// `SELECT $this WHERE { BIND($this AS ?x) ?x <rel> ?why }` read `$this` unbound for a
-/// blank or quoted focus node: `?x` was left unbound, the relation was invoked with its
-/// input FREE and answered from its whole extent. Above the core the seed is joined
-/// beneath the node, but a `GROUP BY` or a sub-`SELECT` whose projection drops the
-/// variable sits between them and hides its column, so
-/// `SELECT ?v WHERE { ?x ex:tag ?v } GROUP BY ?v HAVING(SAMPLE(?x) = $this)` compared
-/// against an unbound `$this` and reported nothing for a blank focus node while the same
-/// constraint reported a violation for an IRI one.
-///
-/// # The two kinds of read, and the rewrite for each
-///
-/// * A **plain read** names the variable itself. Its reference is renamed to a
-///   stand-in variable no query can spell ([`stand_in`]), and a one-row `VALUES`
-///   binding the stand-in to the value is joined onto the node's evaluated operand (the
-///   inner pattern; an `OPTIONAL`'s left operand, whose rows its condition reads). The
-///   expression then reads exactly the term it would have been written as had it a
-///   constant form, whatever the operand's rows bind the pre-bound variable itself to —
-///   which is what an IRI focus node gets, term for term. The one read left alone is a
-///   node on the [`WalkScope::Descent`] whose operand still exposes the variable: every
-///   row there carries the pre-bound term itself, because the seed is joined beneath it
-///   and nothing between hides the column, so the row already holds the value. That is
-///   the shape of every constraint whose `FILTER` sits over its core pattern, and it
-///   pays for nothing.
-/// * An **`EXISTS` read** is an `EXISTS` in the expression whose body names the
-///   variable. The body is evaluated against the node's rows, and a triple pattern or a
-///   call naming the variable there is matched through them, so the value has to be in
-///   the rows: where the operand does not expose the variable, the variable itself is
-///   driven — for every class of value, an IRI included, because an IRI written into
-///   the body's expressions still leaves the body's triple patterns reading the row.
-///   Where the operand exposes it, the body reads the row's binding, as an IRI focus
-///   node's body does.
-///
-/// # Why nothing else changes
-///
-/// The driven variables never escape the node: it is wrapped in a projection onto the
-/// columns it exposed before (a `GROUP BY` hides its operand's columns already, and is
-/// not wrapped). So its schema is unchanged, no `MINUS` sees a new shared variable, and
-/// no `EXISTS` body rebinds the row it filters — a projection is a scope boundary for
-/// both. Beneath the descent a node may also be evaluated with a row substituted into it
-/// — an `EXISTS` body, a `LATERAL`'s right side — and a projection is a boundary for
-/// that substitution too, so there the projection also carries every other variable the
-/// node names: an outer binding reaches every variable it reached before, and one the
-/// node does not bind stays unbound in its output, as it was.
-fn drive_expression_reads(
-    node: &mut GraphPattern,
-    expr_subs: &ExprSubs,
-    scope: WalkScope,
-    operand: SeedColumns,
-) {
-    // On the descent, an operand that carries every value's seed column has every read
-    // answered by its rows — the common case, and it costs nothing more.
-    if scope == WalkScope::Descent && (0..expr_subs.0.len()).all(|index| operand.carries(index)) {
-        return;
-    }
-    let mut reads = Reads::default();
-    for_each_node_expression(node, &mut |expr| note_reads(expr, expr_subs, &mut reads));
-    if reads.plain.is_empty() && reads.in_exists.is_empty() {
-        return;
-    }
-    if scope == WalkScope::Descent {
-        // On the descent a column the operand exposes is the seed's column: the seed is
-        // joined beneath, and nothing between rebinds a pre-bound variable.
-        reads.plain.retain(|&index| !operand.carries(index));
-        reads.in_exists.retain(|&index| !operand.carries(index));
-    } else if !reads.in_exists.is_empty() {
-        // Beneath the seed a column the operand exposes is whatever its own patterns
-        // bound, and an `EXISTS` body reads that binding exactly as an IRI focus node's
-        // body does; only a value the operand does not expose at all is driven.
-        let exposed = operand_schema(node);
-        reads
-            .in_exists
-            .retain(|&index| !exposed.contains(&expr_subs.0[index].0));
-    }
-    if reads.plain.is_empty() && reads.in_exists.is_empty() {
-        return;
-    }
-    let hides_operand = matches!(node, GraphPattern::Group { .. });
-    let carried = (!hides_operand).then(|| carried_columns(node, expr_subs, &reads, scope));
-
-    let renames: Vec<(Variable, Variable)> = reads
-        .plain
-        .iter()
-        .map(|&index| {
-            let var = &expr_subs.0[index].0;
-            (var.clone(), stand_in(var))
-        })
-        .collect();
-    if !renames.is_empty() {
-        for_each_node_expression_mut(node, &mut |expr| rename_reads(expr, &renames));
-    }
-    let mut variables = Vec::with_capacity(renames.len() + reads.in_exists.len());
-    let mut row = Vec::with_capacity(variables.capacity());
-    for (&index, (_, stand_in)) in reads.plain.iter().zip(renames) {
-        variables.push(stand_in);
-        row.push(Some(expr_subs.0[index].1.clone()));
-    }
-    for &index in &reads.in_exists {
-        variables.push(expr_subs.0[index].0.clone());
-        row.push(Some(expr_subs.0[index].1.clone()));
-    }
-    let seed = GraphPattern::Values {
-        variables,
-        bindings: vec![row],
-    };
-    match node {
-        GraphPattern::Extend { inner, .. }
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Filter { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Group { inner, .. }
-        | GraphPattern::LeftJoin { left: inner, .. } => plant_left_driver(inner, seed),
-        _ => return,
-    }
-    if let Some(variables) = carried {
-        purrdf_sparql_algebra::substitute::take_and_replace(node, |node| GraphPattern::Project {
-            inner: Child::new(node),
-            variables,
-        });
-    }
-}
-
-/// The prefix of every [`stand_in`] variable. A NUL is no character a SPARQL
-/// variable name can hold, so no query text can name one, and it matches neither of
-/// the evaluator's own internal prefixes (`crate::bgp`'s blank-node variables,
-/// `crate::blank_scope`'s joined blank labels).
-const STAND_IN_PREFIX: &str = "\u{0}prebound:";
-
-/// The variable an expression reads in place of the pre-bound `var` where the value has
-/// no expression form — see [`drive_expression_reads`]. One per pre-bound name, so the
-/// tree the rewrite builds depends on the names and never on the value, which is what
-/// [`crate::prebind_memo`] relies on.
-fn stand_in(var: &Variable) -> Variable {
-    interned_variable(&format!("{STAND_IN_PREFIX}{}", var.as_str()))
-}
-
-/// What one node's expressions read of the pre-bound values, as indices into the
-/// [`ExprSubs`] list — see [`drive_expression_reads`].
-#[derive(Default)]
-struct Reads {
-    /// Values an expression names as a variable, which [`substitute_in_expression`]
-    /// left in place because they have no expression form.
-    plain: Vec<usize>,
-    /// Values an `EXISTS` in an expression names in its body.
-    in_exists: Vec<usize>,
-}
-
-/// Record what `expr` reads of the pre-bound values into `reads`. An `EXISTS` body's
-/// own expressions are the body's nodes' business — the walk drives them there — so
-/// only the variables the body NAMES count here, as reads of the rows it is matched
-/// against.
-///
-/// The reads are recorded in the order the expression names them, each position
-/// before the ones it holds, over a work list rather than the machine stack.
-fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
-    fn note(list: &mut Vec<usize>, index: usize) {
-        if !list.contains(&index) {
-            list.push(index);
-        }
-    }
-    for_each_expression([expr], |expr| match expr {
-        Expression::Variable(var) => {
-            if let Some(index) = expr_subs
-                .0
-                .iter()
-                .position(|(candidate, _)| candidate == var)
-            {
-                note(&mut reads.plain, index);
-            }
-        }
-        Expression::Exists(body) => {
-            let mut named = crate::DetHashSet::default();
-            crate::expr::pattern_all_vars(body, &mut named);
-            for (index, (var, _)) in expr_subs.0.iter().enumerate() {
-                if named.contains(var) {
-                    note(&mut reads.in_exists, index);
-                }
-            }
-        }
-        Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Bound(_)
-        | Expression::Or(_)
-        | Expression::And(_)
-        | Expression::Arithmetic(..)
-        | Expression::Equal(..)
-        | Expression::SameTerm(..)
-        | Expression::Greater(..)
-        | Expression::GreaterOrEqual(..)
-        | Expression::Less(..)
-        | Expression::LessOrEqual(..)
-        | Expression::UnaryPlus(_)
-        | Expression::UnaryMinus(_)
-        | Expression::Not(_)
-        | Expression::In(..)
-        | Expression::If(..)
-        | Expression::Coalesce(_)
-        | Expression::FunctionCall(..) => {}
-    });
-}
-
-/// Rename every plain read of a `renames` source in `expr` to its stand-in. An `EXISTS`
-/// body is not entered: a variable there is matched against rows, not read as a value,
-/// and the body's own expressions were already driven by the walk.
-fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
-    for_each_expression_mut([expr], |expr| {
-        if let Expression::Variable(var) = expr
-            && let Some((_, to)) = renames.iter().find(|(from, _)| from == var)
-        {
-            *var = to.clone();
-        }
-    });
-}
-
-/// Call `visit` on each of `roots` and every expression beneath it, each before the
-/// expressions it holds and those in source order, over a work list rather than the
-/// machine stack. An `EXISTS` body is a pattern, not an expression, so the walk does not
-/// enter it.
-fn for_each_expression<'e>(
-    roots: impl IntoIterator<Item = &'e Expression>,
-    mut visit: impl FnMut(&'e Expression),
-) {
-    let mut pending: Vec<&'e Expression> = roots.into_iter().collect();
-    pending.reverse();
-    while let Some(expr) = pending.pop() {
-        visit(expr);
-        push_operands(expr, &mut pending);
-    }
-}
-
-/// [`for_each_expression`], with each expression handed over for rewriting. `visit`
-/// sees each expression before the walk reads what it holds, so an expression it
-/// replaces is walked as replaced.
-fn for_each_expression_mut<'e>(
-    roots: impl IntoIterator<Item = &'e mut Expression>,
-    mut visit: impl FnMut(&mut Expression),
-) {
-    let mut pending: Vec<&'e mut Expression> = roots.into_iter().collect();
-    pending.reverse();
-    while let Some(expr) = pending.pop() {
-        visit(expr);
-        push_operands_mut(expr, &mut pending);
-    }
-}
-
-/// Push the expressions `expr` holds onto `pending`, last first, so the work list pops
-/// them in source order. Wildcard-free: an expression variant added later must say
-/// here what it holds.
-fn push_operands<'e>(expr: &'e Expression, pending: &mut Vec<&'e Expression>) {
-    match expr {
-        Expression::Variable(_)
-        | Expression::Bound(_)
-        | Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Exists(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            pending.extend(operands.iter().rev());
-        }
-        Expression::Arithmetic(first, steps) => {
-            pending.extend(steps.iter().rev().map(|(_, operand)| operand));
-            pending.push(first);
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            pending.push(right);
-            pending.push(left);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            pending.push(inner);
-        }
-        Expression::In(target, list) => {
-            pending.extend(list.iter().rev());
-            pending.push(target);
-        }
-        Expression::If(cond, then_expr, else_expr) => {
-            pending.push(else_expr);
-            pending.push(then_expr);
-            pending.push(cond);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            pending.extend(list.iter().rev());
-        }
-    }
-}
-
-/// [`push_operands`], for rewriting.
-fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Expression>) {
-    match expr {
-        Expression::Variable(_)
-        | Expression::Bound(_)
-        | Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Exists(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            pending.extend(operands.iter_mut().rev());
-        }
-        Expression::Arithmetic(first, steps) => {
-            pending.extend(steps.iter_mut().rev().map(|(_, operand)| operand));
-            pending.push(first);
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            pending.push(right);
-            pending.push(left);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            pending.push(inner);
-        }
-        Expression::In(target, list) => {
-            pending.extend(list.iter_mut().rev());
-            pending.push(target);
-        }
-        Expression::If(cond, then_expr, else_expr) => {
-            pending.push(else_expr);
-            pending.push(then_expr);
-            pending.push(cond);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            pending.extend(list.iter_mut().rev());
-        }
-    }
-}
-
-/// Every expression `node` itself evaluates — its `FILTER`, `BIND` or `UNFOLD`
-/// expression, its `OPTIONAL` condition, its sort keys, or its aggregates' arguments and
-/// `FOLD` sort keys — and no expression of a node beneath it.
-fn for_each_node_expression(node: &GraphPattern, f: &mut dyn FnMut(&Expression)) {
-    match node {
-        GraphPattern::Extend { expression, .. }
-        | GraphPattern::Unfold { expression, .. }
-        | GraphPattern::Filter {
-            expr: expression, ..
-        }
-        | GraphPattern::LeftJoin {
-            expression: Some(expression),
-            ..
-        } => f(expression),
-        GraphPattern::OrderBy { expression, .. } => {
-            for order in expression {
-                f(order.expression());
-            }
-        }
-        GraphPattern::Group { aggregates, .. } => {
-            for (_, aggregate) in aggregates {
-                for arg in aggregate.args() {
-                    f(arg);
-                }
-                for order in aggregate.order_by() {
-                    f(order.expression());
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// [`for_each_node_expression`], rewriting each expression in place.
-fn for_each_node_expression_mut(node: &mut GraphPattern, f: &mut dyn FnMut(&mut Expression)) {
-    fn key(order: &mut OrderExpression) -> &mut Expression {
-        match order {
-            OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
-        }
-    }
-    match node {
-        GraphPattern::Extend { expression, .. }
-        | GraphPattern::Unfold { expression, .. }
-        | GraphPattern::Filter {
-            expr: expression, ..
-        }
-        | GraphPattern::LeftJoin {
-            expression: Some(expression),
-            ..
-        } => f(expression),
-        GraphPattern::OrderBy { expression, .. } => {
-            for order in expression.iter_mut() {
-                f(key(order));
-            }
-        }
-        GraphPattern::Group { aggregates, .. } => {
-            // Rebuilt through the consuming `into_parts`, as `substitute_in_aggregate`
-            // does; collecting back into the same element type reuses the buffer.
-            let taken = std::mem::take(aggregates);
-            *aggregates = taken
-                .into_iter()
-                .map(|(var, aggregate)| {
-                    let (function, mut args, scalarvals, mut order_by, distinct) =
-                        aggregate.into_parts();
-                    for arg in &mut args {
-                        f(arg);
+            match node {
+                NodeRef::Expr(Expression::Exists(_)) => Flow::Stop,
+                NodeRef::Pattern(GraphPattern::Project { .. }) => {
+                    if in_head && !projected && !below_modifiers {
+                        projected = true;
+                        Flow::Descend
+                    } else {
+                        Flow::Stop
                     }
-                    for order in &mut order_by {
-                        f(key(order));
+                }
+                NodeRef::Pattern(
+                    GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::OrderBy { .. },
+                ) => {
+                    // Above or beneath the query's own projection; a sub-`SELECT`'s
+                    // modifiers sit under a second `Project`, which stops the walk.
+                    if in_head && !below_modifiers {
+                        Flow::Descend
+                    } else {
+                        Flow::Stop
                     }
-                    let rebuilt =
-                        AggregateExpression::new(function, args, scalarvals, order_by, distinct)
-                            .expect(
-                                "renaming a read preserves argument count, so arity stays valid",
-                            );
-                    (var, rebuilt)
-                })
-                .collect();
-        }
-        _ => {}
-    }
-}
-
-/// The columns of the rows a node's expressions read: a `GROUP BY`'s and each wrapper's
-/// inner pattern, or — for an `OPTIONAL`, whose condition reads the joined rows — the
-/// node's own.
-fn operand_schema(node: &GraphPattern) -> std::sync::Arc<crate::solution::VarSchema> {
-    match node {
-        GraphPattern::Extend { inner, .. }
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Filter { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Group { inner, .. } => crate::eval::syntactic_schema(inner),
-        other => crate::eval::syntactic_schema(other),
-    }
-}
-
-/// The projection [`drive_expression_reads`] wraps a driven node in: the columns it
-/// exposed before, and — beneath the descent, where the node may be evaluated with a row
-/// substituted into it — every other variable it names, so that substitution reaches
-/// every variable it reached before. A variable driven for an `EXISTS` is left out,
-/// which is what keeps the driven binding inside the node, and a stand-in is never named
-/// by the node before it is driven, so none is carried.
-fn carried_columns(
-    node: &GraphPattern,
-    expr_subs: &ExprSubs,
-    reads: &Reads,
-    scope: WalkScope,
-) -> Vec<Variable> {
-    let exposed = crate::eval::syntactic_schema(node);
-    let mut carried = exposed.vars().to_vec();
-    if scope != WalkScope::Descent {
-        let mut named = crate::DetHashSet::default();
-        crate::expr::pattern_all_vars(node, &mut named);
-        let driven = |var: &Variable| {
-            reads
-                .in_exists
-                .iter()
-                .any(|&index| &expr_subs.0[index].0 == var)
-        };
-        let mut extra: Vec<Variable> = named
-            .into_iter()
-            .filter(|var| !exposed.contains(var) && !driven(var))
-            .collect();
-        // Sorted, so the projection's column order is a function of the query alone.
-        extra.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
-        carried.extend(extra);
-    }
-    carried
-}
-
-/// Replace a pre-bound variable in a property-function argument position with its
-/// constant term.
-///
-/// This position writes a [`TermPattern`] but follows the EXPRESSION rule, not the
-/// matched-term rule, which is why [`Pushability::QuotedTriple`] is refused here and
-/// admitted by [`term_pattern_from_ground`]: a property function's arguments are
-/// invocation INPUTS, evaluated per row like a function call's, rather than terms
-/// matched against the graph. A value with no expression form therefore has nothing
-/// to be substituted with here, and is driven into the call instead — see
-/// [`drive_call_arguments`]. A non-variable argument is already a constant and
-/// passes through unchanged.
-///
-/// A quoted-triple argument is entered: its subject and object are argument
-/// positions too, and a variable there is an input of the call exactly as a bare
-/// argument is. Left unwritten, the relation would be handed a triple with that
-/// component free — refused by a relation serving only the bound mode, and answered
-/// from the relation's whole extent by one serving both. [`driven_arguments`] enters
-/// the same two positions for the values it drives, so every variable an argument
-/// names, at any depth, is either written or driven. The predicate is not entered:
-/// it names a predicate, which only an IRI can, and neither rule writes there.
-fn substitute_in_term_pattern(term: &mut TermPattern, values: &[(Variable, GroundTerm)]) {
-    // The positions, over a work list: the term, and within a quoted triple its
-    // subject's positions before its object's.
-    let mut pending: Vec<&mut TermPattern> = vec![term];
-    while let Some(term) = pending.pop() {
-        let var = match term {
-            TermPattern::Variable(var) => var,
-            TermPattern::Triple(triple) => {
-                let triple: &mut TriplePattern = triple;
-                pending.push(&mut triple.object);
-                pending.push(&mut triple.subject);
-                continue;
+                }
+                NodeRef::Pattern(GraphPattern::Extend { variable, .. }) if probed(variable) => {
+                    Flow::Stop
+                }
+                NodeRef::Pattern(GraphPattern::Unfold {
+                    element, companion, ..
+                }) if probed(element) || companion.as_ref().is_some_and(probed) => Flow::Stop,
+                NodeRef::Pattern(
+                    GraphPattern::Extend { .. }
+                    | GraphPattern::Filter { .. }
+                    | GraphPattern::Unfold { .. },
+                ) => {
+                    below_modifiers = true;
+                    if in_head { Flow::Descend } else { Flow::Stop }
+                }
+                NodeRef::Pattern(
+                    GraphPattern::Bgp { .. }
+                    | GraphPattern::Path { .. }
+                    | GraphPattern::Join { .. }
+                    | GraphPattern::Union { .. }
+                    | GraphPattern::Graph { .. }
+                    | GraphPattern::Values { .. },
+                ) => {
+                    in_head = false;
+                    Flow::Descend
+                }
+                NodeRef::Pattern(_) => Flow::Stop,
+                _ => Flow::Descend,
             }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
-                continue;
+        },
+        &rewrite_workspace(memory),
+    )
+}
+
+fn highest_index_with_memory(
+    pattern: &GraphPattern,
+    prefix: &str,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<usize> {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit};
+    let mut highest = 0_usize;
+    rewrite_walk(
+        NodeRef::Pattern(pattern),
+        |visit, node| {
+            if visit == Visit::Enter {
+                node.for_each_variable(|variable| {
+                    if let Some(rest) = variable.as_str().strip_prefix(prefix) {
+                        let digits = rest.split('_').next().unwrap_or_default();
+                        if let Ok(n) = digits.parse::<usize>() {
+                            highest = highest.max(n);
+                        }
+                    }
+                });
             }
-        };
-        let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == var) else {
-            continue;
-        };
-        // Wildcard-free over [`Pushability`], so a new class of value cannot slip through
-        // this position on the strength of a catch-all written for the old ones.
-        let replacement = match Pushability::of(ground) {
-            Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
-            Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
-            Pushability::QuotedTriple(_) | Pushability::SeedOnly => continue,
-        };
-        *term = replacement;
-    }
+            Flow::Descend
+        },
+        &rewrite_workspace(memory),
+    )?;
+    Ok(highest)
 }
 
-/// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
-///
-/// The decision is [`named_node_from_ground`]'s, which is [`Pushability`]'s: a graph
-/// is named by an IRI, so every other class is left for the `VALUES` seed. (The
-/// earlier spelling asked `contains_key` and then re-asked `get`, which read as two
-/// tests and was one — presence is implied by a `Some` entry.)
-fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &ExprSubs) {
-    let NamedNodePattern::Variable(var) = pattern else {
-        return;
-    };
-    let Some(node) = expr_subs.get(var.as_str()).and_then(named_node_from_ground) else {
-        return;
-    };
-    *pattern = NamedNodePattern::NamedNode(node);
-}
-
-/// Substitute pre-bound variables into `roots`, in order, each expression before the
-/// ones it holds: a pre-bound variable with an expression form becomes that constant,
-/// and a `BOUND` of any pre-bound variable becomes `true`. Every `EXISTS` body met is
-/// taken out into `bodies`, in the order met, for the caller to substitute in the
-/// body's own scope and put back with [`replace_exists_bodies`].
-fn substitute_in_expressions<'e>(
-    roots: impl IntoIterator<Item = &'e mut Expression>,
-    expr_subs: &ExprSubs,
-    bodies: &mut Vec<GraphPattern>,
-) {
-    // Wildcard-free on purpose, for the same reason the graph-pattern walk is.
-    for_each_expression_mut(roots, |expr| match expr {
-        Expression::Variable(var) => {
-            // Resolved before the assignment so `var`'s borrow of `*expr` has ended.
-            // `expression_from_ground` is the [`Pushability`] consumer for this
-            // position, and it is asked per OCCURRENCE rather than once per probe —
-            // which costs the same, because the answer it builds for the two classes
-            // that have one is a refcount bump on an `Arc<str>` either way.
-            let replacement = expr_subs.get(var.as_str()).and_then(expression_from_ground);
-            if let Some(subst) = replacement {
-                *expr = subst;
-            }
-        }
-        Expression::Bound(var) => {
-            // `contains_key`, not `get`: a variable pre-bound to a blank node or a
-            // quoted triple has NO expression form and so is absent from the value
-            // side, but it IS bound, and `BOUND()` must say so.
-            if expr_subs.contains_key(var.as_str()) {
-                *expr = true_literal();
-            }
-        }
-        // Back into graph-pattern territory: the body is substituted by the pattern
-        // walk, in the `EXISTS` scope, however deeply the `EXISTS` is nested here.
-        Expression::Exists(inner) => bodies.push(take_child(inner)),
-        Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Or(_)
-        | Expression::And(_)
-        | Expression::Arithmetic(..)
-        | Expression::Equal(..)
-        | Expression::SameTerm(..)
-        | Expression::Greater(..)
-        | Expression::GreaterOrEqual(..)
-        | Expression::Less(..)
-        | Expression::LessOrEqual(..)
-        | Expression::UnaryPlus(_)
-        | Expression::UnaryMinus(_)
-        | Expression::Not(_)
-        | Expression::In(..)
-        | Expression::If(..)
-        | Expression::Coalesce(_)
-        | Expression::FunctionCall(..) => {}
-    });
-}
-
-/// Put `bodies` back into the `EXISTS` positions of `roots`, in the order
-/// [`substitute_in_expressions`] took them out: the substitution leaves every `EXISTS`
-/// where it was, so the same walk meets the same positions in the same order.
-fn replace_exists_bodies<'e>(
-    roots: impl IntoIterator<Item = &'e mut Expression>,
-    bodies: Vec<GraphPattern>,
-) {
-    let mut bodies = bodies.into_iter();
-    for_each_expression_mut(roots, |expr| {
-        if let Expression::Exists(inner) = expr {
-            **inner = bodies
-                .next()
-                .expect("every EXISTS position had its body taken out");
-        }
-    });
-    let left_over = bodies.next();
-    debug_assert!(left_over.is_none(), "every body taken out goes back");
-}
-
-/// Substitute pre-bound variables into one [`Expression`], `EXISTS` bodies included.
+/// Convert a caller-owned term through the same native grounding body.
+/// The resident allocation contract is unchanged; bounded callers use the typed door.
 #[cfg(test)]
-fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
-    let mut bodies = Vec::new();
-    substitute_in_expressions([&mut *expr], expr_subs, &mut bodies);
-    for body in &mut bodies {
-        substitute_in_graph_pattern(body, expr_subs, WalkScope::ExistsBody);
-    }
-    replace_exists_bodies([expr], bodies);
-}
-
-/// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).
-fn true_literal() -> Expression {
-    Expression::Literal(Literal::new_typed(
-        "true",
-        NamedNode::new_unchecked(purrdf_xsd::datatype::XSD_BOOLEAN),
-    ))
-}
-
-/// Convert a dataset-independent [`TermValue`] to the algebra's [`GroundTerm`].
-///
-/// A quoted triple is built from the bottom up over a frame per open triple — its
-/// subject, then its predicate, then its object ([`ground_term_over`]) — so a term of
-/// any depth is converted without a machine-stack frame per level, and the first
-/// component that cannot be converted is the error reported.
-///
-/// # Errors
-///
-/// An IRI a [`NamedNode`] would refuse, a language tag this profile does not lex, or a
-/// quoted triple whose predicate is not an IRI.
 fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
-    ground_term_over(value, |value| {
+    ground_term_from_value_admitted(value, &crate::WorkspaceCapability::default())
+        .map(|ground| {
+            ground
+                .try_into_resident()
+                .expect("resident grounding has no external lease")
+        })
+        .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Resolve directly into the same grounding body, without materializing TermValue.
+pub(crate) fn ground_term_from_id<D: DatasetView>(
+    dataset: &D,
+    id: D::Id,
+) -> Result<GroundTerm, RdfDiagnostic> {
+    let workspace = crate::WorkspaceCapability::default();
+    ground_term_from_id_admitted(dataset, id, &workspace, |error| {
+        GroundFailure::diagnostic("native-sparql-source-read", &error, &workspace)
+    })
+    .map(|ground| {
+        ground
+            .try_into_resident()
+            .expect("resident grounding has no external lease")
+    })
+    .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Resident reference fixtures share the production literal-facet admission law.
+#[cfg(test)]
+fn literal_from_value(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<RdfTextDirection>,
+) -> Result<Literal, RdfDiagnostic> {
+    literal_from_value_admitted(
+        lexical_form,
+        datatype,
+        language,
+        direction,
+        &crate::WorkspaceCapability::default(),
+    )
+    .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Resident reference fixtures share the same borrowed IRI recognition body.
+#[cfg(test)]
+fn node(iri: &str) -> Result<NamedNode, RdfDiagnostic> {
+    node_admitted(iri, &crate::WorkspaceCapability::default())
+        .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// A grounded input whose original child-box admission survives its term.
+/// Leaf text already carries its own intrinsic SharedText grant. This private
+/// carrier is not cloned; trusted query rewrites move both ordered fields.
+pub(crate) struct AdmittedGroundTerm {
+    pub(crate) term: GroundTerm,
+    pub(crate) allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl std::fmt::Debug for AdmittedGroundTerm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdmittedGroundTerm").finish_non_exhaustive()
+    }
+}
+
+impl AdmittedGroundTerm {
+    /// A resident caller may take a term only when no external child lease exists.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refused extraction returns the intact original term and its child-box grant; no allocation may be introduced after refusal"
+    )]
+    fn try_into_resident(self) -> Result<GroundTerm, Self> {
+        if self
+            .allocation
+            .as_ref()
+            .is_some_and(crate::WorkspaceAllocation::is_bounded)
+        {
+            return Err(self);
+        }
+        Ok(self.term)
+    }
+}
+
+/// Exact lexical diagnostics and allocation/source refusal are separate ingress
+/// outcomes. Neither a refused allocation nor a failed read becomes an unbound cell.
+#[derive(Debug)]
+pub(crate) enum GroundFailure {
+    Diagnostic(crate::RetainedDiagnostic),
+    Operational(crate::EvalError),
+}
+
+purrdf_lex::variant_from!(GroundFailure { Operational(crate::EvalError) });
+
+impl GroundFailure {
+    fn diagnostic(
+        code: &str,
+        message: &(impl std::fmt::Display + ?Sized),
+        workspace: &crate::WorkspaceCapability,
+    ) -> Self {
+        match crate::RetainedDiagnostic::render(code, message, workspace) {
+            Ok(diagnostic) => Self::Diagnostic(diagnostic),
+            Err(error) => Self::Operational(error),
+        }
+    }
+
+    /// Move the original diagnostic or operational cause to an expression boundary.
+    pub(crate) fn into_eval_error(self) -> crate::EvalError {
+        match self {
+            Self::Operational(error) => error,
+            Self::Diagnostic(error) => crate::EvalError::RetainedDiagnostic(error),
+        }
+    }
+
+    /// The legacy resident boundary keeps its infallible allocation contract.
+    /// Bounded execution never takes this door or allocates after a refusal.
+    pub(crate) fn into_resident_diagnostic(self) -> RdfDiagnostic {
+        match self {
+            Self::Diagnostic(diagnostic) => diagnostic.diagnostic().clone(),
+            Self::Operational(_) => panic!("resident prebinding allocation failed"),
+        }
+    }
+}
+
+/// Convert a caller-owned value without re-owning intermediate TermValue trees.
+#[cfg(test)]
+pub(crate) fn ground_term_from_value_admitted(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedGroundTerm, GroundFailure> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let term = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        ground_term_from_value_with_memory(value, &mut memory)?
+    };
+    Ok(AdmittedGroundTerm {
+        term,
+        allocation: frame.into_allocation(),
+    })
+}
+
+/// Add grounded child boxes to an enclosing query's original native grant.
+/// Published lexical leaves retain their own intrinsic immutable text owners.
+pub(crate) fn ground_term_from_value_with_memory(
+    value: &TermValue,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<GroundTerm, GroundFailure> {
+    let workspace = memory.admission_mut().workspace().clone();
+    ground_term_over(value, memory, |value| {
         Ok(match value {
-            TermValue::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
-            // The algebra's `BlankNode` has ONE string slot, so a `(label, scope)`
-            // pair is carried in it the way every other single-slot blank surface
-            // carries one: as the scope-qualified rendering. `ground_term_to_value`
-            // decodes it back, so an injected blank focus node still denotes the
-            // dataset node it was resolved from rather than a fresh, unrelated one.
+            TermValue::Iri(iri) => {
+                GroundComponent::Term(GroundTerm::NamedNode(node_admitted(iri, &workspace)?))
+            }
             TermValue::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
-                BlankNode::new(scope.qualify_label(label).into_owned()),
+                blank_admitted(label, *scope, &workspace)?,
             )),
             TermValue::Literal {
                 lexical_form,
                 datatype,
                 language,
                 direction,
-            } => GroundComponent::Term(GroundTerm::Literal(literal_from_value(
+            } => GroundComponent::Term(GroundTerm::Literal(literal_from_value_admitted(
                 lexical_form,
                 datatype,
                 language.as_deref(),
                 *direction,
+                &workspace,
             )?)),
             TermValue::Triple { s, p, o } => GroundComponent::Triple([&**s, &**p, &**o]),
         })
     })
 }
 
-/// Convert a dataset's own term id straight to the algebra's [`GroundTerm`],
-/// without spelling the term out as a [`TermValue`] on the way.
-///
-/// # What this saves, and why it is not merely a shortcut
-///
-/// The value door's route from an interned term to the algebra is
-/// `TermId` → [`TermValue`] → [`GroundTerm`]: the first step owns a `String` per
-/// component (one for an IRI, up to three for a literal, a whole tree for a quoted
-/// triple), and the second immediately re-owns the same bytes into the `Arc<str>`
-/// the algebra holds — after which `crate::bgp`'s `compile_term` hashes the result
-/// back to the id it started from. This route drops the middle allocation entirely:
-/// [`DatasetView::resolve`] hands back a borrowed [`TermRef`], and the algebra term
-/// is built from that borrow. A caller with an id in hand pays ONE materialization
-/// instead of two.
-///
-/// It is a strictly narrower door, not a looser one: every component still goes
-/// through the same [`node`] and [`lang`] admission the value door uses, so a
-/// dataset holding a term the algebra would refuse is refused here identically
-/// rather than admitted because it came from "inside". A quoted triple is built the
-/// way [`ground_term_from_value`] builds one ([`ground_term_over`]).
-///
-/// # Errors
-///
-/// As [`ground_term_from_value`]: an IRI a [`NamedNode`] would refuse, a language tag
-/// this profile does not lex, or a quoted triple whose predicate position is not an
-/// IRI.
-pub(crate) fn ground_term_from_id<D: DatasetView>(
+/// The borrowed-id door resolves directly into the same admitted ground body.
+/// The caller moves a bounded source error into its typed account; it must not
+/// render an opaque D::ReadError before that account selects the original cause.
+pub(crate) fn ground_term_from_id_admitted<D: DatasetView>(
     dataset: &D,
     id: D::Id,
-) -> Result<GroundTerm, RdfDiagnostic> {
-    ground_term_over(id, |id| {
-        let guard = dataset.resolve(id).map_err(|error| {
-            RdfDiagnostic::error("native-sparql-source-read", error.to_string())
-        })?;
+    workspace: &crate::WorkspaceCapability,
+    source_error: impl FnMut(D::ReadError) -> GroundFailure,
+) -> Result<AdmittedGroundTerm, GroundFailure> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let term = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        ground_term_from_id_with_memory(dataset, id, &mut memory, source_error)?
+    };
+    Ok(AdmittedGroundTerm {
+        term,
+        allocation: frame.into_allocation(),
+    })
+}
+
+/// Resolve directly into an enclosing query's original native child-box grant.
+pub(crate) fn ground_term_from_id_with_memory<D: DatasetView>(
+    dataset: &D,
+    id: D::Id,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    mut source_error: impl FnMut(D::ReadError) -> GroundFailure,
+) -> Result<GroundTerm, GroundFailure> {
+    let workspace = memory.admission_mut().workspace().clone();
+    ground_term_over(id, memory, |id| {
+        let guard = dataset.resolve(id).map_err(&mut source_error)?;
         Ok(match purrdf_core::TermGuard::term(&guard) {
-            TermRef::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
-            // Qualified exactly as `ground_term_from_value` qualifies a `TermValue::Blank`,
-            // because the two doors must produce the same algebra term for the same
-            // dataset node — the algebra's `BlankNode` has one string slot, and the
-            // scope-qualified rendering is how every single-slot blank surface carries a
-            // `(label, scope)` pair.
+            TermRef::Iri(iri) => {
+                GroundComponent::Term(GroundTerm::NamedNode(node_admitted(iri, &workspace)?))
+            }
             TermRef::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
-                BlankNode::new(scope.qualify_label(label).into_owned()),
+                blank_admitted(label, scope, &workspace)?,
             )),
             TermRef::Literal {
                 lexical,
@@ -3104,17 +4582,16 @@ pub(crate) fn ground_term_from_id<D: DatasetView>(
                 language,
                 direction,
             } => {
-                let datatype_guard = dataset.resolve(datatype).map_err(|error| {
-                    RdfDiagnostic::error("native-sparql-source-read", error.to_string())
-                })?;
+                let datatype_guard = dataset.resolve(datatype).map_err(&mut source_error)?;
                 let TermRef::Iri(datatype) = purrdf_core::TermGuard::term(&datatype_guard) else {
-                    return Err(RdfDiagnostic::error(
+                    return Err(GroundFailure::diagnostic(
                         "native-sparql-subst-literal-datatype",
-                        "a literal's datatype must be an IRI".to_owned(),
+                        &"a literal's datatype must be an IRI",
+                        &workspace,
                     ));
                 };
-                GroundComponent::Term(GroundTerm::Literal(literal_from_value(
-                    lexical, datatype, language, direction,
+                GroundComponent::Term(GroundTerm::Literal(literal_from_value_admitted(
+                    lexical, datatype, language, direction, &workspace,
                 )?))
             }
             TermRef::Triple { s, p, o } => GroundComponent::Triple([s, p, o]),
@@ -3122,153 +4599,294 @@ pub(crate) fn ground_term_from_id<D: DatasetView>(
     })
 }
 
-/// What one component of a term converts to: a ground term, or a quoted triple's
-/// three components, each still to convert.
+/// Clone a grounded parameter through the original grounding walk. Only child
+/// boxes are fresh; every borrowed leaf's existing immutable text owner is shared.
+pub(crate) fn clone_ground_with_memory(
+    root: &GroundTerm,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<GroundTerm, GroundFailure> {
+    #[derive(Clone, Copy)]
+    enum Component<'a> {
+        Term(&'a GroundTerm),
+        Predicate(&'a NamedNode),
+    }
+    ground_term_over(Component::Term(root), memory, |component| {
+        Ok(match component {
+            Component::Predicate(predicate) => {
+                GroundComponent::Term(GroundTerm::NamedNode(predicate.clone()))
+            }
+            Component::Term(GroundTerm::NamedNode(node)) => {
+                GroundComponent::Term(GroundTerm::NamedNode(node.clone()))
+            }
+            Component::Term(GroundTerm::BlankNode(node)) => {
+                GroundComponent::Term(GroundTerm::BlankNode(node.clone()))
+            }
+            Component::Term(GroundTerm::Literal(literal)) => {
+                GroundComponent::Term(GroundTerm::Literal(literal.clone()))
+            }
+            Component::Term(GroundTerm::Triple(triple)) => GroundComponent::Triple([
+                Component::Term(&triple.subject),
+                Component::Predicate(&triple.predicate),
+                Component::Term(&triple.object),
+            ]),
+        })
+    })
+}
+
+/// What one component converts to, or the three components still to convert.
 enum GroundComponent<C> {
     Term(GroundTerm),
     Triple([C; 3]),
 }
 
-/// A quoted triple being converted: the components not yet entered, and what has come
-/// back so far.
 struct OpenGroundTriple<C> {
     predicate: C,
     object: C,
     stage: GroundTripleStage,
 }
 
-/// How far a quoted triple's conversion has come.
 enum GroundTripleStage {
-    /// The subject is being converted.
     Subject,
-    /// The predicate is being converted.
-    Predicate { subject: GroundTerm },
-    /// The object is being converted.
+    Predicate {
+        subject: GroundTerm,
+    },
     Object {
         subject: GroundTerm,
         predicate: NamedNode,
     },
 }
 
-/// Convert the term named by `root` to a [`GroundTerm`], where `convert` converts one
-/// component: a leaf to its term, a quoted triple to its components. A quoted triple is
-/// built from the bottom up over a frame per open triple — subject, then predicate, then
-/// object — so a term of any depth is converted without a machine-stack frame per
-/// level. The first component `convert` refuses is the error reported, and a converted
-/// predicate that is not an IRI is refused when it comes back, before its object is
-/// entered.
+/// The original subject/predicate/object postorder walk. A non-IRI predicate is
+/// refused before its object is entered; the first refused component wins.
 fn ground_term_over<C: Copy>(
     root: C,
-    mut convert: impl FnMut(C) -> Result<GroundComponent<C>, RdfDiagnostic>,
-) -> Result<GroundTerm, RdfDiagnostic> {
-    let mut open: Vec<OpenGroundTriple<C>> = Vec::new();
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    mut convert: impl FnMut(C) -> Result<GroundComponent<C>, GroundFailure>,
+) -> Result<GroundTerm, GroundFailure> {
+    let baseline = memory.admitted_bytes();
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut open = Vec::<OpenGroundTriple<C>>::new();
     let mut next = root;
-    loop {
-        let mut built = match convert(next)? {
-            GroundComponent::Term(term) => term,
-            GroundComponent::Triple([subject, predicate, object]) => {
-                open.push(OpenGroundTriple {
-                    predicate,
-                    object,
-                    stage: GroundTripleStage::Subject,
-                });
-                next = subject;
-                continue;
-            }
-        };
-        // Hand the converted component up: it is the open triple's subject or
-        // predicate, whose next component is entered, or its object, which closes the
-        // triple.
+    let result: Result<GroundTerm, GroundFailure> = (|| {
         loop {
-            let Some(top) = open.pop() else {
-                return Ok(built);
-            };
-            let stage = match top.stage {
-                GroundTripleStage::Subject => {
-                    next = top.predicate;
-                    GroundTripleStage::Predicate { subject: built }
-                }
-                GroundTripleStage::Predicate { subject } => {
-                    let GroundTerm::NamedNode(predicate) = built else {
-                        return Err(RdfDiagnostic::error(
-                            "native-sparql-subst-triple-predicate",
-                            "a quoted-triple predicate must be an IRI".to_owned(),
-                        ));
-                    };
-                    next = top.object;
-                    GroundTripleStage::Object { subject, predicate }
-                }
-                GroundTripleStage::Object { subject, predicate } => {
-                    built = GroundTerm::Triple(Child::new(GroundTriple {
-                        subject,
-                        predicate,
-                        object: built,
-                    }));
+            let mut built = match convert(next)? {
+                GroundComponent::Term(term) => term,
+                GroundComponent::Triple([subject, predicate, object]) => {
+                    memory
+                        .push(
+                            &mut open,
+                            OpenGroundTriple {
+                                predicate,
+                                object,
+                                stage: GroundTripleStage::Subject,
+                            },
+                        )
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "prebound ground worklist")
+                        })?;
+                    next = subject;
                     continue;
                 }
             };
-            open.push(OpenGroundTriple {
-                predicate: top.predicate,
-                object: top.object,
-                stage,
-            });
-            break;
+            loop {
+                let Some(top) = open.pop() else {
+                    return Ok(built);
+                };
+                let stage = match top.stage {
+                    GroundTripleStage::Subject => {
+                        next = top.predicate;
+                        GroundTripleStage::Predicate { subject: built }
+                    }
+                    GroundTripleStage::Predicate { subject } => {
+                        let GroundTerm::NamedNode(predicate) = built else {
+                            return Err(GroundFailure::diagnostic(
+                                "native-sparql-subst-triple-predicate",
+                                &"a quoted-triple predicate must be an IRI",
+                                &workspace,
+                            ));
+                        };
+                        next = top.object;
+                        GroundTripleStage::Object { subject, predicate }
+                    }
+                    GroundTripleStage::Object { subject, predicate } => {
+                        memory
+                            .add_bytes(size_of::<GroundTriple>())
+                            .map_err(|error| {
+                                memory
+                                    .admission_mut()
+                                    .storage_error(error, "prebound ground triple")
+                            })?;
+                        let triple = purrdf_lex::allocation::try_boxed(GroundTriple {
+                            subject,
+                            predicate,
+                            object: built,
+                        })
+                        .map_err(|_| {
+                            crate::EvalError::AllocationFailed {
+                                construct: "prebound ground triple",
+                            }
+                        })?;
+                        built = GroundTerm::Triple(Child::from(triple));
+                        continue;
+                    }
+                };
+                memory
+                    .push(
+                        &mut open,
+                        OpenGroundTriple {
+                            predicate: top.predicate,
+                            object: top.object,
+                            stage,
+                        },
+                    )
+                    .map_err(|error| {
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "prebound ground worklist")
+                    })?;
+                break;
+            }
+        }
+    })();
+    match result {
+        Ok(term) => {
+            memory.release_vec(open).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "prebound ground worklist release")
+            })?;
+            Ok(term)
+        }
+        Err(error) => {
+            // All completed children in both local and pending stages die before
+            // shrinking. This includes a failed reserve's admitted replacement
+            // layout, even when that actual allocator never produced a buffer.
+            drop(open);
+            let bytes = memory
+                .admitted_bytes()
+                .checked_sub(baseline)
+                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            memory.release_bytes(bytes).map_err(|release| {
+                memory
+                    .admission_mut()
+                    .storage_error(release, "prebound ground unwind")
+            })?;
+            Err(error)
         }
     }
 }
 
-/// Build an algebra [`Literal`] from a value's components, choosing the plain /
-/// typed / lang / dir-lang constructor that matches its shape.
-///
-/// Both component doors refuse rather than build: a datatype IRI goes through
-/// [`node`], and a language tag through [`lang`]. This is the pre-binding
-/// INGRESS — the one place a caller-supplied [`TermValue`] becomes algebra — and
-/// a caller that hands over a malformed component has to learn that it did.
-fn literal_from_value(
+/// Scope qualification uses the existing native canonical blank-label encoder.
+pub(crate) fn blank_admitted(
+    label: &str,
+    scope: purrdf_core::BlankScope,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<BlankNode, GroundFailure> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let encoded = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        purrdf_core::blank_label::encode_blank_label_with_memory(
+            label,
+            scope,
+            purrdf_core::blank_label::LabelAlphabet::Unconstrained,
+            &mut memory,
+        )
+    }
+    .map_err(|error| frame.storage_error(error, "prebound blank qualification"))?;
+    let text = match encoded {
+        std::borrow::Cow::Borrowed(label) => workspace.authored_text(&label)?,
+        std::borrow::Cow::Owned(text) => {
+            let mut text = Some(text);
+            frame.finish_text(&mut text)?
+        }
+    };
+    Ok(BlankNode::from_admitted(text))
+}
+
+/// The original plain/typed/lang/directional choice, with validated facets and
+/// intrinsic text owners. An absent language still discards a stray direction,
+/// and a present language chooses its standard datatype rather than the supplied
+/// datatype, exactly as the resident constructor did.
+fn literal_from_value_admitted(
     lexical_form: &str,
     datatype: &str,
     language: Option<&str>,
     direction: Option<RdfTextDirection>,
-) -> Result<Literal, RdfDiagnostic> {
-    match (language, direction) {
-        (Some(language), dir) => Ok(Literal::new_lang(lexical_form, lang(language)?, dir)),
-        (None, _) => Ok(Literal::new_typed(lexical_form, node(datatype)?)),
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Literal, GroundFailure> {
+    match language {
+        Some(language) => {
+            let language = lang_admitted(language, workspace)?;
+            let datatype = NamedNode::from_admitted(workspace.authored_text(
+                &purrdf_iri::vocab::language_datatype_iri(direction.is_some()),
+            )?);
+            let value = workspace.authored_text(&lexical_form)?;
+            let language = workspace.authored_text(&language)?;
+            Ok(Literal::from_admitted(
+                value,
+                datatype,
+                Some(language),
+                direction,
+            ))
+        }
+        None => {
+            let datatype = node_admitted(datatype, workspace)?;
+            let value = workspace.authored_text(&lexical_form)?;
+            Ok(Literal::from_admitted(value, datatype, None, None))
+        }
     }
 }
 
-/// Validate-and-wrap an IRI, surfacing a malformed IRI as a diagnostic.
-fn node(iri: &str) -> Result<NamedNode, RdfDiagnostic> {
-    NamedNode::new(iri).map_err(|e| RdfDiagnostic::error("native-sparql-subst-iri", e.to_string()))
+/// Validate using the existing scanner and retain its original lexical error
+/// through exact NamedNode diagnostic rendering. No generic IRI reason replaces it.
+fn node_admitted(
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<NamedNode, GroundFailure> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let verdict = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        purrdf_iri::is_absolute_with_memory(iri, &mut memory)
+    };
+    match verdict {
+        Ok(true) => Ok(NamedNode::from_admitted(workspace.authored_text(&iri)?)),
+        Ok(false) => Err(GroundFailure::diagnostic(
+            "native-sparql-subst-iri",
+            &purrdf_sparql_algebra::error::IriTermDisplay::new(
+                iri,
+                &"relative IRI reference in term position (no scheme)",
+            ),
+            workspace,
+        )),
+        Err(purrdf_iri::IriReadError::Lexical(error)) => Err(GroundFailure::diagnostic(
+            "native-sparql-subst-iri",
+            &purrdf_sparql_algebra::error::IriTermDisplay::new(iri, &error),
+            workspace,
+        )),
+        Err(purrdf_iri::IriReadError::Storage(error)) => Err(frame
+            .storage_error(error, "prebound IRI recognition")
+            .into()),
+    }
 }
 
-/// Validate a pre-bound literal's language tag, surfacing an ungrammatical one
-/// as a diagnostic exactly the way [`node`] surfaces a malformed datatype IRI.
-///
-/// The tag is judged on [`crate::scratch::LANGTAG_PROFILE`], the profile the
-/// SPARQL parser holds query text to and the profile `RdfLiteral` holds a
-/// dataset term to, so a pre-binding is admitted on precisely the terms a term
-/// written in the query itself would have been.
-///
-/// # Why this is an ERROR and not an unbound binding
-///
-/// [`Query::substitute_variable`] injects the pre-binding as a single-row
-/// `VALUES` join, and an unbound cell in a `VALUES` row is `UNDEF` — compatible
-/// with every solution. So degrading a refused pre-binding to "unbound" would
-/// not cost the caller a binding, it would delete the CONSTRAINT: the query
-/// would return the whole unrestricted relation, more rows than the caller asked
-/// for, with nothing anywhere saying why. A pre-binding is an instruction to
-/// narrow, and an instruction that cannot be carried out is reported, not
-/// quietly dropped.
-fn lang(tag: &str) -> Result<&str, RdfDiagnostic> {
+/// The borrowing LANGTAG parser owns no storage and preserves input spelling.
+/// Its Copy error renders only borrowed tag/debug text and static reason/code.
+fn lang_admitted<'a>(
+    tag: &'a str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<&'a str, GroundFailure> {
     match purrdf_iri::langtag::parse_with(tag, crate::scratch::LANGTAG_PROFILE) {
         Ok(_) => Ok(tag),
-        Err(error) => Err(RdfDiagnostic::error(
+        Err(error) => Err(GroundFailure::diagnostic(
             "native-sparql-subst-langtag",
-            format!(
+            &format_args!(
                 "a pre-bound literal's language tag {tag:?} is not one this profile lexes: \
                  {error} [{code}]",
-                code = error.diagnostic_code()
+                code = error.diagnostic_code(),
             ),
+            workspace,
         )),
     }
 }
@@ -3328,7 +4946,7 @@ mod tests {
     /// Read the expectations as: `term` = the pushdown's matched-pattern position
     /// ([`term_pattern_from_ground`]); `expr` = a constant expression
     /// ([`expression_from_ground`]); `arg` = a property-function argument
-    /// ([`substitute_in_term_pattern`]); `graph` = a `GRAPH`/`SERVICE` name
+    /// ([`substitute_in_term_pattern_with_memory`]); `graph` = a `GRAPH`/`SERVICE` name
     /// ([`substitute_in_named_node_pattern`]).
     #[test]
     fn the_pushability_classifier_reproduces_every_site_s_decision() {
@@ -3566,7 +5184,7 @@ mod tests {
     /// onto the columns the `FILTER` exposed — none — which keeps `?this` from escaping
     /// it, plus every other variable the `FILTER` names (`?o`, `?out`, `?p`, sorted), so
     /// a row substituted into it still reaches its `EXISTS` body's variables (see
-    /// [`drive_expression_reads`]).
+    /// [`drive_expression_reads_with_memory`]).
     #[test]
     fn a_call_inside_an_exists_body_is_driven_in_a_scope_of_its_own() {
         let this = Variable::new("this");
@@ -3634,6 +5252,137 @@ mod tests {
 /// Every function converted from recursion has a `reference_*` twin here holding the
 /// recursive form, and each twin calls the twins of the converted functions beneath it,
 /// so a test compares whole recursive rewrites against whole work-list rewrites.
+#[cfg(test)]
+mod seed_fast_path_tests {
+    use super::*;
+    use crate::eval::{EvalCtx, Outcome, evaluate_query};
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_sparql_algebra::SparqlParser;
+
+    const P: &str = "http://example.org/p";
+
+    /// `ex:a ex:p ex:o1, ex:o2 . ex:b ex:p ex:o3 .`, every row of `query` with `?this`
+    /// pre-bound to `ex:a` by `rewrite`, sorted.
+    fn answers(
+        query: &str,
+        rewrite: fn(Query, Vec<(Variable, GroundTerm)>) -> Query,
+    ) -> Vec<String> {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri(P);
+        for (subject, object) in [("a", "o1"), ("a", "o2"), ("b", "o3")] {
+            let s = builder.intern_iri(&format!("http://example.org/{subject}"));
+            let o = builder.intern_iri(&format!("http://example.org/{object}"));
+            builder.push_quad(s, p, o, None);
+        }
+        let dataset = builder.freeze().expect("freeze");
+        let parsed = SparqlParser::new()
+            .with_prebound_variables(["this"])
+            .parse_query(query)
+            .expect("parse");
+        let probes = vec![(
+            Variable::new("this"),
+            GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/a")),
+        )];
+        let rewritten = rewrite(parsed, probes);
+        let mut ctx = EvalCtx::new(&dataset);
+        let Outcome::Solutions(sequence) = evaluate_query(&rewritten, &mut ctx).expect("eval")
+        else {
+            panic!("{query}: expected solutions");
+        };
+        let mut rows: Vec<String> = sequence
+            .rows
+            .iter()
+            .map(|row| {
+                let cells: Vec<Option<TermValue>> = row
+                    .iter()
+                    .map(|cell| cell.map(|term| ctx.scratch.value_of(ctx.dataset, term)))
+                    .collect();
+                format!("{cells:?}")
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// **The seed alone is taken only where it answers as the walk does.** Each query
+    /// the fast path takes answers exactly the rows the full walk gives it; each query
+    /// with a place the seed cannot reach — a `FILTER` or `BIND` inside a group, a
+    /// sub-`SELECT` (under a `FILTER` too), `OPTIONAL`, `MINUS`, `GROUP BY`, `EXISTS`,
+    /// `LATERAL` — takes the walk, and where the seed alone would answer differently
+    /// that difference is shown, which is why the walk exists.
+    #[test]
+    fn the_seed_alone_is_taken_only_where_it_answers_as_the_walk() {
+        let seeded = [
+            "SELECT (CONTAINS(STR(?this), \"a\") AS ?r) WHERE {}".to_owned(),
+            format!("SELECT ?o WHERE {{ ?this <{P}> ?o }}"),
+            format!("SELECT ?o WHERE {{ {{ ?this <{P}> ?o }} UNION {{ ?s <{P}> ?o }} }}"),
+            format!("SELECT (STR(?this) AS ?t) ?o WHERE {{ ?s <{P}> ?o FILTER(?s = ?this) }}"),
+            format!("SELECT DISTINCT ?o WHERE {{ ?this <{P}> ?o }} ORDER BY ?o LIMIT 1"),
+            format!("SELECT ?o WHERE {{ VALUES ?o {{ <http://example.org/o1> }} ?this <{P}> ?o }}"),
+        ];
+        for query in &seeded {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(
+                seed_reaches_every_read(&parsed, &[]),
+                "{query}: takes the seed alone"
+            );
+            assert_eq!(
+                answers(query, apply_probes),
+                answers(query, walk_shacl_probes),
+                "{query}: the seed alone answers as the walk"
+            );
+        }
+        let walked = [
+            format!(
+                "SELECT ?o WHERE {{ {{ ?s <{P}> ?o FILTER(?s = ?this) }} UNION {{ ?s <{P}> ?o FILTER(false) }} }}"
+            ),
+            format!(
+                "SELECT ?x WHERE {{ {{ ?s <{P}> ?o BIND(?this AS ?x) }} UNION {{ ?s <{P}> ?o FILTER(false) }} }}"
+            ),
+            format!(
+                "SELECT ?x WHERE {{ {{ SELECT ?x WHERE {{ ?x <{P}> ?o }} }} FILTER(?x = ?this) }}"
+            ),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?o MINUS {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?this (COUNT(*) AS ?c) WHERE {{ ?this <{P}> ?o }}"),
+        ];
+        // Shapes the walk takes although the seed happens to answer these alike: the
+        // fast path is decided by the shape, never by a particular query's luck.
+        let conservative = [
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?x OPTIONAL {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?o FILTER EXISTS {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?x LATERAL {{ ?this <{P}> ?o }} }}"),
+        ];
+        for query in &conservative {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(
+                !seed_reaches_every_read(&parsed, &[]),
+                "{query}: takes the walk"
+            );
+        }
+        for query in &walked {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(
+                !seed_reaches_every_read(&parsed, &[]),
+                "{query}: takes the walk"
+            );
+            assert_ne!(
+                answers(query, apply_probes),
+                answers(query, walk_shacl_probes),
+                "{query}: the seed alone would answer differently"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod walk_tests {
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermBox};
@@ -4058,7 +5807,7 @@ mod walk_tests {
                 complete_shacl_leaf(pattern, &expr_subs.0, scope);
                 (false, core)
             }
-            GraphPattern::Values { .. } => (false, core),
+            GraphPattern::Values { .. } | GraphPattern::Apply { .. } => (false, core),
             GraphPattern::Join { left, right } | GraphPattern::Minus { left, right } => {
                 reference_substitute_in_graph_pattern(left, expr_subs, beneath);
                 reference_substitute_in_graph_pattern(right, expr_subs, beneath);
@@ -4181,14 +5930,18 @@ mod walk_tests {
                 aggregates,
             } => {
                 let operand = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
-                let carried = operand.kept(expr_subs, variables);
+                let keys = variables.clone();
+                let carried = operand.kept(expr_subs, &keys);
                 let taken = std::mem::take(aggregates);
                 *aggregates = taken
                     .into_iter()
                     .map(|(var, agg)| (var, reference_substitute_in_aggregate(agg, expr_subs)))
                     .collect();
                 reference_drive_expression_reads(pattern, expr_subs, scope, operand);
-                return carried;
+                if scope == WalkScope::ExistsBody {
+                    return carried;
+                }
+                return carry_past_group(pattern, expr_subs, &keys, carried);
             }
         };
         if reads_expressions {
@@ -4871,6 +6624,137 @@ mod walk_tests {
     }
 
     // ── Terms ──────────────────────────────────────────────────────────────────────
+
+    struct PatternAdmission {
+        limit: usize,
+        live: usize,
+        peak: usize,
+    }
+
+    impl purrdf_lex::allocation::Admission for PatternAdmission {
+        fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+            if live > self.limit {
+                return Err(purrdf_lex::allocation::StorageError::AdmissionFailed);
+            }
+            self.live = live;
+            self.peak = self.peak.max(live);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn admitted_pattern_spelling_preserves_generated_reference_and_original_owner() {
+        for seed in 0..600_u64 {
+            let input = ground(&mut Choices::new(seed, 12));
+            let mut admission = PatternAdmission {
+                limit: usize::MAX,
+                live: 0,
+                peak: 0,
+            };
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+            let actual = term_pattern_from_ground_with_memory(&input, &mut memory)
+                .expect("admitted spelling");
+            assert_eq!(
+                actual,
+                reference_term_pattern_from_ground(&input),
+                "seed {seed}"
+            );
+            let retained = memory.admitted_bytes();
+            if actual.is_none() {
+                assert_eq!(retained, 0, "refused seed {seed}");
+            }
+            // The enclosing query drops its spelling before releasing the grant.
+            drop(actual);
+            memory
+                .release_bytes(retained)
+                .expect("destroyed original payload");
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn admitted_pattern_blank_refusal_releases_completed_subject_and_walk() {
+        let named = || GroundTerm::NamedNode(iri(0));
+        let input = GroundTerm::Triple(Child::new(GroundTriple {
+            subject: GroundTerm::Triple(Child::new(GroundTriple {
+                subject: named(),
+                predicate: iri(1),
+                object: named(),
+            })),
+            predicate: iri(1),
+            object: GroundTerm::BlankNode(BlankNode::new("seed-only")),
+        }));
+        let mut admission = PatternAdmission {
+            limit: usize::MAX,
+            live: 0,
+            peak: 0,
+        };
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+        assert!(
+            term_pattern_from_ground_with_memory(&input, &mut memory)
+                .expect("blank identity is a semantic refusal")
+                .is_none()
+        );
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert!(admission.peak >= std::alloc::Layout::new::<TriplePattern>().size());
+        assert_eq!(admission.live, 0);
+    }
+
+    #[test]
+    fn admitted_pattern_physical_refusal_is_distinct_from_seed_only() {
+        let input = GroundTerm::Triple(Child::new(GroundTriple {
+            subject: GroundTerm::NamedNode(iri(0)),
+            predicate: iri(1),
+            object: GroundTerm::Literal(Literal::new_simple("object")),
+        }));
+        let mut admitted = PatternAdmission {
+            limit: usize::MAX,
+            live: 0,
+            peak: 0,
+        };
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut admitted);
+        let healthy = term_pattern_from_ground_with_memory(&input, &mut memory)
+            .expect("healthy original owner")
+            .expect("pushable input");
+        let retained = memory.admitted_bytes();
+        assert_eq!(retained, std::alloc::Layout::new::<TriplePattern>().size());
+        drop(healthy);
+        memory
+            .release_bytes(retained)
+            .expect("original payload destroyed");
+        // Refuse both initial walk allocation and the box after its walk exists.
+        for limit in [0, 1, admitted.peak - 1] {
+            let mut admission = PatternAdmission {
+                limit,
+                live: 0,
+                peak: 0,
+            };
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+            assert_eq!(
+                term_pattern_from_ground_with_memory(&input, &mut memory),
+                Err(purrdf_lex::allocation::StorageError::AdmissionFailed)
+            );
+            // Failure destroys local payloads before returning. The enclosing
+            // frame still holds their grant and may release it only afterwards.
+            let remaining = memory.admitted_bytes();
+            memory
+                .release_bytes(remaining)
+                .expect("failed locals destroyed");
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+        let mut admission = PatternAdmission {
+            limit: 0,
+            live: 0,
+            peak: 0,
+        };
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+        assert!(
+            term_pattern_from_ground_with_memory(&GroundTerm::NamedNode(iri(0)), &mut memory)
+                .expect("a shallow shared leaf needs no new allocation")
+                .is_some()
+        );
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
 
     #[test]
     fn term_pattern_from_ground_agrees_with_its_recursive_reference() {
@@ -5610,3 +7494,48 @@ mod walk_tests {
         assert_eq!(levels, 2_000);
     }
 }
+
+/// Hand each pattern `node` holds directly — not its expressions' `EXISTS` bodies — to
+/// `visit`.
+fn for_each_child_pattern_mut<'p>(
+    node: &'p mut GraphPattern,
+    visit: &mut dyn FnMut(&'p mut GraphPattern),
+) {
+    match node {
+        GraphPattern::Join { left, right }
+        | GraphPattern::LeftJoin { left, right, .. }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::Apply { left, right, .. }
+        | GraphPattern::Minus { left, right } => {
+            visit(left);
+            visit(right);
+        }
+        GraphPattern::Union { arms } => {
+            for arm in arms.iter_mut() {
+                visit(arm);
+            }
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => visit(inner),
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => {}
+    }
+}
+
+/// Make every remaining assignment of a pre-bound name join (SPARQL 1.1 §18.5) with
+/// the bound value, at the assignment.
+///
+/// The prefix of the variable [`join_assignments_with_prebinding_with_memory`] moves an
+/// assignment of a pre-bound name to: `{ASSIGNED_PREFIX}{n}_{name}`.
+const ASSIGNED_PREFIX: &str = "__purrdf_assigned_";

@@ -22,12 +22,75 @@
 //! closed three-way `Copy` enum; the dataset-clause logic lives entirely here so the
 //! indexed read path and the C-ABI are untouched.
 
-use std::collections::BTreeSet;
-
 use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{QueryDataset, UsingClause};
 
 use crate::convert::named_node_to_value;
+use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
+use purrdf_core::small::Shared;
+
+#[derive(Debug)]
+struct GraphIdsPayload<I> {
+    values: Vec<I>,
+    _allocation: Option<WorkspaceAllocation>,
+    _control: WorkspaceAllocation,
+}
+
+/// Immutable resolved graph ids; every scope clone retains the same buffer grant.
+#[derive(Clone, Debug)]
+pub(crate) struct GraphIds<I>(Shared<GraphIdsPayload<I>>);
+
+impl<I> std::ops::Deref for GraphIds<I> {
+    type Target = [I];
+    fn deref(&self) -> &[I] {
+        &self.0.values
+    }
+}
+impl<'a, I> IntoIterator for &'a GraphIds<I> {
+    type Item = &'a I;
+    type IntoIter = std::slice::Iter<'a, I>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+impl<I: PartialEq> PartialEq for GraphIds<I> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+impl<I: Eq> Eq for GraphIds<I> {}
+
+impl<I: Ord> GraphIds<I> {
+    fn freeze(
+        mut values: crate::AdmittedVec<I>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        values.as_mut_slice().sort_unstable();
+        let (mut values, allocation) = values.into_parts();
+        values.dedup();
+        let layout = Shared::<GraphIdsPayload<I>>::allocation_layout();
+        let control = workspace
+            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let payload = Shared::try_new(GraphIdsPayload {
+            values,
+            _allocation: allocation,
+            _control: control,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "active graph ids",
+        })?;
+        Ok(Self(payload))
+    }
+
+    pub(crate) fn resident(values: Vec<I>) -> Self {
+        let workspace = WorkspaceCapability::default();
+        Self::freeze(
+            crate::AdmittedVec::from_parts(values, None, &workspace),
+            &workspace,
+        )
+        .expect("resident active graph ids allocation")
+    }
+}
 
 /// How the active **default graph** is sourced.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,7 +100,7 @@ pub(crate) enum DefaultSpec<I: ViewTermId = TermId> {
     /// `FROM`/`USING` graphs: the RDF-merge of these named graphs (sorted, deduped).
     /// An empty vector is legal — every named IRI was absent, or only `FROM NAMED`
     /// was given — and matches nothing.
-    Merged(Vec<I>),
+    Merged(GraphIds<I>),
 }
 
 /// The SPARQL active dataset (§13), resolved to view-local ids once per query/op.
@@ -48,7 +111,7 @@ pub(crate) struct ActiveDataset<I: ViewTermId = TermId> {
     /// The graphs addressable by `GRAPH`. `None` = every store named graph (the
     /// no-clause default); `Some(set)` = exactly these (an explicit `FROM NAMED` /
     /// `USING NAMED`; possibly empty).
-    named: Option<BTreeSet<I>>,
+    named: Option<GraphIds<I>>,
 }
 
 /// The resolved graph filter(s) for the *current* evaluation scope — almost always a
@@ -59,7 +122,7 @@ pub(crate) enum GraphScope<I: ViewTermId = TermId> {
     One(GraphMatch<I>),
     /// The merge of these named graphs. A consumer producing *rows* (BGP) must de-dupe
     /// triples; a consumer collecting *endpoints* into a set (paths) gets it for free.
-    Merge(Vec<I>),
+    Merge(GraphIds<I>),
 }
 
 /// Resolve a list of graph IRIs to their view-local ids, dropping any that name no
@@ -68,14 +131,26 @@ pub(crate) enum GraphScope<I: ViewTermId = TermId> {
 fn resolve_graphs<D: DatasetView>(
     graphs: &[purrdf_sparql_algebra::NamedNode],
     dataset: &D,
-) -> Vec<D::Id> {
-    let mut ids: Vec<D::Id> = graphs
-        .iter()
-        .filter_map(|n| dataset.term_id_if_ready(&named_node_to_value(n)))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    ids
+    workspace: &WorkspaceCapability,
+    source_error: &impl Fn(D::ReadError) -> EvalError,
+) -> Result<GraphIds<D::Id>, EvalError> {
+    let mut ids = crate::AdmittedVec::with_capacity(graphs.len(), workspace)?;
+    for graph in graphs {
+        let allocation = workspace.charge(
+            u64::try_from(graph.as_str().len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let value = crate::WorkspaceTerm::new(
+            TermValue::Iri(crate::workspace::string(
+                graph.as_str(),
+                "active graph lookup key",
+            )?),
+            allocation,
+        );
+        if let Some(id) = dataset.term_id_by_value(&value).map_err(source_error)? {
+            ids.push(id)?;
+        }
+    }
+    GraphIds::freeze(ids, workspace)
 }
 
 impl<I: ViewTermId> ActiveDataset<I> {
@@ -89,21 +164,33 @@ impl<I: ViewTermId> ActiveDataset<I> {
 
     /// Build the active dataset from a query's `FROM` / `FROM NAMED` clause. An empty
     /// clause means "use the store's default dataset" (§13.2).
-    pub(crate) fn from_query_dataset<D: DatasetView<Id = I>>(
+    pub(crate) fn from_query_dataset_admitted<D: DatasetView<Id = I>>(
         qd: &QueryDataset,
         dataset: &D,
-    ) -> Self {
+        workspace: &WorkspaceCapability,
+        source_error: impl Fn(D::ReadError) -> EvalError,
+    ) -> Result<Self, EvalError> {
         if qd.default.is_empty() && qd.named.is_empty() {
-            return Self::store_default();
+            return Ok(Self::store_default());
         }
-        Self {
-            default: DefaultSpec::Merged(resolve_graphs(&qd.default, dataset)),
-            named: Some(resolve_graphs(&qd.named, dataset).into_iter().collect()),
-        }
+        Ok(Self {
+            default: DefaultSpec::Merged(resolve_graphs(
+                &qd.default,
+                dataset,
+                workspace,
+                &source_error,
+            )?),
+            named: Some(resolve_graphs(
+                &qd.named,
+                dataset,
+                workspace,
+                &source_error,
+            )?),
+        })
     }
 
     /// Build the WHERE active dataset from an UPDATE op's `USING` / `USING NAMED`
-    /// clauses (the write-path twin of [`from_query_dataset`]). The caller only invokes
+    /// clauses (the write-path twin of [`Self::from_query_dataset_admitted`]). The caller only invokes
     /// this when `using` is non-empty (§3.1.3: `USING` replaces `WITH`'s effect on the
     /// WHERE dataset).
     pub(crate) fn from_using<D: DatasetView<Id = I>>(using: &[UsingClause], dataset: &D) -> Self {
@@ -126,8 +213,8 @@ impl<I: ViewTermId> ActiveDataset<I> {
         default.sort();
         default.dedup();
         Self {
-            default: DefaultSpec::Merged(default),
-            named: Some(named.into_iter().collect()),
+            default: DefaultSpec::Merged(GraphIds::resident(default)),
+            named: Some(GraphIds::resident(named)),
         }
     }
 
@@ -137,7 +224,7 @@ impl<I: ViewTermId> ActiveDataset<I> {
     pub(crate) fn with_default_graph<D: DatasetView<Id = I>>(dataset: &D, g: &TermValue) -> Self {
         let ids = dataset.term_id_if_ready(g).map_or_default(|id| vec![id]);
         Self {
-            default: DefaultSpec::Merged(ids),
+            default: DefaultSpec::Merged(GraphIds::resident(ids)),
             named: None,
         }
     }
@@ -160,7 +247,7 @@ impl<I: ViewTermId> ActiveDataset<I> {
     pub(crate) fn named_allows(&self, id: I) -> bool {
         match &self.named {
             None => true,
-            Some(set) => set.contains(&id),
+            Some(set) => set.binary_search(&id).is_ok(),
         }
     }
 }

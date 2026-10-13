@@ -44,42 +44,91 @@ use crate::error::EvalError;
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of `read`'s result.
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of `read`'s result.
+#[cfg(test)]
 pub(crate) fn declaration_contained<T>(
     kind: &str,
     iri: &str,
     what: &str,
     read: impl FnOnce() -> T,
 ) -> Result<T, EvalError> {
-    match catch_unwind(AssertUnwindSafe(read)) {
+    declaration_contained_admitted(
+        kind,
+        iri,
+        what,
+        read,
+        &crate::WorkspaceCapability::resident(),
+    )
+}
+
+/// The same declaration/panic law with originally admitted immutable diagnostics.
+pub(crate) fn declaration_contained_admitted<T>(
+    kind: &str,
+    iri: &str,
+    what: &str,
+    read: impl FnOnce() -> T,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
+    match read_declaration(read) {
         Ok(value) => Ok(value),
-        Err(_) => Err(EvalError::function(format!(
-            "{kind} <{iri}> panicked while reporting its {what}"
-        ))),
+        Err(()) => Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::FunctionOperational,
+            format_args!("{kind} <{iri}> panicked while reporting its {what}"),
+            workspace,
+        )),
     }
+}
+
+fn read_declaration<T>(read: impl FnOnce() -> T) -> Result<T, ()> {
+    catch_unwind(AssertUnwindSafe(read)).map_err(|_| ())
+}
+
+/// The existing infeasibility diagnostic alone treats a second modes panic
+/// as an empty suffix. Other declaration failures stay operational.
+pub(crate) fn declaration_best_effort<T>(read: impl FnOnce() -> T) -> Option<T> {
+    read_declaration(read).ok()
 }
 
 /// Run a fallible host **call** (`open`, `step`, `finish`, …) with the panic
 /// contained, producing a fixed, payload-free error naming what panicked.
 ///
-/// The [`declaration_contained`] twin for a call that returns its own
+/// The declaration-containment twin for a call that returns its own
 /// [`Result`] rather than an infallible value.
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `call`'s own result,
-/// propagated unchanged.
+/// [`EvalError::FunctionOperational`] on a caught panic or an opaque caller-returned
+/// [`EvalError::Function`]; every more specific typed cause propagates unchanged.
 pub(crate) fn call_contained<T>(
     kind: &str,
     iri: &str,
     what: &str,
     call: impl FnOnce() -> Result<T, EvalError>,
 ) -> Result<T, EvalError> {
+    call_contained_admitted(
+        kind,
+        iri,
+        what,
+        call,
+        &crate::WorkspaceCapability::resident(),
+    )
+}
+
+/// The original host-call and typed-failure law with before-render admission.
+pub(crate) fn call_contained_admitted<T>(
+    kind: &str,
+    iri: &str,
+    what: &str,
+    call: impl FnOnce() -> Result<T, EvalError>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
     match catch_unwind(AssertUnwindSafe(call)) {
-        Ok(result) => result,
-        Err(_) => Err(EvalError::function(format!(
-            "{kind} <{iri}> panicked while {what}"
-        ))),
+        Ok(result) => result.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::FunctionOperational,
+            format_args!("{kind} <{iri}> panicked while {what}"),
+            workspace,
+        )),
     }
 }
 
@@ -111,6 +160,7 @@ mod tests {
             })
             .expect_err("a panicking read must not escape")
         });
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         let message = error.to_string();
         assert!(
             message.contains("custom aggregate <http://ex/agg> panicked while reporting its arity"),
@@ -127,12 +177,40 @@ mod tests {
     }
 
     #[test]
-    fn call_contained_propagates_an_ordinary_error() {
+    fn call_contained_promotes_an_opaque_host_failure() {
+        let expected = EvalError::function("boom");
         let error = call_contained("kind", "iri", "doing", || {
-            Err::<i32, EvalError>(EvalError::function("boom"))
+            Err::<i32, EvalError>(expected.clone())
         })
-        .expect_err("ordinary error propagates");
-        assert!(error.to_string().contains("boom"), "got {error}");
+        .expect_err("host error propagates");
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
+        assert!(matches!(error, EvalError::FunctionOperational(_)));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn call_contained_preserves_specific_typed_causes() {
+        use purrdf_core::RdfDiagnostic;
+        use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+        for expected in [
+            EvalError::source_read("source disappeared"),
+            EvalError::XPathRegex(Error::Allocation {
+                resource: Resource::MatchSlots,
+                units: 1,
+            }),
+            EvalError::internal("invalid host result"),
+            EvalError::Dataset(RdfDiagnostic::error("caller-storage-failed", "storage")),
+            EvalError::config("request configuration"),
+        ] {
+            let actual = call_contained("kind", "iri", "doing", || {
+                Err::<(), EvalError>(expected.clone())
+            })
+            .expect_err("typed cause propagates");
+            assert_eq!(actual.code(), expected.code());
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -146,6 +224,7 @@ mod tests {
             )
             .expect_err("a panicking call must not escape")
         });
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         let message = error.to_string();
         assert!(
             message.contains("custom aggregate <http://ex/agg> panicked while finishing"),

@@ -28,7 +28,6 @@ mod projection;
 pub const LINKML_METAMODEL_VERSION: &str = "1.11.0";
 
 const LINKML_PREFIX: &str = "linkml";
-const MAX_LINKML_YAML_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LINKML_YAML_DEPTH: usize = 256;
 const MAX_LINKML_YAML_NODES: usize = 1_000_000;
 const MAX_LINKML_STRING_BYTES: usize = 16 * 1024 * 1024;
@@ -496,17 +495,16 @@ purrdf_lex::message_error! {
 /// mapping keys, non-finite numbers, resource-limit violations, or an invalid
 /// fixed-dialect envelope.
 pub fn parse_linkml(input: &str) -> Result<LinkmlDocument, LinkmlError> {
-    if input.len() > MAX_LINKML_YAML_BYTES {
-        return Err(LinkmlError::new(format!(
-            "LinkML YAML exceeds the {MAX_LINKML_YAML_BYTES}-byte input limit"
-        )));
-    }
-
+    // YAML aliases let a short document expand into many nodes, so the
+    // expanded node count is bounded by the input's own size (each node an
+    // alias-free document holds takes at least a byte), and never below the
+    // fixed floor; there is no fixed byte ceiling on the input itself.
+    let max_nodes = MAX_LINKML_YAML_NODES.max(input.len());
     let value = purrdf_lex::yaml::read_with(
         input,
         purrdf_lex::yaml::Limits {
             max_depth: MAX_LINKML_YAML_DEPTH,
-            max_nodes: u64::try_from(MAX_LINKML_YAML_NODES).unwrap_or(u64::MAX),
+            max_nodes: u64::try_from(max_nodes).unwrap_or(u64::MAX),
             aliases: true,
             scalar_keys: false,
         },
@@ -674,14 +672,11 @@ fn validate_json_value(
             "LinkML document at {path} exceeds depth {MAX_LINKML_YAML_DEPTH}"
         )));
     }
+    // An in-memory document's size is its own bound; only its depth (the
+    // walk's recursion) and each string are limited.
     *nodes = nodes
         .checked_add(1)
         .ok_or_else(|| LinkmlError::new("LinkML document node count overflow"))?;
-    if *nodes > MAX_LINKML_YAML_NODES {
-        return Err(LinkmlError::new(format!(
-            "LinkML document exceeds {MAX_LINKML_YAML_NODES} nodes"
-        )));
-    }
     match value {
         Value::String(value) if value.len() > MAX_LINKML_STRING_BYTES => Err(LinkmlError::new(
             format!("LinkML string at {path} exceeds {MAX_LINKML_STRING_BYTES} bytes"),

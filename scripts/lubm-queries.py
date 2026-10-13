@@ -46,8 +46,8 @@ THE FIVE RULES
 ``R4 PREFIX-REBIND``
     The published file binds ``ub:`` to
     ``http://www.lehigh.edu/~zhp2/2004/0401/univ-bench.owl#`` — the 2004 draft
-    namespace. The UBA generator stamps its output with whatever ``-onto`` names,
-    and the ontology Lehigh publishes today declares
+    namespace. The native generator stamps the caller-selected ontology identity,
+    and the external ontology declares
     ``http://swat.cse.lehigh.edu/onto/univ-bench.owl#``. A query carrying the draft
     namespace matches NOTHING in a dataset carrying the published one: it does not
     fail, it silently answers zero, which is the worst possible benchmark outcome.
@@ -109,8 +109,7 @@ PUBLISHED = REPO_ROOT / "target" / "bench-artifacts" / "queries-sparql.txt"
 # LUBM dataset has ever carried.
 DRAFT_NAMESPACE = "http://www.lehigh.edu/~zhp2/2004/0401/univ-bench.owl#"
 
-# The namespace the ontology Lehigh publishes today declares, and the one the UBA
-# generator stamps into its output when run with the matching `-onto`.
+# The external ontology namespace, also the native lane default.
 PUBLISHED_NAMESPACE = "http://swat.cse.lehigh.edu/onto/univ-bench.owl#"
 
 # How many queries LUBM publishes. Named rather than typed at each use: it was inline

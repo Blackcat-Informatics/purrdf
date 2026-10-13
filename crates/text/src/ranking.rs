@@ -8,37 +8,130 @@
 //! single-field profile uses exactly the same operations. See `RANKING.md` for
 //! the arithmetic, bound proof, and independent conformance reference.
 
-use purrdf_core::TermValue;
+use crate::query_workspace::{QueryString, admitted, arithmetic_error, data_error, query_error};
+use purrdf_core::{FastSet, SmallVec, TermValue};
 use purrdf_hash::frame::frame_le;
+use purrdf_sparql_eval::{AdmittedVec, NativeDiagnosticKind, WorkspaceCapability};
 
+use crate::fixed::{SCALE, Scaled};
 use crate::{B, FINGERPRINT_BYTES, Fixed, K1, SCALE_DIGITS, TextError};
+use purrdf_xsd::wide::mul_div;
 
 /// The arithmetic and query aggregation contract, independent of field choices.
-pub const RANKING_PROFILE_ID: &str = "purrdf-bm25f-fixed-v1";
+pub const RANKING_PROFILE_ID: &str = "purrdf-bm25f-fixed-v2";
 /// Revision of the complete ranking law, including intermediate rounding.
-pub const RANKING_PROFILE_VERSION: u32 = 1;
+pub const RANKING_PROFILE_VERSION: u32 = 2;
 /// Corpus construction used by the in-memory index: documents are
 /// `(graph, subject, language)`, partitions are `(graph, language)`, direction
 /// is merged, and zero-token documents are excluded. External stores provide
 /// their own already-partitioned counts to the pure prepared scorer.
 pub const INDEX_CORPUS_PROFILE_ID: &str = "purrdf-text-corpus-graph-language-v1";
 
-/// Maximum number of fields in a ranking profile.
-pub const MAX_FIELDS: usize = 16;
-/// Maximum number of distinct analyzed query terms.
-pub const QUERY_TERMS_MAX: usize = 1024;
-/// Maximum corpus size accepted by the pure scorer.
-pub const DOCUMENTS_MAX: u64 = 1 << 40;
-/// Maximum length of any field in a document.
-pub const FIELD_LENGTH_MAX: u64 = 1 << 24;
-/// Maximum frequency of one term in one field.
-pub const TERM_FREQUENCY_MAX: u64 = 1 << 24;
-/// Maximum field weight; keeps every intermediate representable.
-pub const FIELD_WEIGHT_MAX: Fixed = Fixed::from_raw((1_i128 << 24) * 1_000_000_000_000);
-/// Inclusive maximum score, in the public fixed-point representation.
-pub const SCORE_MAX: Fixed = Fixed::from_raw(65_536 * 1_000_000_000_000);
-/// Bits needed for every admitted nonnegative raw score, derived from the bound.
-pub const SCORE_BITS: u32 = 128 - SCORE_MAX.into_raw().unsigned_abs().leading_zeros();
+/// Inline capacity is an allocation choice, never a field-count limit.
+pub(crate) type FieldInputs = FieldBuffer<FieldInput>;
+
+/// The shared small-vector's inline fields and original spill grant.
+pub(crate) struct FieldBuffer<T> {
+    values: SmallVec<[T; 16]>,
+    allocation: Option<purrdf_sparql_eval::WorkspaceAllocation>,
+}
+impl<T: Copy + Default> FieldBuffer<T> {
+    pub(crate) fn new(len: usize, workspace: &WorkspaceCapability) -> Result<Self, TextError> {
+        let mut output = Self {
+            values: SmallVec::new(),
+            allocation: None,
+        };
+        if len > output.values.capacity() {
+            let bytes = core::alloc::Layout::array::<T>(len)
+                .map_err(|_| crate::query_workspace::overflow())?
+                .size();
+            output.allocation = Some(admitted(
+                workspace
+                    .charge(u64::try_from(bytes).map_err(|_| crate::query_workspace::overflow())?),
+            )?);
+            output.values.try_reserve_exact(len).map_err(|_| {
+                TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
+                    construct: "TEXT field input spill",
+                })
+            })?;
+        }
+        output.values.resize(len, T::default());
+        Ok(output)
+    }
+}
+impl<T> core::ops::Deref for FieldBuffer<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.values
+    }
+}
+impl<T> core::ops::DerefMut for FieldBuffer<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.values
+    }
+}
+
+/// A certified inclusive raw-score bound for one prepared query and corpus.
+///
+/// Constructed from the actual prepared IDFs and the saturation law, including
+/// every truncation. It has no global score ceiling or reserved host tie bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ScoreBound {
+    maximum: Fixed,
+    profile: [u8; FINGERPRINT_BYTES],
+}
+
+impl ScoreBound {
+    /// Every score under this prepared query is in `[0, maximum]`.
+    pub const fn maximum(self) -> Fixed {
+        self.maximum
+    }
+
+    /// Significant bits of the certified maximum's nonnegative raw integer.
+    pub const fn bits(self) -> u32 {
+        128 - self.maximum.into_raw().unsigned_abs().leading_zeros()
+    }
+
+    /// The complete ranking law and caller field choices this bound certifies.
+    pub const fn profile_fingerprint(self) -> [u8; FINGERPRINT_BYTES] {
+        self.profile
+    }
+
+    /// Check the exact interval, rather than admitting every value of its width.
+    ///
+    /// # Errors
+    /// Returns [`TextError::Domain`] for a negative or uncertified score.
+    pub fn validate(self, score: Fixed) -> Result<Fixed, TextError> {
+        self.validate_with(score, None)
+    }
+    pub(crate) fn validate_with(
+        self,
+        score: Fixed,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Fixed, TextError> {
+        if !(Fixed::ZERO..=self.maximum).contains(&score) {
+            return Err(arithmetic_error(
+                true,
+                format_args!(
+                    "score {} is outside the prepared interval [0, {}]",
+                    score.decimal_display(),
+                    self.maximum.decimal_display()
+                ),
+                workspace,
+            ));
+        }
+        Ok(score)
+    }
+}
+
+/// A pure scorer's value and its original query/corpus certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BoundedScore {
+    /// Exact twelve-fractional-digit value.
+    pub value: Fixed,
+    /// Inclusive certified bound, suitable for a caller's key-width decision.
+    pub bound: ScoreBound,
+}
 
 /// One field's named, immutable scoring parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,15 +145,15 @@ pub struct RankingField {
 }
 
 impl RankingField {
-    /// Validate a nonempty name, nonnegative bounded weight, and `0 <= b <= 1`.
+    /// Validate a nonempty name, nonnegative weight, and `0 <= b <= 1`.
     ///
     /// # Errors
     /// Returns [`TextError::Config`] for invalid parameters.
     pub fn new(name: impl Into<String>, weight: Fixed, b: Fixed) -> Result<Self, TextError> {
         let name = name.into();
-        if name.is_empty() || weight < Fixed::ZERO || weight > FIELD_WEIGHT_MAX {
+        if name.is_empty() || weight < Fixed::ZERO {
             return Err(TextError::config(
-                "a field needs a name and a weight in [0, 2^24]",
+                "a field needs a name and a nonnegative weight",
             ));
         }
         if !(Fixed::ZERO..=Fixed::ONE).contains(&b) {
@@ -105,20 +198,21 @@ impl RankingProfile {
     /// Construct a complete profile from explicit fields and predicate routing.
     ///
     /// # Errors
-    /// Refuses zero or more than sixteen fields, repeated field names or
+    /// Refuses zero fields, repeated field names or
     /// predicates, non-IRI predicates, and references to absent fields.
     pub fn new(
         fields: Vec<RankingField>,
         mut mappings: Vec<(TermValue, usize)>,
         unclassified: Option<usize>,
     ) -> Result<Self, TextError> {
-        if fields.is_empty() || fields.len() > MAX_FIELDS {
+        if fields.is_empty() {
             return Err(TextError::config(
-                "a ranking profile needs between 1 and 16 fields",
+                "a ranking profile needs at least one field",
             ));
         }
-        for (at, field) in fields.iter().enumerate() {
-            if fields[..at].iter().any(|prior| prior.name == field.name) {
+        let mut names = FastSet::default();
+        for field in &fields {
+            if !names.insert(field.name.as_str()) {
                 return Err(TextError::config(format!(
                     "repeated field name {:?}",
                     field.name
@@ -217,22 +311,6 @@ impl RankingProfile {
             })
     }
 
-    /// Refuse scores outside the exact inclusive bound, including negative
-    /// scores and values that fit [`SCORE_BITS`] but exceed [`SCORE_MAX`].
-    ///
-    /// # Errors
-    /// Returns [`TextError::Domain`] for a score outside the profile.
-    pub fn validate_score(&self, score: Fixed) -> Result<Fixed, TextError> {
-        if !(Fixed::ZERO..=SCORE_MAX).contains(&score) {
-            return Err(TextError::domain(format!(
-                "score {} is outside [0, {}]",
-                score.to_decimal_lexical(),
-                SCORE_MAX.to_decimal_lexical()
-            )));
-        }
-        Ok(score)
-    }
-
     /// Canonical, length-framed bytes used to identify the profile.
     pub fn canonical_description(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -240,22 +318,14 @@ impl RankingProfile {
         text(RANKING_PROFILE_ID);
         text(INDEX_CORPUS_PROFILE_ID);
         text(if self.field_populations {
-            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*field_documents/total;distinct-query-terms-sorted;field-sum-then-saturate"
+            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*field_documents/total;distinct-query-terms-sorted;field-sum-then-saturate;exact-integer-intermediates;bound=sum(floor(idf*(k1+1)))"
         } else {
-            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate"
+            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate;exact-integer-intermediates;bound=sum(floor(idf*(k1+1)))"
         });
         for number in [
             i128::from(RANKING_PROFILE_VERSION),
             i128::from(SCALE_DIGITS),
             K1.into_raw(),
-            MAX_FIELDS as i128,
-            QUERY_TERMS_MAX as i128,
-            i128::from(DOCUMENTS_MAX),
-            i128::from(FIELD_LENGTH_MAX),
-            i128::from(TERM_FREQUENCY_MAX),
-            FIELD_WEIGHT_MAX.into_raw(),
-            SCORE_MAX.into_raw(),
-            i128::from(SCORE_BITS),
             self.fields.len() as i128,
         ] {
             bytes.extend_from_slice(&number.to_le_bytes());
@@ -295,8 +365,8 @@ pub struct FieldInput {
 
 /// Validated corpus statistics and their ranking profile.
 ///
-/// Totals use `u128`: the declared corpus and length bounds permit exactly
-/// `2^64` tokens in a field. Exact totals avoid rounding a sparse field's
+/// Totals use `u128`: a u64 population times a u64 field length fits exactly.
+/// Exact totals avoid rounding a sparse field's
 /// average to zero. No caller-supplied cached IDF can enter this type.
 #[derive(Debug)]
 pub struct PreparedCorpus<'p> {
@@ -305,17 +375,17 @@ pub struct PreparedCorpus<'p> {
     /// Corpus population.
     documents: u64,
     /// Field token totals, in profile order.
-    totals: Vec<u128>,
+    totals: AdmittedVec<u128>,
     /// Explicit carrier counts in field order; empty under the dense law.
-    populations: Vec<u64>,
+    populations: AdmittedVec<u64>,
 }
 
 impl<'p> PreparedCorpus<'p> {
     /// Validate population and exact field totals once per corpus.
     ///
     /// # Errors
-    /// Refuses an oversized corpus, mismatching field count, or a field total
-    /// exceeding `documents * FIELD_LENGTH_MAX`, including nonzero empty-corpus totals.
+    /// Refuses a mismatching field count or a field total exceeding the
+    /// representable `documents * u64::MAX`, including nonzero empty-corpus totals.
     pub fn new(
         profile: &'p RankingProfile,
         documents: u64,
@@ -338,7 +408,7 @@ impl<'p> PreparedCorpus<'p> {
     ///
     /// # Errors
     /// Refuses a dense profile, mismatching field counts, oversized populations,
-    /// or a total exceeding `field_documents * FIELD_LENGTH_MAX`.
+    /// or a total exceeding the representable `field_documents * u64::MAX`.
     pub fn with_field_populations(
         profile: &'p RankingProfile,
         documents: u64,
@@ -360,26 +430,76 @@ impl<'p> PreparedCorpus<'p> {
         totals: &[u128],
         populations: &[u64],
     ) -> Result<Self, TextError> {
-        if documents > DOCUMENTS_MAX || totals.len() != profile.fields.len() {
-            return Err(TextError::data(
-                "corpus population or field count exceeds the ranking profile",
-            ));
+        Self::validate_owned(
+            profile,
+            documents,
+            totals,
+            populations,
+            &WorkspaceCapability::default(),
+        )
+    }
+
+    pub(crate) fn from_index_owned(
+        profile: &'p RankingProfile,
+        documents: u64,
+        totals: &[u128],
+        populations: &[u64],
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, TextError> {
+        if profile.uses_field_populations() {
+            if populations.len() != profile.fields.len() {
+                return Err(query_error(
+                    workspace,
+                    NativeDiagnosticKind::Data,
+                    format_args!(
+                        "field populations require their ranking mode and one count per field"
+                    ),
+                )?);
+            }
+            Self::validate_owned(profile, documents, totals, populations, workspace)
+        } else {
+            Self::validate_owned(profile, documents, totals, &[], workspace)
+        }
+    }
+
+    fn validate_owned(
+        profile: &'p RankingProfile,
+        documents: u64,
+        totals: &[u128],
+        populations: &[u64],
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, TextError> {
+        if totals.len() != profile.fields.len() {
+            return Err(query_error(
+                workspace,
+                NativeDiagnosticKind::Data,
+                format_args!("corpus population or field count exceeds the ranking profile"),
+            )?);
         }
         for (at, &total) in totals.iter().enumerate() {
             let population = populations.get(at).copied().unwrap_or(documents);
-            if population > documents
-                || total > u128::from(population) * u128::from(FIELD_LENGTH_MAX)
-            {
-                return Err(TextError::data(
-                    "a field population or token total exceeds its corpus bound",
-                ));
+            if population > documents || total > u128::from(population) * u128::from(u64::MAX) {
+                return Err(query_error(
+                    workspace,
+                    NativeDiagnosticKind::Data,
+                    format_args!("a field population or token total exceeds its corpus bound"),
+                )?);
             }
+        }
+        let mut owned_totals = admitted(AdmittedVec::with_capacity(totals.len(), workspace))?;
+        for &total in totals {
+            admitted(owned_totals.push(total))?;
+        }
+        let mut owned_populations =
+            admitted(AdmittedVec::with_capacity(populations.len(), workspace))?;
+        for &population in populations {
+            admitted(owned_populations.push(population))?;
         }
         Ok(Self {
             profile,
             documents,
-            totals: totals.to_vec(),
-            populations: populations.to_vec(),
+            totals: owned_totals,
+            populations: owned_populations,
         })
     }
 
@@ -388,43 +508,65 @@ impl<'p> PreparedCorpus<'p> {
     /// the caller; this arithmetic API does not select an analyzer.
     ///
     /// # Errors
-    /// Refuses too many terms and every document frequency outside the corpus,
+    /// Refuses every document frequency outside the corpus,
     /// even when no document will subsequently be scored.
     pub fn prepare_query(
         &self,
         frequencies: &[(&str, u64)],
     ) -> Result<PreparedQuery<'_, 'p>, TextError> {
-        if frequencies.len() > QUERY_TERMS_MAX {
-            return Err(TextError::data(
-                "query exceeds 1024 distinct analyzed terms",
-            ));
+        self.prepare_query_owned(frequencies, &WorkspaceCapability::default())
+    }
+
+    pub(crate) fn prepare_query_owned(
+        &self,
+        frequencies: &[(&str, u64)],
+        workspace: &WorkspaceCapability,
+    ) -> Result<PreparedQuery<'_, 'p>, TextError> {
+        let mut terms = admitted(AdmittedVec::with_capacity(frequencies.len(), workspace))?;
+        let native = workspace.is_bounded().then_some(workspace);
+        let mut total = Scaled::ZERO;
+        for &count in &self.totals {
+            total = total.add(&Scaled::from_count(count), native)?;
         }
-        let mut terms = Vec::with_capacity(frequencies.len());
-        let total: u128 = self.totals.iter().sum();
         let mut prior: Option<&str> = None;
-        let mut frequency_sum = 0_u128;
+        let mut frequency_sum = Scaled::ZERO;
+        let mut maximum = Fixed::ZERO;
+        let saturation_ceiling = K1.checked_add(Fixed::ONE)?;
         for &(term, frequency) in frequencies {
             if term.is_empty() || prior.is_some_and(|prior| prior >= term) {
-                return Err(TextError::data(
-                    "prepared query terms must be nonempty, distinct and strictly sorted",
-                ));
+                return Err(query_error(
+                    workspace,
+                    NativeDiagnosticKind::Data,
+                    format_args!(
+                        "prepared query terms must be nonempty, distinct and strictly sorted"
+                    ),
+                )?);
             }
             prior = Some(term);
-            frequency_sum += u128::from(frequency);
-            if frequency_sum > total {
-                return Err(TextError::data(
-                    "distinct query document frequencies exceed all tokens in their corpus",
-                ));
+            frequency_sum =
+                frequency_sum.add(&Scaled::from_count(u128::from(frequency)), native)?;
+            if frequency_sum.greater_than(&total) {
+                return Err(query_error(
+                    workspace,
+                    NativeDiagnosticKind::Data,
+                    format_args!(
+                        "distinct query document frequencies exceed all tokens in their corpus"
+                    ),
+                )?);
             }
-            terms.push((
-                term.to_owned(),
-                frequency,
-                inverse_document_frequency(self.documents, frequency)?,
-            ));
+            let idf = inverse_document_frequency(self.documents, frequency, native)?;
+            maximum = maximum
+                .checked_add_with(idf.checked_mul_with(saturation_ceiling, native)?, native)?;
+            admitted(terms.push((QueryString::copy(term, workspace)?, frequency, idf)))?;
         }
         Ok(PreparedQuery {
             corpus: self,
             terms,
+            workspace: workspace.clone(),
+            bound: ScoreBound {
+                maximum,
+                profile: self.profile.fingerprint,
+            },
         })
     }
 }
@@ -436,10 +578,17 @@ pub struct PreparedQuery<'c, 'p> {
     /// Corpus and profile that give the cached IDFs their meaning.
     corpus: &'c PreparedCorpus<'p>,
     /// `(term key, document_frequency, IDF)` in verified canonical term order.
-    terms: Vec<(String, u64, Fixed)>,
+    terms: AdmittedVec<(QueryString, u64, Fixed)>,
+    workspace: WorkspaceCapability,
+    bound: ScoreBound,
 }
 
 impl PreparedQuery<'_, '_> {
+    /// The actual prepared query's certified maximum and key width.
+    pub const fn score_bound(&self) -> ScoreBound {
+        self.bound
+    }
+
     /// Validated document frequency and computed IDF for a query term.
     pub fn term_statistics(&self, ordinal: usize) -> Option<(u64, Fixed)> {
         self.terms
@@ -453,24 +602,27 @@ impl PreparedQuery<'_, '_> {
     /// Refuses a missing term, field count mismatch, impossible or out-of-bound
     /// document facts, undefined normalization, or an out-of-bound score.
     pub fn contribution(&self, ordinal: usize, fields: &[FieldInput]) -> Result<Fixed, TextError> {
+        let workspace = self.workspace.is_bounded().then_some(&self.workspace);
         if self.corpus.documents == 0 {
-            return Err(TextError::data(
+            return Err(data_error(
                 "an empty corpus contains no document to score",
+                workspace,
             ));
         }
         let (df, idf) = self
             .term_statistics(ordinal)
-            .ok_or_else(|| TextError::data("query term ordinal is absent"))?;
+            .ok_or_else(|| data_error("query term ordinal is absent", workspace))?;
         if fields.len() != self.corpus.profile.fields.len() {
-            return Err(TextError::data(
+            return Err(data_error(
                 "document field count disagrees with its ranking profile",
+                workspace,
             ));
         }
-        let mut pseudo = Fixed::ZERO;
+        let mut pseudo = Scaled::ZERO;
         for (at, ((input, field), &total)) in fields
             .iter()
             .zip(&self.corpus.profile.fields)
-            .zip(&self.corpus.totals)
+            .zip(self.corpus.totals.iter())
             .enumerate()
         {
             let population = self.corpus.populations.get(at).copied();
@@ -482,37 +634,47 @@ impl PreparedQuery<'_, '_> {
             } else {
                 documents.saturating_sub(1)
             };
-            validate_field(*input, total, documents, remaining, df)?;
+            validate_field(*input, total, documents, remaining, df, workspace)?;
             if input.term_frequency == 0 {
                 continue;
             }
             // Positive tf implies positive length and total. Form this ratio
             // from exact counts so an average below one raw unit stays usable.
-            let numerator = u128::from(input.length) * u128::from(documents) * 1_000_000_000_000;
+            let count_product = u128::from(input.length) * u128::from(documents);
             let relative = Fixed::from_raw(
-                i128::try_from(numerator / total).expect("bounded counts fit i128"),
+                i128::try_from(
+                    mul_div(count_product, SCALE as u128, total)
+                        .expect("length <= total bounds the ratio by a u64 population at scale"),
+                )
+                .expect("a u64 population at scale fits i128"),
             );
             let normalization = Fixed::ONE
-                .checked_sub(field.b)?
-                .checked_add(field.b.checked_mul(relative)?)?;
+                .checked_sub_with(field.b, workspace)?
+                .checked_add_with(field.b.checked_mul_with(relative, workspace)?, workspace)?;
             if normalization <= Fixed::ZERO {
-                return Err(TextError::domain(
+                return Err(arithmetic_error(
+                    true,
                     "field normalization rounds to zero under this profile",
+                    workspace,
                 ));
             }
-            let frequency = from_count(input.term_frequency)?;
-            pseudo = pseudo.checked_add(
-                frequency
-                    .checked_div(normalization)?
-                    .checked_mul(field.weight)?,
+            let frequency = Scaled::from_fixed(from_count(input.term_frequency, workspace)?);
+            pseudo = pseudo.add(
+                &frequency
+                    .div(&Scaled::from_fixed(normalization), workspace)?
+                    .mul(&Scaled::from_fixed(field.weight), workspace)?,
+                workspace,
             )?;
         }
         let saturation = pseudo
-            .checked_mul(K1.checked_add(Fixed::ONE)?)?
-            .checked_div(pseudo.checked_add(K1)?)?;
-        self.corpus
-            .profile
-            .validate_score(idf.checked_mul(saturation)?)
+            .mul(
+                &Scaled::from_fixed(K1.checked_add_with(Fixed::ONE, workspace)?),
+                workspace,
+            )?
+            .div(&pseudo.add(&Scaled::from_fixed(K1), workspace)?, workspace)?
+            .into_fixed(workspace)?;
+        self.bound
+            .validate_with(idf.checked_mul_with(saturation, workspace)?, workspace)
     }
 
     /// Score one document against all prepared terms, in their canonical order.
@@ -522,7 +684,7 @@ impl PreparedQuery<'_, '_> {
     /// # Errors
     /// Refuses a term count mismatch, invalid field input, or a score outside
     /// the exact profile bound.
-    pub fn score(&self, terms: &[Vec<FieldInput>]) -> Result<Fixed, TextError> {
+    pub fn score(&self, terms: &[Vec<FieldInput>]) -> Result<BoundedScore, TextError> {
         if self.corpus.documents == 0 {
             return Err(TextError::data(
                 "an empty corpus contains no document to score",
@@ -534,7 +696,8 @@ impl PreparedQuery<'_, '_> {
             ));
         }
         let mut score = Fixed::ZERO;
-        let mut frequencies = [0_u64; MAX_FIELDS];
+        let mut frequencies =
+            FieldBuffer::<u64>::new(self.corpus.profile.fields.len(), &self.workspace)?;
         for (ordinal, fields) in terms.iter().enumerate() {
             if fields
                 .iter()
@@ -547,7 +710,11 @@ impl PreparedQuery<'_, '_> {
             }
             let contribution = self.contribution(ordinal, fields)?;
             for (sum, field) in frequencies.iter_mut().zip(fields) {
-                *sum += field.term_frequency;
+                *sum = sum.checked_add(field.term_frequency).ok_or_else(|| {
+                    TextError::data(
+                        "distinct query term frequencies exceed the document field length",
+                    )
+                })?;
                 if *sum > field.length {
                     return Err(TextError::data(
                         "distinct query term frequencies exceed the document field length",
@@ -556,7 +723,10 @@ impl PreparedQuery<'_, '_> {
             }
             score = score.checked_add(contribution)?;
         }
-        self.corpus.profile.validate_score(score)
+        Ok(BoundedScore {
+            value: self.bound.validate(score)?,
+            bound: self.bound,
+        })
     }
 }
 
@@ -567,25 +737,24 @@ fn validate_field(
     documents: u64,
     remaining: u64,
     df: u64,
+    workspace: Option<&WorkspaceCapability>,
 ) -> Result<(), TextError> {
-    if input.length > FIELD_LENGTH_MAX || input.term_frequency > TERM_FREQUENCY_MAX {
-        return Err(TextError::data(
-            "document field length or term frequency exceeds 2^24",
-        ));
-    }
     if input.term_frequency > input.length || u128::from(input.length) > total {
-        return Err(TextError::data(
+        return Err(data_error(
             "field frequency, length, and corpus total are inconsistent",
+            workspace,
         ));
     }
-    if total - u128::from(input.length) > u128::from(remaining) * u128::from(FIELD_LENGTH_MAX) {
-        return Err(TextError::data(
+    if total - u128::from(input.length) > u128::from(remaining) * u128::from(u64::MAX) {
+        return Err(data_error(
             "the remaining corpus cannot hold the declared field total",
+            workspace,
         ));
     }
     if (documents == 0 && input.length != 0) || (df == 0 && input.term_frequency != 0) {
-        return Err(TextError::data(
+        return Err(data_error(
             "a nonempty document or term cannot belong to an empty corpus or posting list",
+            workspace,
         ));
     }
     Ok(())
@@ -593,23 +762,32 @@ fn validate_field(
 
 /// Shifted IDF, checked before any zero-contribution shortcuts.
 /// At large corpus sizes a positive real value may round to exact zero.
-fn inverse_document_frequency(documents: u64, frequency: u64) -> Result<Fixed, TextError> {
+fn inverse_document_frequency(
+    documents: u64,
+    frequency: u64,
+    workspace: Option<&WorkspaceCapability>,
+) -> Result<Fixed, TextError> {
     if frequency > documents {
-        return Err(TextError::data(
+        return Err(data_error(
             "document frequency exceeds its corpus population",
+            workspace,
         ));
     }
     let half = Fixed::from_raw(500_000_000_000);
-    let numerator = from_count(documents - frequency)?.checked_add(half)?;
-    let denominator = from_count(frequency)?.checked_add(half)?;
+    let numerator =
+        from_count(documents - frequency, workspace)?.checked_add_with(half, workspace)?;
+    let denominator = from_count(frequency, workspace)?.checked_add_with(half, workspace)?;
     Fixed::ONE
-        .checked_add(numerator.checked_div(denominator)?)?
-        .ln()
+        .checked_add_with(
+            numerator.checked_div_with(denominator, workspace)?,
+            workspace,
+        )?
+        .ln_with(workspace)
 }
 
 /// A bounded corpus count, exactly at the public scale.
-fn from_count(value: u64) -> Result<Fixed, TextError> {
-    Fixed::from_integer(i64::try_from(value).map_err(|_| TextError::overflow("count exceeds i64"))?)
+fn from_count(value: u64, _workspace: Option<&WorkspaceCapability>) -> Result<Fixed, TextError> {
+    Ok(Fixed::from_raw(i128::from(value) * SCALE))
 }
 
 /// Require an absolute, lexically valid RDF predicate IRI.

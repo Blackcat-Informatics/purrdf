@@ -620,6 +620,10 @@ pub struct Plan {
     pub version: u16,
     /// The request terms this plan was built for, in caller order.
     pub request_terms: Vec<RequestTerm>,
+    /// Original hard membership conditions applied inside every stratum before
+    /// depth. Their order and complete values are identity-bearing; they never
+    /// become ranked request terms or fusion weights.
+    pub constraints: Vec<RequestTerm>,
     /// How much of the answer the request asked for, and therefore the bound
     /// [`Self::stratum_depths`] was derived under.
     ///
@@ -705,6 +709,22 @@ pub struct Plan {
     pub origin: PlanOrigin,
 }
 
+/// Native matching/placement output shared by the two depth policies.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanParts {
+    pub(crate) request_terms: Vec<RequestTerm>,
+    pub(crate) producer_bindings: Vec<ProducerBinding>,
+    pub(crate) producer_decisions: Vec<ProducerDecision>,
+    pub(crate) unserved_terms: Vec<UnservedTerm>,
+    pub(crate) stratum_depths: FastMap<Iri, u32>,
+    pub(crate) stratum_derivations: BTreeMap<Iri, DepthInputs>,
+    pub(crate) declared_rows: BTreeMap<Iri, u64>,
+    pub(crate) statistics_snapshot: StatisticsSnapshot,
+    pub(crate) registry_instance_id: RegistryId,
+    pub(crate) registry_content_fingerprint: String,
+    pub(crate) origin: PlanOrigin,
+}
+
 impl PartialEq for Plan {
     /// Equality over the plan's content, which excludes [`Plan::origin`].
     ///
@@ -715,6 +735,7 @@ impl PartialEq for Plan {
     fn eq(&self, other: &Self) -> bool {
         self.version == other.version
             && self.request_terms == other.request_terms
+            && self.constraints == other.constraints
             && self.read_bound == other.read_bound
             && self.producer_bindings == other.producer_bindings
             && self.producer_decisions == other.producer_decisions
@@ -752,6 +773,13 @@ impl Plan {
         writer.string(&self.registry_content_fingerprint);
         write_unserved_terms(&mut writer, &self.unserved_terms);
         write_read_bound(&mut writer, self.read_bound);
+        // A tagged tail extends the layout without moving or reinterpreting
+        // any existing byte. Ordinary plans keep their original bytes and id;
+        // older readers refuse this scoped extension as trailing content.
+        if !self.constraints.is_empty() {
+            writer.u8(0x53);
+            write_request_terms(&mut writer, &self.constraints);
+        }
         writer.into_bytes()
     }
 
@@ -781,6 +809,22 @@ impl Plan {
         let registry_content_fingerprint = reader.string("registry content fingerprint")?;
         let unserved_terms = read_unserved_terms(&mut reader)?;
         let read_bound = read_read_bound(&mut reader)?;
+        let constraints = if reader.remaining() == 0 {
+            Vec::new()
+        } else {
+            let extra = reader.remaining();
+            if reader.u8()? != 0x53 {
+                return Err(PlanError::TrailingBytes { extra });
+            }
+            let constraints = read_request_terms(&mut reader)?;
+            if constraints.is_empty() {
+                return Err(PlanError::InvalidJson {
+                    pointer: String::new(),
+                    reason: "a scoped plan extension must carry a constraint".to_owned(),
+                });
+            }
+            constraints
+        };
         reader.finish()?;
         // Reconstructed from bytes, so the instance id just read is a counter
         // value this process cannot have minted; the plan is held to its
@@ -790,6 +834,7 @@ impl Plan {
             origin: PlanOrigin::Deserialized,
             version,
             request_terms,
+            constraints,
             read_bound,
             producer_bindings,
             producer_decisions,
@@ -874,6 +919,9 @@ impl Plan {
     /// request terms. Each is a refusal rather than a repair: a plan whose depth
     /// and evidence disagree has no reading under which one of them is the truth.
     pub fn certify(&self) -> Result<(), PlanError> {
+        for constraint in &self.constraints {
+            crate::planner::validate_term(constraint)?;
+        }
         let mut recorded: Vec<(&Iri, u32)> = self
             .stratum_depths
             .iter()
@@ -983,14 +1031,65 @@ impl Plan {
     /// and no forged or stale entry can make it claim otherwise.
     #[must_use]
     pub fn unserved_evidence(&self) -> Vec<UnservedTerm> {
-        let mut served = vec![false; self.request_terms.len()];
-        for binding in &self.producer_bindings {
-            for index in &binding.request_terms {
-                if let Some(slot) = served.get_mut(*index as usize) {
-                    *slot = true;
-                }
+        unserved_evidence(
+            self.request_terms.len(),
+            &self.producer_bindings,
+            &self.unserved_terms,
+        )
+    }
+
+    /// Derive the same loss under the original execution authority.
+    ///
+    /// # Errors
+    /// Preserves scratch/output allocation and admission refusal.
+    pub fn unserved_evidence_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_sparql_eval::AdmittedVec<UnservedTerm>, purrdf_sparql_eval::EvalError> {
+        unserved_evidence_admitted(
+            self.request_terms.len(),
+            &self.producer_bindings,
+            &self.unserved_terms,
+            workspace,
+        )
+    }
+}
+
+/// Derive the same per-term loss for either planning policy.
+pub(crate) fn unserved_evidence(
+    request_terms: usize,
+    bindings: &[ProducerBinding],
+    unserved_terms: &[UnservedTerm],
+) -> Vec<UnservedTerm> {
+    unserved_evidence_admitted(
+        request_terms,
+        bindings,
+        unserved_terms,
+        &purrdf_sparql_eval::WorkspaceCapability::resident(),
+    )
+    .expect("resident evidence allocation")
+    .try_into_resident()
+    .expect("resident derivation has no native grant")
+}
+
+pub(crate) fn unserved_evidence_admitted(
+    request_terms: usize,
+    bindings: &[ProducerBinding],
+    unserved_terms: &[UnservedTerm],
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<purrdf_sparql_eval::AdmittedVec<UnservedTerm>, purrdf_sparql_eval::EvalError> {
+    let mut served = purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+        (0..request_terms).map(|_| false),
+        workspace,
+    )?;
+    for binding in bindings {
+        for index in &binding.request_terms {
+            if let Some(slot) = served.get_mut(*index as usize) {
+                *slot = true;
             }
         }
+    }
+    purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
         served
             .iter()
             .enumerate()
@@ -999,15 +1098,14 @@ impl Plan {
                 let request_term = u32::try_from(index).unwrap_or(u32::MAX);
                 UnservedTerm {
                     request_term,
-                    reason: self
-                        .unserved_terms
+                    reason: unserved_terms
                         .iter()
                         .find(|entry| entry.request_term == request_term)
                         .map_or(UnservedReason::Unbound, |entry| entry.reason),
                 }
-            })
-            .collect()
-    }
+            }),
+        workspace,
+    )
 }
 
 /// The canonical discriminator byte a vector term's metric is written as.
@@ -1110,7 +1208,10 @@ fn unserved_from_tag(tag: u8) -> Result<UnservedReason, PlanError> {
 /// The list order is the plan's own and is not re-sorted here: the planner
 /// emits it ascending by request-term index, and the encoding reproduces the
 /// field rather than imposing an order the value does not have.
-fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
+pub(crate) fn write_unserved_terms(
+    writer: &mut Writer<impl crate::canonical::CanonicalSink>,
+    terms: &[UnservedTerm],
+) {
     writer.u64(terms.len() as u64);
     for term in terms {
         writer.u32(term.request_term);
@@ -1124,7 +1225,7 @@ fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
 /// count is untrusted input, and reserving what a forged length asks for would
 /// let a short, malformed plan demand an arbitrary allocation before a single
 /// element is read. Every decoder in this module caps the same way.
-fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, PlanError> {
+pub(crate) fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, PlanError> {
     let count = reader.count()?;
     let mut terms = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1185,7 +1286,7 @@ fn read_read_bound(reader: &mut Reader<'_>) -> Result<ReadBound, PlanError> {
 }
 
 /// Write an IRI as its length-framed canonical text.
-fn write_iri(writer: &mut Writer, iri: &Iri) {
+fn write_iri(writer: &mut Writer<impl crate::canonical::CanonicalSink>, iri: &Iri) {
     writer.string(iri.as_str());
 }
 
@@ -1195,7 +1296,7 @@ fn write_iri(writer: &mut Writer, iri: &Iri) {
 /// of a plan: a plan is untrusted input, and an [`Iri`] that skipped validation
 /// would carry span offsets that do not describe its own bytes. `what` names
 /// the field, so a refusal says which IRI was malformed.
-fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanError> {
+pub(crate) fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanError> {
     let text = reader.string(what)?;
     Iri::parse(&text)
 }
@@ -1396,7 +1497,7 @@ fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> 
 ///
 /// The order is identity-bearing — producer bindings index into it — so it is
 /// never sorted.
-fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
+pub(crate) fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
     writer.u64(terms.len() as u64);
     for term in terms {
         write_request_term(writer, term);
@@ -1404,7 +1505,7 @@ fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
 }
 
 /// Read the request's terms, preserving the encoded order.
-fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanError> {
+pub(crate) fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanError> {
     let count = reader.count()?;
     let mut terms = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1419,7 +1520,10 @@ fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanE
 /// The producer is written as a plain framed string rather than through
 /// [`write_iri`] because a plan carries the registry's key byte-exactly — what
 /// the host registered under, not a re-canonicalized spelling of it.
-fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
+pub(crate) fn write_bindings(
+    writer: &mut Writer<impl crate::canonical::CanonicalSink>,
+    bindings: &[ProducerBinding],
+) {
     writer.u64(bindings.len() as u64);
     for binding in bindings {
         writer.string(&binding.producer);
@@ -1436,7 +1540,7 @@ fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
 /// The indices are read as-is. Whether they address the plan's own request is
 /// not this decoder's question — it is a semantic claim, checked once at the
 /// admission waist against the registry the plan will actually run on.
-fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanError> {
+pub(crate) fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanError> {
     let count = reader.count()?;
     let mut bindings = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1462,7 +1566,10 @@ fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanEr
 /// Rejections are encoded beside selections rather than dropped: they are the
 /// plan's account of why the answer is the shape it is, and an encoding that
 /// kept only the selections would make two different plans hash alike.
-fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
+pub(crate) fn write_decisions(
+    writer: &mut Writer<impl crate::canonical::CanonicalSink>,
+    decisions: &[ProducerDecision],
+) {
     writer.u64(decisions.len() as u64);
     for decision in decisions {
         match decision {
@@ -1481,7 +1588,7 @@ fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
 }
 
 /// Read the producer decisions written by [`write_decisions`].
-fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, PlanError> {
+pub(crate) fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, PlanError> {
     let count = reader.count()?;
     let mut decisions = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1515,7 +1622,7 @@ fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, Plan
 /// iteration order would give one plan many identities. Sorting by the
 /// stratum's canonical text makes the bytes — and therefore the plan id — a
 /// pure function of the entries, on every target and in every process.
-fn write_depths(writer: &mut Writer, depths: &FastMap<Iri, u32>) {
+pub(crate) fn write_depths(writer: &mut Writer, depths: &FastMap<Iri, u32>) {
     let mut entries: Vec<(&Iri, u32)> = depths.iter().map(|(key, value)| (key, *value)).collect();
     entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
     writer.u64(entries.len() as u64);
@@ -1611,7 +1718,7 @@ fn require_ascending_terms(
 /// of one plan as the section has permutations, each digesting to that plan's
 /// single id. A repeated stratum is refused for a sharper reason still: the map
 /// would silently keep whichever depth arrived last.
-fn read_depths(reader: &mut Reader<'_>) -> Result<FastMap<Iri, u32>, PlanError> {
+pub(crate) fn read_depths(reader: &mut Reader<'_>) -> Result<FastMap<Iri, u32>, PlanError> {
     let count = reader.count()?;
     let mut depths = FastMap::with_capacity_and_hasher(count.min(1024), FastHasher::default());
     let mut previous: Option<Iri> = None;
@@ -1812,7 +1919,7 @@ fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs
 /// and its ascending twin would share an identity and compare unequal. The
 /// encoder writes the sequence it is given, exactly as it does for
 /// [`write_derivations`]'s [`BTreeMap`].
-fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
+pub(crate) fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
     writer.string(&snapshot.source);
     writer.string(&snapshot.revision);
     writer.u64(snapshot.entries.len() as u64);
@@ -1844,7 +1951,7 @@ fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
 ///
 /// Each row's selectivity-term run is held to that same ascending law, by
 /// [`require_ascending_terms`], for the same reason and one nesting level in.
-fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
+pub(crate) fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;
     let count = reader.count()?;

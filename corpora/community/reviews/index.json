@@ -1,0 +1,1559 @@
+{
+  "contractVersion": 1,
+  "copyright": "2026 Blackcat Informatics Inc.",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "cases": [
+    {
+      "id": "empty-left-optional-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/empty-left-optional-iri-violating/manifest.ttl",
+          "blake3": "2e60f010d0e4738b1fa6ab50a5c2e56ca348dc9c9cd8bc6e67f9d5234ca7ebfd"
+        },
+        {
+          "path": "shacl/empty-left-optional-iri-violating/shapes.ttl",
+          "blake3": "17669fddfb6b0b33abb2235d2cbe267a0d0cb7e732b79ff9ea52d4594b7b5636"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "empty-left-optional-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/empty-left-optional-iri-conforming/manifest.ttl",
+          "blake3": "85c180a402698d4fbe66459656b48981e6400488feac1f3b93f2f0d8d385c2f9"
+        },
+        {
+          "path": "shacl/empty-left-optional-iri-conforming/shapes.ttl",
+          "blake3": "17669fddfb6b0b33abb2235d2cbe267a0d0cb7e732b79ff9ea52d4594b7b5636"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "empty-left-optional-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/empty-left-optional-blank-violating/manifest.ttl",
+          "blake3": "203967e9ae3c44854fe08b2705eedad7ea45d41cd7d708bf17296dc46a27a46e"
+        },
+        {
+          "path": "shacl/empty-left-optional-blank-violating/shapes.ttl",
+          "blake3": "17669fddfb6b0b33abb2235d2cbe267a0d0cb7e732b79ff9ea52d4594b7b5636"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "empty-left-optional-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/empty-left-optional-blank-conforming/manifest.ttl",
+          "blake3": "999439925ce85ef3df4bb70a15a95be47bb7f1347859f2b85621f7bd3c8dbbf4"
+        },
+        {
+          "path": "shacl/empty-left-optional-blank-conforming/shapes.ttl",
+          "blake3": "17669fddfb6b0b33abb2235d2cbe267a0d0cb7e732b79ff9ea52d4594b7b5636"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "anchored-optional-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/anchored-optional-iri-violating/manifest.ttl",
+          "blake3": "3e96a77964ee39c4ae596c36b6969a5651671063ee4c5cebbe410a20fdbb3bc5"
+        },
+        {
+          "path": "shacl/anchored-optional-iri-violating/shapes.ttl",
+          "blake3": "aa57757a1714a7c5deabfe60b512a3f1001040843ef5bd3cf20be1ed3d753f5d"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "anchored-optional-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/anchored-optional-iri-conforming/manifest.ttl",
+          "blake3": "5c6c594901699d8936ae4434f48428a68ee802a0e6c8b339980155109ef89017"
+        },
+        {
+          "path": "shacl/anchored-optional-iri-conforming/shapes.ttl",
+          "blake3": "aa57757a1714a7c5deabfe60b512a3f1001040843ef5bd3cf20be1ed3d753f5d"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "anchored-optional-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/anchored-optional-blank-violating/manifest.ttl",
+          "blake3": "95829ea9fadc5561a5b1bc4da50b65138992d3102dbe6b8c636972938e19f03a"
+        },
+        {
+          "path": "shacl/anchored-optional-blank-violating/shapes.ttl",
+          "blake3": "aa57757a1714a7c5deabfe60b512a3f1001040843ef5bd3cf20be1ed3d753f5d"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "anchored-optional-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/anchored-optional-blank-conforming/manifest.ttl",
+          "blake3": "f1fd3cfac77e2d2bdd44029e551bf22b61117a75ac6bab09ad77f692c90b62f7"
+        },
+        {
+          "path": "shacl/anchored-optional-blank-conforming/shapes.ttl",
+          "blake3": "aa57757a1714a7c5deabfe60b512a3f1001040843ef5bd3cf20be1ed3d753f5d"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "nested-optional-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-optional-iri-violating/manifest.ttl",
+          "blake3": "0217175be80d935621bd15f37f71710a779b5b17b0c22c7e31f1c38f7444b4b6"
+        },
+        {
+          "path": "shacl/nested-optional-iri-violating/shapes.ttl",
+          "blake3": "2cdc3b91f23d62e26f3b6b30f7f0d6f80c41d0d4538d86544feda01729a2d8fc"
+        }
+      ]
+    },
+    {
+      "id": "nested-optional-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-optional-iri-conforming/manifest.ttl",
+          "blake3": "e5792b445b34842563a607d70466a4ba4931e53fa26351d8327657e21c540a9f"
+        },
+        {
+          "path": "shacl/nested-optional-iri-conforming/shapes.ttl",
+          "blake3": "2cdc3b91f23d62e26f3b6b30f7f0d6f80c41d0d4538d86544feda01729a2d8fc"
+        }
+      ]
+    },
+    {
+      "id": "nested-optional-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-optional-blank-violating/manifest.ttl",
+          "blake3": "73f8a4121befeba30cd8bd64abe450422d2b4e68f3d55f1662d05479a00a5653"
+        },
+        {
+          "path": "shacl/nested-optional-blank-violating/shapes.ttl",
+          "blake3": "2cdc3b91f23d62e26f3b6b30f7f0d6f80c41d0d4538d86544feda01729a2d8fc"
+        }
+      ]
+    },
+    {
+      "id": "nested-optional-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-optional-blank-conforming/manifest.ttl",
+          "blake3": "c5202b8cdd50d0e1b8a11a57862f33433e0ab5e5b087111e5e53ca579123cb53"
+        },
+        {
+          "path": "shacl/nested-optional-blank-conforming/shapes.ttl",
+          "blake3": "2cdc3b91f23d62e26f3b6b30f7f0d6f80c41d0d4538d86544feda01729a2d8fc"
+        }
+      ]
+    },
+    {
+      "id": "not-exists-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/not-exists-iri-violating/manifest.ttl",
+          "blake3": "700cb2e5dc71e2c5ff1c2589505fb1e029b85dc7f4602159901d203d59056c3d"
+        },
+        {
+          "path": "shacl/not-exists-iri-violating/shapes.ttl",
+          "blake3": "d16358b32f19f8e0491ff0d23174394c252b627d0f617776a73c4023c09b8333"
+        }
+      ]
+    },
+    {
+      "id": "not-exists-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/not-exists-iri-conforming/manifest.ttl",
+          "blake3": "dabb3bc90aafac4406becc3df8270075a32361882064af1b471dc9f5b9080699"
+        },
+        {
+          "path": "shacl/not-exists-iri-conforming/shapes.ttl",
+          "blake3": "d16358b32f19f8e0491ff0d23174394c252b627d0f617776a73c4023c09b8333"
+        }
+      ]
+    },
+    {
+      "id": "not-exists-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/not-exists-blank-violating/manifest.ttl",
+          "blake3": "6d0e0322cad7884aa32f8c0f2dd9f9dc251346cd85826f4c388d4c95319e8aff"
+        },
+        {
+          "path": "shacl/not-exists-blank-violating/shapes.ttl",
+          "blake3": "d16358b32f19f8e0491ff0d23174394c252b627d0f617776a73c4023c09b8333"
+        }
+      ]
+    },
+    {
+      "id": "not-exists-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/not-exists-blank-conforming/manifest.ttl",
+          "blake3": "936e404289bb33baa8cc35b3fa8f51e691023d002c15d0b9d3f56c9ae49d0241"
+        },
+        {
+          "path": "shacl/not-exists-blank-conforming/shapes.ttl",
+          "blake3": "d16358b32f19f8e0491ff0d23174394c252b627d0f617776a73c4023c09b8333"
+        }
+      ]
+    },
+    {
+      "id": "nested-not-exists-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-not-exists-iri-violating/manifest.ttl",
+          "blake3": "21ff05906e25d061c1213ee532214a490db18fde73afc1e21cfafa36868fe452"
+        },
+        {
+          "path": "shacl/nested-not-exists-iri-violating/shapes.ttl",
+          "blake3": "816156115725a84f3e2f2ac819ddc489e25a0f2ef64b61555121be2e2ef1a768"
+        }
+      ]
+    },
+    {
+      "id": "nested-not-exists-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-not-exists-iri-conforming/manifest.ttl",
+          "blake3": "2206f079ba3350085f946c5443a0b3e4a1f09c96753b5f234ad58eb4356a1bc0"
+        },
+        {
+          "path": "shacl/nested-not-exists-iri-conforming/shapes.ttl",
+          "blake3": "816156115725a84f3e2f2ac819ddc489e25a0f2ef64b61555121be2e2ef1a768"
+        }
+      ]
+    },
+    {
+      "id": "nested-not-exists-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-not-exists-blank-violating/manifest.ttl",
+          "blake3": "07272f5a22c82c5d2fbb7843e11ee2fadebe5b0df1c7c8175cdd5efc2c1df3c5"
+        },
+        {
+          "path": "shacl/nested-not-exists-blank-violating/shapes.ttl",
+          "blake3": "816156115725a84f3e2f2ac819ddc489e25a0f2ef64b61555121be2e2ef1a768"
+        }
+      ]
+    },
+    {
+      "id": "nested-not-exists-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/nested-not-exists-blank-conforming/manifest.ttl",
+          "blake3": "0caccdbac0b2cb9272ee1c2c3f1abdbce4336d24ed60289461f197e30638f3d1"
+        },
+        {
+          "path": "shacl/nested-not-exists-blank-conforming/shapes.ttl",
+          "blake3": "816156115725a84f3e2f2ac819ddc489e25a0f2ef64b61555121be2e2ef1a768"
+        }
+      ]
+    },
+    {
+      "id": "exists-absence-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/exists-absence-iri-violating/manifest.ttl",
+          "blake3": "a3fc54bbe5451734ec9a186c86e988500726e50aef99c5be02f915a678fe8ca4"
+        },
+        {
+          "path": "shacl/exists-absence-iri-violating/shapes.ttl",
+          "blake3": "2f379045427d4342cd87d45353b0b33acdf82c1849af60cc5094eeb91e0c5f56"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "exists-absence-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/exists-absence-iri-conforming/manifest.ttl",
+          "blake3": "21245b087ae262e23c567c0dbcb13354ec0119919a2e3a591b63d81545ebe775"
+        },
+        {
+          "path": "shacl/exists-absence-iri-conforming/shapes.ttl",
+          "blake3": "2f379045427d4342cd87d45353b0b33acdf82c1849af60cc5094eeb91e0c5f56"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "exists-absence-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/exists-absence-blank-violating/manifest.ttl",
+          "blake3": "7d5da59850382141c0d0d8487f91c2b6c5b987ba0962612ba84d3803e389e9aa"
+        },
+        {
+          "path": "shacl/exists-absence-blank-violating/shapes.ttl",
+          "blake3": "2f379045427d4342cd87d45353b0b33acdf82c1849af60cc5094eeb91e0c5f56"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "exists-absence-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/exists-absence-blank-conforming/manifest.ttl",
+          "blake3": "0d13c025b5b3604c8d0efeb5450c85bae4cc58b236fa56fe8d499653e1ee96a8"
+        },
+        {
+          "path": "shacl/exists-absence-blank-conforming/shapes.ttl",
+          "blake3": "2f379045427d4342cd87d45353b0b33acdf82c1849af60cc5094eeb91e0c5f56"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "union-absence-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/union-absence-iri-violating/manifest.ttl",
+          "blake3": "33a52369a68e33ee1ca11ad3d1486c0e4ad10e8318e85047fdf8e9a8f8e02768"
+        },
+        {
+          "path": "shacl/union-absence-iri-violating/shapes.ttl",
+          "blake3": "2e3c6a24984d241de65bfcee4b6c4f3418a45e82ece3438d5a678ef840ffa321"
+        }
+      ]
+    },
+    {
+      "id": "union-absence-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/union-absence-iri-conforming/manifest.ttl",
+          "blake3": "a3066dbb87be6bd99940bb9c9f16da18efb193b0c55743be7ac7fcfce1499a98"
+        },
+        {
+          "path": "shacl/union-absence-iri-conforming/shapes.ttl",
+          "blake3": "2e3c6a24984d241de65bfcee4b6c4f3418a45e82ece3438d5a678ef840ffa321"
+        }
+      ]
+    },
+    {
+      "id": "union-absence-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/union-absence-blank-violating/manifest.ttl",
+          "blake3": "1ed02409930ac76c761e4f8414d5c97aa32766af3147d18c5a04fef5bd78f4d1"
+        },
+        {
+          "path": "shacl/union-absence-blank-violating/shapes.ttl",
+          "blake3": "2e3c6a24984d241de65bfcee4b6c4f3418a45e82ece3438d5a678ef840ffa321"
+        }
+      ]
+    },
+    {
+      "id": "union-absence-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/union-absence-blank-conforming/manifest.ttl",
+          "blake3": "c4ee3d8ea6eb928c6eda6e305c4aea6a68ae035917d8ac33e5e5188ea9629a63"
+        },
+        {
+          "path": "shacl/union-absence-blank-conforming/shapes.ttl",
+          "blake3": "2e3c6a24984d241de65bfcee4b6c4f3418a45e82ece3438d5a678ef840ffa321"
+        }
+      ]
+    },
+    {
+      "id": "path-absence-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/path-absence-iri-violating/manifest.ttl",
+          "blake3": "523fe52e3d5eb42c451ad46f55f81468eb769e62eeab3f2ed503a75480755d27"
+        },
+        {
+          "path": "shacl/path-absence-iri-violating/shapes.ttl",
+          "blake3": "7eced46bffa91bdd3c9d67628a4e9ddb7acd2e12430fc11606d106d0aca4c0e9"
+        }
+      ]
+    },
+    {
+      "id": "path-absence-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/path-absence-iri-conforming/manifest.ttl",
+          "blake3": "213a2904261cb1132717357aad41e7d67df39d87fc74ece35d53f5bfff50ae60"
+        },
+        {
+          "path": "shacl/path-absence-iri-conforming/shapes.ttl",
+          "blake3": "7eced46bffa91bdd3c9d67628a4e9ddb7acd2e12430fc11606d106d0aca4c0e9"
+        }
+      ]
+    },
+    {
+      "id": "path-absence-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/path-absence-blank-violating/manifest.ttl",
+          "blake3": "d11c90acd18b73cc9e8d9143eb8ef70997212b61bd9ec46f6c4a91db831eeb35"
+        },
+        {
+          "path": "shacl/path-absence-blank-violating/shapes.ttl",
+          "blake3": "7eced46bffa91bdd3c9d67628a4e9ddb7acd2e12430fc11606d106d0aca4c0e9"
+        }
+      ]
+    },
+    {
+      "id": "path-absence-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/path-absence-blank-conforming/manifest.ttl",
+          "blake3": "3a1e31b35eadb0c682d3cc3f973f9eb0f47f5187d33a82610f1af417933671f7"
+        },
+        {
+          "path": "shacl/path-absence-blank-conforming/shapes.ttl",
+          "blake3": "7eced46bffa91bdd3c9d67628a4e9ddb7acd2e12430fc11606d106d0aca4c0e9"
+        }
+      ]
+    },
+    {
+      "id": "projected-subquery-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/projected-subquery-iri-violating/manifest.ttl",
+          "blake3": "a15b3bff5955d532cf47f206dc35e6a4fb9aaeb73267ee0f9eaba78c0f110a4b"
+        },
+        {
+          "path": "shacl/projected-subquery-iri-violating/shapes.ttl",
+          "blake3": "b265a816356e2313453f4aee5d66ccd511267e7f793ebdf3ad24abce2e202c7e"
+        }
+      ]
+    },
+    {
+      "id": "projected-subquery-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/projected-subquery-iri-conforming/manifest.ttl",
+          "blake3": "f1041a3e85c38a047305b7d381f973b7e04f071d76104df8dd080c7ea0372f98"
+        },
+        {
+          "path": "shacl/projected-subquery-iri-conforming/shapes.ttl",
+          "blake3": "b265a816356e2313453f4aee5d66ccd511267e7f793ebdf3ad24abce2e202c7e"
+        }
+      ]
+    },
+    {
+      "id": "projected-subquery-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/projected-subquery-blank-violating/manifest.ttl",
+          "blake3": "bf728a95ad8d5a5eb444b3f41400372d0cc8034fc37d46f712f589975086fb7b"
+        },
+        {
+          "path": "shacl/projected-subquery-blank-violating/shapes.ttl",
+          "blake3": "b265a816356e2313453f4aee5d66ccd511267e7f793ebdf3ad24abce2e202c7e"
+        }
+      ]
+    },
+    {
+      "id": "projected-subquery-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/projected-subquery-blank-conforming/manifest.ttl",
+          "blake3": "968861a4c174e46087fc63447f311981bc15a05d8177dd73b774680379ee558c"
+        },
+        {
+          "path": "shacl/projected-subquery-blank-conforming/shapes.ttl",
+          "blake3": "b265a816356e2313453f4aee5d66ccd511267e7f793ebdf3ad24abce2e202c7e"
+        }
+      ]
+    },
+    {
+      "id": "aggregate-subquery-iri-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/aggregate-subquery-iri-violating/manifest.ttl",
+          "blake3": "8f137f64f655682328354ba195ef4ba24c5c73317bab45b71f049853c219c2b8"
+        },
+        {
+          "path": "shacl/aggregate-subquery-iri-violating/shapes.ttl",
+          "blake3": "9ef850a8ee90bce286daef77e7240cfe5251b73f64f019eb213bad0334bc2b5c"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "aggregate-subquery-iri-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/aggregate-subquery-iri-conforming/manifest.ttl",
+          "blake3": "226a7568c171e81c6269cbaf6cfecafb9863c092efd3de611d246a9860dab91e"
+        },
+        {
+          "path": "shacl/aggregate-subquery-iri-conforming/shapes.ttl",
+          "blake3": "9ef850a8ee90bce286daef77e7240cfe5251b73f64f019eb213bad0334bc2b5c"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "aggregate-subquery-blank-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/aggregate-subquery-blank-violating/manifest.ttl",
+          "blake3": "3a8306667d9aba0da81406f3d76edd128ba38a387152854355af97378fa87eb5"
+        },
+        {
+          "path": "shacl/aggregate-subquery-blank-violating/shapes.ttl",
+          "blake3": "9ef850a8ee90bce286daef77e7240cfe5251b73f64f019eb213bad0334bc2b5c"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "aggregate-subquery-blank-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/aggregate-subquery-blank-conforming/manifest.ttl",
+          "blake3": "9c07e64ac717269d3679a4ae7e393ddde030827dbff7c45b0c58371a96bd90c7"
+        },
+        {
+          "path": "shacl/aggregate-subquery-blank-conforming/shapes.ttl",
+          "blake3": "9ef850a8ee90bce286daef77e7240cfe5251b73f64f019eb213bad0334bc2b5c"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "ask-validator-parameter-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/ask-validator-parameter-violating/manifest.ttl",
+          "blake3": "98d85ae5e440d1f5ce08eb416d373e2612825f7d801ed73a05a515cdc2bba71c"
+        },
+        {
+          "path": "shacl/ask-validator-parameter-violating/shapes.ttl",
+          "blake3": "f5caeb3301fa927302da16c7cdb7cde388aacfc6c2faea651b66dc457e4506c0"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "ask-validator-parameter-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/ask-validator-parameter-conforming/manifest.ttl",
+          "blake3": "4050fa1553e2ec796c0eb4c50cc24f4cbe89db870e9dc9db74fa32c0e76aff41"
+        },
+        {
+          "path": "shacl/ask-validator-parameter-conforming/shapes.ttl",
+          "blake3": "f5caeb3301fa927302da16c7cdb7cde388aacfc6c2faea651b66dc457e4506c0"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "select-validator-parameter-violating",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/select-validator-parameter-violating/manifest.ttl",
+          "blake3": "cc927f90bdcff11c1835da7c272f7b4ede29890b12c585ac99b77e70d621d692"
+        },
+        {
+          "path": "shacl/select-validator-parameter-violating/shapes.ttl",
+          "blake3": "e3bef6dda4cd6445268059ee4e01d79c6efc9df7f89bed79c60d9ac61caa4755"
+        }
+      ]
+    },
+    {
+      "id": "select-validator-parameter-conforming",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/select-validator-parameter-conforming/manifest.ttl",
+          "blake3": "821ef3189f0f3d918c00281f529d1ea7a8b99808fb6907d098afc7c5d8e1430b"
+        },
+        {
+          "path": "shacl/select-validator-parameter-conforming/shapes.ttl",
+          "blake3": "e3bef6dda4cd6445268059ee4e01d79c6efc9df7f89bed79c60d9ac61caa4755"
+        }
+      ]
+    },
+    {
+      "id": "predicate-focus-iri",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/predicate-focus-iri/manifest.ttl",
+          "blake3": "0f65b8bcdca6dc244022cdc3e31efbf2fe1220c3d03975eadeef4b6551501795"
+        },
+        {
+          "path": "shacl/predicate-focus-iri/shapes.ttl",
+          "blake3": "098e2e14cdde165cd87f722b0ea4dbd62a3444e3d4e960d73b2379b7bd2416fe"
+        }
+      ]
+    },
+    {
+      "id": "predicate-focus-blank",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/predicate-focus-blank/manifest.ttl",
+          "blake3": "998a0552eb648a765dfa3784ee89e5a2accb8a89eebdc4e11e36dc0a5101b569"
+        },
+        {
+          "path": "shacl/predicate-focus-blank/shapes.ttl",
+          "blake3": "ebde041d93ee534553af220a29a5bbf4228f04fcd734417b7d57f33fb6acda35"
+        }
+      ]
+    },
+    {
+      "id": "admission-local-values-rec",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-local-values-rec/manifest.ttl",
+          "blake3": "e108036fbc0556bb4626319791d8578a4f0f5dbf427870eca64d9a50610cbdf5"
+        },
+        {
+          "path": "shacl/admission-local-values-rec/shapes.ttl",
+          "blake3": "d297c2e1c2884052748b8d4a50f7fb9c6e7a1fdafda72f715296d1e6d8ab29c8"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-local-values-draft",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-local-values-draft/manifest.ttl",
+          "blake3": "d0545c49e33328cf16e97750895b0b5d3543b1f0a66b011746dedfb8f9cb31f7"
+        },
+        {
+          "path": "shacl/admission-local-values-draft/shapes.ttl",
+          "blake3": "d297c2e1c2884052748b8d4a50f7fb9c6e7a1fdafda72f715296d1e6d8ab29c8"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-hidden-prebound-subquery-rec",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-hidden-prebound-subquery-rec/manifest.ttl",
+          "blake3": "e3f9387189e19dba87173d85c6774124e1cdacacabaa1ef1e2541e71d69be8a0"
+        },
+        {
+          "path": "shacl/admission-hidden-prebound-subquery-rec/shapes.ttl",
+          "blake3": "54b5878cd0d54f908f0b505936562637eebb5f3bcd4e988fb356162dcb4a7b78"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-hidden-prebound-subquery-draft",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-hidden-prebound-subquery-draft/manifest.ttl",
+          "blake3": "c4ff1d4afe7f27f580ce8c45d62544834f872fe0b8566c23439e3d89c00fe027"
+        },
+        {
+          "path": "shacl/admission-hidden-prebound-subquery-draft/shapes.ttl",
+          "blake3": "54b5878cd0d54f908f0b505936562637eebb5f3bcd4e988fb356162dcb4a7b78"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-prebound-values-rec",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-prebound-values-rec/manifest.ttl",
+          "blake3": "86208bdf5c861f4a3aec85fababd1ab9954ce4de422179d6a6f81c341bbe4d1b"
+        },
+        {
+          "path": "shacl/admission-prebound-values-rec/shapes.ttl",
+          "blake3": "7c44ec4ade98427aec31ab0e2f92ea3537f3317f0e9512bd6051fa6d252cb540"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-prebound-values-draft",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-prebound-values-draft/manifest.ttl",
+          "blake3": "2e1857ec94e678f1839d251ed107ad57c4b0be93df01f355e6b2450c185e8c51"
+        },
+        {
+          "path": "shacl/admission-prebound-values-draft/shapes.ttl",
+          "blake3": "7c44ec4ade98427aec31ab0e2f92ea3537f3317f0e9512bd6051fa6d252cb540"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-prebound-as-rec",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-prebound-as-rec/manifest.ttl",
+          "blake3": "f141a047c1659665eedde78dc9f4191b5b6da86280e3203a785b42badc5641ab"
+        },
+        {
+          "path": "shacl/admission-prebound-as-rec/shapes.ttl",
+          "blake3": "b3ef738a21f95acf5a0a90eb97f19e1a005bd4251194c90af5eb00c642f81cb3"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-prebound-as-draft",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-prebound-as-draft/manifest.ttl",
+          "blake3": "6561c8c10e2fc2e9113174a769449fee34c8baf3e56df5f9ffe8b5036d3617dd"
+        },
+        {
+          "path": "shacl/admission-prebound-as-draft/shapes.ttl",
+          "blake3": "b3ef738a21f95acf5a0a90eb97f19e1a005bd4251194c90af5eb00c642f81cb3"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-minus-rec",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-minus-rec/manifest.ttl",
+          "blake3": "666e8e0d96b355fc60c569fc301b6dcfcfd882277a92aa7f68cb8b652204ac3e"
+        },
+        {
+          "path": "shacl/admission-minus-rec/shapes.ttl",
+          "blake3": "5abce97f4c7bb99fe821acd1859f74161da04f6c444dfb07a190131244939d9d"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-minus-draft",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-minus-draft/manifest.ttl",
+          "blake3": "23b037f72b06a25e1acf1ba787259ed1699419cca08e929cdf6419417356fd14"
+        },
+        {
+          "path": "shacl/admission-minus-draft/shapes.ttl",
+          "blake3": "5abce97f4c7bb99fe821acd1859f74161da04f6c444dfb07a190131244939d9d"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-service-rec",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-service-rec/manifest.ttl",
+          "blake3": "cb01b3db5f6850b9988a71cfe5e8a2a66a90bbd3cf7b712b327eb24c2ad6a779"
+        },
+        {
+          "path": "shacl/admission-service-rec/shapes.ttl",
+          "blake3": "c49d758d4dca1b27c20e2784b88b73ac97558f5d1d6144e241708cded88e7845"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "admission-service-draft",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/admission-service-draft/manifest.ttl",
+          "blake3": "a3875ce9022aebe251c810b7af2a44b51bbc76ea60517487a0f7fbb115b04f47"
+        },
+        {
+          "path": "shacl/admission-service-draft/shapes.ttl",
+          "blake3": "c49d758d4dca1b27c20e2784b88b73ac97558f5d1d6144e241708cded88e7845"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "solution-declared-failure",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/solution-declared-failure/manifest.ttl",
+          "blake3": "27ad045d97a3576afb06d0f9a486b0c8b3d529b16d6b950c5a2e852a06a5ba84"
+        },
+        {
+          "path": "shacl/solution-declared-failure/shapes.ttl",
+          "blake3": "15209f63724f325c3ea29e38349294ce966143622f9457ad6a15ebc35f8bd296"
+        }
+      ]
+    },
+    {
+      "id": "solution-message-priority",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/solution-message-priority/manifest.ttl",
+          "blake3": "fa15f793ee1500a398b308ce960bb2da2eaca7a7f97184aa3d9999f0c5c5216e"
+        },
+        {
+          "path": "shacl/solution-message-priority/shapes.ttl",
+          "blake3": "3ad9a005374dcfdd6e0c52f85fbb0455579cb13e928f4a8e36ca0d8073896891"
+        }
+      ]
+    },
+    {
+      "id": "quoted-focus-optional",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/quoted-focus-optional/manifest.ttl",
+          "blake3": "39c63e9d4fb4088a2c9d6b6d052a2dcca1212f5e104d5edcfdb819e02fe62145"
+        },
+        {
+          "path": "shacl/quoted-focus-optional/shapes.ttl",
+          "blake3": "b8637360efa03cd6c897c7737008a9b6b09847326ee0ce0e48b6280f318bf4ee"
+        }
+      ]
+    },
+    {
+      "id": "complex-sequence-inverse-path",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/complex-sequence-inverse-path/manifest.ttl",
+          "blake3": "053b6ce22988e5e93332f78e6182fc0624063e28055689f5d3fae87ee3af0dd5"
+        },
+        {
+          "path": "shacl/complex-sequence-inverse-path/shapes.ttl",
+          "blake3": "c3f76aff1aea1ea4c0e3e572b7070859f45f40b426c757e27b2e14b5a6d12a85"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        }
+      ]
+    },
+    {
+      "id": "rule-optional",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/rule-optional/data.ttl",
+          "blake3": "be310df05945d68ce45c5dbb19d7e26a9093621f5f08d61bc5de4536b6b76524"
+        },
+        {
+          "path": "shacl/rule-optional/expected.ttl",
+          "blake3": "52326a60fef8aa5554e833fa63c285218c19da214d41b93a8f8d6d0399a2cb8b"
+        },
+        {
+          "path": "shacl/rule-optional/manifest.ttl",
+          "blake3": "0d00e6638d9307eff422f396f85996ea33025e72afb1798c9f212d887543d151"
+        },
+        {
+          "path": "shacl/rule-optional/shapes.ttl",
+          "blake3": "b47db826bc453d456167172f623b8f0f604d4e45c77dee1d939554426cd900a6"
+        }
+      ]
+    },
+    {
+      "id": "rule-not-exists",
+      "status": "accepted",
+      "reviewer": "automated agent source review",
+      "derivation": "reviews/shacl.md",
+      "payloads": [
+        {
+          "path": "reviews/shacl.md",
+          "blake3": "03e1052ae6e5f25e24e1f5c4fd57bddb4ffd63c264d9e9f43c74bc73fa8c0366"
+        },
+        {
+          "path": "shacl/manifest.ttl",
+          "blake3": "52848fd8780b8f37fb9c4c285176636fd76fa3fe1053ac2c0876c5d04ecc6887"
+        },
+        {
+          "path": "shacl/rule-not-exists/data.ttl",
+          "blake3": "be310df05945d68ce45c5dbb19d7e26a9093621f5f08d61bc5de4536b6b76524"
+        },
+        {
+          "path": "shacl/rule-not-exists/expected.ttl",
+          "blake3": "52326a60fef8aa5554e833fa63c285218c19da214d41b93a8f8d6d0399a2cb8b"
+        },
+        {
+          "path": "shacl/rule-not-exists/manifest.ttl",
+          "blake3": "c7bfb16faf3964b0e6355fa97a211c8252fc9fb52a5534472ea803580862651e"
+        },
+        {
+          "path": "shacl/rule-not-exists/shapes.ttl",
+          "blake3": "e651905bf83c8effacc78ad80b4ad15356af3f5f3c05594a3e4cf3a7e9afc1e9"
+        }
+      ]
+    }
+  ]
+}

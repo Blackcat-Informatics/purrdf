@@ -18,11 +18,9 @@
 //!   return type can carry it;
 //! * the per-relation ledger entry the reading is folded into.
 //!
-//! **This bench asserts nothing.** It reports allocation COUNTS and peak bytes,
-//! because those are properties of the code rather than of the machine — the box
-//! this runs on is not quiet, and a timing threshold here would be a flaky gate
-//! rather than a measurement. Counts do not need a quiet machine: the same code
-//! over the same fixture requests the same allocations on any box.
+//! This bench reports allocation calls and peak bytes within each invocation.
+//! Fixture construction is outside the allocation window; the returned product
+//! remains alive until that window closes.
 //!
 //! Each phase reports its figures **per invocation**, over a fixture whose driving
 //! pattern is `ROWS` rows wide, so the numbers can be read directly as "what one

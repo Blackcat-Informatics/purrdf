@@ -103,6 +103,14 @@ name = "segmented"
 harness = false
 
 [[test]]
+name = "model_traits"
+harness = false
+
+[[bench]]
+name = "model_traits"
+harness = false
+
+[[test]]
 name = "dataset_state_digest"
 harness = false
 
@@ -259,4 +267,8 @@ harness = false
 # selects the explicit simd128 kernel comparisons and dispatch assertion.
 [[test]]
 name = "csv_scan_wasm"
+harness = false
+
+[[test]]
+name = "byte_cover"
 harness = false

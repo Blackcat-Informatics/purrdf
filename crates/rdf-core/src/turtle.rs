@@ -1112,11 +1112,8 @@ mod tests {
                 assert_eq!(written.len(), LEVELS * level + innermost);
                 assert!(written.starts_with("<<( <<( "));
             }
-            // The owned model's derived drop descends once per level, so the chain
-            // is taken apart one level at a time.
-            while let RdfTerm::Triple(triple) = term {
-                term = triple.subject;
-            }
+            // The owned model's drop is iterative too.
+            drop(term);
         })
         .expect("the thread starts");
     }

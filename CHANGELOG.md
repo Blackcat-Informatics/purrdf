@@ -8,8 +8,323 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Shared exact integer engine:** arbitrary-precision Integer, Decimal,
+  Rational, numeric codecs and geometric facades share binary `u64` limbs.
+  Small exact integers retain inline `i128` arithmetic; the binary engine adds
+  inline magnitude storage, bounded reusable scratch and Karatsuba products.
+  Governor profile 14 prices binary storage and decimal base conversion.
+
+- **RDFLib compatibility queries:** Graph, Dataset, ConjunctiveGraph and the
+  SPARQL processor compile contextual mappings through the shared Rust evaluator.
+  Repeated assignments and initial bindings now follow RDFLib's mapping/context
+  laws through nested groups, OPTIONAL, MINUS, EXISTS and aggregation. Public
+  columns, duplicate rows, empty projected mappings and query-wide labelled
+  blank-node identity are preserved. Native Store and SHACL assignment rules
+  remain unchanged.
+
+### Breaking Changes
+
+- **One exact XSD numeric value API:** public `XsdValue::Integer` and
+  `XsdValue::Decimal` carry the exact integer and decimal types at every size.
+  The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal
+  narrowing conversions are removed; callers that matched the old wide
+  variants use the same exact variants as small values. Integer narrowing to
+  `i128` or `i64` remains explicit and typed. Decimal division now keeps every
+  digit of a terminating quotient and otherwise rounds to 18 fractional
+  places, half to even. Explicit `exact`, `N`, `N:ROUNDING` and
+  `exact-or-N[:ROUNDING]` policies remain available. Temporal seconds use exact
+  decimals, including fractional precision beyond 18 places, through
+  arithmetic, comparisons and canonical output.
+
+- **Unrestricted exact BM25F ranking:** the ranking identity is now
+  `purrdf-bm25f-fixed-v2`, revision 2. Query terms, ranking fields, corpus
+  populations, field lengths/frequencies and nonnegative weights no longer have
+  selected admission ceilings. Overflowing intermediates use the existing exact
+  Integer/BigInt at the original rounding boundaries; previously admitted score
+  lexicals remain byte-identical. Profile/index fingerprints change because the
+  admission and bound laws changed. The fixed maximum/width exports are removed;
+  `PreparedQuery::score` now returns `BoundedScore { value, bound }`, native
+  `Scored` carries `score_bound`, and matched-term counts use usize. The bound is
+  derived from the actual prepared query/corpus, with no reserved host tie bits.
+
+
+- **Developer-schema output for ontologies without anonymous expressions:**
+  correctness fixes change what an IRI-only ontology emits. Each change:
+  - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
+    IRI-only ontologies and ontologies with no OWL at all included: the policy
+    salt moves from `owl-rdfs-fragment-v1` to `owl-rdfs-fragment-v2`, and the
+    fixed ceilings the key binds gain the class-membership ceiling below. A
+    compilation cached under an earlier key is never reused.
+  - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
+    datatype. It is no longer a class: it gets no `$defs` entry and no coverage
+    class rows. A property that is not an `owl:ObjectProperty` and ranges over
+    it admits a literal tagged `ex:X` or a value of the defining datatype (and a
+    node, as below). An
+    `owl:DatatypeProperty` ranging over it, which used to be refused, is
+    accepted. Its coverage rows are `representation_approximation` where the
+    defining datatype's projection is.
+  - A property that is not an `owl:ObjectProperty` and ranges over
+    `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
+    `owl:rational` projects a literal of that datatype (beside a node, as
+    every OWL-derived property does; see below), where it projected a node
+    reference only.
+    Its coverage rows are `representation_approximation`, because lexical
+    forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
+    which used to be refused, is accepted.
+  - A property ranging over an XSD datatype, which used to admit only literals
+    tagged with that datatype, admits every literal whose value is in the
+    datatype's value space (see "OWL datatypes are judged by value space"
+    under Added). Its coverage rows are
+    `representation_approximation` for a decimal or integer range, which
+    admits `owl:rational` literals unjudged. SHACL-derived properties and
+    shaped-only output are unchanged.
+  - **Every OWL-derived property takes a node or a checked literal**, read by
+    the OWL 2 RDF-Based Semantics (OWL 2 Full) with the OWL 2 datatype map,
+    whatever its declared kind:
+    - every `owl:ObjectProperty` now takes well-typed literals, where it took
+      only nodes: with no range, any well-typed literal; under a class range,
+      a well-typed literal whose membership is not judged; under a datatype
+      range (`rdf:JSON`, say), that datatype's literals. A class declared
+      disjoint with `rdfs:Literal` (or below `¬rdfs:Literal`) still rejects
+      every literal;
+    - every `owl:DatatypeProperty` (and `rdf:Property`) now also takes a node,
+      since an IRI may denote a data value;
+    - an ill-typed literal (`"abc"^^xsd:integer`, `" a "^^xsd:token`) is no
+      value of any OWL-derived property; one typed `rdf:XMLLiteral` or with a
+      datatype outside the map is admitted unjudged;
+    - coverage cells: a property no range constrains is exact; a data range
+      (which admits a node unjudged) and a class range (which admits a literal
+      unjudged) are `representation_approximation`, unless the class rejects
+      literals; the manifest reports a data-range `owl:allValuesFrom`
+      `approximated` on every property kind;
+    - the well-typed-literal schema is the new reserved `$defs/Literal`
+      definition, so an ontology class whose local name is `Literal` is keyed
+      by its CURIE, as one named `Node` or `Annotation` already is.
+  - The schema `$id` under a hash namespace
+    (`http://purl.org/goodrelations/v1#`) is fragment-free:
+    `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
+    `…/v1#schema/instance.schema.json`. JSON Schema draft 2020-12 §8.2.1
+    requires a `$id` to resolve to an absolute URI without a fragment, and
+    draft 2020-12 validators refused the old one. Slash namespaces keep their
+    `$id`.
+  - A class hierarchy whose closure holds more than 1,048,576 memberships (a
+    subclass chain deeper than about 1,450) used to be refused with
+    `LimitExceeded` "propagated class memberships". The closure now holds up to
+    16,777,216 (a chain about 5,790 deep).
+  - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
+    `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
+    which used to be ignored, is projected and reported as above.
+  - Nothing else changes. A golden of the output frozen before anonymous class
+    expressions were read is compared on every test run with today's: for an
+    ontology with a hierarchy, an equivalence, disjointness, domains, ranges,
+    functional, symmetric and inverse properties, a sub-property, a declared
+    datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
+    shaped-only output is byte-identical, and the ontology-complete output
+    differs only in the OWL-derived properties' value schemas (each takes a
+    node or a checked literal, as above; `payload` over `rdf:JSON` takes its
+    literals and any node), the new `$defs/Literal`, and coverage precision
+    (the datatype ranges' and the class ranges' cells, `payload` on `Org`
+    among them, move from exact to `representation_approximation`).
+- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
+  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
+  node expression's scope and `sh:expression`'s `value` — now takes the one
+  pre-binding rewrite SHACL pre-binding used. They still differ where SHACL's
+  Appendix A refuses a construct, as set out below. On the prepared-parameter and request-substitution lanes the bound
+  value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
+  and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
+  did not reach, and it is carried past every `GROUP BY` at any depth as a
+  constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
+  the bound node, an implicit group over no rows answers `COUNT` 0 with the
+  bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes every
+  assignment of a pre-bound name joins with the bound value where it is made
+  (§18.5), by one rule at every depth, a sub-`SELECT` that does not project the
+  name and an `EXISTS` body included: with `$this` bound to `ex:a`,
+  `BIND(ex:z AS $this)` leaves the assigning pattern no row, whatever else the
+  query holds. No scope has a `$this` of its own. On the engine lanes
+  `MINUS` sees the bound value on both sides whether or not a side mentions it,
+  as rdflib's `initBindings` does, so `?x ex:p ?o MINUS { ?s ex:q ?w }` answers
+  no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }` does.
+  A `VALUES` over a pre-bound name keeps the rows that agree with the bound
+  value, joined where it is written at every depth: `VALUES $this { ex:b }`,
+  with `$this` bound to `ex:a`, answers no row in the query's `WHERE` group. The SHACL lanes refuse
+  `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
+  lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
+  and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
+  they pre-bind, so `VALUES ?value { … }` inside `sh:expression` is refused at
+  load as `VALUES $this { … }` already was, while `VALUES ?v { true }` loads.
+  A `sh:sparql` constraint, a component validator, a `sh:SPARQLTarget`'s
+  `sh:ask` and a SPARQL rule refuse every `VALUES`, as the W3C SHACL case
+  `unsupported-sparql-002` requires. A query that reads
+  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
+  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
+  `EXISTS` or property-function call) skips the rewrite's expression walk
+  (the `prebind_seed_fast_path` bench times both), which takes the SHACL
+  allocation pins to 40 / 78 / 48 / 101 per focus node ungoverned and
+  58 / 98 / 66 / 126 governed.
+
+  **Migration.** A query run with request substitutions or prepared-execution
+  parameters that reads a bound variable inside `OPTIONAL`, `MINUS`, a
+  sub-`SELECT` or `EXISTS` now sees the bound value there; before, the
+  variable matched freely in those positions. To keep the old answer, rename
+  the variable to a fresh one inside that position: `OPTIONAL { ?s2 ex:p ?y }`
+  in place of `OPTIONAL { ?s ex:p ?y }`. An assignment of a pre-bound variable
+  keeps only the rows whose assigned value is the bound one, where before an
+  assignment no other pattern met answered with the assigned value; assign a
+  fresh variable to keep that answer. This holds in a sub-`SELECT` that does not
+  project the name too. rdflib 7.6's `initBindings` is not the reference for
+  this: it rebinds a pre-bound name wherever the query assigns it, at the top
+  level as in a sub-`SELECT`, and PurRDF follows the single join rule instead. A `VALUES ?s { … }` over a pre-bound
+  name that lists other terms than the bound one has no row, at any depth. A `MINUS` carries the
+  bound value on both sides, so a right side that shares no other variable
+  with the left now subtracts every left row once it has a row, where before
+  it subtracted nothing; share the variables it should match on, as
+  `MINUS { ?x ex:q ?w }` beside `?x ex:p ?o` does.
+
+- **`purrdf_core::RdfTriple` implements `Drop`:** this is what makes dropping a
+  deeply nested term stack-safe (see Fixed). Rust forbids moving a field out of
+  a `Drop` type, so code that destructures an owned `RdfTriple` by value, or
+  moves `triple.subject`, `triple.object`, `triple.predicate` or
+  `triple.location` out of one, no longer compiles (E0509). Use the new
+  `RdfTriple::into_parts`, which returns `(subject, predicate, object,
+  location)` without copying: replace
+  `let RdfTriple { subject, predicate, object, location } = *boxed;` with
+  `let (subject, predicate, object, location) = boxed.into_parts();`.
+  Struct update syntax from an owned triple (`RdfTriple { location: None,
+  ..other }`) is refused the same way; take `other` apart with `into_parts`
+  and rebuild it with a struct literal, or assign the field in place.
+  Construction with a struct literal or `RdfTriple::new`, destructuring and
+  matching by reference (`&triple`, `&mut triple`), reading and assigning
+  fields in place, and moving the `Box<RdfTriple>` out of
+  `RdfTerm::Triple` are unchanged. `RdfTerm` itself has no `Drop`, so moving
+  values out of its variants is unchanged too. Code that took deep chains
+  apart by hand to avoid the old recursive drop can simply drop them.
+- **SPARQL evaluator errors:** this change and the next alter behaviour
+  without changing a signature, so a semver check cannot see them;
+  `EvalError` is `#[non_exhaustive]`, so existing matches still compile.
+  When a native host function returns its own `Err`, a native function or a property function's `open`/`next` panics, a
+  function hits a resource ceiling, or a host sends an invalid protocol
+  response, the query now fails with the new `EvalError::FunctionOperational`
+  instead of `EvalError::Function`. `EvalError::Function` now means only that
+  the request was refused: an arity, type or access-mode mismatch. Code that
+  matches `EvalError::Function` to catch host failures must also match
+  `FunctionOperational`. `EvalError` also gains `FunctionAdmission`, for a
+  SPARQL-bodied function a dated invocation law refuses, and `XPathRegex`, for
+  a refused native XPath compile, match or replacement.
+- **SPARQL diagnostic codes:** `EvalError::diagnostic_code()` and
+  `EvalError::code()` now return a code for `Internal`
+  (`native-sparql-internal`), `CompositeBound` (`native-sparql-composite-bound`)
+  and `FloatEnvironment` (`native-sparql-float-environment`), where they used
+  to return `None`. They also return one for `FunctionOperational`
+  (`native-sparql-function-operational`) and `XPathRegex` (the exhausted
+  resource's code, otherwise `native-sparql-xpath-operational`). The
+  native engine used to report these failures as `native-sparql-query-eval`,
+  so `RdfDiagnostic::code`, and the error codes the CLI, C ABI, Python and
+  WebAssembly surfaces report, change to the specific codes.
+
 ### Added
 
+- **Dated SHACL profiles:** `purrdf_shapes::ShaclProfile` selects the law a
+  validation follows: `ShaclProfile::LEGACY` (the default, unchanged),
+  `ShaclProfile::REC_20170720` (the SHACL Recommendation of 20 July 2017) and
+  `ShaclProfile::WD_20260918` (SHACL 1.2 Core of 17 September 2026 with the
+  SPARQL Extensions of 18 September 2026). Each dated profile names its exact
+  Core, SPARQL and XPath specifications, and `ShaclProfile::from_id` refuses
+  any other identifier with `UnsupportedProfile` rather than picking a nearby
+  date. `ValidationOptions::with_profile` selects one. Pre-binding admission
+  follows the selected law. Both refuse `MINUS`, `SERVICE` and assignment to a
+  potentially pre-bound variable. The draft's potentially pre-bound variables
+  are `this`, `value` and the parameters alone, so under it `$shapesGraph`
+  and `$currentShape` are never pre-bound: they are the query's own
+  variables, whether or not the validation has a value for them. The Recommendation also refuses every
+  `VALUES` and a subquery that does not project a potentially pre-bound
+  variable; the draft refuses a `VALUES` only when it names one, and has no
+  subquery rule. A refusal is a typed `AdmissionRefusal` with its reason,
+  query role and variable.
+- **Complete SHACL reports:** `CompleteValidationReport` sits beside the
+  unchanged `ValidationReport`. Each result carries its `sh:sourceConstraint`
+  (the actual `sh:sparql` value), recursive `sh:detail` results with their own
+  evidence, and messages chosen in the dated order: a bound `?message`, then
+  the constraint's or validator's messages, then the component's. Its graph
+  (`to_graph`) keeps a report root and records, for every emitted blank node,
+  the data or shapes blank node it stands for, so independently parsed
+  documents never share blank identity. `CompleteValidationError` keeps
+  admission, semantic, resource, source and native XPath refusals apart from a
+  verdict.
+- **Complete reports at the shared boundary:** `purrdf_validate` adds
+  `validate_complete_sources`, `validate_complete_documents`,
+  `validate_complete_product`, `complete_report_payload`,
+  `complete_report_to_json`, `complete_report_to_sarif_string`,
+  `complete_profile` and `complete_validation_status` with
+  `CompleteValidationStatus`. Existing functions, JSON payloads and SARIF
+  output are unchanged under the default profile.
+- **Community SHACL corpus:** `corpora/community/` holds 64 SHACL cases with
+  inline expected reports and an agent review of every expectation. Their
+  applicable dated executions (57 under the Recommendation, 58 under the
+  draft) run through the fresh, prepared and restored-product routes in
+  `cargo test -p purrdf-sparql-conformance --test community_conformance`, and
+  the `community-conformance` binary writes their records and EARL. The new
+  unpublished `purrdf-conformance-kit` compares each complete report with its
+  expectation by graph isomorphism in source context. A catalog profile with no
+  built-in dated law is counted as unsupported, apart from failures. The
+  conformance matrix gains the row.
+- **Test vocabularies:** `purrdf_iri::vocab` adds the W3C test manifest
+  (`mf`), result set (`rs`), SHACL test (`sht`) and EARL (`earl`) terms.
+- **`purrdf-hash` BLAKE3 subtree primitives:** `blake3::ChainingValue`,
+  `left_subtree_len`, `subtree_chaining_value`, `merge_subtrees_non_root` and
+  `merge_subtrees_root`, the same primitives and rules as the `blake3` crate's
+  `hazmat` module, over the existing tree code. BLAKE3's hash is the root of a
+  Merkle tree over 1 KiB chunks, so a piece of an input can be proved to belong
+  to its hash by its siblings' chaining values alone: verified streaming,
+  verified range reads, and erasure shards checked against the identity of the
+  artifact they belong to. A subtree at a misaligned offset panics rather than
+  yielding a chaining value no input produces. Zero new dependencies.
+
+- **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups,
+  482 cases, and the sort extension) is vendored byte-for-byte and graded in
+  `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The extension's
+  one case, whose frozen order RDF 1.2 makes unreachable, is graded in its
+  own row against the SPARQL 1.2 order. The conformance
+  harness now reads DAWG RDF result sets (ASK booleans, `rs:index` ordering,
+  unbound rows), honors `mf:LaxCardinality` for `REDUCED`, loads
+  `FROM`/`FROM NAMED` documents under their query IRIs, and runs each case
+  with exactly the `mf:requires` features it names, refusing a feature it
+  does not model. Every vendored file keeps its upstream name: a manifest
+  named like a discovered one may include others only as an index, which the
+  runner checks for coverage and never runs through its members. The vendored
+  files no upstream manifest lists are accounted for in their own
+  conformance row.
+- **SPARQL `=` extension for language-tagged strings:**
+  `QueryOptions::with_disjoint_language_strings(true)` makes `=` answer
+  `false`, rather than a type error, when a language-tagged string meets an
+  ill-typed literal or one of an unrecognized datatype, as in
+  `"xyz"@en = "xyz"^^xsd:integer`; `!=` is then `true`. This is the
+  operator extension SPARQL 1.2 §17.3.1 permits and the W3C tests call
+  `mf:KnownTypesDefault2Neq`. The default stays the SPARQL 1.2 answer, an
+  error.
+- **`purrdf_lex::walk::write_debug_scalars`:** the heap-walking `Debug` writer
+  for scripts whose leaves are standard strings and unsigned integers
+  (`DebugScalar`). Unlike `write_debug`, it applies every option of the
+  caller's formatter to those leaves exactly as `#[derive(Debug)]` does,
+  including newline fill in the pretty form, and it fails only when the
+  caller's writer does.
+- **Remembered empty named graphs (opt-in):** `GraphExistenceMode`
+  (`Implicit`, the default, and `RememberEmpty`),
+  `MutableDataset::new_with_graph_existence`, `MutableDataset::graph_existence`,
+  `MutableDataset::create_named_graph`, `MutableDataset::has_named_graph`,
+  `MutableDataset::try_withdraw_named_graph_declarations` and
+  `QueryOptions::with_graph_existence`. In `RememberEmpty`, `CREATE GRAPH`
+  registers an empty graph and refuses an existing one
+  (`rdf-ir-graph-already-exists`); `CLEAR` keeps the graph and `DROP` removes
+  it; removing a graph's last row keeps it; `ADD`, `COPY` and `MOVE` create
+  their destination even from an empty source. A missing `CLEAR`/`DROP` target
+  or transfer source is refused (`native-sparql-update-graph-missing`) before
+  anything is touched. `SILENT` turns each refusal into a no-op. Python's `Store` and `MutableDataset` take a
+  keyword-only `remember_empty_graphs=True` and gain `add_graph` and
+  `named_graphs`. The 3.x default is unchanged; this mode is expected to become
+  the default in v4.0.
+- **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
+  freezing its result and before publishing it, and before each declaration a
+  bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
 - **Arbitrary-precision numeric tower (`purrdf_xsd::exact`):** exact
   `xsd:integer`, `xsd:decimal` and `owl:rational` values of any size, beside
   the bounded types, which are unchanged. `exact::Integer` keeps values that
@@ -59,8 +374,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `EvalCtx::with_division_policy` select the scale and rounding of an
   `xsd:integer`/`xsd:decimal` quotient, or the exact quotient. The default
   keeps eighteen fractional digits, truncated toward zero, at every magnitude.
-  Under `DivisionPolicy::Exact` a non-terminating quotient is the hard error
-  `EvalError::Numeric` (`native-sparql-numeric`, F&O `FOAR0002`). `AVG` and `/`
+  Under `DivisionPolicy::Exact` a non-terminating quotient is a SPARQL
+  expression error, as division by zero is: the value is unbound, `COALESCE`
+  catches it, and a governed query counts it as F&O `FOAR0002` in its
+  evidence. `AVG` and `/`
   share the policy, so `AVG(?x)` and `SUM(?x) / COUNT(?x)` always agree, and
   `fold_values_with_division` gives a value-level fold the same policy.
   `DivisionPolicy` has one text form (`FromStr`/`Display`): `exact`, a scale
@@ -78,12 +395,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `GovernorEvidence::expression_errors` counts, per code, every numeric error a
   governed query absorbed into an unbound value, as SPARQL requires for an
   expression error; the C, WebAssembly and Python evidence carry the counts.
+  A governed `purrdf query` or `purrdf update` writes them to stderr, after
+  the governor report, as a `purrdf-expression-errors 1` block of
+  `absorbed CODE COUNT` lines; a run that absorbed none writes no block.
+  `purrdf update` takes `--division` as `purrdf query` does.
 - **ShEx exact facet bounds:** `purrdf_shex::ExactSchema` (`parse_shexc`,
   `parse_shexj`, `from_schema`, `resolve_imports`, `to_shexj`) keeps every
   numeric facet bound as written, per node constraint, and `validate_exact` /
   `validate_shape_map_exact` compare against it in the XSD value space.
   `purrdf shex` and the Python binding use it. The existing parsers and AST
-  are unchanged.
+  are unchanged, except that a DOUBLE bound past the double range
+  (`MAXINCLUSIVE 1E400`, in ShExC or ShExJ) is now the infinity of its sign,
+  as the same lexical form is in the data, where every parser used to refuse it.
 - **`BigInt` arithmetic:** `purrdf_xsd::bigint::BigInt` gains truncating
   division with a quotient (`div_rem`, `div_rem_pow10`), `pow`, `gcd`, `abs`,
   `signum`, `pow10`, `decimal_digits`, `trailing_decimal_zeros`, `limb_len`,
@@ -183,9 +506,255 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.
 - **rdf:** `flat_dataset_from_quads_declaring`.
+- **core: dated native XPath regular expressions:** `xsd_regex::xpath` compiles
+  and runs a pattern under an explicitly selected dated law. `Profile::Xpath20`
+  is XPath and XQuery Functions and Operators 2.0 (Second Edition, 2010-12-14)
+  and `Profile::Xpath31` is Functions and Operators 3.1 (2017-03-21).
+  `Profile::name` gives the stable names `xpath-2.0-2010-12-14` and
+  `xpath-3.1-2017-03-21`, `Profile::ALL` lists both, and `Profile::from_name`
+  accepts exactly those names, with no case folding or undated alias. Both
+  laws admit backreferences; only 3.1 admits non-capturing groups and the `q`
+  flag. `compile(profile, pattern, flags, limits)` returns a
+  `CompiledPattern` with `is_match`, `find` (ordered `Captures`) and
+  `replace_all`. `Limits::new()` holds finite production bounds for each
+  `Resource`: pattern source bytes (64 KiB), compile steps, program nodes,
+  compile slots, match steps, match states, match slots and replacement
+  output bytes. `Limits::with` replaces one bound, and zero withholds that
+  resource. `Error` keeps the syntax verdicts (`Flags`, FORX0001; `Syntax`;
+  `EmptyMatch`, FORX0003; `Replacement`, FORX0004) apart from the operational
+  `Resource` refusal and `Allocation` failure. `Error::is_operational` tells
+  them apart, and each `Resource::code` is a stable `xpath-*` diagnostic code.
+  `PatternCache` keeps one successful program under its exact law, source and
+  flags, and admits it again under the current limits on every reuse. The
+  existing `xsd_regex::compile` compatibility API is unchanged.
+- **SPARQL, SHACL and ShEx selection doors:**
+  `NativeSparqlEngine::with_xpath_regex(profile, limits)` selects a law for
+  every `REGEX` and `REPLACE` the engine evaluates, and
+  `QueryOptions::with_xpath_regex` selects one for a single request; an unset
+  request inherits the engine's selection. `PreparedShapes::with_xpath_regex`
+  returns an `XPathPreparedShapes` that applies the law to `sh:pattern`,
+  SHACL-SPARQL targets, constraints and SHACL-AF functions, including the
+  governed and change-set paths. `purrdf_shex::validate_with_xpath` and
+  `validate_shape_map_with_xpath` apply it to string-facet `PATTERN`s;
+  `validate_exact_with_xpath`, `validate_shape_map_exact_with_xpath` and
+  `XPathValidator::exact` do so over an `ExactSchema`, keeping its numeric
+  facet bounds exact, and the `shex` command and Python `shex.validate` take
+  that path under a selected law. In
+  `purrdf-validate`, `xpath_regex::parse_profile` maps a host's name to a
+  profile, `xpath_regex::sparql_engine` and `xpath_regex::query_options`
+  build the selected SPARQL engine or request, and every SHACL entry point
+  that evaluates a pattern gains a `*_with_xpath_regex` twin. A pattern the
+  law does not define is still the host's ordinary invalid-pattern outcome: a
+  SPARQL expression error, a SHACL finding or a failed ShEx facet. A resource
+  or allocation refusal is an operational failure with its `xpath-*` code. It
+  never becomes an unbound value, a `false` filter, a partial answer or a
+  conforming report, and a refused UPDATE changes nothing. Without a selection,
+  every surface keeps its compatibility regular expressions.
+- **CLI:** `--xpath-regex <PROFILE>` on `query`, `update`, `validate`, `shex`,
+  `rules` and `node-expr` selects a dated law by its exact name. Any other
+  name is a usage error (exit 2) that lists the accepted names. A resource
+  refusal fails the run (exit 1), names the resource and writes no answers,
+  dataset, report or output. `rules --check` refuses the flag, and
+  `shapes lint`, which compiles no pattern, does not offer it.
+- **Python:** `purrdf.XPATH_REGEX_PROFILES` lists the accepted names. An
+  `xpath_regex=` keyword selects a law on every SPARQL entry point (`query`,
+  `query_governed`, `query_entailment_governed`, `update`, `update_governed`
+  and `Store.prepare`, on `Store` and `MutableDataset`, and the rdflib layer's
+  `Graph.query` and `Graph.update`), on `shapes.validate`,
+  `Shapes.validate_nt`, `Shapes.validate_store`, `PreparedShapes.validate_nt`,
+  `PreparedShapes.validate_store_changes`, `shapes.entail`,
+  `shapes.apply_rules` and `shapes.eval_node_expr`, and on `shex.validate`.
+  An unknown name raises `ValueError` listing the accepted names. A resource
+  refusal raises `ValueError` carrying its `xpath-*` code.
+- **WebAssembly:** an `xpathRegex` option, typed `XPathRegexLaw`, on every
+  evaluating `QueryEngine` method and its asynchronous twin, and on the
+  Cloudflare adapter. It is a trailing argument on `Dataset.query`,
+  `queryRawConfigured`, `queryRawWithContext`, `shaclValidateToSarif`,
+  `shaclValidateChangesToSarif`, the four `shaclProductValidateToSarif…`
+  entries, `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr`; the
+  asynchronous SHACL twins take it in their options object. An unknown name
+  throws with the code `purrdf-wasm-options`. A resource refusal throws, or
+  rejects, with the resource's `xpath-*` code.
+- **C ABI:** fourteen `*_xpath_regex` twins take a nullable `regex_profile`
+  before their out-parameters (before `governors` on the governed ones):
+  `purrdf_query_xpath_regex`, `purrdf_query_json_xpath_regex`,
+  `purrdf_query_governed_xpath_regex`,
+  `purrdf_query_entailment_governed_xpath_regex`,
+  `purrdf_update_governed_xpath_regex`,
+  `purrdf_shacl_validate_to_sarif_xpath_regex`,
+  `purrdf_shacl_validate_changes_to_sarif_xpath_regex`,
+  `purrdf_shapes_product_admit_xpath_regex`,
+  `purrdf_shapes_product_admit_expecting_xpath_regex`,
+  `purrdf_shapes_product_rebuild_xpath_regex`,
+  `purrdf_shapes_product_rebuild_expecting_xpath_regex`,
+  `purrdf_shacl_entail_to_ntriples_xpath_regex`,
+  `purrdf_shacl_apply_rules_xpath_regex` and
+  `purrdf_shacl_eval_node_expr_xpath_regex`. NULL behaves exactly like the
+  entry point without the suffix. An unknown name is
+  `PURRDF_STATUS_INVALID_ARGUMENT`. The new status
+  `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13) reports a resource refusal, and the
+  call then writes no result, answer, report or dataset. These symbols and
+  the status belong to the same 0.10.0 C ABI; no existing prototype changes.
+- **SPARQL pre-bound declarations:** `SparqlParser::with_prebound_variables`
+  declares the variables a caller binds before evaluation, which the grouping
+  constraint then reads as constants, and `QueryOptions::with_declared_prebound`
+  declares further names a caller's context binds without supplying a value.
+  A prepared execution reads the declared names too.
 
+### Deprecated
+
+- **SPARQL pre-binding lane:** `ShaclPrebinding` and
+  `QueryOptions::with_prebinding` are kept for compatibility and have no
+  effect: both values select the one pre-binding rewrite every lane takes.
+
+- **Anonymous OWL class expressions in developer schemas:** the
+  ontology-complete schema surface no longer refuses an `rdfs:subClassOf` or
+  `owl:equivalentClass` whose object is a blank node. Restrictions
+  (`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`,
+  and the unqualified and qualified cardinalities over `owl:onClass` or
+  `owl:onDataRange`) and the boolean forms (`owl:unionOf`,
+  `owl:intersectionOf`, `owl:complementOf`, `owl:oneOf`) are recorded with
+  their source axiom and inherited by subclasses. Data ranges
+  (`owl:onDatatype`/`owl:withRestrictions`, `owl:datatypeComplementOf`, a
+  literal `owl:oneOf`) are read as fillers and ranges, and
+  `[ owl:inverseOf p ]` wherever a property expression may stand. A
+  restriction on `inverse(p)` whose inverse is named is read as one on that
+  property. A class constructor on an IRI (`ex:Day owl:oneOf ( … )`, an IRI
+  typed `owl:Restriction`) is read as the equivalence OWL gives it. The JSON
+  Schema and OpenAPI carriers, and the LinkML, TypeScript, GraphQL and
+  Pydantic emitters that read them, carry what a schema can state:
+  `owl:allValuesFrom` as a value constraint (`owl:Nothing` forbids the
+  property), existentials and minimums as required properties with
+  `contains`/`minContains`, maximums as `maxItems`/`maxContains`, datatype
+  facets through the SHACL value compiler, an `owl:oneOf` of individuals as an
+  `@id` enumeration, the complement of a named class as an `@type` exclusion,
+  and a union of restrictions as `anyOf`. An inherited restriction is
+  referenced through `allOf` to its owner's `<Class>.Restriction.<property>`
+  fragment rather than copied, so output grows with the restrictions and not
+  with the hierarchy's depth. A restricted property is emitted on the class
+  carrying the restriction whatever its declared domain. An existential
+  restriction places the class in the property's domain. A universal
+  restriction on `owl:Thing` is a global range. Coverage rows that closed-world
+  readings, class fillers, datatype complements or unchecked lexical forms
+  touch are marked `representation_approximation`. The new
+  `SchemaCompileRequest::class_expression_report` and
+  `compile_schema_with_class_expressions` return a class-expression manifest
+  (`SchemaClassExpressionReport`) listing every axiom with an anonymous class
+  once: subclass, equivalence, disjointness (`owl:disjointWith`,
+  `owl:AllDisjointClasses`, `owl:disjointUnionOf`), class assertions,
+  anonymous `owl:hasKey` and datatype definitions. Each component carries its
+  `SchemaExpressionOutcome` (projected, approximated, unrepresented or
+  excluded) and reason, on the axiom or on each class that owns it. A class
+  below an owner has its own row only where its outcome differs.
+- **Refusals:** nothing the surface accepted before is refused. A malformed
+  anonymous part of an axiom it used to skip (an anonymous subject,
+  disjointness, a class assertion, an IRI-named constructor, `owl:hasKey`) is
+  reported as unrepresented. An `owl:ObjectProperty` ranging over a datatype is
+  refused only where the datatype is XSD, `rdfs:Literal`, `rdf:langString` or
+  declared. A malformed expression in an axiom the surface always read (the
+  object of `rdfs:subClassOf`, `owl:equivalentClass`, `rdfs:subPropertyOf`,
+  `owl:equivalentProperty` or `owl:inverseOf` with a named subject, or an
+  `rdfs:domain`/`rdfs:range`) is refused with a typed error when it has:
+  a restriction without `owl:onProperty` or `owl:onProperties`; a
+  cardinality that is not a non-negative integer literal; a
+  qualified cardinality without its qualifier, or a qualifier without a
+  qualified cardinality; `owl:hasSelf` other than `true`; `owl:onProperties`
+  with a facet other than `owl:someValuesFrom`/`owl:allValuesFrom`; a blank
+  node with no construct, or one that is both a class expression and a data
+  range (OWL 2 Mapping to RDF Graphs §3.2.1); a mixed or triple-term
+  `owl:oneOf`; an anonymous property
+  expression that is not `owl:inverseOf` one named property; a non-IRI
+  `owl:onDatatype`, a facet restriction that is
+  not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
+  regular-expression language; an ill-formed or cyclic RDF list; an expression
+  that contains itself; or a data range where a class expression is
+  required. Every property's values are read
+  by the OWL 2 RDF-Based Semantics (§5.3) with the OWL 2 datatype map,
+  whatever its declared kind: any node (an IRI may denote a data value) or any
+  well-typed literal (`"abc"^^xsd:integer` is none). A property no range
+  constrains states that exactly; a data range holds literals to its value
+  space and admits a node unjudged, and a class range or filler admits a
+  well-typed literal unjudged, both approximations, except that a class
+  disjoint with `rdfs:Literal` rejects every literal exactly. A literal
+  `owl:hasValue` on an object property is `∃p.{v}`, as an individual one on a
+  datatype property is, and `owl:hasSelf` on a datatype property is the self
+  restriction. Each cell carrying an `owl:hasSelf` is an approximation.
+  `owl:Nothing`, and an expression empty by its form (`¬owl:Thing`, the empty
+  enumeration), admits no value in any range or filler position, reported
+  exactly: an existential or a qualified minimum over it leaves the class no
+  instance. A class below `owl:Nothing`
+  (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
+  conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
+  class extension: several facets or values of one facet on a restriction
+  node (an OWL 1 `owl:minCardinality` beside `owl:maxCardinality`,
+  `owl:someValuesFrom` beside `owl:allValuesFrom`, two `owl:someValuesFrom`
+  values), several properties or qualifiers, or several class constructs on
+  one node. A facet over a defined datatype (`ex:Percent owl:equivalentClass
+  xsd:integer[≥ 0]`) restricts the definition's values, and is reported as an
+  approximation where it has no exact form over them. Constructs are read by
+  their meaning rather than refused: a union of no class is `owl:Nothing` and
+  an intersection of none `owl:Thing` (of no data range, the empty range and
+  `rdfs:Literal`), a union or intersection of one member is that member,
+  repeated members count once, `owl:oneOf ()` is `owl:Nothing` (Mapping Table
+  18), and an empty `owl:withRestrictions` is its base datatype. A cardinality
+  beyond `u64::MAX` is read as `u64::MAX`, which no finite set of values tells
+  apart from it: such a maximum holds of every instance and such a minimum of
+  none. An IRI declared several property kinds is read by the OWL 2 RDF-Based
+  Semantics (§5.3): a datatype declaration decides, then an object one, so
+  PROV-O's `prov:specializationOf`, an annotation and an object property,
+  compiles as an object property.
+- **OWL datatypes are judged by value space:** an OWL range, filler, data
+  range, enumeration or `owl:hasValue` admits a literal by its value, as OWL 2
+  §4 reads a datatype, not by its tag as SHACL's `sh:datatype` does.
+  `xsd:decimal` admits the bare integer `1` and `"7"^^xsd:nonNegativeInteger`;
+  `xsd:string` admits `xsd:normalizedString`, `xsd:token` and the other
+  string datatypes, and `xsd:token` admits an `xsd:string` with no stray
+  whitespace (an RDF literal's lexical form lies in its datatype's lexical
+  space, which for every string datatype is its value space, XSD 1.1 Part 2
+  §3.4); `xsd:integer[≥ 0]` admits `"5"^^xsd:int`; `xsd:dateTime` admits
+  `xsd:dateTimeStamp`. An enumeration or `owl:hasValue` matches every literal
+  of an equal value: `1` matches `"01"^^xsd:integer` and `"1.0"^^xsd:decimal`,
+  `"a b"` matches `"a b"^^xsd:token`, `true` matches `"1"^^xsd:boolean`.
+  OWL-Time's `time:years 1` is now valid. A literal typed `owl:rational` is in
+  a decimal or integer value space exactly when its denominator divides out,
+  which no pattern decides, so it is admitted unjudged and the range is
+  reported as an approximation; a maximum counted over such a qualifier, and a
+  datatype complement of it, count and negate only the literals they judge, so
+  neither rejects a conforming value. A length or pattern facet holds of the
+  value, which for every string datatype is the lexical form, so it is applied
+  to every string literal (`"ABCDEFG"^^xsd:token` fails `maxLength 4`) and
+  projected exactly. An equal value of another datatype (a `dateTime` in
+  another time zone) is matched by any literal of that datatype, an
+  approximation too. SHACL-derived schemas keep SHACL's tag check.
 ### Changed
 
+- **OWL-Direct decisions that used to run out of budget now decide.** A
+  witness that a nominal axiom (`D ⊑ {n}`, `D ⊑ {n, l}`) would absorb no longer
+  mints a chain of witnesses of its own under a universal over a transitive
+  role. At a tree node still to be identified with a nominal, a witness that
+  could itself come to await an identification waits until hyperresolution reaches a
+  fixpoint, and, when the identification is a choice, until that choice is
+  made. Those ontologies used to answer `unknown` under `completeness
+  budget-exhausted`; they now answer `true`. Nothing else waits, so a search
+  in which no such chain can start takes the same rounds, nodes and branches
+  as it would without the wait. Across 15,000 generated ontologies, every one
+  that decided before still decides, and 43 that ran out of budget now decide.
+- **OWL-Direct certificate counters move; verdicts do not.** The decision core
+  saturates by delta: a round re-matches only what a change can reach, reads
+  cached transitive closures, and keeps blocking and the open-disjunction index
+  current incrementally rather than rescanning the graph. It derives in a
+  different order, so the certificate's `steps`, `peak-nodes` and
+  `disjunctions` change on some knowledge bases. Of 14,920 generated ontologies
+  that both 3.0.1 and this release decide, 642 report different figures: 516
+  in `steps` (339 higher, 177 lower), 379 in `peak-nodes` and 192 in
+  `disjunctions`. That count includes the witness wait above. No verdict
+  differs except the 27 that the transitive sub-role fix under Fixed corrects.
+- **The OWL-Direct work meter bills what a search reads.** A neighbourhood step
+  is charged the edges indexed under its node plus one, not the whole graph's
+  edge count. A choice beside a large saturated ABox therefore costs what it
+  changes. Work figures move: a co-typed shape of ten equivalence blocks now
+  decides inside its derived work cap, where it used to answer `unknown` at the
+  cap. The caps themselves are unchanged.
 - **`xsd:integer` and `xsd:decimal` values past machine words are values, not
   errors.** `purrdf_xsd::parse` and `parse_by_iri` return
   `XsdValue::BigInteger` / `XsdValue::BigDecimal` for a well-formed lexical
@@ -205,7 +774,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   needs arms for the two new variants (the enum is `#[non_exhaustive]`, so
   existing wildcard arms compile); code that relied on `OutOfRange` to reject
   large values must check the variant or the magnitude itself.
-- **Governor profile version 12:** the charge schedule is unchanged. Every
+- **Governor profile version 13:** the charge schedule is unchanged. Every
   operation on a value past machine words — arithmetic, comparison, the
   unary functions, casts, the rendering of a result, `SUM`, `AVG`, `MIN`,
   `MAX`, `ORDER BY` and the statistical aggregates — and every division under
@@ -215,9 +784,60 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   refuses a run of repeated squaring before it computes or allocates, however
   short its coefficients stay. Operations on machine-word values charge
   nothing new. `CustomAggregate::exact_numeric_cost` (default zero) lets a
-  custom aggregate price its own arithmetic.
-  `GOVERNOR_PROFILE_VERSION` is 12 and `GOVERNOR_PROFILE_DIGEST` is
-  `a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a`;
+  custom aggregate price its own arithmetic; `exact_numeric_cost_under` and
+  `init_under` pass it the query's `DivisionPolicy`, and
+  `AggregateAccumulator::finish_absorbing` lets it report the F&O errors it
+  absorbed into an unbound answer (all three default to the existing
+  methods). `VARIANCE`, `VAR_POP`, `STDDEV` and `STDDEV_POP` use them: an
+  integer or decimal variance is one quotient under the query's policy, so
+  under `exact` a variance with no finite expansion is unbound with
+  `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
+  These charges reach the governor in evaluation order on every host. A
+  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter can fork under
+  fuel/scratch ceilings when no other caller-set ceiling prevents it: each
+  worker records every charge its rows (groups, left rows) make from inside
+  their evaluation (fuel, explicit scratch, transient working sets and the
+  arena's growth), and the loop's ordered commit makes them again in source
+  order on the evaluation's own context, counting the workers' mints into its
+  arena as it goes. The trip, the consumption and the answer are therefore
+  those of the loop run in order (which is what the wasm32 build runs), at
+  every thread count, under fuel and scratch ceilings alike. As in that loop,
+  a trip inside an expression withholds the operator's output. A caller's
+  fuel or scratch ceiling selects small blocks that workers take in input order, so
+  they advance together from the front of the input. The workers share one
+  running total of what they have spent, minted bytes included, and every
+  worker stops once that total passes the headroom. The commit then trips
+  where the in-order loop does, or finishes the loop in order from the first
+  row a worker stopped at. What a forked loop holds past its ceiling is
+  therefore about one headroom plus each worker's unreported sharing interval
+  and row in flight. Stop-only and unlimited metering retain normal chunks
+  and exact ordered accounting. Cell accounting remains engaged on every
+  governed driver. A cell limit whose row bound cannot form an outer solution-vector
+  allocation does not force sequential evaluation; reachable cell limits retain their
+  bounded sequential path. The CLI's metered `--fuel` can therefore fork an eligible
+  `OPTIONAL` filter while recording its cells. Newly eligible join workers and ordered
+  concatenation retain typed output allocation errors. Historically measured on 4,400 rows of
+  3,125-digit integers, each raised to the 32nd power and rendered (about
+  1.75 MB of scratch per row; the data takes 67 MB to load, and an
+  ungoverned run peaks at 2.7 GB), peak memory at 1, 2, 4, 8 and 32 threads
+  is:
+  - under `--max-scratch-bytes 100000000`: 130, 179, 208, 231 and 284 MB
+    (145, 237, 343, 393 and 595 MB when a worker stopped only once the
+    workers before it had spent the headroom);
+  - under `--max-scratch-bytes 400000000`: 438, 460, 473, 505 and 536 MB
+    (451, 816, 1,184, 1,626 and 1,425 MB before).
+  Every run trips at the same charge with the same answer. Scratch is now
+  the same whether a loop forks: a forked loop used to drop the terms its
+  workers minted and did not keep (a query's constants, intermediate
+  values), so it charged less than the same loop run in order. `SELECT (UCASE("abc") AS ?u) {}` now charges the 148
+  bytes of `"abc"` and `"ABC"` that the in-order loop holds (74 before), and
+  the corpus's `concat` cases charge 465 (353 before).
+  `exists-inner-counters` charges 153 (76 before). The custom aggregate's
+  scratch over-bound case certifies the fold's empty prefix.
+  `GOVERNOR_CORPUS_DIGEST` is
+  `160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb`.
+  `GOVERNOR_PROFILE_VERSION` is 13 and `GOVERNOR_PROFILE_DIGEST` is
+  `7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70`;
   consumers that pin either must re-pin.
 - **OWL 2 RL value identity with doubles is exact:** `dt-eq` and `dt-diff`
   compare an `xsd:integer`/`xsd:decimal` literal with an
@@ -245,6 +865,116 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **Large compiled schemas emit and read back:** the GraphQL, TypeScript,
+  Pydantic and LinkML emitters and the JSON Schema importer refused a compiled
+  schema over 16 MiB (QUDT's is 55 MB), LinkML a document over 1,000,000
+  nodes, the LinkML importer one over 65,536 elements (QUDT's has 90,765),
+  and the JSON Schema importer one over 65,536 definitions or 65,536
+  properties on one object (so bare `import_linkml` refused QUDT's document,
+  whose pivot has 90,765 definitions). The importers now read any number of
+  definitions and properties, bounded by the input's own size under the depth
+  and string ceilings; the emitters read any size under their depth, definition, field and
+  enumeration ceilings; each emitted artifact is bounded at four bytes per
+  input byte (at least 16 MiB), and LinkML's YAML alias expansion by the
+  input's size. QUDT's schema now emits in every language and reads back
+  through every importer. A TypeScript or Pydantic name that is reserved or taken
+  (QUDT's `qudt:Symbol`) takes `<Name>Type` or `<Name>Model`, and a Pydantic
+  field whose name is taken (`@id` beside `qudt:id`) takes `id_2`, in key
+  order, instead of being refused.
+- **Pydantic negation audit in linear time:** the check of which `not`
+  schemas the runtime evaluates exactly re-walked every `$ref` path, taking
+  time exponential in a chain of definitions referencing each other; eight
+  classes with existentials over the next one never finished. It now judges
+  each definition once. The `ontology_schema_emitters` bench times every
+  emitter over a 400-class tree.
+- **Ontology-complete schemas read back:** a restriction's value schema nests
+  a list's or a literal's projection, and a restriction fragment over one
+  literal (`A ⊑ ∀m.xsd:float` with `≤1 m`) is one, which the importers read as
+  a node shape with `@list` or `@value` properties and refused. They are read
+  as value constraints, and ontology-complete output reads back through every
+  importer.
+
+- **GraphQL type-name collisions with a nested schema:** a class whose
+  derived nested type name another class already holds (GoodRelations'
+  `gr:BusinessEntity`, whose `@type` field would be named
+  `BusinessEntityType`, beside the class `gr:BusinessEntityType`) no longer
+  aborts emission with `GraphqlError` "type name … collides". The nested type
+  takes the first free name of `<Name>Nested`, `<Name>Nested2`, …, in the
+  definitions' order, so the choice is deterministic; a definition keeps its
+  own name.
+- **GraphQL emission of enumerated values beside their array form:** a
+  property whose values are an enumeration, written as one value or several
+  (a SHACL `sh:in`), no longer aborts with
+  `GraphqlError` "type name … collides". The wrapper object that carries the
+  enum in the `@oneOf` union is named `<Enum>Value`, apart from the enum.
+- **SPARQL pre-binding, `VALUES` at every depth:** a `VALUES` over a pre-bound
+  name in an `OPTIONAL` arm, a `MINUS` operand, an `EXISTS` body or a
+  sub-`SELECT` that does not project the name was combined with its neighbours
+  before it met the bound value, so its answer depended on unrelated sibling
+  patterns. With `$this` bound to `ex:a`, `?s ex:p ?o OPTIONAL { VALUES $this
+  { ex:b } }` answered no row instead of every `?s ex:p ?o` row, and
+  `{ SELECT ?x WHERE { ?x ex:q ?y VALUES $this { ex:b } } }` answered every
+  `?x` beside an unrelated triple pattern. Such a `VALUES` now joins with the
+  bound value where it is written, as an assignment does, for prepared
+  parameters and request substitutions alike. Every row a sub-`SELECT` makes
+  now carries the bound value before it deduplicates or groups, so
+  `{ SELECT DISTINCT $this ?x … }` and `GROUP BY $this` inside one beside
+  another pattern no longer split rows that never mention the name from rows
+  that bind the bound value.
+
+- **SPARQL pre-binding, one value in every sub-`SELECT`:** a sub-`SELECT` that
+  assigned a pre-bound name without projecting it gave the name a variable of
+  its own, and the check that decided so also counted an assignment in a
+  nested sub-`SELECT` or an `EXISTS` body, so the outer sub-`SELECT`'s reads
+  lost the bound value: `{ SELECT (COUNT($this) AS ?c) WHERE { ?s ex:p ?o
+  FILTER EXISTS { BIND(ex:a AS $this) } } }` counted 0. There is now no such
+  scope: an assignment of the name in any sub-`SELECT` joins with the bound
+  value like every other assignment, so that query counts every row,
+  `{ SELECT ?y WHERE { BIND(?nothing AS $this) $this ex:p ?y } }` reads the
+  bound value after the failed assignment, and `{ SELECT ?w WHERE { BIND(ex:b
+  AS $this) } }` has no row.
+
+- **SPARQL `SERVICE` refusal messages:** refusing a property-function or
+  custom-aggregate call inside a `SERVICE` body no longer prints runs of
+  spaces in the middle of its diagnostic.
+- **SPARQL `OPTIONAL` filters:** every `FILTER` written directly in an
+  `OPTIONAL` group now becomes part of the left-join condition, conjoined in
+  written order. Before, only the last one did, and the others filtered the
+  optional side alone. A `FILTER` inside a nested group stays in that group.
+- **SPARQL `=` and `!=`:** two literals with known but different values now
+  compare unequal when one is a language-tagged string, as with
+  `"xyz"@en = "xyz"` or `"xyz"@en != 7`, instead of raising an error. An
+  `xsd:dateTime` and an `xsd:date` compare unequal. Comparisons involving an
+  unknown datatype or an ill-typed literal still raise an error.
+- **OWL-Direct consistency over sub-roles and inverse partners of transitive
+  roles:** a transitive role's closure followed only edges labelled with that
+  role, so `s ⊑ r` with `r` transitive, `x s y`, `y : ∃r.E`, `x : ∀r.D` and
+  `E ⊑ ¬D` answered `consistency true` (decided), and so did the same shape
+  spelled with an `owl:inverseOf` partner of `r`. Both are inconsistent and now
+  answer `false`. The proof checker recomputes closures the same way.
+- **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash`,
+  `Debug` and dropping a `purrdf_core::RdfTerm` or `RdfTriple` no longer
+  recurse once per quoted-triple level, so a term nested 100,000 levels deep
+  clones, compares, hashes, prints and drops on a 256 KiB stack, and on
+  wasm32's shadow stack, where each used to abort with a stack overflow.
+  Results are unchanged: `Hash` feeds the hasher the same writes in the same
+  order as the derive, and `Debug` prints the derive's bytes under every format
+  spec (fill, alignment, width, precision, sign, `#`, `0`, `{:x?}`/`{:X?}`,
+  compact and pretty). An IRI, a blank node or a literal runs the derive's own
+  code (`Clone`'s leaf arms are the derive's, verbatim), and a triple term
+  nested up to four levels deep is walked by direct calls; only deeper terms
+  switch to heap work lists. Dropping a triple whose subject and object are
+  leaves costs two discriminant checks. Counted in retired instructions
+  against the previous release, no bounded case costs more than 1% more: the
+  largest increase is +0.9%, for dropping a four-level term, while `Hash`
+  retires 5% to 24% fewer instructions and `==` 2% to 7% fewer. See Breaking Changes for the one source change this needs.
+- **Named-graph capability of declared empty graphs:** a frozen dataset whose
+  only named graphs are declared empty ones (TriG `<g> {}`) now reports
+  `capabilities().named_graphs` as true, as does the C ABI's
+  `PurrdfCapabilities.named_graphs`. Before, it reported false while
+  `named_graphs()` and `GRAPH ?g` enumerated the graph. A mutable snapshot
+  derives the bit from the graphs it actually enumerates. PACK header flags,
+  which describe the pack's own sections, are unchanged.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register
@@ -451,6 +1181,120 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   registered profile. The transcode matrix gains the HexTuples pairs:
   quad-capable, no triple terms, so star-capable sources record
   `rdf12-star-unrepresentable`.
+
+- **SPARQL NaN comparisons:** a NaN compared with a number now gives a
+  boolean instead of an error, as XPath `op:numeric-equal`,
+  `op:numeric-less-than` and `op:numeric-greater-than` define. `=`, `<`, `>`,
+  `<=` and `>=` give `false`, and `!=` gives `true`, so
+  `FILTER("NaN"^^xsd:double != ?x)` keeps every numeric row. NaN equals
+  nothing and orders against nothing, itself included (SPARQL 1.2 §17.4.2.2):
+  `"NaN"^^xsd:double = "NaN"^^xsd:double`, `"NaN"^^xsd:float =
+  "NaN"^^xsd:double` and `<=` between two NaNs are `false`, `NaN IN (1, NaN)`
+  is `false`, and `FILTER(?o = ?o)` drops a row whose `?o` is NaN. A triple
+  term compares componentwise, so one holding a NaN at any depth is unequal
+  to itself as well: `<<( :a :b "NaN"^^xsd:double )>> = <<( :a :b
+  "NaN"^^xsd:double )>>` is `false`. `sameTerm(NaN, NaN)` is still `true`, and a NaN against a non-number is
+  still an error. `ORDER BY`, `MIN` and `MAX` are unchanged.
+- **SPARQL casts:** a cast to a numeric, boolean or date/time type is now an
+  error when the source literal's datatype has no row in the casting table.
+  `xsd:double("1.5"^^ex:custom)` and `xsd:integer("1"@en)` are unbound instead
+  of `1.5E0` and `1`. Casts the table marks never allowed are errors too:
+  numbers and booleans cast to no date, time, Gregorian or binary type
+  (`xsd:gYear(2020)`), and date, time, duration, Gregorian and binary values
+  cast to no number or boolean (`xsd:integer("2020"^^xsd:gYear)`). Simple
+  literals, `xsd:string` and the types derived from it, such as `xsd:token`,
+  cast by lexical form to every target, calendar types included:
+  `xsd:dateTime("2002-10-10T17:30:05Z"^^xsd:token)` is a `xsd:dateTime`
+  rather than unbound. `xsd:dateTimeStamp` casts to the calendar types by
+  value, as `xsd:dateTime` does. `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION`
+  cast to `xsd:string` alone, so `xsd:date("2024-01-01"^^xsd:anyURI)` is an
+  error. A string cast to a non-string type is first normalized by the
+  target's `whiteSpace` facet (`collapse`, XPath F&O 3.1 §19.2), so
+  `xsd:integer(" 12 ")`, `xsd:double(" 1.5 ")` and `xsd:boolean(" true ")`
+  bind where they were unbound, while white space inside a value is still an
+  error. Every numeric and boolean cast the table allows is unchanged, and
+  casting any literal or IRI to `xsd:string` still works.
+- **SPARQL duration and binary casts:** the casts XPath allows between these
+  types now work, by value; before, they were unbound or re-read the source's
+  spelling. `xsd:duration` and its two subtypes cast among themselves
+  (`xsd:dayTimeDuration("P1Y2M3DT4H"^^xsd:duration)` is `"P3DT4H"`), and
+  `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes
+  (`xsd:hexBinary("abcd"^^xsd:base64Binary)` is `"69B71D"`, not `"ABCD"`). A
+  calendar, duration or binary value casts to no other non-string type, so
+  `xsd:hexBinary("2020"^^xsd:gYear)` is an error.
+- **SPARQL keywords:** `true` and `false` match case-insensitively like every
+  other SPARQL keyword except `a`, so `SELECT (TRUE AS ?t) (False AS ?f) {}`
+  parses (the W3C `case-insensitive-booleans` test). They work this way in
+  expressions, `VALUES` and triple patterns, and are always written as the
+  canonical `"true"`/`"false"`.
+- **SPARQL grammar:** the parser now refuses several forms the grammar does
+  not allow. `GROUP BY` and `ORDER BY` need at least one condition.
+  `HAVING` and `FILTER` need a bracketed expression or a function call, and a
+  function call needs its argument list, so `HAVING ?x`, `FILTER ?x`,
+  `FILTER true`, `FILTER :f`, `HAVING <f>`, `GROUP BY :f` and `ORDER BY :f`
+  are refused while `FILTER :f(?o)` still parses. For the same reason a bare
+  unary operator is no `FILTER` constraint, so `FILTER !BOUND(?x)` and
+  `FILTER -1` are refused while `FILTER(!BOUND(?x))` and `FILTER(-1)` parse,
+  and a `FOLD(… ORDER BY :f)` key needs its argument list as an `ORDER BY`
+  key does. Two triples need a `.` between them in a pattern or template; a
+  `.` separates two triples, may end a block of them once before its `}`, and
+  may follow a non-triples element once, so `{ . }`, `{ ?s ?p ?o . . }` and
+  `{ :a :b :c :d :e :f }` are refused while `{ ?s ?p ?o . }` parses (the W3C
+  `syn-bad-02`, `-03`, `-05`, `-06`, `-07`, `-14` and `filter-missing-parens`
+  tests). The same rules hold in `INSERT DATA`, `DELETE DATA`, `DELETE WHERE`
+  and the templates of `INSERT`/`DELETE`. One case was refused wrongly
+  before: a non-empty collection may now stand alone as a triple, as in
+  `{ ( ?x ) }` or `{ ( ( ) ) }`, as the grammar allows for blank-node
+  property lists (the W3C `syntax-lists-03`, `-04`, `-05` and
+  `syntax-forms-02` tests). In update quad data, such a standalone collection
+  or blank-node property list may be followed directly by a `GRAPH` block,
+  as in `INSERT DATA { ( 1 ) GRAPH <g> { … } }`. `()` on its own is still
+  refused. A `;` may now repeat in a property list (`?s :p 1 ; ; :q 2`), in
+  patterns, templates and quad data, as grammar productions [77] and [83]
+  allow; it was refused before.
+- **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
+  expression may read, outside an aggregate, only group keys, aggregate
+  results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
+  expression does not make its variables keys, so `SELECT ((?a + ?b) AS ?s) …
+  GROUP BY (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests), and so is
+  a variable the `WHERE` clause never binds or binds only inside `MINUS`. The
+  one exemption is a variable the caller binds before evaluation:
+  `SparqlParser::with_prebound_variables` declares them, a prepared execution
+  declares its parameters, `QueryOptions::with_declared_prebound` declares
+  names a caller binds per run, and SHACL-SPARQL declares `$this`, the shape
+  context and the parameters of a component or target type. A SHACL node
+  expression's query may read `$this` and the names its context binds: `value`
+  inside `sh:expression`, a custom function's arguments inside its body, and
+  `node-expr --scope` names. A custom function's argument is evaluated in the
+  empty scope (SHACL 1.2 Node Expressions §6.3), so a query inside one may read
+  `$this` alone: reading the call site's `$value` or an enclosing body's `$arg0`
+  there is refused at load instead of aborting validation, and the argument may
+  assign `?value`. A node expression never binds `$currentShape` or
+  `$shapesGraph`, so reading either — like any other variable — is refused when
+  the shapes graph is loaded or packed, even in an expression no focus node
+  reaches. Assigning a name a SHACL lane pre-binds, by `BIND(… AS ?x)` or
+  `(… AS ?x)` at any depth, is refused there, as Appendix A requires. A
+  SHACL-SPARQL query declares
+  `$shapesGraph` and `$currentShape` pre-bound whether or not the validation
+  gives them a value, so a `sh:sparql` constraint reading `$shapesGraph` above
+  its `GROUP BY` validates, unbound, when the shapes graph has no IRI instead
+  of loading and then aborting, and assigning either name is refused when the
+  shapes graph loads. A shape rule's `CONSTRUCT` is checked with the names its
+  run pre-binds, so a sub-`SELECT` there may read `$this` above its group. A
+  named-parameter custom function's body may read each parameter its own
+  `sh:optional` marks required, whatever the parameters' IRI order.
+- **SPARQL conformance:** the W3C SPARQL 1.1 `aggregates` group is vendored
+  verbatim at the suite's pinned commit, replacing a 3-test curated subset,
+  and all 47 cases pass. The results comparer now reads two numeric literals
+  of the same datatype by value, so `"2"^^xsd:decimal` matches
+  `"2.0"^^xsd:decimal`. The datatype must still match exactly, every other
+  literal compares as an exact term, and NaN matches NaN. The five fixtures
+  ledgered for spelling a computed number inconsistently (`cast-decimal`,
+  `cast-double`, `cast-float`, `coalesce01`, `plus-1-corrected`) pass, so the
+  SPARQL evaluation row ledgers nothing: 911 pass, 0 ledgered.
+- **SPARQL grouping:** a `GROUP BY` condition that is only a variable,
+  bracketed or not, is a key: `SELECT ?s (COUNT(*) AS ?c) … GROUP BY (?s)` and
+  `GROUP BY ((?s))` answer as `GROUP BY ?s` does instead of being refused.
 
 ## [3.0.1] - 2026-10-02
 

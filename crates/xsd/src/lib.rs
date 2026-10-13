@@ -81,18 +81,15 @@
 //!
 //! # Exact integers and decimals of any size
 //!
-//! `xsd:integer` and `xsd:decimal` are exact at every size. A value that fits the
-//! machine-word representations — an `i128` integer ([`XsdValue::Integer`]), or a
-//! decimal with an `i128` coefficient and at most eighteen fractional digits
-//! ([`XsdValue::Decimal`]) — is held in them and computed on with machine
-//! arithmetic; any other is held on the arbitrary-precision tower [`exact`]
-//! ([`XsdValue::BigInteger`], [`XsdValue::BigDecimal`]). [`parse`] and every
-//! operator choose between the two by the value alone, so an operation over two
-//! machine-word values that overflows them returns the exact result in the
-//! big variants rather than failing. Addition, subtraction and multiplication are
+//! `xsd:integer` and `xsd:decimal` are exact at every size. [`XsdValue::Integer`]
+//! and [`XsdValue::Decimal`] hold the exact tower values, which use inline words
+//! where they fit and arbitrary-precision storage otherwise. [`parse`] and every
+//! operator preserve those value spaces across machine-word boundaries.
+//! Addition, subtraction and multiplication are
 //! exact; division follows a caller-chosen [`exact::DivisionPolicy`]
-//! ([`numeric::numeric_div_with_policy`]), by default eighteen fractional digits
-//! truncated toward zero. [`numeric::numeric_cost`] reports what a tower operation
+//! ([`numeric::numeric_div_with_policy`]): by default a terminating quotient is
+//! exact, and a repeating quotient is rounded to eighteen fractional digits,
+//! half to even. [`numeric::numeric_cost`] reports what a tower operation
 //! costs, for a governor to charge before running it.
 //!
 //! [`exact`] is also usable on its own: an `xsd:integer` with an inline `i128`
@@ -116,7 +113,8 @@
 //!
 //! * a quotient of integers or decimals keeps the precision of a caller-chosen
 //!   [`exact::DivisionPolicy`] (F&O §4.2 leaves it to the implementation): by
-//!   default eighteen fractional digits, truncated toward zero, at every magnitude;
+//!   default an exact terminating quotient or a repeating quotient rounded to
+//!   eighteen fractional digits, half to even;
 //! * a conversion to `xsd:float`/`xsd:double` rounds once, to nearest with ties to
 //!   even, from the exact value at any size (F&O §19.1.2.2);
 //! * a conversion from `xsd:float`/`xsd:double` to `xsd:decimal` is exact, which is
@@ -213,7 +211,9 @@ pub mod datatype;
 mod decimal_float;
 pub mod exact;
 pub mod ieee;
+pub mod integer;
 pub mod json_number;
+pub mod math;
 pub mod numeric;
 pub mod ops;
 pub mod range;
@@ -226,11 +226,11 @@ pub mod wide;
 pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
 pub use datatype::{XSD_NS, XsdDatatype};
-pub use exact::{Decimal, Integer};
 pub use numeric::{
-    numeric_abs, numeric_add, numeric_ceil, numeric_cmp, numeric_div, numeric_floor, numeric_mul,
-    numeric_round, numeric_sub, numeric_total_cmp, numeric_unary_minus, numeric_unary_plus,
-    parse_double_xsd10, parse_float_xsd10,
+    bigint_avg_decimal, bigint_avg_decimal_lexical, numeric_abs, numeric_add, numeric_ceil,
+    numeric_cmp, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
+    numeric_total_cmp, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
+    parse_float_xsd10,
 };
 pub use ops::{
     effective_boolean_value, value_add, value_cmp, value_div, value_eq, value_equal, value_mul,

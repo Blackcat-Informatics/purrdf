@@ -55,7 +55,7 @@ pub unsafe extern "C" fn purrdf_graph_from_dataset(
             if dataset.is_null() || out_graph.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
-            let base = PurrdfDataset::arc(dataset).clone();
+            let base = PurrdfDataset::handle(dataset).clone();
             *out_graph = into_handle(PurrdfGraph(MutableDataset::new(base)));
             PurrdfStatus::Ok as i32
         })

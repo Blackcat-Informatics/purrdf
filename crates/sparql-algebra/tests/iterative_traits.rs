@@ -64,6 +64,11 @@ mod mirror {
             left: Box<Self>,
             right: Box<Self>,
         },
+        Apply {
+            left: Box<Self>,
+            right: Box<Self>,
+            policy: Box<ApplicationPolicy>,
+        },
         Filter {
             expr: Expression,
             inner: Box<Self>,
@@ -124,6 +129,22 @@ mod mirror {
             element: Variable,
             companion: Option<Variable>,
         },
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    pub(crate) struct ApplicationPolicy {
+        pub(crate) dataset_required: bool,
+        pub(crate) row_pipeline: bool,
+        pub(crate) reduced_adjacent: bool,
+        pub(crate) group_domain: Option<Box<[Variable]>>,
+        pub(crate) inputs: Vec<(Variable, Variable)>,
+        pub(crate) optional: Option<OptionalApplication>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    pub(crate) struct OptionalApplication {
+        pub(crate) retry_inputs: Vec<(Variable, Variable)>,
+        pub(crate) forget_marker: Variable,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -259,6 +280,28 @@ fn m_pattern(p: &GraphPattern) -> mirror::GraphPattern {
         GraphPattern::Lateral { left, right } => M::Lateral {
             left: b(left),
             right: b(right),
+        },
+        GraphPattern::Apply {
+            left,
+            right,
+            policy,
+        } => M::Apply {
+            left: b(left),
+            right: b(right),
+            policy: Box::new(mirror::ApplicationPolicy {
+                dataset_required: policy.dataset_required,
+                row_pipeline: policy.row_pipeline,
+                reduced_adjacent: policy.reduced_adjacent,
+                group_domain: policy.group_domain.clone(),
+                inputs: policy.inputs.clone(),
+                optional: policy
+                    .optional
+                    .as_ref()
+                    .map(|optional| mirror::OptionalApplication {
+                        retry_inputs: optional.retry_inputs.clone(),
+                        forget_marker: optional.forget_marker.clone(),
+                    }),
+            }),
         },
         GraphPattern::Filter { expr, inner } => M::Filter {
             expr: m_expr(expr),
@@ -841,6 +884,34 @@ fn pattern() -> BoxedStrategy<GraphPattern> {
                 left: Child::new(l),
                 right: Child::new(r)
             }),
+            (inner.clone(), inner.clone(), prop::option::of(expr.clone())).prop_map(
+                |(left, right, condition)| GraphPattern::Apply {
+                    left: Child::new(left),
+                    right: Child::new(match condition.clone() {
+                        Some(expr) => GraphPattern::Filter {
+                            inner: Child::new(right),
+                            expr,
+                        },
+                        None => right,
+                    }),
+                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: false,
+                        row_pipeline: false,
+                        reduced_adjacent: false,
+                        group_domain: None,
+                        inputs: vec![(Variable::new("input"), Variable::new("driver"))],
+                        optional: condition.map(|_| {
+                            purrdf_sparql_algebra::algebra::OptionalApplication {
+                                retry_inputs: vec![(
+                                    Variable::new("input"),
+                                    Variable::new("remembered"),
+                                )],
+                                forget_marker: Variable::new("visibility"),
+                            }
+                        }),
+                    }),
+                }
+            ),
             pair.prop_map(|(l, r)| GraphPattern::Minus {
                 left: Child::new(l),
                 right: Child::new(r)

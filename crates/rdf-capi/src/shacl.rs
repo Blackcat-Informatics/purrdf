@@ -84,16 +84,20 @@ use std::os::raw::c_char;
 
 use purrdf_validate::{
     ChangeScope, ConformanceDisallows, EntailOutcome, EntailRequest, ExprSelector, LintReport,
-    NodeExprRequest, RuleLimits, RulesOutcome, RulesRequest, SarifOptions, ShapesError,
-    ShapesProductRefusal, ValidationOptions, apply_rules_to_ntriples, check_rules,
-    entail_to_ntriples, eval_node_expr, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
-    validate_changes_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_shapes_graph,
+    NodeExprRequest, RuleLimits, RulesOutcome, RulesRequest, SarifOptions, SelectedProductError,
+    ShapesError, ShapesProductRefusal, ValidationOptions, XPathValidationError,
+    apply_rules_to_ntriples_with_xpath_regex, check_rules, entail_to_ntriples_with_xpath_regex,
+    eval_node_expr_with_xpath_regex, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
+    validate_changes_to_sarif_string_with_shapes_graph,
+    validate_changes_to_sarif_string_with_xpath_regex, validate_to_sarif_string_with_shapes_graph,
+    validate_to_sarif_string_with_xpath_regex,
 };
 
 use crate::buffer::PurrdfBuffer;
 use crate::entail::import_pairs;
 use crate::error::PurrdfError;
 use crate::handles::into_handle;
+use crate::regex_profile::{Profile, decode_regex_profile, validation_error};
 use crate::status::PurrdfStatus;
 use crate::{cstr_array, cstr_to_str, opt_cstr_to_str};
 
@@ -229,29 +233,125 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shacl_validate_to_sarif",
-                ));
-            }
-            let shapes = cstr_to_str(shapes_ttl)?;
-            let base = opt_cstr_to_str(shapes_base_iri)?;
-            let data = cstr_to_str(data_nt)?;
-            let disallows = cstr_array(
+            validate_entry(
+                "purrdf_shacl_validate_to_sarif",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
                 conformance_disallows,
                 conformance_disallows_count,
-                "conformance_disallows",
-                "purrdf_shacl_validate_to_sarif",
-            )?;
-            let imports = import_pairs(
                 import_iris,
                 import_documents,
                 import_count,
-                "purrdf_shacl_validate_to_sarif",
-            )?;
-            let graph = opt_cstr_to_str(shapes_graph_iri)?;
-            let bytes = validate_to_sarif_bytes(
+                subclass_of_in_shapes_graph,
+                std::ptr::null(),
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// [`purrdf_shacl_validate_to_sarif`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` (nullable, NUL-terminated UTF-8) names the dated XPath law every
+/// `sh:pattern` constraint, and every SPARQL pattern built-in a SHACL-SPARQL target,
+/// constraint or rule evaluates, compiles and matches under: exactly
+/// `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second Edition) or `xpath-3.1-2017-03-21`
+/// (XPath F&O 3.1), run under the production native limits. NULL is
+/// [`purrdf_shacl_validate_to_sarif`]: the compatibility regular expressions,
+/// unchanged. Any other name — an undated `xpath-3.1`, another letter case, the empty
+/// string — is `PURRDF_STATUS_INVALID_ARGUMENT`, and the message lists the accepted
+/// names.
+///
+/// An `sh:pattern` the selected law does not admit is reported as SHACL reports an
+/// ill-formed pattern, in the SARIF log. A pattern or value the law cannot process
+/// within its limits is not: the call fails with `PURRDF_STATUS_REGEX_RESOURCE_ERROR`
+/// and writes no report, so a refusal is never read as a conforming graph.
+///
+/// # Safety
+/// As [`purrdf_shacl_validate_to_sarif`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif_xpath_regex(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            validate_entry(
+                "purrdf_shacl_validate_to_sarif_xpath_regex",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                conformance_disallows,
+                conformance_disallows_count,
+                import_iris,
+                import_documents,
+                import_count,
+                subclass_of_in_shapes_graph,
+                regex_profile,
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_shacl_validate_to_sarif`] and
+/// [`purrdf_shacl_validate_to_sarif_xpath_regex`]. `regex_profile` is null for the
+/// entry point that has no such parameter.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn validate_entry(
+    entry: &str,
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let shapes = cstr_to_str(shapes_ttl)?;
+        let base = opt_cstr_to_str(shapes_base_iri)?;
+        let data = cstr_to_str(data_nt)?;
+        let disallows = cstr_array(
+            conformance_disallows,
+            conformance_disallows_count,
+            "conformance_disallows",
+            entry,
+        )?;
+        let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
+        let graph = opt_cstr_to_str(shapes_graph_iri)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let bytes = match regex {
+            None => validate_to_sarif_bytes(
                 shapes,
                 base,
                 graph,
@@ -260,11 +360,30 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
                 &imports,
                 subclass_of_in_shapes_graph,
             )
-            .map_err(PurrdfError::shapes)?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
-            Ok(PurrdfStatus::Ok)
-        })
+            .map_err(PurrdfError::shapes)?,
+            Some(profile) => validate_to_sarif_string_with_xpath_regex(
+                shapes,
+                base,
+                graph,
+                data,
+                &sarif_options(&disallows, subclass_of_in_shapes_graph)
+                    .map_err(PurrdfError::shapes)?,
+                &imports,
+                Some(profile),
+            )
+            .map_err(law_error)?
+            .into_bytes(),
+        };
+        *out_buffer = into_handle(PurrdfBuffer(bytes));
+        Ok(PurrdfStatus::Ok)
     }
+}
+
+/// A selected-law refusal on the C error channel: a shapes, data or import refusal exactly
+/// as the compatibility path maps it ([`PurrdfError::shapes`]), and everything only the
+/// law raises through [`validation_error`].
+fn law_error(error: XPathValidationError) -> PurrdfError {
+    validation_error(error, PurrdfError::shapes)
 }
 
 /// Which question a change-path report answered, written to
@@ -405,39 +524,149 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if shapes_ttl.is_null()
-                || data_nt.is_null()
-                || out_buffer.is_null()
-                || out_scope.is_null()
-                || out_focus_nodes.is_null()
-                || out_reason.is_null()
-            {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shacl_validate_changes_to_sarif",
-                ));
-            }
-            let shapes = cstr_to_str(shapes_ttl)?;
-            let base = opt_cstr_to_str(shapes_base_iri)?;
-            let data = cstr_to_str(data_nt)?;
-            let added = opt_cstr_to_str(added_nt)?;
-            let removed = opt_cstr_to_str(removed_nt)?;
-            let disallows = cstr_array(
+            validate_changes_entry(
+                "purrdf_shacl_validate_changes_to_sarif",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                added_nt,
+                removed_nt,
                 conformance_disallows,
                 conformance_disallows_count,
-                "conformance_disallows",
-                "purrdf_shacl_validate_changes_to_sarif",
-            )?;
-            let imports = import_pairs(
                 import_iris,
                 import_documents,
                 import_count,
-                "purrdf_shacl_validate_changes_to_sarif",
-            )?;
-            let (bytes, scope) = validate_changes_to_sarif_bytes(
+                subclass_of_in_shapes_graph,
+                std::ptr::null(),
+                out_buffer,
+                out_scope,
+                out_focus_nodes,
+                out_reason,
+            )
+        })
+    }
+}
+
+/// [`purrdf_shacl_validate_changes_to_sarif`] under a caller-selected
+/// regular-expression law.
+///
+/// `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+/// [`purrdf_shacl_validate_changes_to_sarif`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` selects that dated XPath law for the bound expansion and its
+/// validation alike, and any other name is `PURRDF_STATUS_INVALID_ARGUMENT`. A law's
+/// resource refusal is `PURRDF_STATUS_REGEX_RESOURCE_ERROR`; no report, scope or reason
+/// is written.
+///
+/// # Safety
+/// As [`purrdf_shacl_validate_changes_to_sarif`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif_xpath_regex(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    added_nt: *const c_char,
+    removed_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_scope: *mut i32,
+    out_focus_nodes: *mut usize,
+    out_reason: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            validate_changes_entry(
+                "purrdf_shacl_validate_changes_to_sarif_xpath_regex",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                added_nt,
+                removed_nt,
+                conformance_disallows,
+                conformance_disallows_count,
+                import_iris,
+                import_documents,
+                import_count,
+                subclass_of_in_shapes_graph,
+                regex_profile,
+                out_buffer,
+                out_scope,
+                out_focus_nodes,
+                out_reason,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_shacl_validate_changes_to_sarif`] and
+/// [`purrdf_shacl_validate_changes_to_sarif_xpath_regex`]. `regex_profile` is null for
+/// the entry point that has no such parameter.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn validate_changes_entry(
+    entry: &str,
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    added_nt: *const c_char,
+    removed_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_scope: *mut i32,
+    out_focus_nodes: *mut usize,
+    out_reason: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if shapes_ttl.is_null()
+            || data_nt.is_null()
+            || out_buffer.is_null()
+            || out_scope.is_null()
+            || out_focus_nodes.is_null()
+            || out_reason.is_null()
+        {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let shapes = cstr_to_str(shapes_ttl)?;
+        let base = opt_cstr_to_str(shapes_base_iri)?;
+        let data = cstr_to_str(data_nt)?;
+        let added = opt_cstr_to_str(added_nt)?;
+        let removed = opt_cstr_to_str(removed_nt)?;
+        let disallows = cstr_array(
+            conformance_disallows,
+            conformance_disallows_count,
+            "conformance_disallows",
+            entry,
+        )?;
+        let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
+        let graph = opt_cstr_to_str(shapes_graph_iri)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let (bytes, scope) = match regex {
+            None => validate_changes_to_sarif_bytes(
                 shapes,
                 base,
-                opt_cstr_to_str(shapes_graph_iri)?,
+                graph,
                 data,
                 added,
                 removed,
@@ -445,24 +674,40 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
                 &imports,
                 subclass_of_in_shapes_graph,
             )
-            .map_err(PurrdfError::shapes)?;
-            // Written before the buffer so a caller reading the outputs in
-            // declaration order never sees a report without the scope it is about.
-            match scope {
-                ChangeScope::Bounded { focus_nodes } => {
-                    *out_scope = PurrdfShaclChangeScopeKind::Bounded as i32;
-                    *out_focus_nodes = focus_nodes;
-                    *out_reason = std::ptr::null_mut();
-                }
-                ChangeScope::Everything { reason } => {
-                    *out_scope = PurrdfShaclChangeScopeKind::Everything as i32;
-                    *out_focus_nodes = 0;
-                    *out_reason = into_handle(PurrdfBuffer(reason.as_bytes().to_vec()));
-                }
+            .map_err(PurrdfError::shapes)?,
+            Some(profile) => {
+                let (sarif, scope) = validate_changes_to_sarif_string_with_xpath_regex(
+                    shapes,
+                    base,
+                    graph,
+                    data,
+                    added,
+                    removed,
+                    &sarif_options(&disallows, subclass_of_in_shapes_graph)
+                        .map_err(PurrdfError::shapes)?,
+                    &imports,
+                    Some(profile),
+                )
+                .map_err(law_error)?;
+                (sarif.into_bytes(), scope)
             }
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
-            Ok(PurrdfStatus::Ok)
-        })
+        };
+        // Written before the buffer so a caller reading the outputs in
+        // declaration order never sees a report without the scope it is about.
+        match scope {
+            ChangeScope::Bounded { focus_nodes } => {
+                *out_scope = PurrdfShaclChangeScopeKind::Bounded as i32;
+                *out_focus_nodes = focus_nodes;
+                *out_reason = std::ptr::null_mut();
+            }
+            ChangeScope::Everything { reason } => {
+                *out_scope = PurrdfShaclChangeScopeKind::Everything as i32;
+                *out_focus_nodes = 0;
+                *out_reason = into_handle(PurrdfBuffer(reason.as_bytes().to_vec()));
+            }
+        }
+        *out_buffer = into_handle(PurrdfBuffer(bytes));
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -470,8 +715,9 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
 /// (base graph plus every SHACL-AF rule inference) as canonical N-Triples, and the shapes
 /// graph's mandatory diagnostics. Native-testable, pointer-free core.
 ///
-/// The parse→entail→serialize sequence lives in [`entail_to_ntriples`]; the exported
-/// symbol only adds the C-ABI buffer framing.
+/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_with_xpath_regex`],
+/// under the caller's dated XPath law or (`None`) the compatibility regular expressions;
+/// the exported symbols only add the C-ABI buffer framing.
 fn entail_outcome(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -479,19 +725,24 @@ fn entail_outcome(
     data_nt: &str,
     imports: &[(&str, &str)],
     limits: RuleLimits,
-) -> Result<EntailOutcome, ShapesError> {
-    entail_to_ntriples(&EntailRequest {
-        shapes_ttl,
-        shapes_base,
-        shapes_graph,
-        data_nt,
-        imports,
-        max_term_generating_rounds: limits.max_term_generating_rounds,
-        max_generated_terms: limits.max_generated_terms,
-        max_stored_facts: limits.max_stored_facts,
-        max_join_steps: limits.max_join_steps,
-        host: purrdf_validate::RulesHost::CAbi,
-    })
+    regex: Option<Profile>,
+) -> Result<EntailOutcome, PurrdfError> {
+    entail_to_ntriples_with_xpath_regex(
+        &EntailRequest {
+            shapes_ttl,
+            shapes_base,
+            shapes_graph,
+            data_nt,
+            imports,
+            max_term_generating_rounds: limits.max_term_generating_rounds,
+            max_generated_terms: limits.max_generated_terms,
+            max_stored_facts: limits.max_stored_facts,
+            max_join_steps: limits.max_join_steps,
+            host: purrdf_validate::RulesHost::CAbi,
+        },
+        regex,
+    )
+    .map_err(law_error)
 }
 
 /// The shapes graph's mandatory diagnostics as the text every host renders: one
@@ -569,42 +820,146 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shacl_entail_to_ntriples",
-                ));
-            }
-            let shapes = cstr_to_str(shapes_ttl)?;
-            let base = opt_cstr_to_str(shapes_base_iri)?;
-            let shapes_graph = opt_cstr_to_str(shapes_graph_iri)?;
-            let data = cstr_to_str(data_nt)?;
-            let imports = import_pairs(
+            entail_entry(
+                "purrdf_shacl_entail_to_ntriples",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
                 import_iris,
                 import_documents,
                 import_count,
-                "purrdf_shacl_entail_to_ntriples",
-            )?;
-            let limits = RuleLimits {
-                // SAFETY: the caller's contract — null or readable.
-                max_term_generating_rounds: max_term_generating_rounds.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_generated_terms: max_generated_terms.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_stored_facts: max_stored_facts.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_join_steps: max_join_steps.as_ref().copied(),
-            };
-            let outcome = entail_outcome(shapes, base, shapes_graph, data, &imports, limits)
-                .map_err(PurrdfError::shapes)?;
-            if !out_diagnostics.is_null() {
-                *out_diagnostics = into_handle(PurrdfBuffer(
-                    diagnostic_text(&outcome.diagnostics).into_bytes(),
-                ));
-            }
-            *out_buffer = into_handle(PurrdfBuffer(outcome.ntriples.into_bytes()));
-            Ok(PurrdfStatus::Ok)
+                [
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                ],
+                std::ptr::null(),
+                out_buffer,
+                out_diagnostics,
+            )
         })
+    }
+}
+
+/// [`purrdf_shacl_entail_to_ntriples`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+/// [`purrdf_shacl_entail_to_ntriples`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` selects that dated XPath law for every `REGEX`/`REPLACE` a
+/// `sh:SPARQLRule`, a SHACL-AF function or a node expression evaluates and every
+/// `sh:pattern` a rule condition decides, under the production native limits, and any
+/// other name is `PURRDF_STATUS_INVALID_ARGUMENT`, listing the accepted names. A pattern
+/// the law does not define behaves as an ill-formed pattern does on the compatibility
+/// path; a pattern or value the law cannot process within its limits fails the call with
+/// `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no dataset.
+///
+/// # Safety
+/// As [`purrdf_shacl_entail_to_ntriples`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples_xpath_regex(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    max_term_generating_rounds: *const u64,
+    max_generated_terms: *const u64,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            entail_entry(
+                "purrdf_shacl_entail_to_ntriples_xpath_regex",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                import_iris,
+                import_documents,
+                import_count,
+                [
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                ],
+                regex_profile,
+                out_buffer,
+                out_diagnostics,
+            )
+        })
+    }
+}
+
+/// The four nullable rule-evaluation limits — term-generating rounds, generated terms,
+/// stored facts, join steps — as the [`RuleLimits`] they name.
+///
+/// # Safety
+/// Each pointer must be null or readable.
+unsafe fn rule_limits(limits: [*const u64; 4]) -> RuleLimits {
+    // SAFETY: the caller's contract — each null or readable.
+    let [rounds, terms, facts, steps] = limits.map(|limit| unsafe { limit.as_ref().copied() });
+    RuleLimits {
+        max_term_generating_rounds: rounds,
+        max_generated_terms: terms,
+        max_stored_facts: facts,
+        max_join_steps: steps,
+    }
+}
+
+/// The one body of [`purrdf_shacl_entail_to_ntriples`] and
+/// [`purrdf_shacl_entail_to_ntriples_xpath_regex`]. `regex_profile` is null for the entry
+/// point that has no such parameter.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn entail_entry(
+    entry: &str,
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    limits: [*const u64; 4],
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let shapes = cstr_to_str(shapes_ttl)?;
+        let base = opt_cstr_to_str(shapes_base_iri)?;
+        let shapes_graph = opt_cstr_to_str(shapes_graph_iri)?;
+        let data = cstr_to_str(data_nt)?;
+        let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
+        let limits = rule_limits(limits);
+        let regex = decode_regex_profile(regex_profile)?;
+        let outcome = entail_outcome(shapes, base, shapes_graph, data, &imports, limits, regex)?;
+        if !out_diagnostics.is_null() {
+            *out_diagnostics = into_handle(PurrdfBuffer(
+                diagnostic_text(&outcome.diagnostics).into_bytes(),
+            ));
+        }
+        *out_buffer = into_handle(PurrdfBuffer(outcome.ntriples.into_bytes()));
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -613,9 +968,14 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
 // ---------------------------------------------------------------------------
 
 /// Run a rule set over a data graph. Native-testable, pointer-free core of
-/// [`purrdf_shacl_apply_rules`]: the work is [`apply_rules_to_ntriples`].
-fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
-    apply_rules_to_ntriples(request)
+/// [`purrdf_shacl_apply_rules`] and its `_xpath_regex` twin: the work is
+/// [`apply_rules_to_ntriples_with_xpath_regex`], under the caller's dated XPath law or
+/// (`None`) the compatibility regular expressions.
+fn apply_rules_outcome(
+    request: &RulesRequest<'_>,
+    regex: Option<Profile>,
+) -> Result<RulesOutcome, PurrdfError> {
+    apply_rules_to_ntriples_with_xpath_regex(request, regex).map_err(law_error)
 }
 
 /// Run a rule set over a data graph (N-Triples) and write the INFERENCE GRAPH — the
@@ -699,49 +1059,161 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if data_nt.is_null() || out_inferred.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shacl_apply_rules",
-                ));
-            }
-            let imports = import_pairs(
+            apply_rules_entry(
+                "purrdf_shacl_apply_rules",
+                [
+                    data_nt,
+                    shapes_ttl,
+                    shapes_base_iri,
+                    shapes_graph_iri,
+                    srl,
+                    srl_base_iri,
+                ],
+                [
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                ],
                 import_iris,
                 import_documents,
                 import_count,
-                "purrdf_shacl_apply_rules",
-            )?;
-            let request = RulesRequest {
-                data_nt: cstr_to_str(data_nt)?,
-                shapes_ttl: opt_cstr_to_str(shapes_ttl)?,
-                shapes_base: opt_cstr_to_str(shapes_base_iri)?,
-                shapes_graph: opt_cstr_to_str(shapes_graph_iri)?,
-                imports: &imports,
-                srl: opt_cstr_to_str(srl)?,
-                srl_base: opt_cstr_to_str(srl_base_iri)?,
-                explain: !out_proof.is_null(),
-                // SAFETY: the caller's contract — null or readable.
-                max_term_generating_rounds: max_term_generating_rounds.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_generated_terms: max_generated_terms.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_stored_facts: max_stored_facts.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_join_steps: max_join_steps.as_ref().copied(),
-                host: purrdf_validate::RulesHost::CAbi,
-            };
-            let outcome = apply_rules_outcome(&request).map_err(PurrdfError::shapes)?;
-            if let Some(proof) = outcome.proof {
-                *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
-            }
-            if !out_diagnostics.is_null() {
-                *out_diagnostics = into_handle(PurrdfBuffer(
-                    diagnostic_text(&outcome.diagnostics).into_bytes(),
-                ));
-            }
-            *out_inferred = into_handle(PurrdfBuffer(outcome.inferred_ntriples.into_bytes()));
-            Ok(PurrdfStatus::Ok)
+                std::ptr::null(),
+                [out_inferred, out_proof, out_diagnostics],
+            )
         })
+    }
+}
+
+/// [`purrdf_shacl_apply_rules`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+/// [`purrdf_shacl_apply_rules`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` selects that dated XPath law for either rule source — every
+/// `REGEX`/`REPLACE` a SHACL rule, a SHACL-AF function, a node expression or a SPARQL 1.2
+/// RL filter or assignment evaluates, and every `sh:pattern` a rule condition decides —
+/// under the production native limits, and any other name is
+/// `PURRDF_STATUS_INVALID_ARGUMENT`, listing the accepted names. A pattern the law does not
+/// define behaves as an ill-formed pattern does on the compatibility path; a pattern or
+/// value the law cannot process within its limits fails the call with
+/// `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no inference.
+///
+/// # Safety
+/// As [`purrdf_shacl_apply_rules`]; `regex_profile` must be null or a NUL-terminated C
+/// string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
+    data_nt: *const c_char,
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    srl: *const c_char,
+    srl_base_iri: *const c_char,
+    max_term_generating_rounds: *const u64,
+    max_generated_terms: *const u64,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    regex_profile: *const c_char,
+    out_inferred: *mut *mut PurrdfBuffer,
+    out_proof: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            apply_rules_entry(
+                "purrdf_shacl_apply_rules_xpath_regex",
+                [
+                    data_nt,
+                    shapes_ttl,
+                    shapes_base_iri,
+                    shapes_graph_iri,
+                    srl,
+                    srl_base_iri,
+                ],
+                [
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                ],
+                import_iris,
+                import_documents,
+                import_count,
+                regex_profile,
+                [out_inferred, out_proof, out_diagnostics],
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_shacl_apply_rules`] and
+/// [`purrdf_shacl_apply_rules_xpath_regex`]: `documents` is `data_nt`, `shapes_ttl`,
+/// `shapes_base_iri`, `shapes_graph_iri`, `srl`, `srl_base_iri`; `outputs` is
+/// `out_inferred`, `out_proof`, `out_diagnostics`. `regex_profile` is null for the entry
+/// point that has no such parameter.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn apply_rules_entry(
+    entry: &str,
+    documents: [*const c_char; 6],
+    limits: [*const u64; 4],
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    regex_profile: *const c_char,
+    outputs: [*mut *mut PurrdfBuffer; 3],
+) -> Result<PurrdfStatus, PurrdfError> {
+    let [
+        data_nt,
+        shapes_ttl,
+        shapes_base_iri,
+        shapes_graph_iri,
+        srl,
+        srl_base_iri,
+    ] = documents;
+    let [out_inferred, out_proof, out_diagnostics] = outputs;
+    unsafe {
+        if data_nt.is_null() || out_inferred.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
+        let limits = rule_limits(limits);
+        let request = RulesRequest {
+            data_nt: cstr_to_str(data_nt)?,
+            shapes_ttl: opt_cstr_to_str(shapes_ttl)?,
+            shapes_base: opt_cstr_to_str(shapes_base_iri)?,
+            shapes_graph: opt_cstr_to_str(shapes_graph_iri)?,
+            imports: &imports,
+            srl: opt_cstr_to_str(srl)?,
+            srl_base: opt_cstr_to_str(srl_base_iri)?,
+            explain: !out_proof.is_null(),
+            max_term_generating_rounds: limits.max_term_generating_rounds,
+            max_generated_terms: limits.max_generated_terms,
+            max_stored_facts: limits.max_stored_facts,
+            max_join_steps: limits.max_join_steps,
+            host: purrdf_validate::RulesHost::CAbi,
+        };
+        let regex = decode_regex_profile(regex_profile)?;
+        let outcome = apply_rules_outcome(&request, regex)?;
+        if let Some(proof) = outcome.proof {
+            *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
+        }
+        if !out_diagnostics.is_null() {
+            *out_diagnostics = into_handle(PurrdfBuffer(
+                diagnostic_text(&outcome.diagnostics).into_bytes(),
+            ));
+        }
+        *out_inferred = into_handle(PurrdfBuffer(outcome.inferred_ntriples.into_bytes()));
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -856,8 +1328,14 @@ pub unsafe extern "C" fn purrdf_shacl_check_rules(
 }
 
 /// Evaluate one node expression. Native-testable, pointer-free core of
-/// [`purrdf_shacl_eval_node_expr`]: `scope` holds `NAME=TERM` bindings, and the output
-/// is one N-Triples 1.2 term per line, beside the shapes graph's mandatory diagnostics.
+/// [`purrdf_shacl_eval_node_expr`] and its `_xpath_regex` twin: `scope` holds `NAME=TERM`
+/// bindings, and the output is one N-Triples 1.2 term per line, beside the shapes graph's
+/// mandatory diagnostics. `regex` is the caller's dated XPath law, or `None` for the
+/// compatibility regular expressions.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per request input, and the selected law"
+)]
 fn eval_node_expr_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -866,20 +1344,26 @@ fn eval_node_expr_bytes(
     focus: &str,
     scope: &[&str],
     imports: &[(&str, &str)],
-) -> Result<(Vec<u8>, Vec<purrdf_validate::MandatoryDiagnostic>), ShapesError> {
+    regex: Option<Profile>,
+) -> Result<(Vec<u8>, Vec<purrdf_validate::MandatoryDiagnostic>), PurrdfError> {
     let bindings = scope
         .iter()
         .map(|binding| parse_scope_binding(binding))
-        .collect::<Result<Vec<_>, _>>()?;
-    let outcome = eval_node_expr(&NodeExprRequest {
-        shapes_ttl,
-        shapes_base,
-        data_nt,
-        expr,
-        focus,
-        scope: &bindings,
-        imports,
-    })?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PurrdfError::shapes(error.into()))?;
+    let outcome = eval_node_expr_with_xpath_regex(
+        &NodeExprRequest {
+            shapes_ttl,
+            shapes_base,
+            data_nt,
+            expr,
+            focus,
+            scope: &bindings,
+            imports,
+        },
+        regex,
+    )
+    .map_err(law_error)?;
     let mut out = String::new();
     for term in &outcome.outputs {
         out.push_str(term);
@@ -956,49 +1440,132 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if shapes_ttl.is_null() || data_nt.is_null() || focus.is_null() || out_terms.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shacl_eval_node_expr",
-                ));
-            }
-            let bindings = cstr_array(scope, scope_count, "scope", "purrdf_shacl_eval_node_expr")?;
-            let via = cstr_array(
-                expr_via,
-                expr_via_count,
-                "expr_via",
+            eval_node_expr_entry(
                 "purrdf_shacl_eval_node_expr",
-            )?;
-            let selector = ExprSelector::from_parts(
-                opt_cstr_to_str(expr)?,
-                opt_cstr_to_str(expr_at)?,
-                &via,
-                opt_cstr_to_str(expr_turtle)?,
+                [shapes_ttl, shapes_base_iri, data_nt, focus],
+                [expr, expr_at, expr_turtle],
+                (expr_via, expr_via_count),
+                (scope, scope_count),
+                (import_iris, import_documents, import_count),
+                std::ptr::null(),
+                [out_terms, out_diagnostics],
             )
-            .map_err(|error| PurrdfError::shapes(error.into()))?;
-            let imports = import_pairs(
-                import_iris,
-                import_documents,
-                import_count,
-                "purrdf_shacl_eval_node_expr",
-            )?;
-            let (bytes, diagnostics) = eval_node_expr_bytes(
-                cstr_to_str(shapes_ttl)?,
-                opt_cstr_to_str(shapes_base_iri)?,
-                cstr_to_str(data_nt)?,
-                selector,
-                cstr_to_str(focus)?,
-                &bindings,
-                &imports,
-            )
-            .map_err(PurrdfError::shapes)?;
-            if !out_diagnostics.is_null() {
-                *out_diagnostics =
-                    into_handle(PurrdfBuffer(diagnostic_text(&diagnostics).into_bytes()));
-            }
-            *out_terms = into_handle(PurrdfBuffer(bytes));
-            Ok(PurrdfStatus::Ok)
         })
+    }
+}
+
+/// [`purrdf_shacl_eval_node_expr`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+/// [`purrdf_shacl_eval_node_expr`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` selects that dated XPath law for every `sh:pattern` a filter
+/// shape decides and every `REGEX`/`REPLACE` a function call or SPARQL-based expression
+/// evaluates, under the production native limits, and any other name is
+/// `PURRDF_STATUS_INVALID_ARGUMENT`, listing the accepted names. A pattern the law does not
+/// define behaves as an ill-formed pattern does on the compatibility path; a pattern or
+/// value the law cannot process within its limits fails the call with
+/// `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no output.
+///
+/// # Safety
+/// As [`purrdf_shacl_eval_node_expr`]; `regex_profile` must be null or a NUL-terminated C
+/// string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_eval_node_expr_xpath_regex(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    data_nt: *const c_char,
+    expr: *const c_char,
+    expr_at: *const c_char,
+    expr_via: *const *const c_char,
+    expr_via_count: usize,
+    expr_turtle: *const c_char,
+    focus: *const c_char,
+    scope: *const *const c_char,
+    scope_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    regex_profile: *const c_char,
+    out_terms: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            eval_node_expr_entry(
+                "purrdf_shacl_eval_node_expr_xpath_regex",
+                [shapes_ttl, shapes_base_iri, data_nt, focus],
+                [expr, expr_at, expr_turtle],
+                (expr_via, expr_via_count),
+                (scope, scope_count),
+                (import_iris, import_documents, import_count),
+                regex_profile,
+                [out_terms, out_diagnostics],
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_shacl_eval_node_expr`] and
+/// [`purrdf_shacl_eval_node_expr_xpath_regex`]: `documents` is `shapes_ttl`,
+/// `shapes_base_iri`, `data_nt`, `focus`; `selectors` is `expr`, `expr_at`,
+/// `expr_turtle`; `outputs` is `out_terms`, `out_diagnostics`. `regex_profile` is null for
+/// the entry point that has no such parameter.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn eval_node_expr_entry(
+    entry: &str,
+    documents: [*const c_char; 4],
+    selectors: [*const c_char; 3],
+    (expr_via, expr_via_count): (*const *const c_char, usize),
+    (scope, scope_count): (*const *const c_char, usize),
+    (import_iris, import_documents, import_count): (
+        *const *const c_char,
+        *const *const c_char,
+        usize,
+    ),
+    regex_profile: *const c_char,
+    outputs: [*mut *mut PurrdfBuffer; 2],
+) -> Result<PurrdfStatus, PurrdfError> {
+    let [shapes_ttl, shapes_base_iri, data_nt, focus] = documents;
+    let [expr, expr_at, expr_turtle] = selectors;
+    let [out_terms, out_diagnostics] = outputs;
+    unsafe {
+        if shapes_ttl.is_null() || data_nt.is_null() || focus.is_null() || out_terms.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let bindings = cstr_array(scope, scope_count, "scope", entry)?;
+        let via = cstr_array(expr_via, expr_via_count, "expr_via", entry)?;
+        let selector = ExprSelector::from_parts(
+            opt_cstr_to_str(expr)?,
+            opt_cstr_to_str(expr_at)?,
+            &via,
+            opt_cstr_to_str(expr_turtle)?,
+        )
+        .map_err(|error| PurrdfError::shapes(error.into()))?;
+        let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let (bytes, diagnostics) = eval_node_expr_bytes(
+            cstr_to_str(shapes_ttl)?,
+            opt_cstr_to_str(shapes_base_iri)?,
+            cstr_to_str(data_nt)?,
+            selector,
+            cstr_to_str(focus)?,
+            &bindings,
+            &imports,
+            regex,
+        )?;
+        if !out_diagnostics.is_null() {
+            *out_diagnostics =
+                into_handle(PurrdfBuffer(diagnostic_text(&diagnostics).into_bytes()));
+        }
+        *out_terms = into_handle(PurrdfBuffer(bytes));
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -1305,19 +1872,157 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if data_nt.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shapes_product_admit",
-                ));
-            }
-            let bytes = product_bytes(product, product_len, "purrdf_shapes_product_admit")?;
-            let data = cstr_to_str(data_nt)?;
-            let sarif =
-                admit_product_bytes(bytes, data).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(sarif));
-            Ok(PurrdfStatus::Ok)
+            product_entry(
+                "purrdf_shapes_product_admit",
+                Restore::Admit,
+                product,
+                product_len,
+                data_nt,
+                None,
+                std::ptr::null(),
+                out_buffer,
+            )
         })
+    }
+}
+
+/// [`purrdf_shapes_product_admit`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+/// [`purrdf_shapes_product_admit`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` validates the restored preparation under that dated XPath
+/// law, and any other name is `PURRDF_STATUS_INVALID_ARGUMENT`. The law is request
+/// configuration, not product content: the same product admits under either law and
+/// its identity does not change. A law's resource refusal is
+/// `PURRDF_STATUS_REGEX_RESOURCE_ERROR`, with no report.
+///
+/// # Safety
+/// As [`purrdf_shapes_product_admit`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_admit_xpath_regex(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            product_entry(
+                "purrdf_shapes_product_admit_xpath_regex",
+                Restore::Admit,
+                product,
+                product_len,
+                data_nt,
+                None,
+                regex_profile,
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// How a product-validation entry point restores its preparation.
+#[derive(Clone, Copy, Debug)]
+enum Restore {
+    /// Admit the product's memo.
+    Admit,
+    /// Re-derive the preparation from the product's carried shapes dataset.
+    Rebuild,
+}
+
+/// The one body of the eight product-validation entry points: admit or rebuild, with
+/// or without an expected identity (`expect_identity` is `None` for the entry points
+/// that take none), and under the compatibility regular expressions (null
+/// `regex_profile`) or a dated XPath law.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn product_entry(
+    entry: &str,
+    restore: Restore,
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    expect_identity: Option<*const c_char>,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if data_nt.is_null()
+            || expect_identity.is_some_and(<*const c_char>::is_null)
+            || out_buffer.is_null()
+        {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let bytes = product_bytes(product, product_len, entry)?;
+        let data = cstr_to_str(data_nt)?;
+        let expected = match expect_identity {
+            Some(identity) => Some(
+                purrdf_validate::parse_identity_digest(cstr_to_str(identity)?)
+                    .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?,
+            ),
+            None => None,
+        };
+        let regex = decode_regex_profile(regex_profile)?;
+        let sarif = match regex {
+            None => match (restore, &expected) {
+                (Restore::Admit, None) => admit_product_bytes(bytes, data),
+                (Restore::Admit, Some(expected)) => {
+                    admit_product_bytes_expecting(bytes, data, expected)
+                }
+                (Restore::Rebuild, None) => rebuild_product_bytes(bytes, data),
+                (Restore::Rebuild, Some(expected)) => {
+                    rebuild_product_bytes_expecting(bytes, data, expected)
+                }
+            }
+            .map_err(|refusal| product_error(&refusal))?,
+            Some(profile) => {
+                let options = SarifOptions::default();
+                match restore {
+                    Restore::Admit => {
+                        purrdf_validate::validate_with_shapes_product_with_xpath_regex(
+                            bytes,
+                            data,
+                            expected.as_ref(),
+                            &options,
+                            Some(profile),
+                        )
+                    }
+                    Restore::Rebuild => {
+                        purrdf_validate::validate_with_rebuilt_shapes_product_with_xpath_regex(
+                            bytes,
+                            data,
+                            expected.as_ref(),
+                            &options,
+                            Some(profile),
+                        )
+                    }
+                }
+                .map_err(selected_product_error)?
+                .into_bytes()
+            }
+        };
+        *out_buffer = into_handle(PurrdfBuffer(sarif));
+        Ok(PurrdfStatus::Ok)
+    }
+}
+
+/// A selected-law product validation's refusal on the C error channel: every refusal the
+/// compatibility product path gives, mapped as it maps it ([`product_error`]), and
+/// everything only the law raises through [`validation_error`].
+fn selected_product_error(error: SelectedProductError) -> PurrdfError {
+    match error {
+        SelectedProductError::Product(refusal) => product_error(&refusal),
+        SelectedProductError::Law(error) => validation_error(error, |error| {
+            product_error(&ShapesProductRefusal::Shapes(error))
+        }),
     }
 }
 
@@ -1376,24 +2081,50 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit_expecting(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if data_nt.is_null() || expect_identity.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shapes_product_admit_expecting",
-                ));
-            }
-            let bytes = product_bytes(
+            product_entry(
+                "purrdf_shapes_product_admit_expecting",
+                Restore::Admit,
                 product,
                 product_len,
-                "purrdf_shapes_product_admit_expecting",
-            )?;
-            let data = cstr_to_str(data_nt)?;
-            let expected = purrdf_validate::parse_identity_digest(cstr_to_str(expect_identity)?)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
-            let sarif = admit_product_bytes_expecting(bytes, data, &expected)
-                .map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(sarif));
-            Ok(PurrdfStatus::Ok)
+                data_nt,
+                Some(expect_identity),
+                std::ptr::null(),
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// [`purrdf_shapes_product_admit_expecting`] under a caller-selected
+/// regular-expression law, exactly as [`purrdf_shapes_product_admit_xpath_regex`] adds
+/// one to [`purrdf_shapes_product_admit`]. The identity comparison is unchanged and
+/// runs before any validation.
+///
+/// # Safety
+/// As [`purrdf_shapes_product_admit_expecting`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_admit_expecting_xpath_regex(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    expect_identity: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            product_entry(
+                "purrdf_shapes_product_admit_expecting_xpath_regex",
+                Restore::Admit,
+                product,
+                product_len,
+                data_nt,
+                Some(expect_identity),
+                regex_profile,
+                out_buffer,
+            )
         })
     }
 }
@@ -1446,18 +2177,48 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if data_nt.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shapes_product_rebuild",
-                ));
-            }
-            let bytes = product_bytes(product, product_len, "purrdf_shapes_product_rebuild")?;
-            let data = cstr_to_str(data_nt)?;
-            let sarif =
-                rebuild_product_bytes(bytes, data).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(sarif));
-            Ok(PurrdfStatus::Ok)
+            product_entry(
+                "purrdf_shapes_product_rebuild",
+                Restore::Rebuild,
+                product,
+                product_len,
+                data_nt,
+                None,
+                std::ptr::null(),
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// [`purrdf_shapes_product_rebuild`] under a caller-selected regular-expression law,
+/// exactly as [`purrdf_shapes_product_admit_xpath_regex`] adds one to
+/// [`purrdf_shapes_product_admit`].
+///
+/// # Safety
+/// As [`purrdf_shapes_product_rebuild`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_rebuild_xpath_regex(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            product_entry(
+                "purrdf_shapes_product_rebuild_xpath_regex",
+                Restore::Rebuild,
+                product,
+                product_len,
+                data_nt,
+                None,
+                regex_profile,
+                out_buffer,
+            )
         })
     }
 }
@@ -1522,24 +2283,50 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if data_nt.is_null() || expect_identity.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shapes_product_rebuild_expecting",
-                ));
-            }
-            let bytes = product_bytes(
+            product_entry(
+                "purrdf_shapes_product_rebuild_expecting",
+                Restore::Rebuild,
                 product,
                 product_len,
-                "purrdf_shapes_product_rebuild_expecting",
-            )?;
-            let data = cstr_to_str(data_nt)?;
-            let expected = purrdf_validate::parse_identity_digest(cstr_to_str(expect_identity)?)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
-            let sarif = rebuild_product_bytes_expecting(bytes, data, &expected)
-                .map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(sarif));
-            Ok(PurrdfStatus::Ok)
+                data_nt,
+                Some(expect_identity),
+                std::ptr::null(),
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// [`purrdf_shapes_product_rebuild_expecting`] under a caller-selected
+/// regular-expression law, exactly as [`purrdf_shapes_product_admit_xpath_regex`] adds
+/// one to [`purrdf_shapes_product_admit`]. The identity comparison is unchanged and
+/// runs before the re-derivation.
+///
+/// # Safety
+/// As [`purrdf_shapes_product_rebuild_expecting`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting_xpath_regex(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    expect_identity: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            product_entry(
+                "purrdf_shapes_product_rebuild_expecting_xpath_regex",
+                Restore::Rebuild,
+                product,
+                product_len,
+                data_nt,
+                Some(expect_identity),
+                regex_profile,
+                out_buffer,
+            )
         })
     }
 }
@@ -2294,6 +3081,7 @@ ex:StatusShape a sh:NodeShape ;
             RULE_DATA,
             &[],
             RuleLimits::default(),
+            None,
         )
         .expect("entailment produced");
         let text = bytes.ntriples;
@@ -2315,7 +3103,8 @@ ex:StatusShape a sh:NodeShape ;
                 None,
                 RULE_DATA,
                 &[],
-                RuleLimits::default()
+                RuleLimits::default(),
+                None,
             )
             .is_err()
         );

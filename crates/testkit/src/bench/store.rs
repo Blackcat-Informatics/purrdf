@@ -116,8 +116,18 @@ impl Store {
         record: &str,
         estimates: &Estimates,
     ) -> Result<PathBuf, String> {
-        let path = self.record_path(components, record)?;
         let text = estimates.to_json().map_err(|error| error.to_string())?;
+        self.write_text(components, record, &text)
+    }
+
+    /// Write either estimates schema through the same atomic record replacement.
+    pub(crate) fn write_text(
+        &self,
+        components: &[&str],
+        record: &str,
+        text: &str,
+    ) -> Result<PathBuf, String> {
+        let path = self.record_path(components, record)?;
         let directory = path
             .parent()
             .ok_or_else(|| format!("{}: no parent directory", path.display()))?;

@@ -4,9 +4,10 @@
 //! XSD/XPath regular-expression dialect support.
 //!
 //! `sh:pattern` (SHACL §4.5.3), SPARQL `REGEX`/`REPLACE` (§17.4.3.14), and
-//! ShEx `PATTERN` (§5.4.5) all specify their pattern facet via *XPath and
-//! XQuery Functions and Operators 3.1* §5.6 `fn:matches`/`fn:replace`, which
-//! in turn reuses the `regExp` grammar of XML Schema Part 2 Appendix G.
+//! ShEx `PATTERN` (§5.4.5) specify their pattern facet via *XPath and
+//! XQuery Functions and Operators* `fn:matches`/`fn:replace`, with the edition
+//! selected by their governing specifications. These functions reuse the
+//! `regExp` grammar of XML Schema Part 2 Appendix G.
 //! That grammar is a distinct dialect from the `regex` crate's own syntax:
 //! [`compile`] is the one shared translation between the two, so `sh:pattern`,
 //! `REGEX`/`REPLACE`, and `PATTERN` all carry the same accept set and the
@@ -17,22 +18,19 @@
 //! [`from_ecma_262`] imports the proven shared grammar as valid XSD syntax.
 //! [`ecma_262_rust_compatible`] checks the semantics a Rust runtime can install.
 //!
-//! # The one permanent limitation: backreferences
+//! # Compatibility and native dated programs
 //!
 //! XPath F&O 3.1 §5.6.1.4 adds `backReference ::= "\" [1-9][0-9]*` to the
 //! `fn:matches` grammar, so backreferences ARE part of the governing
-//! dialect. This module rejects every one of them
-//! ([`XsdRegexError::Backreference`]), and always will: translation targets
-//! the `regex` crate, whose matching engine is a DFA that cannot backtrack,
-//! so it structurally cannot execute a backreference no matter how the
-//! source text is rewritten. This is a permanent, by-design gap in this
-//! implementation, not a bug to be fixed later — supporting backreferences
-//! would require subsuming a second, backtracking engine, which is exactly
-//! the design this module exists instead of. It is recorded as a known gap
-//! in `docs/CONFORMANCE.md` and pinned by the first-party corpus under
-//! `crates/rdf-core/corpus/xsd-regex/`.
+//! dialect. The compatibility [`compile`] rejects them with
+//! [`XsdRegexError::Backreference`], because its public `regex::Regex`
+//! representation cannot execute them. The additive [`xpath::compile`]
+//! instead recognizes an explicitly dated law and executes its flat native
+//! program, including backreferences, ordered captures and replacement.
+//! It admits finite compiler, matcher, storage and output limits and preserves
+//! operational refusal separately from pattern/flag/replacement-language errors.
 //!
-//! # Everything else: translated, not subsumed
+//! # Compatibility translation
 //!
 //! Every other construct in the grammar (see `emit`'s module doc for
 //! the full construct-by-construct table) is translated into `regex`-crate
@@ -114,9 +112,10 @@
 //!   defensively-escaped pattern; the first-party corpus pins `[a\&b]`/`[\~]`
 //!   and the vendored ShExTest corpus pins `\$` as its literal-dollar spelling.
 //!
-//! `fn:replace`'s `err:FORX0004` (a malformed replacement string) is
-//! implemented by [`CompiledPattern::replace_all`]; `err:FORX0003` (the
-//! pattern matches a zero-length string) is not.
+//! Compatibility [`CompiledPattern::replace_all`] checks malformed replacement
+//! strings (`err:FORX0004`). Native [`xpath::CompiledPattern::replace_all`]
+//! additionally checks empty-match patterns (`err:FORX0003`) under the selected
+//! dated law; the check itself preserves an operational resource refusal.
 
 mod blocks;
 mod case_variants;
@@ -129,6 +128,8 @@ mod prefilter;
 mod replace;
 mod scan;
 mod xflag;
+
+pub mod xpath;
 
 pub use blocks::unicode_version as block_escape_unicode_version;
 pub use ecma_emit::{Ecma262Error, ecma_262_rust_compatible, from_ecma_262, to_ecma_262};

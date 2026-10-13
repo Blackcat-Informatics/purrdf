@@ -28,7 +28,7 @@
 //!            and `Rule` / `RuleGraph` / `RuleSetDeclaration` carry the SHACL rules.
 //!
 //!   RULE 2 — STAGE ID. [`stage_id`] is a content-derived capability digest over
-//!            the whole census plus the tables the model's MEANING depends on. It
+//!            the census's carried model plus the tables its MEANING depends on. It
 //!            is not hand-incremented, because a hand-incremented version is
 //!            exactly how an authenticated cache serves stale-but-verified wrong
 //!            answers: the bytes verify, the digest matches, and the meaning moved
@@ -48,6 +48,13 @@
 //! `pub(crate)` fields are deliberately not crossed. `Shapes::shapes_dataset` and
 //! `Shapes::parse_provenance` are reconstructed rather than carried, and a caller
 //! cannot name them at all.
+//!
+//! The census still records those private fields. Only the exact private
+//! `Shapes::sparql_sources: OnceLock<Arc<ConstraintSources>>` cache is omitted
+//! from the stage preimage: it is reconstructed from the authenticated retained
+//! shapes dataset, carries no product bytes, and warming it changes no model
+//! fact. Its visibility and type are checked below; no other private field gets
+//! this exclusion.
 //!
 //! # Not vacuous
 //!
@@ -790,7 +797,8 @@ pub fn preamble() -> Vec<ModelType> {
     scan_sources(&shapes_sources()).rows(&PREAMBLE_TYPES)
 }
 
-/// Every row the stage id digests: the model [`census`], then the [`preamble`].
+/// Every row the stage id projects: the complete model [`census`], then the
+/// [`preamble`]. The preimage omits only the checked derived report cache.
 #[must_use]
 pub fn stage_types() -> Vec<ModelType> {
     [census(), preamble()].concat()
@@ -803,6 +811,16 @@ pub fn stage_rows(scan: &Scan) -> Vec<ModelType> {
 }
 
 // ── Stage id ────────────────────────────────────────────────────────────────────
+
+/// The single runtime-only cache excluded from the carried-model identity.
+/// A different type, visibility, owner or declaration site remains a model fact.
+fn is_derived_report_cache(row: &ModelType, field: &Field) -> bool {
+    row.name == "Shapes"
+        && row.file == "crates/shapes/src/shapes.rs"
+        && field.name == "sparql_sources"
+        && !field.public
+        && field.signature == "path(OnceLock<path(Arc<path(ConstraintSources),>),>)"
+}
 
 /// The `builtin_function_keyword` table: every name the SPARQL parser's built-in
 /// table accepts, paired with the canonical keyword the resolver answers with.
@@ -1276,6 +1294,9 @@ pub fn stage_id_preimage(
         for variant in &row.variants {
             let _ = writeln!(out, "  variant {}", variant.name);
             for field in &variant.fields {
+                if is_derived_report_cache(row, field) {
+                    continue;
+                }
                 let _ = writeln!(
                     out,
                     "    field {} {} {}",
@@ -1495,6 +1516,79 @@ fn stage_id_matches_shipped_constant() {
          --nocapture regenerate_the_prepared_product_fixture` — and set GOLDEN_LEN in that file \
          to the length it prints. Do NOT hand-roll a throwaway writer for that step."
     );
+}
+
+/// The derived report cache stays visible in the structural census, while its
+/// absence from a preparation changes neither the model closure nor stage id.
+#[test]
+fn report_cache_is_censused_but_not_carried_by_the_stage() {
+    let (real, without_cache) = patched_sources(
+        "crates/shapes/src/shapes.rs",
+        "    pub(crate) sparql_sources: OnceLock<Arc<ConstraintSources>>,\n",
+        "",
+    );
+    let scan = scan_sources(&real);
+    let row = scan.definition("Shapes").unwrap();
+    let field = row.variants[0]
+        .fields
+        .iter()
+        .find(|field| field.name == "sparql_sources")
+        .unwrap();
+    assert!(!field.public);
+    assert_eq!(
+        field.signature,
+        type_signature(&syn::parse_str("OnceLock<Arc<ConstraintSources>>").unwrap()).0
+    );
+    assert!(is_derived_report_cache(row, field));
+    let removed = scan_sources(&without_cache);
+    assert_eq!(scan.closure(CENSUS_ROOT), removed.closure(CENSUS_ROOT));
+    let builtins = builtin_function_table();
+    let components = constraint_component_parameter_table();
+    let analysis = class_analysis_table();
+    let original = stage_id_preimage(&stage_rows(&scan), &builtins, &components, &analysis);
+    let without = stage_id_preimage(&stage_rows(&removed), &builtins, &components, &analysis);
+    assert_eq!(original, without);
+    assert!(!original.contains("field sparql_sources"));
+    assert_eq!(
+        stage_id(&stage_rows(&removed), &builtins, &components, &analysis),
+        shipped_stage_id()
+    );
+}
+
+/// The runtime-cache exception cannot conceal a public field, another private
+/// field or a change to the admitted cache's type.
+#[test]
+fn report_cache_exclusion_is_exact_and_model_fields_still_move_the_stage() {
+    let builtins = builtin_function_table();
+    let components = constraint_component_parameter_table();
+    let analysis = class_analysis_table();
+    for replacement in [
+        "pub sparql_sources: OnceLock<Arc<ConstraintSources>>",
+        "pub(crate) sparql_sources: Option<Arc<ConstraintSources>>",
+        "pub(crate) another_cache: OnceLock<Arc<ConstraintSources>>",
+        "pub(crate) sparql_sources: OnceLock<Arc<ConstraintSources>>, pub probe: bool",
+        "pub(crate) sparql_sources: OnceLock<Arc<ConstraintSources>>, private_probe: bool",
+    ] {
+        let (real, changed) = patched_sources(
+            "crates/shapes/src/shapes.rs",
+            "pub(crate) sparql_sources: OnceLock<Arc<ConstraintSources>>",
+            replacement,
+        );
+        let original = stage_id(
+            &stage_rows(&scan_sources(&real)),
+            &builtins,
+            &components,
+            &analysis,
+        );
+        let different = stage_id(
+            &stage_rows(&scan_sources(&changed)),
+            &builtins,
+            &components,
+            &analysis,
+        );
+        assert_eq!(original, shipped_stage_id());
+        assert_ne!(original, different, "{replacement}");
+    }
 }
 
 /// The digest is derived from facts, not from a constant: the same census digests

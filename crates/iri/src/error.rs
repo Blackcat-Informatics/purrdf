@@ -35,7 +35,7 @@ const REMEDY_NON_ABSOLUTE_BASE: &str =
 const REMEDY_MISSING_SCHEME: &str = "write the IRI in absolute form, with a scheme";
 
 /// Why an IRI/URI string (or a reference-resolution / CURIE operation) failed.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IriError {
     /// The string is empty where a non-empty IRI/URI was required.
@@ -95,7 +95,58 @@ pub enum IriError {
     },
 }
 
+purrdf_lex::resident_clone!(IriError);
+
 impl IriError {
+    /// Copy every original typed IRI failure field under before-copy admission.
+    /// Text stays verbatim; no parse or diagnostic re-rendering changes identity.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before the copied error is published.
+    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(match self {
+            Self::Empty => Self::Empty,
+            Self::MissingScheme => Self::MissingScheme,
+            Self::BadScheme(text) => Self::BadScheme(memory.string(text)?),
+            Self::BadPercentEncoding(offset) => Self::BadPercentEncoding(*offset),
+            Self::DisallowedChar(character, offset) => Self::DisallowedChar(*character, *offset),
+            Self::BadAuthority(text) => Self::BadAuthority(memory.string(text)?),
+            Self::NonAbsoluteBase(text) => Self::NonAbsoluteBase(memory.string(text)?),
+            Self::NoBase { reference } => Self::NoBase {
+                reference: memory.string(reference)?,
+            },
+            Self::NotAbsoluteByGrammar { reference, base } => Self::NotAbsoluteByGrammar {
+                reference: memory.string(reference)?,
+                base: base.clone_with_memory(memory)?,
+            },
+        })
+    }
+
+    /// Exact owned-text capacities, for releasing original native error storage.
+    /// This is a destruction census, never an admission certificate.
+    #[must_use]
+    pub fn owned_text_bytes(&self) -> usize {
+        match self {
+            Self::BadScheme(text) | Self::BadAuthority(text) | Self::NonAbsoluteBase(text) => {
+                text.capacity()
+            }
+            Self::NoBase { reference } => reference.capacity(),
+            Self::NotAbsoluteByGrammar { reference, base } => {
+                reference.capacity()
+                    + match base {
+                        BaseInScope::Absent => 0,
+                        BaseInScope::InForce { iri, .. } => iri.capacity(),
+                    }
+            }
+            Self::Empty
+            | Self::MissingScheme
+            | Self::BadPercentEncoding(_)
+            | Self::DisallowedChar(_, _) => 0,
+        }
+    }
     /// The byte offset the failure was reported at, for the offset-bearing
     /// variants ([`BadPercentEncoding`](Self::BadPercentEncoding)/
     /// [`DisallowedChar`](Self::DisallowedChar)). `None` for the whole-string
@@ -250,67 +301,154 @@ impl IriError {
     /// remedy included. Hosts read the condition and its offset without parsing
     /// English.
     #[must_use]
+    pub fn presentation(&self) -> DiagnosticPresentation {
+        let mut resident = purrdf_lex::allocation::Resident;
+        self.try_presentation_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+            .expect("resident IRI presentation allocation")
+    }
+
+    /// Construct exact typed presentation under the original native admission.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before destination allocation.
     #[expect(
         clippy::literal_string_with_formatting_args,
         reason = "these templates are interpreted and contract-checked by DiagnosticPresentation"
     )]
-    pub fn presentation(&self) -> DiagnosticPresentation {
+    pub fn try_presentation_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
         use crate::base::{BaseInScope, BaseOrigin};
         use DiagnosticValue::{Character, Text, Unsigned};
-        let parameter = |name, value| DiagnosticParameter::new(name, value);
+
         let (identity, template, parameters) = match self {
-            Self::Empty => ("iri-empty", "empty IRI/URI string", vec![]),
-            Self::MissingScheme => ("iri-missing-scheme", "missing scheme", vec![]),
-            Self::BadScheme(value) => (
-                "iri-bad-scheme",
-                "malformed scheme: {scheme:?}",
-                vec![parameter("scheme", Text(value.clone()))],
-            ),
+            Self::Empty => ("iri-empty", "empty IRI/URI string", {
+                let native_values = [];
+                memory.collect(native_values)
+            }?),
+            Self::MissingScheme => ("iri-missing-scheme", "missing scheme", {
+                let native_values = [];
+                memory.collect(native_values)
+            }?),
+            Self::BadScheme(value) => ("iri-bad-scheme", "malformed scheme: {scheme:?}", {
+                let native_values = [DiagnosticParameter::try_new_with_memory(
+                    "scheme",
+                    Text(memory.string(value)?),
+                    memory,
+                )?];
+                memory.collect(native_values)
+            }?),
             Self::BadPercentEncoding(offset) => (
                 "iri-bad-percent-encoding",
                 "malformed percent-encoding at byte {offset}",
-                vec![parameter("offset", Unsigned(*offset as u64))],
+                {
+                    let native_values = [DiagnosticParameter::try_new_with_memory(
+                        "offset",
+                        Unsigned(*offset as u64),
+                        memory,
+                    )?];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::DisallowedChar(character, offset) => (
                 "iri-disallowed-char",
                 "disallowed character {character:?} at byte {offset}",
-                vec![
-                    parameter("character", Character(*character)),
-                    parameter("offset", Unsigned(*offset as u64)),
-                ],
+                {
+                    let native_values = [
+                        DiagnosticParameter::try_new_with_memory(
+                            "character",
+                            Character(*character),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "offset",
+                            Unsigned(*offset as u64),
+                            memory,
+                        )?,
+                    ];
+                    memory.collect(native_values)
+                }?,
             ),
-            Self::BadAuthority(reason) => (
-                "iri-bad-authority",
-                "malformed authority: {reason}",
-                vec![parameter("reason", Text(reason.clone()))],
-            ),
+            Self::BadAuthority(reason) => ("iri-bad-authority", "malformed authority: {reason}", {
+                let native_values = [DiagnosticParameter::try_new_with_memory(
+                    "reason",
+                    Text(memory.string(reason)?),
+                    memory,
+                )?];
+                memory.collect(native_values)
+            }?),
             Self::NonAbsoluteBase(base) => (
                 "iri-non-absolute-base",
                 "base IRI is not absolute (no scheme): {base:?}",
-                vec![parameter("base", Text(base.clone()))],
+                {
+                    let native_values = [DiagnosticParameter::try_new_with_memory(
+                        "base",
+                        Text(memory.string(base)?),
+                        memory,
+                    )?];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::NoBase { reference } => (
                 "iri-relative-no-base",
                 "relative IRI reference {reference:?} cannot be resolved: no base IRI is in scope",
-                vec![parameter("reference", Text(reference.clone()))],
+                {
+                    let native_values = [DiagnosticParameter::try_new_with_memory(
+                        "reference",
+                        Text(memory.string(reference)?),
+                        memory,
+                    )?];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::NotAbsoluteByGrammar { reference, base } => {
-                let mut parameters = vec![parameter("reference", Text(reference.clone()))];
+                let mut parameters = {
+                    let native_values = [DiagnosticParameter::try_new_with_memory(
+                        "reference",
+                        Text(memory.string(reference)?),
+                        memory,
+                    )?];
+                    memory.collect(native_values)
+                }?;
                 let (identity, template) = match base {
                     BaseInScope::Absent => (
                         "iri-not-absolute-by-grammar.absent",
                         "relative IRI reference {reference:?} is not permitted by this syntax (no base IRI is in scope)",
                     ),
                     BaseInScope::InForce { iri, origin } => {
-                        parameters.push(parameter("base", Text(iri.clone())));
+                        {
+                            let native_parameter = DiagnosticParameter::try_new_with_memory(
+                                "base",
+                                Text(memory.string(iri)?),
+                                memory,
+                            )?;
+                            memory.push(&mut parameters, native_parameter)
+                        }?;
                         match origin {
                             BaseOrigin::Caller => (
                                 "iri-not-absolute-by-grammar.caller",
                                 "relative IRI reference {reference:?} is not permitted by this syntax (the caller-supplied base, <{base}>, is in scope but is never applied here)",
                             ),
                             BaseOrigin::Directive { line, column } => {
-                                parameters.push(parameter("line", Unsigned(*line)));
-                                parameters.push(parameter("column", Unsigned(u64::from(*column))));
+                                {
+                                    let native_parameter =
+                                        DiagnosticParameter::try_new_with_memory(
+                                            "line",
+                                            Unsigned(*line),
+                                            memory,
+                                        )?;
+                                    memory.push(&mut parameters, native_parameter)
+                                }?;
+                                {
+                                    let native_parameter =
+                                        DiagnosticParameter::try_new_with_memory(
+                                            "column",
+                                            Unsigned(u64::from(*column)),
+                                            memory,
+                                        )?;
+                                    memory.push(&mut parameters, native_parameter)
+                                }?;
                                 (
                                     "iri-not-absolute-by-grammar.directive",
                                     "relative IRI reference {reference:?} is not permitted by this syntax (the `@base` at line {line} column {column}, <{base}>, is in scope but is never applied here)",
@@ -327,17 +465,20 @@ impl IriError {
             }
         };
         let template = if let Some(remedy) = self.remedy_hint() {
-            format!("{template}; {remedy}")
+            memory.format(&format_args!("{template}; {remedy}"))?
         } else {
-            template.to_owned()
+            memory.string(template)?
         };
         // Unreachable refusal: validation judges only the identity, the template
         // and the parameter names, which are literals fixed per arm (the remedy
         // suffix is a brace-free constant); field values are spliced in and never
         // re-read as template text. `presentation_covers_every_variant` constructs
         // every arm.
-        DiagnosticPresentation::new(identity, &template, parameters)
-            .expect("IRI templates and typed argument sets agree")
+        let result =
+            DiagnosticPresentation::try_new_with_memory(identity, &template, parameters, memory)
+                .map_err(|error| error.fixed_template_storage())?;
+        memory.release_string(template)?;
+        Ok(result)
     }
 }
 

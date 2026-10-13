@@ -8,11 +8,6 @@
 use purrdf_xsd::{XsdDatatype as D, XsdError, XsdValue, parse, parse_by_iri, value_cmp};
 use std::cmp::Ordering;
 
-/// Whether `value` is an integer held past the machine word (outside `i128`).
-fn big_integer(value: &XsdValue) -> bool {
-    matches!(value, XsdValue::Integer { value, .. } if value.as_i128().is_none())
-}
-
 /// (lexical, datatype, expected canonical lexical).
 const CANONICAL_VECTORS: &[(&str, D, &str)] = &[
     // integer
@@ -103,7 +98,7 @@ fn canonical_is_idempotent() {
 fn parse_by_iri_contract() {
     // A known XSD value-space datatype IRI parses.
     let v = parse_by_iri("42", "http://www.w3.org/2001/XMLSchema#integer").unwrap();
-    assert_eq!(v.as_ref().and_then(XsdValue::as_i128), Some(42));
+    assert!(matches!(v, Some(XsdValue::Integer { value, .. }) if value.as_i128() == Some(42)));
     // A non-XSD datatype IRI is Ok(None) — caller treats as a plain term.
     // (XsdValue has no PartialEq by design, so assert on `is_none`.)
     assert!(
@@ -130,7 +125,10 @@ fn integer_values_past_i128_are_exact_and_derived_bounds_still_refuse() {
     // never a saturated or wrapped one.
     let past = "170141183460469231731687303715884105728";
     let value = parse(past, D::Integer).expect("an unbounded integer");
-    assert!(big_integer(&value), "{value:?}");
+    assert!(
+        matches!(value, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()),
+        "{value:?}"
+    );
     assert_eq!(value.canonical_lexical(), past);
     // A bounded derived datatype still refuses past its own range, beside its
     // largest value.

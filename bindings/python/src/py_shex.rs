@@ -26,6 +26,12 @@
 //! shexj = shex.parse(schema)  # canonical ShExJ JSON text
 //! ```
 //!
+//! # Pattern law
+//!
+//! [`validate`]'s `xpath_regex` keyword selects a dated native XPath law for pattern
+//! facets through [`purrdf_shex::validate_with_xpath`]; `None` keeps the compatibility
+//! pattern behaviour.
+//!
 //! # Hard-fail
 //!
 //! Every typed engine error ([`purrdf_shex::ShexError`], a codec
@@ -131,11 +137,25 @@ fn shape_selector(shape: &str) -> ShapeSelector {
 /// start shape. Returns one dict per association, in input order, with keys
 /// `"node"` / `"shape"` (echoed verbatim), `"conformant"` (bool), and
 /// `"reason"` (`None`, or the deepest failure for a nonconformant entry).
+///
+/// `xpath_regex` selects the dated native XPath law a `/pattern/flags` facet is
+/// matched under, by its stable name: `"xpath-2.0-2010-12-14"` (XPath F&O 2.0 Second
+/// Edition) or `"xpath-3.1-2017-03-21"` (XPath F&O 3.1), the root module's
+/// `XPATH_REGEX_PROFILES`, matched exactly; any other value raises `ValueError` naming
+/// the accepted ones. `None` (the default) keeps the compatibility pattern behaviour
+/// unchanged. Under a selected law a pattern or flag the law refuses makes its entry
+/// nonconformant, as any failed facet does; a native resource refusal (an `xpath-*`
+/// code, under finite production bounds) raises `ValueError` for the whole map rather
+/// than reporting any entry.
 #[pyfunction]
-#[pyo3(signature = (schema, data, map, *, schema_format="shexc", data_format="turtle", base=None))]
+#[pyo3(signature = (schema, data, map, *, schema_format="shexc", data_format="turtle", base=None, xpath_regex=None))]
 #[allow(
     clippy::needless_pass_by_value,
     reason = "the binding ABI receives owned values"
+)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each validation-request option is named explicitly at the call site"
 )]
 fn validate(
     py: Python<'_>,
@@ -145,7 +165,9 @@ fn validate(
     schema_format: &str,
     data_format: &str,
     base: Option<&str>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let selection = crate::xpath_regex::selection(xpath_regex)?;
     // Schema parse, data parse, and validation run detached (GIL released);
     // the per-association result dicts are built after the GIL is reacquired.
     let map_ref = &map;
@@ -162,12 +184,30 @@ fn validate(
                 shape_selector(shape),
             ));
         }
-        Ok::<_, PyErr>(purrdf_shex::validate_exact(
-            &schema,
-            &dataset,
-            &associations,
-            &purrdf_shex::ValidationOptions::default(),
-        ))
+        match selection {
+            None => Ok(purrdf_shex::validate_exact(
+                &schema,
+                &dataset,
+                &associations,
+                &purrdf_shex::ValidationOptions::default(),
+            )),
+            Some((profile, limits)) => purrdf_shex::validate_exact_with_xpath(
+                &schema,
+                &dataset,
+                &associations,
+                &purrdf_shex::ValidationOptions::default(),
+                profile,
+                limits,
+            )
+            .map_err(|error| {
+                match purrdf_validate::xpath_regex::refusal_code(&error) {
+                    Some(code) => {
+                        crate::py_store::presentation::refusal_value_error(error.to_string(), code)
+                    }
+                    None => PyValueError::new_err(error.to_string()),
+                }
+            }),
+        }
     })?;
 
     let out = PyList::empty(py);

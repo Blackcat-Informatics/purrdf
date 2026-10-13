@@ -12,7 +12,7 @@
 //! RDF 1.2 quoted triple terms are first-class: [`TermPattern::Triple`] (in query
 //! patterns) and [`GroundTerm::Triple`] (in ground data, e.g. `VALUES`).
 
-use std::sync::Arc;
+use purrdf_lex::allocation::{OwnedText, SharedText};
 
 use crate::error::{ParseError, Result};
 use crate::tree::Child;
@@ -44,7 +44,7 @@ pub use purrdf_xsd::datatype::XSD_STRING;
 /// satisfies.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct NamedNode {
-    iri: Arc<str>,
+    iri: OwnedText,
 }
 
 purrdf_lex::constructors! {
@@ -56,6 +56,12 @@ purrdf_lex::constructors! {
 }
 
 impl NamedNode {
+    purrdf_lex::constructors!(@items
+        /// Wrap a native lexical spelling under its original immutable owner.
+        /// The producer has already validated the same IRI recognition law.
+        pub fn from_admitted(iri: SharedText) -> Self { .. };
+    );
+
     /// Validate and wrap an absolute IRI. Returns [`ParseError::Iri`] if the
     /// string is not a valid RFC-3987 IRI, or if it is a relative reference
     /// (term-position IRIs — predicates, datatypes, `GRAPH`/`SERVICE` names —
@@ -93,9 +99,9 @@ impl core::fmt::Debug for NamedNode {
 /// form: `Clone` is a refcount bump, so a blank-node outer binding fanning out
 /// to several `VALUES`-join sites in a correlated substitution costs no
 /// per-site text allocation.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlankNode {
-    id: Arc<str>,
+    id: OwnedText,
 }
 
 purrdf_lex::constructors! {
@@ -106,6 +112,11 @@ purrdf_lex::constructors! {
 }
 
 impl BlankNode {
+    purrdf_lex::constructors!(@items
+        /// Wrap a native blank label while retaining its original admission.
+        pub fn from_admitted(id: SharedText) -> Self { .. };
+    );
+
     /// The blank-node label (without `_:`).
     pub fn as_str(&self) -> &str {
         &self.id
@@ -119,6 +130,13 @@ impl core::fmt::Debug for BlankNode {
 }
 
 const HIDDEN_VAR_PREFIX: &str = "\u{0}bgp";
+
+struct HiddenBlankName<'a>(&'a str);
+impl core::fmt::Display for HiddenBlankName<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{HIDDEN_VAR_PREFIX}blank:{}", self.0)
+    }
+}
 
 /// A query variable (without the leading `?`/`$`).
 ///
@@ -139,7 +157,7 @@ const HIDDEN_VAR_PREFIX: &str = "\u{0}bgp";
 /// delegates to `T`), never the pointer, so ordering/dedup stay unaffected.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variable {
-    name: Arc<str>,
+    name: OwnedText,
 }
 
 purrdf_lex::constructors! {
@@ -150,6 +168,11 @@ purrdf_lex::constructors! {
 }
 
 impl Variable {
+    purrdf_lex::constructors!(@items
+        /// Wrap a native variable spelling while retaining its original admission.
+        pub fn from_admitted(name: SharedText) -> Self { .. };
+    );
+
     /// A non-distinguished variable introduced by algebra translation. Its reserved
     /// identity cannot be written in SPARQL text, so it never collides with a caller
     /// variable. Serializers assign it a fresh legal name and omit it from projections.
@@ -158,6 +181,23 @@ impl Variable {
     /// [`Query::validate`](crate::Query::validate) refuses those observations.
     pub fn hidden(name: impl AsRef<str>) -> Self {
         Self::new(format!("{HIDDEN_VAR_PREFIX}{}", name.as_ref()))
+    }
+
+    /// Mint an arbitrary hidden witness through its original immutable text owner.
+    ///
+    /// # Errors
+    /// Returns the caller's original text-publication refusal.
+    pub fn try_hidden<E>(
+        name: &dyn core::fmt::Display,
+        mint: impl FnOnce(&dyn core::fmt::Display) -> core::result::Result<SharedText, E>,
+    ) -> core::result::Result<Self, E> {
+        struct HiddenName<'a>(&'a dyn core::fmt::Display);
+        impl core::fmt::Display for HiddenName<'_> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                write!(f, "{HIDDEN_VAR_PREFIX}{}", self.0)
+            }
+        }
+        Ok(Self::from_admitted(mint(&HiddenName(name))?))
     }
 
     /// Whether this is a non-distinguished translation variable.
@@ -169,7 +209,18 @@ impl Variable {
     /// This differs from an ordinary hidden witness: a later piece of that same
     /// BGP may still carry the original blank label and must join on this identity.
     pub fn hidden_blank(label: &str) -> Self {
-        Self::hidden(format!("blank:{label}"))
+        Self::new(HiddenBlankName(label).to_string())
+    }
+
+    /// Mint the same hidden blank identity through its original text owner.
+    ///
+    /// # Errors
+    /// Returns the caller's text-publication failure.
+    pub fn try_hidden_blank<E>(
+        label: &str,
+        mint: impl FnOnce(&dyn core::fmt::Display) -> core::result::Result<SharedText, E>,
+    ) -> core::result::Result<Self, E> {
+        Ok(Self::from_admitted(mint(&HiddenBlankName(label))?))
     }
 
     /// The original source blank label, when this variable carries that identity.
@@ -217,13 +268,28 @@ pub use purrdf_cdt::TextDirection as BaseDirection;
 /// through `NamedNode` itself.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Literal {
-    value: Arc<str>,
+    value: OwnedText,
     datatype: NamedNode,
-    language: Option<Arc<str>>,
+    language: Option<OwnedText>,
     direction: Option<BaseDirection>,
 }
 
 impl Literal {
+    /// Assemble originally admitted native facets without lexical copying.
+    pub fn from_admitted(
+        value: SharedText,
+        datatype: NamedNode,
+        language: Option<SharedText>,
+        direction: Option<BaseDirection>,
+    ) -> Self {
+        Self {
+            value: value.into(),
+            datatype,
+            language: language.map(Into::into),
+            direction,
+        }
+    }
+
     /// A simple `xsd:string` literal.
     pub fn new_simple(value: impl Into<String>) -> Self {
         Self {

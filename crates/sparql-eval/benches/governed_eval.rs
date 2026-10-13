@@ -24,7 +24,7 @@
 //!   ungoverned, under a stop signal alone, and under a fuel ceiling with a stop
 //!   signal, on the forced-sequential engine and on the default one that forks a
 //!   parallel-safe row loop. The stop signal is a never-cancelled
-//!   [`CancellationFlag`], so every row pays the poll and none is refused; the fuel
+//!   [`purrdf_sparql_eval::CancellationFlag`], so every row pays the poll and none is refused; the fuel
 //!   ceiling is one below the largest representable, so it is engaged and charged but
 //!   never reached. `UNFOLD`'s row loop is never forked, so its two engine lanes
 //!   differ only below it.
@@ -35,17 +35,17 @@
 #[path = "../tests/support/mod.rs"]
 mod support;
 
+use support::governor_workloads::{
+    AnswerGuard, LOOP_QUERIES, LOOP_ROWS, loop_dataset, loop_governors,
+};
 use support::result_size;
 
 use std::{fmt::Write, sync::Arc};
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlResult, TermValue,
-};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlResult, TermValue};
 use purrdf_iri::vocab::rdf::TYPE;
 use purrdf_sparql_eval::{
-    CancellationFlag, EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
-    QueryGovernors, QueryOptions,
+    EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors, QueryOptions,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
@@ -261,70 +261,6 @@ fn bench_path_scaling(c: &mut Bench) {
     group.finish();
 }
 
-/// Rows in the row-loop dataset: past the evaluator's parallel threshold, so the
-/// default engine forks a parallel-safe `FILTER` or `BIND` loop.
-const LOOP_ROWS: usize = 16_384;
-
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const CDT_LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
-
-/// Per subject `i`: `ex:v i % 100` (an `xsd:integer`) and `ex:list "[1,2,3]"`, a
-/// three-element composite list.
-fn loop_dataset(rows: usize) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let v = builder.intern_iri(&format!("{EX}v"));
-    let list = builder.intern_iri(&format!("{EX}list"));
-    let three = builder.intern_literal(RdfLiteral::typed("[1,2,3]", CDT_LIST));
-    for index in 0..rows {
-        let subject = builder.intern_iri(&format!("{EX}s{index}"));
-        let value =
-            builder.intern_literal(RdfLiteral::typed((index % 100).to_string(), XSD_INTEGER));
-        builder.push_quad(subject, v, value, None);
-        builder.push_quad(subject, list, three, None);
-    }
-    builder.freeze().expect("freeze the row-loop dataset")
-}
-
-/// `(bench id, query text, exact expected rows)` for the three row loops.
-const LOOP_QUERIES: &[(&str, &str, usize)] = &[
-    (
-        "filter",
-        "SELECT ?s WHERE { ?s <https://example.org/v> ?v FILTER(?v >= 10) }",
-        // `?v < 10` on ten subjects of every hundred, and on ten of the last 84.
-        LOOP_ROWS - 10 * LOOP_ROWS.div_ceil(100),
-    ),
-    (
-        "bind",
-        "SELECT ?s ?x WHERE { ?s <https://example.org/v> ?v BIND(?v * 2 + 1 AS ?x) }",
-        LOOP_ROWS,
-    ),
-    (
-        "unfold",
-        "SELECT ?s ?e WHERE { ?s <https://example.org/list> ?l UNFOLD(?l AS ?e) }",
-        3 * LOOP_ROWS,
-    ),
-];
-
-/// The three governor configurations, freshly built so each carries its own stop flag.
-fn loop_governors() -> [(&'static str, Option<QueryGovernors>); 3] {
-    let stop = || Arc::new(CancellationFlag::new()) as Arc<dyn purrdf_sparql_eval::StopSignal>;
-    [
-        ("ungoverned", None),
-        (
-            "stop_signal",
-            Some(QueryGovernors::UNBOUNDED.with_stop_signal(stop())),
-        ),
-        (
-            "fuel_and_stop_signal",
-            Some(
-                QueryGovernors::UNBOUNDED
-                    .with_fuel(u64::MAX - 1)
-                    .with_stop_signal(stop()),
-            ),
-        ),
-    ]
-}
-
 fn run_loop(
     engine: &NativeSparqlEngine,
     dataset: &Arc<RdfDataset>,
@@ -353,8 +289,30 @@ fn bench_governed_row_loops(c: &mut Bench) {
         let prepared = parallel
             .prepare_query(query, None)
             .expect("parse row-loop benchmark query");
+        let guard = matches!(shape, "filter" | "bind").then(|| AnswerGuard::row_loop(shape));
         for (lane, engine) in engines {
             for (governed, governor) in &governors {
+                if let Some(guard) = &guard {
+                    let result = engine
+                        .query_prepared(&dataset, &prepared, &[], QueryOptions::EMPTY)
+                        .expect("full row-loop answer");
+                    guard.check(&result);
+                    if let Some(governor) = governor {
+                        let outcome = engine
+                            .query_prepared_governed_view(
+                                &*dataset,
+                                &prepared,
+                                &[] as &[(String, TermValue)],
+                                QueryOptions::EMPTY,
+                                governor,
+                            )
+                            .expect("full governed row-loop answer");
+                        let GovernedOutcome::Complete { result, .. } = outcome else {
+                            panic!("row-loop count fixture must complete");
+                        };
+                        guard.check(&result);
+                    }
+                }
                 // Every lane answers the same rows before any is timed: a governor that
                 // refused rows would otherwise read as a speedup.
                 assert_eq!(

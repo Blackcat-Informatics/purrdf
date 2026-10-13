@@ -34,11 +34,15 @@
 //!
 //! # Overflow
 //!
-//! An intermediate that does not fit is a [`TextError::Overflow`], never a
-//! wrapped or saturated value. A wrapped score is a wrong ranking presented as a
-//! right one, which is precisely the failure this crate exists to rule out.
+//! Public [`Fixed`] operations report [`TextError::Overflow`] only when their
+//! result does not fit; products use the shared wide-integer home. Ranking
+//! intermediates additionally promote through the existing exact [`Integer`]
+//! home and return to [`Fixed`] under their prepared query's score certificate.
+//! Neither path wraps or saturates a score.
 
-use purrdf_xsd::wide::mul_div;
+use crate::query_workspace::arithmetic_error;
+use purrdf_sparql_eval::WorkspaceCapability;
+use purrdf_xsd::{exact::Integer, wide::mul_div};
 
 use crate::error::TextError;
 
@@ -52,7 +56,7 @@ pub const SCALE_DIGITS: u32 = 12;
 
 /// `10^SCALE_DIGITS` — the divisor relating a [`Fixed`]'s raw integer to its
 /// value.
-const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
+pub(crate) const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
 
 /// `SCALE` as an unsigned value, for the magnitude arithmetic below.
 const SCALE_U: u128 = SCALE as u128;
@@ -124,11 +128,22 @@ impl Fixed {
     /// actually overflows an `i128`; the [`Result`] is kept so that widening the
     /// input type later cannot silently become a wrapping conversion.
     pub fn from_integer(value: i64) -> Result<Self, TextError> {
+        Self::from_integer_with(value, None)
+    }
+
+    pub(crate) fn from_integer_with(
+        value: i64,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
         i128::from(value)
             .checked_mul(SCALE)
             .map(Self)
             .ok_or_else(|| {
-                TextError::overflow(format!("{value} does not fit the fixed-point range"))
+                arithmetic_error(
+                    false,
+                    format_args!("{value} does not fit the fixed-point range"),
+                    workspace,
+                )
             })
     }
 
@@ -146,19 +161,33 @@ impl Fixed {
 
     /// `self + other`, or [`TextError::Overflow`] if the sum does not fit.
     pub fn checked_add(self, other: Self) -> Result<Self, TextError> {
-        self.0
-            .checked_add(other.0)
-            .map(Self)
-            .ok_or_else(|| TextError::overflow("addition left the fixed-point range"))
+        self.checked_add_with(other, None)
+    }
+
+    pub(crate) fn checked_add_with(
+        self,
+        other: Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        self.0.checked_add(other.0).map(Self).ok_or_else(|| {
+            arithmetic_error(false, "addition left the fixed-point range", workspace)
+        })
     }
 
     /// `self - other`, or [`TextError::Overflow`] if the difference does not
     /// fit.
     pub fn checked_sub(self, other: Self) -> Result<Self, TextError> {
-        self.0
-            .checked_sub(other.0)
-            .map(Self)
-            .ok_or_else(|| TextError::overflow("subtraction left the fixed-point range"))
+        self.checked_sub_with(other, None)
+    }
+
+    pub(crate) fn checked_sub_with(
+        self,
+        other: Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        self.0.checked_sub(other.0).map(Self).ok_or_else(|| {
+            arithmetic_error(false, "subtraction left the fixed-point range", workspace)
+        })
     }
 
     /// `self × other`, truncated toward zero.
@@ -169,9 +198,21 @@ impl Fixed {
     /// a helper that falls back to a 256-bit intermediate rather than reporting
     /// an overflow the answer does not have.
     pub fn checked_mul(self, other: Self) -> Result<Self, TextError> {
-        let magnitude = mul_div(self.0.unsigned_abs(), other.0.unsigned_abs(), SCALE_U)
-            .ok_or_else(|| TextError::overflow("multiplication left the fixed-point range"))?;
-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
+        self.checked_mul_with(other, None)
+    }
+
+    pub(crate) fn checked_mul_with(
+        self,
+        other: Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        product_ratio(self.0, other.0, SCALE).ok_or_else(|| {
+            arithmetic_error(
+                false,
+                "multiplication left the fixed-point range",
+                workspace,
+            )
+        })
     }
 
     /// `self ÷ other`, truncated toward zero.
@@ -183,12 +224,20 @@ impl Fixed {
     /// Division by zero is a [`TextError::Domain`]: there is no value to return,
     /// so none is invented.
     pub fn checked_div(self, other: Self) -> Result<Self, TextError> {
+        self.checked_div_with(other, None)
+    }
+
+    pub(crate) fn checked_div_with(
+        self,
+        other: Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
         if other.0 == 0 {
-            return Err(TextError::domain("division by zero"));
+            return Err(arithmetic_error(true, "division by zero", workspace));
         }
-        let magnitude = mul_div(self.0.unsigned_abs(), SCALE_U, other.0.unsigned_abs())
-            .ok_or_else(|| TextError::overflow("division left the fixed-point range"))?;
-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
+        product_ratio(self.0, SCALE, other.0).ok_or_else(|| {
+            arithmetic_error(false, "division left the fixed-point range", workspace)
+        })
     }
 
     /// The natural logarithm of `self`, exact to the last representable digit
@@ -215,11 +264,22 @@ impl Fixed {
     /// defined there, and returning a sentinel would let a caller rank against a
     /// number that means nothing.
     pub fn ln(self) -> Result<Self, TextError> {
+        self.ln_with(None)
+    }
+
+    pub(crate) fn ln_with(
+        self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
         if self.0 <= 0 {
-            return Err(TextError::domain(format!(
-                "ln is undefined at {}, which is not positive",
-                self.to_decimal_lexical()
-            )));
+            return Err(arithmetic_error(
+                true,
+                format_args!(
+                    "ln is undefined at {}, which is not positive",
+                    self.decimal_display()
+                ),
+                workspace,
+            ));
         }
 
         let raw = self.0.unsigned_abs();
@@ -234,10 +294,20 @@ impl Fixed {
         } else {
             (INTERNAL_TO_SCALE_U << exponent.unsigned_abs(), 1_u128)
         };
-        let mantissa_magnitude = mul_div(raw, numerator, denominator)
-            .ok_or_else(|| TextError::overflow("range reduction left the fixed-point range"))?;
-        let mantissa = i128::try_from(mantissa_magnitude)
-            .map_err(|_| TextError::overflow("range reduction left the fixed-point range"))?;
+        let mantissa_magnitude = mul_div(raw, numerator, denominator).ok_or_else(|| {
+            arithmetic_error(
+                false,
+                "range reduction left the fixed-point range",
+                workspace,
+            )
+        })?;
+        let mantissa = i128::try_from(mantissa_magnitude).map_err(|_| {
+            arithmetic_error(
+                false,
+                "range reduction left the fixed-point range",
+                workspace,
+            )
+        })?;
 
         // z = (m - 1) / (m + 1) at INTERNAL_SCALE. `mantissa` is in
         // [10^18, 2·10^18), so the numerator is at most 10^18 and the product
@@ -257,7 +327,9 @@ impl Fixed {
         let total = i128::from(exponent)
             .checked_mul(LN2_INTERNAL)
             .and_then(|scaled| scaled.checked_add(ln_mantissa))
-            .ok_or_else(|| TextError::overflow("logarithm left the fixed-point range"))?;
+            .ok_or_else(|| {
+                arithmetic_error(false, "logarithm left the fixed-point range", workspace)
+            })?;
 
         // The one and only rounding.
         Ok(Self(total / INTERNAL_TO_SCALE))
@@ -273,12 +345,7 @@ impl Fixed {
     /// lexically the same way the values order numerically for any two
     /// same-signed numbers with the same number of integer digits.
     pub fn to_decimal_lexical(self) -> String {
-        let magnitude = self.0.unsigned_abs();
-        let integer = magnitude / SCALE_U;
-        let fraction = magnitude % SCALE_U;
-        let sign = if self.0 < 0 { "-" } else { "" };
-        let width = SCALE_DIGITS as usize;
-        format!("{sign}{integer}.{fraction:0width$}")
+        self.decimal_display().to_string()
     }
 }
 
@@ -294,7 +361,7 @@ const INTERNAL_TO_SCALE_U: u128 = INTERNAL_TO_SCALE as u128;
 /// inline so the asymmetry is visible at the one place it matters.
 const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
 
-/// Reassemble a magnitude and a sign into a [`Fixed`], or report the overflow.
+/// Reassemble a magnitude and sign in the public raw representation.
 ///
 /// The `negative` branch is not symmetric with the positive one, and cannot be.
 /// `i128` spans `-2^127 ..= 2^127 - 1`, so the magnitude `2^127` is
@@ -306,13 +373,195 @@ const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
 /// rather than a rounding detail — the arithmetic's usable range depended on the
 /// sign of the operands rather than on the answer — so the negative extreme is
 /// admitted here explicitly.
-fn signed(magnitude: u128, negative: bool) -> Result<Fixed, TextError> {
+fn signed_value(magnitude: u128, negative: bool) -> Option<i128> {
     if negative && magnitude == NEGATIVE_LIMIT_MAGNITUDE {
-        return Ok(Fixed::from_raw(i128::MIN));
+        return Some(i128::MIN);
     }
-    let raw = i128::try_from(magnitude)
-        .map_err(|_| TextError::overflow("result left the fixed-point range"))?;
-    Ok(Fixed::from_raw(if negative { -raw } else { raw }))
+    let raw = i128::try_from(magnitude).ok()?;
+    Some(if negative { -raw } else { raw })
+}
+
+/// One scaled-product kernel, including signed truncation toward zero.
+fn product_ratio(left: i128, right: i128, divisor: i128) -> Option<Fixed> {
+    let magnitude = mul_div(
+        left.unsigned_abs(),
+        right.unsigned_abs(),
+        divisor.unsigned_abs(),
+    )?;
+    signed_value(magnitude, (left < 0) ^ (right < 0) ^ (divisor < 0)).map(Fixed::from_raw)
+}
+
+/// Ranking intermediates at the same scale as Fixed. The existing exact
+/// Integer owns the canonical i128/BigInt representation; this adapter supplies
+/// only the original scaling and rounding boundaries, not an integer engine.
+pub(crate) struct Scaled {
+    value: Integer,
+    // The numeric payload dies before its original destination grant.
+    _allocation: Option<purrdf_sparql_eval::WorkspaceAllocation>,
+}
+
+impl Scaled {
+    pub(crate) const ZERO: Self = Self {
+        value: Integer::ZERO,
+        _allocation: None,
+    };
+
+    pub(crate) const fn from_fixed(value: Fixed) -> Self {
+        Self {
+            value: Integer::from_i128(value.into_raw()),
+            _allocation: None,
+        }
+    }
+
+    pub(crate) fn from_count(value: u128) -> Self {
+        // Every u128 fits the existing magnitude's two inline limbs.
+        Self {
+            value: Integer::from(value),
+            _allocation: None,
+        }
+    }
+
+    pub(crate) fn greater_than(&self, other: &Self) -> bool {
+        self.value > other.value
+    }
+
+    fn storage_error(error: purrdf_xsd::bigint::LimbScratchError) -> TextError {
+        match error {
+            purrdf_xsd::bigint::LimbScratchError::SizeOverflow => {
+                crate::query_workspace::overflow()
+            }
+            _ => TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
+                construct: "TEXT exact integer destination",
+            }),
+        }
+    }
+
+    fn grant(
+        layout: Result<
+            purrdf_xsd::exact::cost::NumericOperationLayout,
+            purrdf_xsd::bigint::LimbScratchError,
+        >,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Option<purrdf_sparql_eval::WorkspaceAllocation>, TextError> {
+        let layout = layout.map_err(Self::storage_error)?;
+        workspace
+            .filter(|_| layout.required_bytes() != 0)
+            .map(|cap| {
+                crate::query_workspace::admitted(
+                    cap.charge(
+                        u64::try_from(layout.required_bytes())
+                            .map_err(|_| crate::query_workspace::overflow())?,
+                    ),
+                )
+            })
+            .transpose()
+    }
+
+    pub(crate) fn add(
+        &self,
+        other: &Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        let allocation = Self::grant(
+            self.value
+                .operation_layout(&other.value, purrdf_xsd::exact::cost::IntegerOperation::Add),
+            workspace,
+        )?;
+        let value = self
+            .value
+            .try_add(&other.value)
+            .map_err(Self::storage_error)?;
+        Ok(Self {
+            value,
+            _allocation: allocation,
+        })
+    }
+
+    pub(crate) fn mul(
+        &self,
+        other: &Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        Self::quotient_product(
+            &self.value,
+            &other.value,
+            &Integer::from_i128(SCALE),
+            workspace,
+        )
+    }
+
+    pub(crate) fn div(
+        &self,
+        other: &Self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        if other.value.is_zero() {
+            return Err(arithmetic_error(true, "division by zero", workspace));
+        }
+        Self::quotient_product(
+            &self.value,
+            &Integer::from_i128(SCALE),
+            &other.value,
+            workspace,
+        )
+    }
+
+    pub(crate) fn into_fixed(
+        self,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Fixed, TextError> {
+        self.value
+            .as_i128()
+            .map(Fixed::from_raw)
+            .ok_or_else(|| arithmetic_error(false, "result left the fixed-point range", workspace))
+    }
+
+    /// Stay on the existing wide kernel when the rounded result fits, even if
+    /// the unscaled product exceeds i128; otherwise use exact Integer once.
+    fn quotient_product(
+        left: &Integer,
+        right: &Integer,
+        divisor: &Integer,
+        workspace: Option<&WorkspaceCapability>,
+    ) -> Result<Self, TextError> {
+        if let (Some(a), Some(b), Some(c)) = (left.as_i128(), right.as_i128(), divisor.as_i128())
+            && let Some(value) = product_ratio(a, b, c)
+        {
+            return Ok(Self::from_fixed(value));
+        }
+        let allocation = Self::grant(
+            left.operation_layout(right, purrdf_xsd::exact::cost::IntegerOperation::Multiply),
+            workspace,
+        )?;
+        let product = Self {
+            value: left.try_mul(right).map_err(Self::storage_error)?,
+            _allocation: allocation,
+        };
+        let allocation = Self::grant(
+            purrdf_xsd::exact::cost::integer_division_layout(
+                product.value.limb_len(),
+                divisor.limb_len(),
+            ),
+            workspace,
+        )?;
+        let (value, remainder) =
+            product
+                .value
+                .try_div_rem(divisor)
+                .map_err(|error| match error {
+                    purrdf_xsd::exact::ExactOperationError::Storage(error) => {
+                        Self::storage_error(error)
+                    }
+                    purrdf_xsd::exact::ExactOperationError::Value(_) => {
+                        arithmetic_error(true, "division by zero", workspace)
+                    }
+                })?;
+        drop(remainder);
+        Ok(Self {
+            value,
+            _allocation: allocation,
+        })
+    }
 }
 
 /// `floor(log2(raw / 10^SCALE_DIGITS))` for a strictly positive `raw`.
@@ -338,6 +587,24 @@ fn binade(raw: u128) -> i32 {
         (raw << candidate.unsigned_abs()) < SCALE_U
     };
     if below { candidate - 1 } else { candidate }
+}
+
+/// Formatting the native fixed value borrows it and allocates no private buffer.
+pub(crate) struct DecimalDisplay(Fixed);
+impl core::fmt::Display for DecimalDisplay {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let magnitude = self.0.0.unsigned_abs();
+        let integer = magnitude / SCALE_U;
+        let fraction = magnitude % SCALE_U;
+        let sign = if self.0.0 < 0 { "-" } else { "" };
+        let width = SCALE_DIGITS as usize;
+        write!(f, "{sign}{integer}.{fraction:0width$}")
+    }
+}
+impl Fixed {
+    pub(crate) const fn decimal_display(self) -> DecimalDisplay {
+        DecimalDisplay(self)
+    }
 }
 
 #[cfg(test)]

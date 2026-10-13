@@ -4,7 +4,8 @@
 //! The deterministic JSON writer, over a heap work list.
 
 use super::Value;
-use crate::json_escape::{JsonEscapes, push_string};
+use crate::allocation::{Admission, Memory, Resident, StorageError};
+use crate::json_escape::{JsonEscapes, push_string_with_memory};
 
 /// How the writer lays a value out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,91 +46,145 @@ enum Frame<'v> {
 }
 
 /// The line break and indentation of a nesting depth (pretty only).
-fn line_break(out: &mut String, unit: &str, depth: usize) {
-    out.push('\n');
+fn line_break<S: Admission + ?Sized>(
+    out: &mut String,
+    unit: &str,
+    depth: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    memory.push_char(out, '\n')?;
     for _ in 0..depth {
-        out.push_str(unit);
+        memory.push_str(out, unit)?;
     }
+    Ok(())
 }
 
-/// Write a scalar, or open a container onto `frames` (an empty one is written
-/// whole).
+/// Write a scalar, or open its original container onto the admitted work list.
 #[inline]
-fn write_value<'v>(
+fn write_value<'v, S: Admission + ?Sized>(
     out: &mut String,
     value: &'v Value,
     escapes: JsonEscapes,
     frames: &mut Vec<Frame<'v>>,
-) {
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(true) => out.push_str("true"),
-        Value::Bool(false) => out.push_str("false"),
-        Value::Number(number) => out.push_str(number.lexeme()),
-        Value::String(text) => push_string(out, text, escapes),
-        Value::Array(items) if items.is_empty() => out.push_str("[]"),
-        Value::Object(object) if object.is_empty() => out.push_str("{}"),
+        Value::Null => memory.push_str(out, "null"),
+        Value::Bool(true) => memory.push_str(out, "true"),
+        Value::Bool(false) => memory.push_str(out, "false"),
+        Value::Number(number) => memory.push_str(out, number.lexeme()),
+        Value::String(text) => push_string_with_memory(out, text, escapes, memory),
+        Value::Array(items) if items.is_empty() => memory.push_str(out, "[]"),
+        Value::Object(object) if object.is_empty() => memory.push_str(out, "{}"),
         Value::Array(items) => {
-            out.push('[');
-            frames.push(Frame::Array(items.iter(), false));
+            memory.push_char(out, '[')?;
+            memory.push(frames, Frame::Array(items.iter(), false))
         }
         Value::Object(object) => {
-            out.push('{');
-            frames.push(Frame::Object(object.members().iter(), false));
+            memory.push_char(out, '{')?;
+            memory.push(frames, Frame::Object(object.members().iter(), false))
         }
     }
 }
 
 /// Append `value` to `out`, laid out per `format`.
 ///
-/// The output is a pure function of the value and the format: members in the
-/// object's order, a number as its lexeme, a string in one spelling. Each open
-/// container is one frame on a heap stack holding its remaining members, so a
-/// scalar is written where it stands and nesting costs heap, never stack.
+/// Members remain in their original order and numbers keep their lexemes.
+/// Open containers use the same native work list as the admitted writer.
 pub fn write_into(out: &mut String, value: &Value, format: Format<'_>) {
-    let separator = if format.indent.is_some() { ": " } else { ":" };
-    let escapes = format.escapes;
-    let mut frames: Vec<Frame<'_>> = Vec::new();
-    write_value(out, value, escapes, &mut frames);
-    loop {
-        let depth = frames.len();
-        let Some(top) = frames.last_mut() else {
-            break;
-        };
-        // The next member of the innermost container, and whether one came
-        // before it; `None` when the container is spent.
-        let (next, comma, close) = match top {
-            Frame::Array(items, started) => (
-                items.next().map(|item| (None, item)),
-                core::mem::replace(started, true),
-                ']',
-            ),
-            Frame::Object(members, started) => (
-                members.next().map(|(name, member)| (Some(name), member)),
-                core::mem::replace(started, true),
-                '}',
-            ),
-        };
-        let Some((name, item)) = next else {
-            frames.pop();
-            if let Some(unit) = format.indent {
-                line_break(out, unit, depth - 1);
+    let mut resident = Resident;
+    let mut memory = Memory::resume(&mut resident, out.capacity());
+    write_into_with_memory(out, value, format, &mut memory)
+        .expect("resident JSON writer allocation");
+}
+
+/// Append through the original physical account. Partial output retains its
+/// original grant on refusal; only destroyed writer scratch is released.
+///
+/// # Errors
+///
+/// Returns checked layout, allocator or original admission refusal.
+pub fn write_into_with_memory<S: Admission + ?Sized>(
+    out: &mut String,
+    value: &Value,
+    format: Format<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    let baseline = memory.admitted_bytes();
+    let output_capacity = out.capacity();
+    let result = (|| {
+        let separator = if format.indent.is_some() { ": " } else { ":" };
+        let escapes = format.escapes;
+        let mut frames: Vec<Frame<'_>> = Vec::new();
+        write_value(out, value, escapes, &mut frames, memory)?;
+        loop {
+            let depth = frames.len();
+            let Some(top) = frames.last_mut() else { break };
+            let (next, comma, close) = match top {
+                Frame::Array(items, started) => (
+                    items.next().map(|item| (None, item)),
+                    core::mem::replace(started, true),
+                    ']',
+                ),
+                Frame::Object(members, started) => (
+                    members.next().map(|(name, member)| (Some(name), member)),
+                    core::mem::replace(started, true),
+                    '}',
+                ),
+            };
+            let Some((name, item)) = next else {
+                frames.pop();
+                if let Some(unit) = format.indent {
+                    line_break(out, unit, depth - 1, memory)?;
+                }
+                memory.push_char(out, close)?;
+                continue;
+            };
+            if comma {
+                memory.push_char(out, ',')?;
             }
-            out.push(close);
-            continue;
-        };
-        if comma {
-            out.push(',');
+            if let Some(unit) = format.indent {
+                line_break(out, unit, depth, memory)?;
+            }
+            if let Some(name) = name {
+                push_string_with_memory(out, name, escapes, memory)?;
+                memory.push_str(out, separator)?;
+            }
+            write_value(out, item, escapes, &mut frames, memory)?;
         }
-        if let Some(unit) = format.indent {
-            line_break(out, unit, depth);
+        memory.release_vec(frames)
+    })();
+    if result.is_err() {
+        // The closure's original frame array is already destroyed; out survives.
+        let retained = baseline.checked_add(out.capacity() - output_capacity);
+        if let Some(released) =
+            retained.and_then(|retained| memory.admitted_bytes().checked_sub(retained))
+        {
+            let _ = memory.release_bytes(released);
         }
-        if let Some(name) = name {
-            push_string(out, name, escapes);
-            out.push_str(separator);
-        }
-        write_value(out, item, escapes, &mut frames);
     }
+    result
+}
+
+/// Write the same value into a new, ownership-carrying admitted destination.
+///
+/// # Errors
+///
+/// Returns the original physical refusal; failed output dies before refund.
+pub fn write_with_memory<S: Admission + ?Sized>(
+    value: &Value,
+    format: Format<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, StorageError> {
+    memory.scope(|memory| {
+        let mut out = String::new();
+        write_into_with_memory(&mut out, value, format, memory)?;
+        Ok(out)
+    })
+}
+
+pub(super) const fn frame_bytes() -> usize {
+    size_of::<Frame<'static>>()
 }
 
 /// `value` laid out per `format`.

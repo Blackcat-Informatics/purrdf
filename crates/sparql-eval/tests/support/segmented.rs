@@ -72,16 +72,33 @@ pub fn open(image: &SegmentedImage, ceiling: u64) -> SegmentedSession {
     open_with_cache(image, ceiling, 2)
 }
 
+/// The actual fixed session footprint, leaving no room for an owned query control.
+pub fn baseline_ceiling(image: &SegmentedImage) -> u64 {
+    let source = open(image, CEILING);
+    source.evidence().live_bytes()
+}
+
 /// Open a session with explicit cache occupancy for hot/cold benchmark cases.
 pub fn open_with_cache(
     image: &SegmentedImage,
     ceiling: u64,
     cache_blocks: u32,
 ) -> SegmentedSession {
+    open_with_evidence(image, ceiling, cache_blocks, 2048)
+}
+
+/// Explicit evidence capacity for computed-query matrices with many reverse lookups.
+/// This independent dimension does not change the physical live-byte ceiling.
+pub fn open_with_evidence(
+    image: &SegmentedImage,
+    ceiling: u64,
+    cache_blocks: u32,
+    evidence_entries: u32,
+) -> SegmentedSession {
     SegmentedSession::open(
         Arc::new(image.provider()),
         image.receipt(),
-        SegmentedReadLimits::new(ceiling, cache_blocks, 2048, 20_000_000, 8),
+        SegmentedReadLimits::new(ceiling, cache_blocks, evidence_entries, 20_000_000, 8),
     )
     .unwrap()
 }

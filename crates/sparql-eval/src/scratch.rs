@@ -127,6 +127,90 @@ const _: () = assert!(
     "Option<SolutionTerm<TermId>> must stay niche-packed to SolutionTerm<TermId>'s size"
 );
 
+/// Default-scope blank identities share immutable spellings and a native table.
+/// Forking shares the original table; the first mutation admits a real copy.
+#[derive(Debug, Default, Clone)]
+struct BlankLabels {
+    owner: Option<
+        crate::workspace::SharedWorkspace<
+            crate::AdmittedMap<purrdf_lex::allocation::SharedText, ()>,
+        >,
+    >,
+}
+impl BlankLabels {
+    fn contains(&self, label: &str) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.get(label).is_some())
+    }
+    fn iter(&self) -> impl Iterator<Item = &purrdf_lex::allocation::SharedText> {
+        self.owner
+            .iter()
+            .flat_map(|owner| owner.iter().map(|(label, ())| label))
+    }
+    fn clear(&mut self) {
+        if let Some(owner) = &mut self.owner
+            && let Some(table) = owner.get_mut()
+        {
+            table.clear();
+            return;
+        }
+        self.owner = None;
+    }
+    fn capacity_bytes(&self) -> usize {
+        self.owner.as_ref().map_or(0, |owner| {
+            purrdf_core::hash::hash_table_allocation_bound::<(
+                purrdf_lex::allocation::SharedText, (),
+            )>(owner.capacity())
+            .unwrap_or(usize::MAX)
+            .saturating_add(crate::workspace::SharedWorkspace::<crate::AdmittedMap<
+                purrdf_lex::allocation::SharedText, (),
+            >>::control_bytes())
+        })
+    }
+    fn insert_admitted(
+        &mut self,
+        label: &str,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, crate::EvalError> {
+        if self.contains(label) {
+            return Ok(false);
+        }
+        let label = workspace.authored_text(&format_args!("{label}"))?;
+        let unique = self
+            .owner
+            .as_mut()
+            .and_then(crate::workspace::SharedWorkspace::get_mut)
+            .is_some();
+        if !unique {
+            let mut replacement = crate::AdmittedMap::default();
+            if let Some(owner) = &self.owner {
+                for (label, ()) in owner.iter() {
+                    replacement.insert_admitted(label.clone(), (), workspace)?;
+                }
+            }
+            self.owner = Some(crate::workspace::SharedWorkspace::new_admitted(
+                replacement,
+                workspace,
+            )?);
+        }
+        self.owner
+            .as_mut()
+            .expect("a mutation has a native owner")
+            .get_mut()
+            .expect("the replacement is uniquely owned")
+            .insert_admitted(label, (), workspace)?;
+        Ok(true)
+    }
+}
+/// Identity and original-payload policies for the one store-once body.
+struct InternValueHooks<H, Q, R, B> {
+    hash_value: H,
+    equal: Q,
+    storage_error: R,
+    track_value: B,
+}
+
 /// A per-query interner for terms computed during evaluation.
 ///
 /// Interns by [`TermValue`] (dataset-independent), de-duplicating equal computed
@@ -135,13 +219,20 @@ const _: () = assert!(
 /// conflict with the evaluator's other dataset access.
 #[derive(Debug, Default)]
 pub struct ScratchInterner {
-    /// `ScratchId` index → the computed value.
+    /// The arena this one extends, frozen: its values are this arena's first
+    /// [`Self::shared_len`] ids. A forked loop's worker reads the evaluation's arena
+    /// through it rather than through a copy (see [`Self::over`]). `None` for an arena
+    /// that holds every value itself.
+    shared: Option<std::sync::Arc<Self>>,
+    /// How many ids [`Self::shared`] holds.
+    shared_len: usize,
+    /// `ScratchId` index − [`Self::shared_len`] → the computed value.
     values: Vec<TermValue>,
-    /// Store-once value index: ids only; equality resolves through `values`.
-    index: HashTable<ScratchId>,
+    /// Store-once value index: cached hashes avoid rehashing nested terms during growth.
+    index: HashTable<(ScratchId, u64)>,
     /// Default-scope identities already visible to a fresh blank allocator.
     /// Activated lazily, so ordinary computed terms keep their existing cost.
-    blank_labels: crate::DetHashSet<String>,
+    blank_labels: BlankLabels,
     track_blank_labels: bool,
     /// The running total of [`value_bytes`] over computed values, plus the
     /// retained default-scope identity labels needed by fresh allocation.
@@ -150,11 +241,25 @@ pub struct ScratchInterner {
     /// This arena's already-accounted growth, independent of other contexts
     /// sharing the execution's governor. Atomic only to retain `Send + Sync`.
     charged_bytes: std::sync::atomic::AtomicU64,
+    /// Values a forked loop's workers minted that the loop's ordered commit counted
+    /// into [`Self::minted_bytes`] without storing them as terms
+    /// ([`Self::count_worker_mint`]): what the loop run in order would hold here. A
+    /// later intern of an equal value stores it without counting it again. `None` once
+    /// stored. Not carried into a copy: a worker that mints one afresh is reconciled by
+    /// its loop's commit.
+    ghosts: Vec<Option<TermValue>>,
+    /// [`Self::ghosts`]' value index.
+    ghost_index: HashTable<usize>,
+    // Capacity owners follow every arena allocation they cover in drop order.
+    values_admission: Option<crate::WorkspaceAllocation>,
+    index_admission: Option<crate::WorkspaceAllocation>,
 }
 
 impl Clone for ScratchInterner {
     fn clone(&self) -> Self {
         Self {
+            shared: self.shared.clone(),
+            shared_len: self.shared_len,
             values: self.values.clone(),
             index: self.index.clone(),
             blank_labels: self.blank_labels.clone(),
@@ -165,6 +270,10 @@ impl Clone for ScratchInterner {
             // their existing law: only outputs re-interned in the parent are
             // checkpointed, avoiding a thread-geometry-dependent receipt.
             charged_bytes: std::sync::atomic::AtomicU64::new(0),
+            ghosts: Vec::new(),
+            ghost_index: HashTable::new(),
+            values_admission: None,
+            index_admission: None,
         }
     }
 }
@@ -186,13 +295,18 @@ impl Clone for ScratchInterner {
 /// alone would never see them; see `crate::modifier::eval_aggregate`'s doc
 /// comment for why that retained buffer needs its own charge.
 pub(crate) fn value_bytes(value: &TermValue) -> u64 {
+    value_bytes_with_storage(value).expect("resident scratch proxy traversal allocation")
+}
+
+fn value_bytes_with_storage(value: &TermValue) -> Result<u64, std::collections::TryReserveError> {
     // Every term of the value — the triple terms and their components, all the way
     // down — contributes its own payload and one `TERM_OVERHEAD`, summed with
     // saturating addition. The sum is walked over a work list rather than the call
     // stack, so a value of any nesting costs no more machine stack; saturating addition
     // of unsigned terms is associative, so the total is the same in any visit order.
     let mut total: u64 = 0;
-    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![value];
+    let mut pending: purrdf_lex::walk::WorkList<&TermValue, 16> =
+        purrdf_lex::walk::WorkList::with(value);
     while let Some(term) = pending.pop() {
         let payload = match term {
             TermValue::Iri(iri) => iri.len() as u64,
@@ -207,13 +321,15 @@ pub(crate) fn value_bytes(value: &TermValue) -> u64 {
                     as u64
             }
             TermValue::Triple { s, p, o } => {
-                pending.extend([&**o, &**p, &**s]);
+                pending.try_push(&**o)?;
+                pending.try_push(&**p)?;
+                pending.try_push(&**s)?;
                 0
             }
         };
         total = total.saturating_add(payload).saturating_add(TERM_OVERHEAD);
     }
-    total
+    Ok(total)
 }
 
 /// Whether `value` is a blank node the QUERY wrote inside a composite literal —
@@ -255,7 +371,14 @@ pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 /// before the next, over a work list rather than the call stack; the first tag that
 /// fails the grammar ends the walk.
 pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
-    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![value];
+    language_tags_with_storage(value).expect("resident language-tag traversal allocation")
+}
+
+fn language_tags_with_storage(
+    value: &TermValue,
+) -> Result<bool, std::collections::TryReserveError> {
+    let mut pending: purrdf_lex::walk::WorkList<&TermValue, 16> =
+        purrdf_lex::walk::WorkList::with(value);
     while let Some(term) = pending.pop() {
         match term {
             TermValue::Iri(_) | TermValue::Blank { .. } => {}
@@ -263,16 +386,33 @@ pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
                 if language.as_deref().is_some_and(|tag| {
                     !purrdf_iri::langtag::is_well_formed_with(tag, LANGTAG_PROFILE)
                 }) {
-                    return false;
+                    return Ok(false);
                 }
             }
-            TermValue::Triple { s, p, o } => pending.extend([&**o, &**p, &**s]),
+            TermValue::Triple { s, p, o } => {
+                pending.try_push(&**o)?;
+                pending.try_push(&**p)?;
+                pending.try_push(&**s)?;
+            }
         }
     }
-    true
+    Ok(true)
+}
+
+fn admit_identity_walk(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceAllocation, crate::EvalError> {
+    let nodes = crate::retained::term_layout(value, workspace)?.nodes;
+    let bytes =
+        TermValue::hash_workspace_bound(nodes).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    workspace.charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)
 }
 
 impl ScratchInterner {
+    pub(crate) fn owned_value_count(&self) -> usize {
+        self.values.len()
+    }
     /// Empty this interner while KEEPING the tables it has already grown.
     ///
     /// Observationally a fresh [`Self::new`] — every id it could answer is gone, the
@@ -300,19 +440,29 @@ impl ScratchInterner {
     /// next and change where a `ScratchBytes` ceiling trips.
     pub(crate) fn clear(&mut self) {
         let Self {
+            shared,
+            shared_len,
             values,
             index,
             blank_labels,
             track_blank_labels,
             minted_bytes,
             charged_bytes,
+            ghosts,
+            ghost_index,
+            values_admission: _,
+            index_admission: _,
         } = self;
+        *shared = None;
+        *shared_len = 0;
         values.clear();
         index.clear();
         blank_labels.clear();
         *track_blank_labels = false;
         *minted_bytes = 0;
         charged_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
+        ghosts.clear();
+        ghost_index.clear();
     }
 
     /// A conservative byte charge for the tables this interner is RETAINING — the
@@ -328,21 +478,21 @@ impl ScratchInterner {
         self.values
             .capacity()
             .saturating_mul(size_of::<TermValue>())
-            .saturating_add(self.index.capacity().saturating_mul(size_of::<ScratchId>()))
             .saturating_add(
-                self.blank_labels
+                self.index
                     .capacity()
-                    .saturating_mul(size_of::<String>()),
+                    .saturating_mul(size_of::<(ScratchId, u64)>()),
             )
+            .saturating_add(self.blank_labels.capacity_bytes())
     }
 
     /// Preserve concrete input identities when a user function starts a fresh
     /// computed-term table. Its counter is shared with the calling evaluation.
-    pub(crate) fn fresh_for_user_function(&mut self) -> Self {
-        // Index parent computed values once. Later interns maintain the index,
-        // so successive stateful calls copy only retained blank labels rather
-        // than repeatedly walking all of the parent's computed terms.
-        self.track_blank_labels();
+    pub(crate) fn fresh_for_user_function_admitted(
+        &mut self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        self.track_blank_labels_admitted(workspace)?;
         let blank_labels = self.blank_labels.clone();
         let minted_bytes = blank_labels
             .iter()
@@ -352,35 +502,74 @@ impl ScratchInterner {
                     .saturating_add(TERM_OVERHEAD)
             })
             .fold(0_u64, u64::saturating_add);
-        Self {
+        Ok(Self {
             blank_labels,
             track_blank_labels: true,
             minted_bytes,
             ..Self::default()
-        }
+        })
     }
 
-    fn track_blank_labels(&mut self) {
+    fn track_blank_labels_admitted(
+        &mut self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
         if !self.track_blank_labels {
-            self.track_blank_labels = true;
-            for value in &self.values {
-                reserve_value_blanks(value, &mut self.blank_labels, &mut self.minted_bytes);
+            let shared = self.shared.as_deref();
+            for value in shared
+                .into_iter()
+                .flat_map(|shared| (0..shared.computed_count()).map(|i| shared.value_at(i)))
+                .chain(&self.values)
+            {
+                reserve_value_blanks_admitted(
+                    value,
+                    &mut self.blank_labels,
+                    &mut self.minted_bytes,
+                    workspace,
+                )?;
             }
+            self.track_blank_labels = true;
         }
+        Ok(())
     }
 
     /// Reserve a scoped concrete input without resolving it against a dataset.
+    #[cfg(test)]
     pub(crate) fn reserve_blank_identity(&mut self, label: &str, scope: purrdf_core::BlankScope) {
+        self.reserve_blank_identity_admitted(label, scope, &crate::WorkspaceCapability::resident())
+            .expect("resident blank identity index");
+    }
+    pub(crate) fn reserve_blank_identity_admitted(
+        &mut self,
+        label: &str,
+        scope: purrdf_core::BlankScope,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
         if scope == purrdf_core::BlankScope::DEFAULT {
-            self.track_blank_labels();
-            reserve_blank_label(label, &mut self.blank_labels, &mut self.minted_bytes);
+            self.track_blank_labels_admitted(workspace)?;
+            reserve_blank_label_admitted(
+                label,
+                &mut self.blank_labels,
+                &mut self.minted_bytes,
+                workspace,
+            )?;
         }
+        Ok(())
     }
 
     /// A lazily indexed membership check, independent of term interning order.
+    #[cfg(test)]
     pub(crate) fn blank_label_is_reserved(&mut self, label: &str) -> bool {
-        self.track_blank_labels();
-        self.blank_labels.contains(label)
+        self.blank_label_is_reserved_admitted(label, &crate::WorkspaceCapability::resident())
+            .expect("resident blank identity index")
+    }
+    pub(crate) fn blank_label_is_reserved_admitted(
+        &mut self,
+        label: &str,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, crate::EvalError> {
+        self.track_blank_labels_admitted(workspace)?;
+        Ok(self.blank_labels.contains(label))
     }
 
     /// Intern a dataset-independent value to a [`SolutionTerm`], **promoting** it to
@@ -467,6 +656,135 @@ impl ScratchInterner {
         value: TermValue,
     ) -> Result<SolutionTerm<D::Id>, D::ReadError> {
         self.intern_value(dataset, value)
+    }
+
+    pub(crate) fn try_intern_admitted<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<SolutionTerm<D::Id>, crate::EvalError> {
+        let _working = admit_identity_walk(&value, workspace)?;
+        self.intern_value_with(
+            dataset,
+            value,
+            |dataset, value| {
+                dataset
+                    .term_id_by_value(value)
+                    .map_err(crate::EvalError::source_read)
+            },
+            |arena| arena.admit_storage_growth(workspace),
+            InternValueHooks {
+                hash_value: |value: &TermValue| workspace.term_hash(value),
+                equal: |left: &TermValue, right: &TermValue| workspace.terms_equal(left, right),
+                storage_error: |_| crate::EvalError::AllocationFailed {
+                    construct: "computed term identity traversal",
+                },
+                track_value: |value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64| {
+                    reserve_value_blanks_admitted(value, labels, bytes, workspace)
+                },
+            },
+        )
+    }
+
+    pub(crate) fn try_intern_checked_admitted<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<SolutionTerm<D::Id>>, crate::EvalError> {
+        let _working = admit_identity_walk(&value, workspace)?;
+        if !language_tags_with_storage(&value).map_err(|_| crate::EvalError::AllocationFailed {
+            construct: "computed term language traversal",
+        })? {
+            return Ok(None);
+        }
+        self.try_intern_admitted(dataset, value, workspace)
+            .map(Some)
+    }
+
+    pub(crate) fn try_intern_checked_with_admission<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+        workspace: &crate::WorkspaceCapability,
+        lookup: impl FnOnce(&TermValue) -> Result<Option<D::Id>, crate::EvalError>,
+    ) -> Result<Option<SolutionTerm<D::Id>>, crate::EvalError> {
+        let _working = admit_identity_walk(&value, workspace)?;
+        if !language_tags_with_storage(&value).map_err(|_| crate::EvalError::AllocationFailed {
+            construct: "computed term language traversal",
+        })? {
+            return Ok(None);
+        }
+        self.intern_value_with(
+            dataset,
+            value,
+            |_, value| lookup(value),
+            |arena| arena.admit_storage_growth(workspace),
+            InternValueHooks {
+                hash_value: |value: &TermValue| workspace.term_hash(value),
+                equal: |left: &TermValue, right: &TermValue| workspace.terms_equal(left, right),
+                storage_error: |_| crate::EvalError::AllocationFailed {
+                    construct: "computed term identity traversal",
+                },
+                track_value: |value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64| {
+                    reserve_value_blanks_admitted(value, labels, bytes, workspace)
+                },
+            },
+        )
+        .map(Some)
+    }
+
+    fn admit_storage_growth(
+        &mut self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        if !workspace.is_bounded() {
+            return Ok(());
+        }
+        if self.computed_count() >= u32::MAX as usize {
+            return Err(crate::EvalError::WorkspaceBoundOverflow);
+        }
+        if self.values.len() == self.values.capacity() {
+            let capacity = self
+                .values
+                .capacity()
+                .checked_mul(2)
+                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?
+                .max(1);
+            let bytes = capacity
+                .checked_mul(size_of::<TermValue>())
+                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            let admission = workspace.charge(
+                u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            self.values
+                .try_reserve_exact(capacity - self.values.len())
+                .map_err(|_| crate::EvalError::AllocationFailed {
+                    construct: "computed term arena",
+                })?;
+            self.values_admission = Some(admission);
+        }
+        if self.index.len() == self.index.capacity() {
+            let capacity = self
+                .index
+                .len()
+                .checked_add(1)
+                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            let bytes =
+                purrdf_core::hash::hash_table_allocation_bound::<(ScratchId, u64)>(capacity)
+                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            let admission = workspace.charge(
+                u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            self.index.try_reserve(1, |(_, hash)| *hash).map_err(|_| {
+                crate::EvalError::AllocationFailed {
+                    construct: "computed term index",
+                }
+            })?;
+            self.index_admission = Some(admission);
+        }
+        Ok(())
     }
 
     /// [`Self::intern`], but it asks the language grammar first and returns
@@ -557,6 +875,57 @@ impl ScratchInterner {
         )
     }
 
+    /// Count `value`, minted by a forked loop's worker in its copy of this arena, as the
+    /// loop's ordered commit replays the worker's mints (`crate::row_checkpoint`): when
+    /// this arena holds no equal value, its bytes join [`Self::minted_bytes`] as the
+    /// in-order loop's intern would add them, and it is kept as a ghost so that a later
+    /// intern of it is not counted twice. The worker's own intern already promoted it
+    /// and passed it through the language gate.
+    pub(crate) fn count_worker_mint(&mut self, hash: u64, value: TermValue) {
+        debug_assert_eq!(
+            hash,
+            purrdf_hash::fixed::hash_one(&value),
+            "the value's own hash"
+        );
+        if self.find(hash, &value).is_some()
+            || self
+                .ghost_index
+                .find(hash, |&slot| self.ghosts[slot].as_ref() == Some(&value))
+                .is_some()
+        {
+            return;
+        }
+        if self.track_blank_labels {
+            reserve_value_blanks(&value, &mut self.blank_labels, &mut self.minted_bytes);
+        }
+        self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
+        let slot = self.ghosts.len();
+        self.ghosts.push(Some(value));
+        let ghosts = &self.ghosts;
+        self.ghost_index.insert_unique(hash, slot, |&slot| {
+            ghosts[slot]
+                .as_ref()
+                .map_or(0, purrdf_hash::fixed::hash_one)
+        });
+    }
+
+    /// Whether `value` (of `hash`) was a ghost, which is then stored and no longer one.
+    fn take_ghost(&mut self, hash: u64, value: &TermValue) -> bool {
+        if self.ghost_index.is_empty() {
+            return false;
+        }
+        let ghosts = &self.ghosts;
+        let Ok(entry) = self
+            .ghost_index
+            .find_entry(hash, |&slot| ghosts[slot].as_ref() == Some(value))
+        else {
+            return false;
+        };
+        let (slot, _) = entry.remove();
+        self.ghosts[slot] = None;
+        true
+    }
+
     /// The promotion + store-once body — the one `values.push` in the crate.
     /// Every public door above funnels here, so the promotion rule and the
     /// store-once rule have exactly one implementation.
@@ -565,27 +934,71 @@ impl ScratchInterner {
         dataset: &D,
         value: TermValue,
     ) -> Result<SolutionTerm<D::Id>, D::ReadError> {
+        self.intern_value_with(
+            dataset,
+            value,
+            D::term_id_by_value,
+            |_| Ok(()),
+            InternValueHooks {
+                hash_value: |value: &TermValue| Ok(purrdf_hash::fixed::hash_one(value)),
+                equal: |left: &TermValue, right: &TermValue| Ok(left == right),
+                storage_error: |error| {
+                    panic!("resident scratch proxy traversal allocation: {error}")
+                },
+                track_value: |value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64| {
+                    reserve_value_blanks(value, labels, bytes);
+                    Ok(())
+                },
+            },
+        )
+    }
+
+    fn intern_value_with<D, E, H, Q, R, B>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+        lookup: impl FnOnce(&D, &TermValue) -> Result<Option<D::Id>, E>,
+        admit: impl FnOnce(&mut Self) -> Result<(), E>,
+        hooks: InternValueHooks<H, Q, R, B>,
+    ) -> Result<SolutionTerm<D::Id>, E>
+    where
+        D: DatasetView,
+        H: FnOnce(&TermValue) -> Result<u64, E>,
+        Q: FnMut(&TermValue, &TermValue) -> Result<bool, E>,
+        R: FnOnce(std::collections::TryReserveError) -> E,
+        B: FnOnce(&TermValue, &mut BlankLabels, &mut u64) -> Result<(), E>,
+    {
+        let InternValueHooks {
+            hash_value,
+            mut equal,
+            storage_error,
+            track_value,
+        } = hooks;
+        // A computed identity already passed promotion in this execution.
+        // Reusing it must not repeat the source lookup or retain a duplicate.
+        let hash = hash_value(&value)?;
+        if let Some(sid) = self.find_with(hash, &value, &mut equal)? {
+            return Ok(SolutionTerm::Computed(sid));
+        }
         if !is_query_scoped_blank(&value)
-            && let Some(id) = dataset.term_id_by_value(&value)?
+            && let Some(id) = lookup(dataset, &value)?
         {
             return Ok(SolutionTerm::Existing(id));
         }
-        let hash = purrdf_hash::fixed::hash_one(&value);
-        if let Some(&sid) = self
-            .index
-            .find(hash, |sid| self.values[sid.index()] == value)
-        {
-            return Ok(SolutionTerm::Computed(sid));
+        admit(self)?;
+        let sid = ScratchId::from_index(self.computed_count());
+        // A ghost's bytes, its labels included, were counted when it became one.
+        if !self.take_ghost(hash, &value) {
+            if self.track_blank_labels {
+                track_value(&value, &mut self.blank_labels, &mut self.minted_bytes)?;
+            }
+            self.minted_bytes = self
+                .minted_bytes
+                .saturating_add(value_bytes_with_storage(&value).map_err(storage_error)?);
         }
-        let sid = ScratchId::from_index(self.values.len());
-        if self.track_blank_labels {
-            reserve_value_blanks(&value, &mut self.blank_labels, &mut self.minted_bytes);
-        }
-        self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         self.values.push(value);
-        self.index.insert_unique(hash, sid, |sid| {
-            purrdf_hash::fixed::hash_one(&self.values[sid.index()])
-        });
+        self.index
+            .insert_unique(hash, (sid, hash), |(_, hash)| *hash);
         Ok(SolutionTerm::Computed(sid))
     }
 
@@ -605,6 +1018,14 @@ impl ScratchInterner {
     #[must_use]
     pub fn minted_bytes(&self) -> u64 {
         self.minted_bytes
+    }
+
+    /// The growth [`Self::claim_uncharged_growth`] would claim now, without claiming it.
+    pub(crate) fn uncharged_growth(&self) -> u64 {
+        self.minted_bytes.saturating_sub(
+            self.charged_bytes
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Claim only this arena's growth for the execution's shared scratch meter.
@@ -636,7 +1057,125 @@ impl ScratchInterner {
     ) -> Result<TermValue, purrdf_core::TermLookupError<D::ReadError>> {
         match term {
             SolutionTerm::Existing(id) => dataset.term_value(id),
-            SolutionTerm::Computed(sid) => Ok(self.values[sid.index()].clone()),
+            SolutionTerm::Computed(sid) => Ok(self.value_at(sid.index()).clone()),
+        }
+    }
+
+    /// Resolve one original cell through native physical admission, retaining
+    /// its payload after the scratch interner and dataset borrow are released.
+    ///
+    /// # Errors
+    /// Preserves the original source read or native allocation refusal.
+    pub fn try_owned_value_of<D: DatasetView>(
+        &self,
+        dataset: &D,
+        term: SolutionTerm<D::Id>,
+        workspace: &crate::WorkspaceCapability,
+        source_error: impl Fn(D::ReadError) -> crate::EvalError,
+    ) -> Result<crate::WorkspaceTerm, crate::EvalError> {
+        if let SolutionTerm::Computed(id) = term {
+            return workspace.clone_term(self.computed_value(id));
+        }
+        let SolutionTerm::Existing(id) = term else {
+            unreachable!("computed terms returned above")
+        };
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        // This ordered carrier keeps the actual payload alive beneath its
+        // original frame until every fallible publication step has succeeded.
+        let mut value = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            Some(dataset.term_value_with_memory(
+                id,
+                &mut memory,
+                |error| match error {
+                    purrdf_core::TermLookupError::Read(error) => source_error(error),
+                    purrdf_core::TermLookupError::ForeignId => {
+                        if workspace.is_bounded() {
+                            crate::NativeDiagnostic::error(
+                                crate::NativeDiagnosticKind::Internal,
+                                "foreign dataset term id",
+                                workspace,
+                            )
+                        } else {
+                            crate::EvalError::source_read("foreign dataset term id")
+                        }
+                    }
+                },
+                |error, memory| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "resolved term value")
+                },
+            )?)
+        };
+        frame.finish_term(|| {
+            value
+                .take()
+                .expect("original term checked before publication")
+        })
+    }
+
+    pub(crate) fn try_value_of_admitted<D: DatasetView>(
+        &self,
+        dataset: &D,
+        term: SolutionTerm<D::Id>,
+        workspace: &crate::WorkspaceCapability,
+        source_error: impl Fn(D::ReadError) -> crate::EvalError,
+    ) -> Result<TermValue, crate::EvalError> {
+        if !workspace.is_bounded() {
+            return self
+                .try_value_of(dataset, term)
+                .map_err(crate::EvalError::source_read);
+        }
+        let (payload, temporary) = match term {
+            SolutionTerm::Existing(_) => {
+                let bytes =
+                    dataset
+                        .max_owned_term_bytes()
+                        .ok_or(crate::EvalError::WorkspaceUnpriced(
+                            "a view without an owned term certificate",
+                        ))?;
+                // Every non-root node owns one TermValue box. This remains a
+                // safe node bound when a provider omits inline root storage.
+                let nodes = usize::try_from(bytes / size_of::<TermValue>() as u64)
+                    .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?
+                    .checked_add(1)
+                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+                (
+                    bytes,
+                    purrdf_core::ir::fold_workspace_bound::<D::Id, TermValue>(nodes),
+                )
+            }
+            SolutionTerm::Computed(id) => {
+                let layout = crate::retained::term_layout(self.computed_value(id), workspace)?;
+                (layout.bytes, TermValue::clone_workspace_bound(layout.nodes))
+            }
+        };
+        let temporary = temporary.ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+        let _temporary = workspace.charge(
+            u64::try_from(temporary).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        workspace.retain(payload)?;
+        match term {
+            SolutionTerm::Existing(id) => dataset.term_value_with_storage(
+                id,
+                |error| match error {
+                    purrdf_core::TermLookupError::Read(error) => source_error(error),
+                    purrdf_core::TermLookupError::ForeignId => crate::NativeDiagnostic::error(
+                        crate::NativeDiagnosticKind::Internal,
+                        "foreign dataset term id",
+                        workspace,
+                    ),
+                },
+                |_| crate::EvalError::AllocationFailed {
+                    construct: "materialized dataset term",
+                },
+            ),
+            SolutionTerm::Computed(id) => self.computed_value(id).try_clone().map_err(|_| {
+                crate::EvalError::AllocationFailed {
+                    construct: "materialized computed term",
+                }
+            }),
         }
     }
 
@@ -645,13 +1184,120 @@ impl ScratchInterner {
     /// computed term (e.g. the comparison fast path in `expr`).
     #[must_use]
     pub fn computed_value(&self, sid: ScratchId) -> &TermValue {
-        &self.values[sid.index()]
+        self.value_at(sid.index())
+    }
+
+    /// The value of id `index`, in this arena or the one it extends.
+    fn value_at(&self, index: usize) -> &TermValue {
+        match index.checked_sub(self.shared_len) {
+            Some(local) => &self.values[local],
+            None => self.shared.as_deref().map_or_else(
+                || unreachable!("an id below shared_len is shared"),
+                |shared| shared.value_at(index),
+            ),
+        }
+    }
+
+    /// The id of a value equal to `value` (whose hash is `hash`), in this arena or the
+    /// one it extends.
+    fn find(&self, hash: u64, value: &TermValue) -> Option<ScratchId> {
+        let result: Result<_, core::convert::Infallible> =
+            self.find_with(hash, value, &mut |left, right| Ok(left == right));
+        match result {
+            Ok(value) => value,
+            Err(error) => match error {},
+        }
+    }
+
+    fn find_with<E>(
+        &self,
+        hash: u64,
+        value: &TermValue,
+        equal: &mut impl FnMut(&TermValue, &TermValue) -> Result<bool, E>,
+    ) -> Result<Option<ScratchId>, E> {
+        if let Some(sid) = self
+            .shared
+            .as_deref()
+            .map(|shared| shared.find_with(hash, value, equal))
+            .transpose()?
+            .flatten()
+        {
+            return Ok(Some(sid));
+        }
+        let mut failure = None;
+        let found = self
+            .index
+            .find(hash, |(sid, _)| {
+                if failure.is_some() {
+                    return false;
+                }
+                match equal(self.value_at(sid.index()), value) {
+                    Ok(same) => same,
+                    Err(error) => {
+                        failure = Some(error);
+                        false
+                    }
+                }
+            })
+            .map(|(sid, _)| *sid);
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(found),
+        }
+    }
+
+    /// An arena extending `shared`, frozen: it holds `shared`'s values as its own first
+    /// ids without copying them, and mints after them, as a copy of `shared` would. A
+    /// forked loop's worker takes one per block of the loop's items, so a block's worker
+    /// costs no copy of the evaluation's arena however large that has grown.
+    pub(crate) fn over(shared: &std::sync::Arc<Self>) -> Self {
+        let shared_len = shared.computed_count();
+        Self {
+            // No id can reach an ancestor with zero terms. Retain its byte/blank-label
+            // state below, but avoid that empty lookup layer. Keep the local tables
+            // fresh even if the snapshot has a large index retained after clear().
+            shared: (shared_len > 0).then(|| std::sync::Arc::clone(shared)),
+            shared_len,
+            blank_labels: shared.blank_labels.clone(),
+            track_blank_labels: shared.track_blank_labels,
+            minted_bytes: shared.minted_bytes,
+            ..Self::default()
+        }
     }
 
     /// The number of distinct computed terms minted so far (diagnostics/tests).
     #[must_use]
     pub fn computed_count(&self) -> usize {
-        self.values.len()
+        self.shared_len + self.values.len()
+    }
+
+    /// Move out every computed value minted at or after index `base`, in mint order and
+    /// with its hash, leaving the arena holding the values before it. A forked loop's worker hands its
+    /// mints to the loop's ordered commit this way once its chunk is done
+    /// (`crate::row_checkpoint`); ids at or past `base` are dangling afterwards, so the
+    /// worker reads none of them again.
+    pub(crate) fn take_values_from(&mut self, base: usize) -> Vec<(u64, TermValue)> {
+        if base >= self.computed_count() {
+            return Vec::new();
+        }
+        debug_assert!(base >= self.shared_len, "a worker takes only its own mints");
+        self.index.retain(|(sid, _)| sid.index() < base);
+        self.values
+            .split_off(base - self.shared_len)
+            .into_iter()
+            .map(|value| (purrdf_hash::fixed::hash_one(&value), value))
+            .collect()
+    }
+
+    /// Make room for `additional` more [ghosts](Self::count_worker_mint).
+    pub(crate) fn reserve_ghosts(&mut self, additional: usize) {
+        self.ghosts.reserve(additional);
+        let ghosts = &self.ghosts;
+        self.ghost_index.reserve(additional, |&slot| {
+            ghosts[slot]
+                .as_ref()
+                .map_or(0, purrdf_hash::fixed::hash_one)
+        });
     }
     /// Promote and intern a value in a resident dataset.
     pub fn intern<D: DatasetView<ReadError = core::convert::Infallible>>(
@@ -721,26 +1367,54 @@ impl ScratchInterner {
     }
 }
 
-fn reserve_blank_label(label: &str, labels: &mut crate::DetHashSet<String>, bytes: &mut u64) {
-    if !labels.contains(label) {
-        labels.insert(label.to_owned());
+fn reserve_blank_label_admitted(
+    label: &str,
+    labels: &mut BlankLabels,
+    bytes: &mut u64,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), crate::EvalError> {
+    if labels.insert_admitted(label, workspace)? {
         *bytes = bytes
             .saturating_add(u64::try_from(label.len()).unwrap_or(u64::MAX))
             .saturating_add(TERM_OVERHEAD);
     }
+    Ok(())
 }
 
-fn reserve_value_blanks(
+fn reserve_value_blanks(value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64) {
+    reserve_value_blanks_admitted(
+        value,
+        labels,
+        bytes,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident blank identity discovery");
+}
+fn reserve_value_blanks_admitted(
     value: &TermValue,
-    labels: &mut crate::DetHashSet<String>,
+    labels: &mut BlankLabels,
     bytes: &mut u64,
-) {
-    let _ = value.visit_blank_identities(|label, scope| {
-        if scope == purrdf_core::BlankScope::DEFAULT {
-            reserve_blank_label(label, labels, bytes);
-        }
-        std::ops::ControlFlow::<()>::Continue(())
-    });
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), crate::EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut failure = None;
+    let visited = value.visit_blank_identities_with_memory(
+        |label, scope, _memory| {
+            if scope == purrdf_core::BlankScope::DEFAULT
+                && let Err(error) = reserve_blank_label_admitted(label, labels, bytes, workspace)
+            {
+                failure = Some(error);
+                return core::ops::ControlFlow::Break(());
+            }
+            core::ops::ControlFlow::Continue(())
+        },
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    );
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let _ = visited.map_err(|error| frame.storage_error(error, "blank identity discovery"))?;
+    Ok(())
 }
 
 /// Resolve a dataset-local id to an owned, dataset-independent [`TermValue`]
@@ -785,6 +1459,86 @@ mod tests {
         let o = b.intern_iri("https://example.org/o");
         b.push_quad(s, p, o, None);
         b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn empty_shared_arena_flattens_without_copying_retained_index_or_losing_mint_state() {
+        use std::sync::Arc;
+        let ds = dataset_with_one_iri();
+        let mut parent = ScratchInterner::default();
+        // Workspace reuse keeps the grown index while removing all stored terms.
+        for index in 0..512 {
+            parent.intern(&ds, TermValue::integer(index));
+        }
+        parent.clear();
+        assert_eq!(parent.computed_count(), 0);
+        assert!(parent.index.capacity() >= 512);
+        parent.reserve_blank_identity("input", purrdf_core::BlankScope::DEFAULT);
+        let ghost = TermValue::Blank {
+            label: "ghost".to_owned(),
+            scope: purrdf_core::BlankScope::DEFAULT,
+        };
+        parent.count_worker_mint(purrdf_hash::fixed::hash_one(&ghost), ghost.clone());
+        assert!(parent.ghosts.iter().any(Option::is_some));
+        let inherited = parent.minted_bytes();
+        assert_eq!(parent.claim_uncharged_growth(), inherited);
+        let mut copy = parent.clone();
+        let snapshot = Arc::new(parent.clone());
+        assert!(snapshot.index.capacity() >= 512);
+        let mut worker = ScratchInterner::over(&snapshot);
+        assert!(worker.shared.is_none());
+        assert_eq!(
+            worker.index.capacity(),
+            0,
+            "no retained bucket copy per worker"
+        );
+        assert_eq!(worker.minted_bytes(), inherited);
+        assert!(worker.blank_label_is_reserved("input"));
+        assert!(worker.blank_label_is_reserved("ghost"));
+        assert!(worker.ghosts.is_empty() && copy.ghosts.is_empty());
+        assert_eq!(
+            worker.claim_uncharged_growth(),
+            copy.claim_uncharged_growth()
+        );
+        for value in [ghost.clone(), TermValue::integer(9_000), ghost.clone()] {
+            let expected = copy.intern(&ds, value.clone());
+            let actual = worker.intern(&ds, value);
+            assert_eq!(actual, expected);
+            assert_eq!(worker.value_of(&ds, actual), copy.value_of(&ds, expected));
+            assert_eq!(worker.minted_bytes(), copy.minted_bytes());
+            assert_eq!(
+                worker.claim_uncharged_growth(),
+                copy.claim_uncharged_growth()
+            );
+        }
+        let mints = worker.take_values_from(0);
+        assert_eq!(
+            mints,
+            copy.take_values_from(0),
+            "same ordered harvest and hashes"
+        );
+        for (hash, value) in mints {
+            parent.count_worker_mint(hash, value);
+        }
+        let before = parent.minted_bytes();
+        parent.intern(&ds, ghost.clone());
+        assert_eq!(
+            parent.minted_bytes(),
+            before,
+            "parent ghost counted only once"
+        );
+        let nonempty = Arc::new(parent);
+        let mut child = ScratchInterner::over(&nonempty);
+        assert!(Arc::ptr_eq(
+            child.shared.as_ref().expect("inherited term"),
+            &nonempty
+        ));
+        assert_eq!(
+            child.intern(&ds, ghost),
+            SolutionTerm::Computed(ScratchId::from_index(0))
+        );
+        assert_eq!(child.computed_count(), 1);
+        assert_eq!(child.take_values_from(1), []);
     }
 
     #[test]

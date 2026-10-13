@@ -18,9 +18,46 @@ pub struct TaggedScalar<M> {
 
 /// Replace `scalars` by its NFD/NFKD form, preserving each contributor through
 /// decomposition and stable canonical ordering. `scratch` is reusable storage.
+/// Exact native decomposition count, including pinned compatibility expansions.
+pub fn decomposed_len<const COMPAT: bool, M>(scalars: &[TaggedScalar<M>]) -> Option<usize> {
+    let mut count = Some(0usize);
+    for scalar in scalars {
+        decompose_scalar::<COMPAT>(scalar.value, |_| {
+            count = count.and_then(|n| n.checked_add(1));
+        });
+    }
+    count
+}
+
+/// Decompose and canonically order annotated scalars using reusable storage.
 pub fn decompose_tagged<const COMPAT: bool, M: Clone>(
     scalars: &mut Vec<TaggedScalar<M>>,
     scratch: &mut Vec<TaggedScalar<M>>,
+) {
+    decompose_tagged_with::<COMPAT, M>(scalars, scratch, |run| {
+        canonical_order(run, |scalar| ccc(scalar.value));
+    });
+}
+
+/// The same decomposition law with already-admitted destination and sort work.
+pub fn decompose_tagged_preallocated<const COMPAT: bool, M: Clone>(
+    scalars: &mut Vec<TaggedScalar<M>>,
+    scratch: &mut Vec<TaggedScalar<M>>,
+    order: &mut Vec<usize>,
+) {
+    assert!(
+        scratch.capacity()
+            >= decomposed_len::<COMPAT, _>(scalars).expect("admitted decomposition count")
+    );
+    decompose_tagged_with::<COMPAT, M>(scalars, scratch, |run| {
+        super::canonical_order_by_index(run, order, |scalar| ccc(scalar.value));
+    });
+}
+
+fn decompose_tagged_with<const COMPAT: bool, M: Clone>(
+    scalars: &mut Vec<TaggedScalar<M>>,
+    scratch: &mut Vec<TaggedScalar<M>>,
+    mut order: impl FnMut(&mut [TaggedScalar<M>]),
 ) {
     scratch.clear();
     for scalar in scalars.iter() {
@@ -34,11 +71,11 @@ pub fn decompose_tagged<const COMPAT: bool, M: Clone>(
     let mut start = 0;
     for at in 0..scratch.len() {
         if ccc(scratch[at].value) == 0 {
-            canonical_order(&mut scratch[start..at], |scalar| ccc(scalar.value));
+            order(&mut scratch[start..at]);
             start = at + 1;
         }
     }
-    canonical_order(&mut scratch[start..], |scalar| ccc(scalar.value));
+    order(&mut scratch[start..]);
     std::mem::swap(scalars, scratch);
 }
 

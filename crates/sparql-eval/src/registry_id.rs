@@ -187,6 +187,31 @@ impl Default for RegistryId {
 /// two different answers.
 pub(crate) use purrdf_hash::frame::frame_be_labelled as append_framed_part;
 
+/// Admit the exact native frame destination before the existing encoder writes.
+pub(crate) fn append_framed_part_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    output: &mut Vec<u8>,
+    label: &str,
+    value: &[u8],
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    let frame = purrdf_hash::frame::frame_be_labelled_len(label, value)
+        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    let required = output
+        .len()
+        .checked_add(frame)
+        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    if required > output.capacity() {
+        let capacity = output
+            .capacity()
+            .checked_mul(2)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?
+            .max(required);
+        memory.reserve(output, capacity)?;
+    }
+    append_framed_part(output, label, value);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RegistryId, append_framed_part};

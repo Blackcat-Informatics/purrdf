@@ -26,6 +26,32 @@ pip install purrdf
 
 Requires Python 3.13+. Wheels bundle the native extension; no Rust toolchain needed.
 
+## Empty named graphs
+
+`Store` and `MutableDataset` accept the keyword-only `remember_empty_graphs`
+option, which defaults to `False` in 3.x. Select it to keep an empty named graph
+after its last row is removed or after `CLEAR`; `DROP` removes the slot.
+
+```python
+import purrdf
+
+store = purrdf.Store(remember_empty_graphs=True)
+graph = purrdf.NamedNode("https://example.org/empty")
+store.add_graph(graph)
+store.update("CLEAR GRAPH <https://example.org/empty>")
+print(store.named_graphs())
+```
+
+In remembered mode, `add_graph` has native CREATE semantics: it registers a named
+or blank graph and raises `ValueError` for an existing slot unless `silent=True`.
+In implicit mode it succeeds without registering a slot. Invalid graph
+names are refused even with `silent=True`. `named_graphs()` returns native
+`NamedNode`/`BlankNode` values, including declared empty graphs, and excludes the
+mandatory default graph. UPDATE, governed UPDATE, checkpoint and compaction keep
+the selected policy. Loading and dumping declared empty graphs in TriG, JSON-LD
+and TriX works with either policy; a refused governed request changes neither
+rows nor graph slots. Remembered empty graphs are expected to be the v4.0 default.
+
 ## Parse RDF
 
 ```python
@@ -729,8 +755,10 @@ except ValueError as refusal:
                           #  'detail': None}
 ```
 
-`message_id` is one of `sparql-parse-lex`, `sparql-parse-syntax`,
-`sparql-parse-unsupported`, `sparql-parse-iri` or `sparql-parse-cdt-arity`.
+For a parse failure, `message_id` is one of `sparql-parse-lex`,
+`sparql-parse-syntax`, `sparql-parse-unsupported`, `sparql-parse-iri` or
+`sparql-parse-cdt-arity`; a dated XPath law's resource refusal carries its
+`xpath-*` code (see below).
 In each parameter, `value` is an exact `int` for the `unsigned` and `signed`
 kinds, a `bool` for `boolean`, and a `str` for `text` and `character`. When an
 IRI refusal came from the IRI checker, `detail` holds that condition in the same
@@ -741,6 +769,64 @@ both attributes to every `ValueError` they raise. A failure with no typed
 presentation, such as an argument refusal, an unknown entailment regime or a
 rule document the regime does not take, carries `None` in both. A wrong-typed
 argument is still a plain `TypeError`.
+
+## Dated XPath regular expressions
+
+Unselected, SPARQL `REGEX`/`REPLACE`, SHACL `sh:pattern` and ShEx pattern facets
+keep their compatibility pattern behaviour. The `xpath_regex` keyword selects a
+dated native XPath law by its stable name instead:
+
+```python
+purrdf.XPATH_REGEX_PROFILES
+# ('xpath-2.0-2010-12-14', 'xpath-3.1-2017-03-21')
+
+store.query(
+    'SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, "^(a)\\\\1$")) }',
+    xpath_regex="xpath-3.1-2017-03-21",
+)
+shapes.validate(my_shapes, my_data, xpath_regex="xpath-2.0-2010-12-14")
+shex.validate(my_schema, my_data, my_map, xpath_regex="xpath-3.1-2017-03-21")
+```
+
+`xpath-2.0-2010-12-14` is XPath F&O 2.0 Second Edition and
+`xpath-3.1-2017-03-21` is XPath F&O 3.1. Both define backreferences; only 3.1
+admits non-capturing groups such as `(?:a)` and the `q` flag. Every SPARQL door
+takes the keyword (`query`, `query_governed`, `query_entailment_governed`,
+`update`, `update_governed`, `Store.prepare`, on `Store` and `MutableDataset`,
+and the rdflib layer's `Graph.query` / `Graph.update`), as do
+`shapes.validate`, `Shapes.validate_nt`, `Shapes.validate_store`,
+`PreparedShapes.validate_nt`, `PreparedShapes.validate_store_changes` and
+`shex.validate`. A prepared query carries its
+law into every `run`. The SHACL tools that evaluate patterns take it too:
+`shapes.entail` and `shapes.apply_rules` (the `REGEX`/`REPLACE` of SHACL rules,
+SHACL-AF functions, node expressions and SPARQL 1.2 RL filters and assignments,
+and the `sh:pattern` of rule conditions) and `shapes.eval_node_expr` (filter-shape
+`sh:pattern`s and function-call or SPARQL-based `REGEX`/`REPLACE`).
+`shapes.lint_shapes` compiles and matches no pattern, so it takes no law.
+
+Names match exactly. Any other value, `"xpath-3.1"` or `"XPATH-3.1-2017-03-21"`
+among them, raises `ValueError` listing the accepted names. A pattern or flag the
+selected law refuses goes through the host's ordinary pattern channel: SPARQL
+treats it as an expression error, so a `FILTER` drops the row; SHACL reports a
+`sh:pattern` result; ShEx marks the entry nonconformant. A selected law runs
+under finite bounds, 64 KiB of pattern source among them. A refusal of those
+bounds raises `ValueError` carrying its `xpath-*` code, such as
+`xpath-pattern-bytes`. It never returns an empty or false answer, and an update
+it stops changes nothing.
+
+Every door identifies the refusal by that code, as it identifies a typed SPARQL
+parse failure: the code is the exception's `message_id`, on a SPARQL method,
+a SHACL validation or tool (a SHACL-SPARQL query's refusal included) and
+`shex.validate` alike. The refusal has no typed parameters:
+
+```python
+try:
+    shapes.validate(my_shapes, my_data, xpath_regex="xpath-3.1-2017-03-21")
+except ValueError as refusal:
+    refusal.message_id    # 'xpath-pattern-bytes'
+    refusal.presentation  # {'message_id': 'xpath-pattern-bytes',
+                          #  'parameters': {}, 'detail': None}
+```
 
 ## Base IRIs
 
@@ -842,10 +928,13 @@ its own reasoning limits, independently of the query's governors.
 Every query and UPDATE entry point — `query`, `query_governed`,
 `query_entailment_governed`, `update`, `update_governed` and `Store.prepare` —
 takes `division=`, the precision of an `xsd:integer`/`xsd:decimal` quotient (`/`
-and `AVG`): `"exact"`, `"N"` (N fractional digits, truncated toward zero) or
-`"N:ROUNDING"` (e.g. `"5:half-even"`), the same text the CLI's `--division` reads.
-Unset is 18 digits truncated toward zero. Under `"exact"` a quotient with no
-finite decimal expansion raises `ValueError` naming `err:FOAR0002`. A governed
+and `AVG`): `"exact"`, `"N"` (N fractional digits, truncated toward zero),
+`"N:ROUNDING"` (e.g. `"5:half-even"`), `"exact-or-N"`, or
+`"exact-or-N:ROUNDING"`, the same text the CLI's `--division` reads.
+Unset keeps terminating quotients exact and rounds repeating quotients to 18
+fractional digits, half to even. Under `"exact"` a quotient with no
+finite decimal expansion is a SPARQL expression error: unbound, like `1/0`, and
+counted under `err:FOAR0002` in a governed call's evidence. A governed
 call's `evidence.expression_errors` counts every XPath F&O numeric error the
 query absorbed into an unbound value, keyed by code (`{"err:FOAR0001": 1, ...}`
 for `1/0`, every code present, zero when it never occurred).

@@ -22,6 +22,11 @@
 //! gives a `ValueError` without a presentation (an argument refusal, an unknown
 //! regime, a rule document a regime refuses) `None` for both.
 //!
+//! A native XPath resource refusal under a selected `xpath_regex` law carries its
+//! resource's stable code (`xpath-pattern-bytes`, ...) as `message_id`, with no
+//! parameters ([`refusal_value_error`]), from every SPARQL method above and from every
+//! SHACL and ShEx door that takes the law.
+//!
 //! A premise IRI the shared boundary refuses carries the same two attributes, from
 //! every `purrdf.entail` function and from `Store.query_entailment_governed`:
 //! `premise-iri-not-absolute`, whose `detail` is the IRI parser's `iri-*` condition
@@ -38,7 +43,29 @@ use pyo3::types::PyDict;
 /// Callable with or without the GIL held: the attributes are set under
 /// [`Python::attach`], which the detached engine calls reach only on this error path.
 pub(super) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr {
-    presented_value_error(message, diagnostic.presentation())
+    match (
+        diagnostic.presentation(),
+        purrdf_validate::xpath_regex::diagnostic_refusal_code(&diagnostic.code),
+    ) {
+        (None, Some(code)) => refusal_value_error(message, code),
+        (presentation, _) => presented_value_error(message, presentation),
+    }
+}
+
+/// The `ValueError` reading `message` for a native XPath resource refusal, identified by
+/// its resource's stable `code` (`xpath-pattern-bytes`, `xpath-match-steps`, ...): that
+/// code is its `message_id`, and its `presentation` is `{"message_id": code,
+/// "parameters": {}, "detail": None}`.
+///
+/// Every door that can refuse one raises it this way — each SPARQL method (the engine
+/// reports the refusal under the resource's code, with no presentation of its own), each
+/// SHACL validation and tool, and `shex.validate` — so a host reads one identity for one
+/// refusal whichever door it called.
+pub(crate) fn refusal_value_error(message: String, code: &'static str) -> PyErr {
+    // The code is a non-empty template without placeholders, which the constructor
+    // accepts; were it ever refused, the error is still raised with its words.
+    let presentation = DiagnosticPresentation::new(code, code, Vec::new()).ok();
+    presented_value_error(message, presentation.as_ref())
 }
 
 /// The `ValueError` reading `message`, carrying `presentation` as `message_id` and

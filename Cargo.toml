@@ -10,12 +10,14 @@ members = [
     "crates/cdt",
     "crates/cli",
     "crates/columnar",
+    "crates/conformance-kit",
     "crates/datalog",
     "crates/deflate",
     "crates/ed25519",
     "crates/entail",
     "crates/envelope-probe",
     "crates/geo",
+    "crates/geo-kernel",
     "crates/gts",
     "crates/hash",
     "crates/hash-conformance",
@@ -26,6 +28,7 @@ members = [
     "crates/jsonschema",
     "crates/lex",
     "crates/markdown",
+    "crates/mime",
     "crates/purrdf",
     "crates/rdf",
     "crates/rdf-capi",
@@ -80,6 +83,7 @@ purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "3.0.1" }
 purrdf-alloc-probe = { path = "crates/alloc-probe" }
 purrdf-cdt = { path = "crates/cdt", version = "3.0.1" }
 purrdf-columnar = { path = "crates/columnar", version = "3.0.1" }
+purrdf-conformance-kit = { path = "crates/conformance-kit" }
 purrdf-core = { path = "crates/rdf-core", version = "3.0.1" }
 purrdf-datalog = { path = "crates/datalog", version = "3.0.1" }
 purrdf-deflate = { path = "crates/deflate", version = "3.0.1" }
@@ -87,6 +91,7 @@ purrdf-ed25519 = { path = "crates/ed25519", version = "3.0.1" }
 purrdf-entail = { path = "crates/entail", version = "3.0.1" }
 purrdf-events = { path = "crates/rdf-events", version = "3.0.1" }
 purrdf-geo = { path = "crates/geo", version = "3.0.1" }
+purrdf-geo-kernel = { path = "crates/geo-kernel", version = "3.0.1" }
 purrdf-gts = { path = "crates/gts", version = "3.0.1" }
 purrdf-hash = { path = "crates/hash", version = "3.0.1" }
 purrdf-hnsw = { path = "crates/hnsw", version = "3.0.1" }
@@ -95,6 +100,7 @@ purrdf-json = { path = "crates/json", version = "3.0.1" }
 purrdf-jsonschema = { path = "crates/jsonschema", version = "3.0.1" }
 purrdf-lex = { path = "crates/lex", version = "3.0.1" }
 purrdf-markdown = { path = "crates/markdown", version = "3.0.1" }
+purrdf-mime = { path = "crates/mime", version = "3.0.1" }
 purrdf-rdf = { path = "crates/rdf", version = "3.0.1" }
 purrdf-retrieval = { path = "crates/retrieval", version = "3.0.1" }
 purrdf-shapes = { path = "crates/shapes", version = "3.0.1" }

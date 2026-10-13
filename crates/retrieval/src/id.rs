@@ -284,10 +284,17 @@ impl EvidenceId {
     /// Digest canonical evidence `bytes` under the evidence domain.
     #[must_use]
     pub fn from_canonical(bytes: &[u8]) -> Self {
+        Self::from_record(|hasher| {
+            hasher.update(bytes);
+        })
+    }
+
+    /// Absorb the one evidence encoding without materializing its byte buffer.
+    pub(crate) fn from_record(write: impl FnOnce(&mut purrdf_hash::blake3::RecordHasher)) -> Self {
         let mut hasher = purrdf_hash::blake3::RecordHasher::new();
         hasher.update(EVIDENCE_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
-        hasher.update(bytes);
+        write(&mut hasher);
         Self(Digest32::new(*hasher.finalize().as_bytes()))
     }
 

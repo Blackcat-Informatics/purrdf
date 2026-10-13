@@ -85,6 +85,7 @@ pub(crate) mod admission;
 pub(crate) mod graph_index;
 pub mod provider;
 pub mod query;
+pub mod stack;
 pub(crate) mod summary;
 pub mod translation;
 
@@ -103,6 +104,10 @@ pub use provider::{
     PageMaterialization, PageProvider, SubsetPageProvider,
 };
 pub use query::{PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView};
+pub use stack::{
+    CanonicalPagedError, PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView,
+    PagedStackSnapshot, StackPageOrigin, StackSource, canonical_paged_seal,
+};
 pub use translation::PageTranslation;
 
 /// One page of a [`PagedDataset`]: its [`PageId`], the local↔global

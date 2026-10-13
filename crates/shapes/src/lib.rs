@@ -50,6 +50,7 @@ pub mod limits;
 pub mod linkml;
 pub mod lint;
 pub mod model;
+pub(crate) mod owl_value_space;
 pub(crate) mod parallel;
 pub mod path;
 pub(crate) mod plan;
@@ -57,8 +58,10 @@ pub(crate) mod prebinding;
 pub mod product;
 #[doc(hidden)]
 pub mod product_fixture;
+pub mod profile;
 pub mod provenance;
 pub mod pydantic;
+mod query_law;
 pub mod report;
 pub(crate) mod result_annotations;
 pub mod rules;
@@ -78,6 +81,7 @@ pub mod text_ingest;
 pub mod typescript;
 pub(crate) mod unique_values;
 pub mod validator_alternatives;
+pub mod xpath;
 
 pub use error::{
     IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
@@ -92,15 +96,22 @@ pub use imports::{
     ResolvedShapesGraph, ShapesImportError, ShapesImports, UnanchoredNote, resolve_shapes_imports,
 };
 pub use json_schema::{
-    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
-    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
-    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
-    SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_schema, compile_with_value_vocab,
+    Namespaces, SchemaClassExpressionAxiom, SchemaClassExpressionCoverage,
+    SchemaClassExpressionReport, SchemaClassPropertyCoverage, SchemaCompilation,
+    SchemaCompilationInput, SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest,
+    SchemaCoveragePrecision, SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus,
+    SchemaExpressionComponent, SchemaExpressionOutcome, SchemaPropertyCoverage, SchemaSurfaceMode,
+    ValueVocab, ValueVocabProjection, compile_schema, compile_schema_with_class_expressions,
+    compile_with_value_vocab,
 };
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic,
     LinkmlSlotDisposition, LinkmlSlotReason, LinkmlSlotRename, SanitizePolicy, emit_linkml,
     import_linkml, import_linkml_package, parse_linkml, write_linkml,
+};
+pub use profile::{
+    AdmissionReason, AdmissionRefusal, QueryPurpose, ShaclProfile, UnsupportedProfile,
+    XPathProfileConflict,
 };
 pub use pydantic::{
     PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticError, PydanticModuleConfig,

@@ -6,27 +6,26 @@
 #![allow(missing_docs)]
 
 //! The arbitrary-precision tower (`purrdf_xsd::exact`): its small-value fast
-//! path, directly and through the `XsdValue` operators, and how its cost grows
-//! with operand size.
+//! path against the bounded 3.x arithmetic it will replace, and how its cost
+//! grows with operand size.
 //!
 //! Report-only, `cargo bench -p purrdf-xsd --bench exact`. Nothing here asserts
 //! a threshold.
 //!
-//! - `xsd_exact_small/*/{exact,value}` — the same 1024 operations over values
-//!   inside `i128`, on the tower (`Integer`, `Decimal`) and through the
-//!   `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`,
-//!   `parse_decimal`, `Decimal::to_f64`) that every consumer calls. The `value`
-//!   lanes are the ones the 3.x `bounded` lanes measured, when those operators
-//!   still ran on the bounded `i128` types: comparing the two across releases is
-//!   the small-value regression check.
+//! - `xsd_exact_small/*/{exact,bounded}` — the same 1024 operations over values
+//!   inside `i128`, through the tower (`Integer`, `Decimal`) and the current
+//!   hybrid `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`).
+//!   Division on this hybrid path already uses the exact tower; historical 3.x
+//!   bounded instruction counts require a separate baseline checkout.
 //! - `xsd_exact_growth/*/<digits>` — one operation on operands of 40 to 40 000
-//!   decimal digits: addition, parsing and rendering stay linear, products grow
-//!   as Karatsuba's `n^1.585`, division as quotient × divisor length.
+//!   decimal digits: binary addition stays linear; decimal parsing and rendering
+//!   include base conversion, products grow as Karatsuba's `n^1.585`, and
+//!   division as quotient × divisor length.
 //! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — the two product
 //!   algorithms on either side of `KARATSUBA_THRESHOLD`, the evidence for where
 //!   it sits.
-//! - `xsd_exact_fine_products/{bounded,tower}` — products of two machine-word
-//!   decimals whose scales sum to eighteen and to twenty (past the 3.x bound).
+//! - `xsd_exact_fine_products/{bounded,tower}` — products of two bounded decimals
+//!   whose scales sum to eighteen (machine words) and to twenty (the tower).
 //!
 //! Each routine in `--test` mode runs its body once, so
 //! `perf stat -e instructions:u <bench binary> --test --exact <id>` minus the
@@ -39,7 +38,7 @@ use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::bigint::BigInt;
 use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer};
 use purrdf_xsd::numeric::parse_decimal;
-use purrdf_xsd::{XsdValue, numeric_add, numeric_div, numeric_mul};
+use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_mul};
 
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
@@ -98,9 +97,15 @@ fn bench_small(c: &mut Bench) {
         .iter()
         .map(|&(a, b)| (Integer::from(a), Integer::from(b)))
         .collect();
-    let value_integers: Vec<(XsdValue, XsdValue)> = integers
+    let bounded_integers: Vec<(XsdValue, XsdValue)> = integers
         .iter()
-        .map(|&(a, b)| (XsdValue::integer(a), XsdValue::integer(b)))
+        .map(|&(a, b)| {
+            let value = |value: i128| XsdValue::Integer {
+                value: value.into(),
+                datatype: XsdDatatype::Integer,
+            };
+            (value(a), value(b))
+        })
         .collect();
     let decimals = small_decimals();
     let exact_decimals: Vec<(Decimal, Decimal)> = decimals
@@ -112,12 +117,12 @@ fn bench_small(c: &mut Bench) {
             )
         })
         .collect();
-    let value_decimals: Vec<(XsdValue, XsdValue)> = decimals
+    let bounded_decimals: Vec<(XsdValue, XsdValue)> = decimals
         .iter()
         .map(|(a, b)| {
             (
-                XsdValue::Decimal(parse_decimal(a).expect("valid")),
-                XsdValue::Decimal(parse_decimal(b).expect("valid")),
+                XsdValue::from_exact_decimal(parse_decimal(a).expect("valid")),
+                XsdValue::from_exact_decimal(parse_decimal(b).expect("valid")),
             )
         })
         .collect();
@@ -131,9 +136,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("integer_add/value", |b| {
+    group.bench_function("integer_add/bounded", |b| {
         b.iter(|| {
-            for (x, y) in &value_integers {
+            for (x, y) in &bounded_integers {
                 black_box(numeric_add(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -145,9 +150,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("integer_mul/value", |b| {
+    group.bench_function("integer_mul/bounded", |b| {
         b.iter(|| {
-            for (x, y) in &value_integers {
+            for (x, y) in &bounded_integers {
                 black_box(numeric_mul(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -159,9 +164,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_add/value", |b| {
+    group.bench_function("decimal_add/bounded", |b| {
         b.iter(|| {
-            for (x, y) in &value_decimals {
+            for (x, y) in &bounded_decimals {
                 black_box(numeric_add(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -173,9 +178,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_mul/value", |b| {
+    group.bench_function("decimal_mul/bounded", |b| {
         b.iter(|| {
-            for (x, y) in &value_decimals {
+            for (x, y) in &bounded_decimals {
                 black_box(numeric_mul(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -193,9 +198,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_div/value", |b| {
+    group.bench_function("decimal_div/bounded", |b| {
         b.iter(|| {
-            for (x, y) in &value_decimals {
+            for (x, y) in &bounded_decimals {
                 black_box(numeric_div(black_box(x), black_box(y)).ok());
             }
         });
@@ -212,7 +217,7 @@ fn bench_small(c: &mut Bench) {
             black_box(len)
         });
     });
-    group.bench_function("decimal_parse_canonical/value", |b| {
+    group.bench_function("decimal_parse_canonical/public", |b| {
         b.iter(|| {
             let mut len = 0;
             for (text, _) in &decimals {
@@ -231,9 +236,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_to_f64/value", |b| {
+    group.bench_function("decimal_to_f64/bounded", |b| {
         b.iter(|| {
-            for (x, _) in &value_decimals {
+            for (x, _) in &bounded_decimals {
                 if let XsdValue::Decimal(decimal) = black_box(x) {
                     black_box(decimal.to_f64());
                 }
@@ -319,7 +324,7 @@ fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
         let (whole, fraction) = digits.split_at(12 - scale.min(12));
         let fraction = format!("{fraction:0>scale$}");
         let text = format!("{}.{fraction}", if whole.is_empty() { "0" } else { whole });
-        XsdValue::Decimal(parse_decimal(&text).expect("a decimal"))
+        XsdValue::from_exact_decimal(parse_decimal(&text).expect("an exact decimal"))
     };
     (0..SMALL_OPS)
         .map(|_| (one(&mut state), one(&mut state)))
@@ -327,11 +332,10 @@ fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
 }
 
 /// `xsd_exact_fine_products/{bounded,tower}`: 1024 `numeric_mul` products of two
-/// twelve-digit decimals. Nine fractional digits each keep the product at eighteen;
-/// ten each make it twenty, which the 3.x bounded decimal could not hold and the
-/// exact decimal does, its 24-digit coefficient still inline in `i128`. The pair is
-/// the cost of an exact product past eighteen fractional digits against the one
-/// beside it that never left eighteen.
+/// bounded decimals. Nine fractional digits each keep the product at eighteen, inside
+/// the bounded decimal; ten each make it twenty, which only the tower holds exactly,
+/// so every product allocates its coefficient there. The pair is the cost of an exact
+/// product past eighteen fractional digits against the machine-word one beside it.
 fn bench_fine_products(c: &mut Bench) {
     let at_eighteen = scaled_decimals(9);
     let at_twenty = scaled_decimals(10);

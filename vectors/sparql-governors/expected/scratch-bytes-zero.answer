@@ -1,5 +1,5 @@
 outcome	budget-exhausted
-tripped	budget	scratch-bytes	scratch-exhausted	limit=0	consumed=353
+tripped	budget	scratch-bytes	scratch-exhausted	limit=0	consumed=465
 certificate	certain	positional-prefix=true
 variables	wide
 row	"alpha-0123456789012345678901234567890123456789"^^<http://www.w3.org/2001/XMLSchema#string>

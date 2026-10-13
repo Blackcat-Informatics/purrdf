@@ -9,6 +9,15 @@ on:
       - main
   # Any branch can be run on demand, without opening a pull request for it.
   workflow_dispatch:
+    inputs:
+      native_profile:
+        description: Capture matched native compilation and C phase cold/warm arms
+        type: boolean
+        default: false
+      simd_projection:
+        description: Generate and verify the complete SIMD document projection
+        type: boolean
+        default: false
 
 # A newer push to a pull request supersedes the run the previous one started, so that
 # run is cancelled rather than left to hold runners for a result nobody reads. Runs on
@@ -223,7 +232,7 @@ jobs:
         run: python3 scripts/check-doc-claims.py
 
       - name: Check the zh-Hans translation against its glossary
-        run: python3 scripts/check-i18n-glossary.py
+        run: cargo run -q --locked -p helper-census -- --glossary-gate
 
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py
@@ -291,13 +300,13 @@ jobs:
       - name: Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # `cargo test --workspace --locked` (`make test`), as six parallel shards. As one
+  # `cargo test --workspace --locked` (`make test`), as seven parallel shards. As one
   # job it compiled for 25 minutes before running a test and was cancelled at its
   # timeout; nearly all of that is first-party test targets, so a dependency cache
   # alone could not bring it back under budget. `make test-shard` defines the
   # shards and carries the proof that together they are exactly the old command:
   # every shard selects `--workspace`, so dependency features resolve as they did,
-  # and the lib / doc / four integration-test shards partition its default target
+  # and the lib / doc / five integration-test shards partition its default target
   # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
   # job below already runs through `make capi-check`.
   test-shard:
@@ -309,7 +318,7 @@ jobs:
       # the suite, and a cancelled slice is a slice nobody saw.
       fail-fast: false
       matrix:
-        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4]
+        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4, integration-5]
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
@@ -348,7 +357,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # One cache for all six shards. Every shard resolves features over the whole
+      # One cache for all seven shards. Every shard resolves features over the whole
       # workspace, so each compiles its dependencies identically and one saved set
       # serves them all; the lib shard, which builds every package's dev-dependencies,
       # is the one that saves it. First-party crates are never cached (the action
@@ -368,7 +377,7 @@ jobs:
         if: matrix.shard == 'lib'
         uses: ./.github/actions/binaryen-toolchain
 
-      - name: Run workspace tests (this shard; the six include the doc tests)
+      - name: Run workspace tests (this shard; the seven include the doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
         # vector path of each family this job requires; the distance, kNN and HNSW
         # tests still assert they executed every path the runner reports, and every
@@ -460,7 +469,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 31 publishable crates with rustdoc lints promoted
+      # Document exactly the 33 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -555,12 +564,14 @@ jobs:
             -p purrdf-hnsw \
             -p purrdf-rdf \
             -p purrdf-markdown \
+            -p purrdf-mime \
             -p purrdf-json \
             -p purrdf-slice \
             -p purrdf-shapes \
             -p purrdf-shex \
             -p purrdf-entail \
             -p purrdf-geo \
+            -p purrdf-geo-kernel \
             -p purrdf-text \
             -p purrdf-retrieval \
             -p purrdf-validate \
@@ -661,6 +672,32 @@ jobs:
         # uses both builds, and shadow-stack/host-clock probes use the baseline.
         run: make wasm-test
 
+  geo-determinism:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown
+
+      - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+        uses: ./.github/actions/wasm-toolchain
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Compare native, portable WASM and SIMD WASM geographic laws
+        run: make geo-determinism
+
   # Native schema oracles need no wasm package and run in parallel.
   wasm-schema-oracles:
     runs-on: ubuntu-latest
@@ -730,7 +767,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Record measurement inputs
+        run: |
+          mkdir -p target/asm-diagnostics
+          rustc -vV > target/asm-diagnostics/compiler.txt
+          git rev-parse HEAD 'HEAD^{tree}' > target/asm-diagnostics/checkout.txt
+          git status --porcelain=v1 > target/asm-diagnostics/source-status.txt
+          test ! -s target/asm-diagnostics/source-status.txt
+          sha256sum Makefile Cargo.toml Cargo.lock rust-toolchain.toml \
+            scripts/check-simd-asm.py scripts/simd_asm_runtime.py \
+            scripts/simd-asm-manifest.toml docs/design/purrdf-simd.md \
+            > target/asm-diagnostics/inputs.sha256
       - name: Measure and check this configuration
+        id: measure
         run: |
           # Bound scalar WASM compilation through the existing Cargo job budget.
           # Other configurations keep their current scheduling.
@@ -743,6 +792,105 @@ jobs:
         with:
           name: simd-asm-${{ matrix.config }}
           path: target/asm-reports/*.json
+          if-no-files-found: error
+      - name: Upload failed measurement diagnostics
+        if: failure() && steps.measure.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          # Outside simd-asm-* so the aggregate receives only checked reports.
+          name: asm-diagnostics-${{ matrix.config }}
+          path: |
+            target/asm-diagnostics/
+            target/asm-reports/${{ matrix.config }}.json
+            target/simd-asm/contexts/**/purrdf_core*.s
+            target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
+            target/simd-asm/contexts/**/cargo.graph-*.stderr.log
+            target/simd-asm/contexts/**/evidence/*.json
+          if-no-files-found: error
+
+  # An explicit dispatch generates a projection independently of ordinary parity
+  # checks. Its output is reviewed and committed separately; it never commits or pushes.
+  simd-asm-projection:
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+      - name: Install the C cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Record the clean checkout and measurement inputs
+        run: |
+          mkdir -p target/asm-projection/reports
+          rustc -vV > target/asm-projection/compiler.txt
+          git rev-parse HEAD 'HEAD^{tree}' > target/asm-projection/checkout.txt
+          git status --porcelain=v1 > target/asm-projection/source-status-before.txt
+          test ! -s target/asm-projection/source-status-before.txt
+          sha256sum .github/workflows/ci.yaml Makefile Cargo.toml Cargo.lock rust-toolchain.toml \
+            scripts/check-simd-asm.py scripts/simd_asm_runtime.py \
+            scripts/simd-asm-manifest.toml crates/rdf-core/src/ir/dataset.rs \
+            crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/query.rs \
+            crates/rdf-core/src/ir/paged/translation.rs docs/design/purrdf-simd.md \
+            > target/asm-projection/inputs-before.sha256
+      - name: Inspect the actual x86-v3 eager seal and mapping bodies
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
+            > target/asm-projection/x86-v3-body-probe.log 2>&1
+      - name: Inspect the actual x86-v4 eager seal and mapping bodies
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
+            > target/asm-projection/x86-v4-body-probe.log 2>&1
+      - name: Generate the complete seven-configuration projection
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--write-doc --jobs 2" \
+            > target/asm-projection/generation.log 2>&1
+          git diff --exit-code -- . ':(exclude)docs/design/purrdf-simd.md'
+          git ls-files --others --exclude-standard > target/asm-projection/untracked-after.txt
+          test ! -s target/asm-projection/untracked-after.txt
+          git diff --binary -- docs/design/purrdf-simd.md > target/asm-projection/projection.patch
+          cp docs/design/purrdf-simd.md target/asm-projection/purrdf-simd.md
+          sha256sum docs/design/purrdf-simd.md scripts/simd-asm-manifest.toml \
+            > target/asm-projection/inputs-after.sha256
+          git status --porcelain=v1 > target/asm-projection/source-status-after.txt
+      - name: Qualify the generated projection on all seven configurations
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--jobs 2 --report target/asm-projection/reports/all-configurations.json" \
+            > target/asm-projection/qualification.log 2>&1
+      - name: Require complete checked evidence and the same compiler
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-projection/reports" \
+            > target/asm-projection/aggregate.log 2>&1
+          rustc -vV > target/asm-projection/compiler-after.txt
+          cmp target/asm-projection/compiler.txt target/asm-projection/compiler-after.txt
+      - name: Record artifact checksums
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p target/asm-projection
+          find target/asm-projection -type f ! -name artifacts.sha256 -print0 \
+            | sort -z | xargs -0 sha256sum > target/asm-projection/artifacts.sha256
+      - name: Upload projection and emitted-body evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: asm-projection
+          path: |
+            target/asm-projection/
+            target/simd-asm/contexts/**/purrdf_core*.s
+            target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
+            target/simd-asm/contexts/**/cargo.graph-*.stderr.log
+            target/simd-asm/contexts/**/evidence/*.json
           if-no-files-found: error
 
   simd-asm:
@@ -796,6 +944,14 @@ jobs:
         env:
           PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: cargo test --locked -p purrdf-core --lib distance
+
+      - name: Replay certified geographic and cell laws on NEON
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: numeric:portable,numeric:neon
+        run: |
+          cargo test --locked -p purrdf-xsd --test certified_numerical
+          cargo test --locked -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
+          cargo test --locked -p purrdf-geo --test determinism
 
       - name: Run the kNN kernels and their pinned cross-target answers on aarch64
         env:
@@ -914,6 +1070,14 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
             --test binary_arithmetic
 
+      - name: Replay certified geographic and cell laws on i686
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: numeric:portable,numeric:sse2
+        run: |
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-xsd --test certified_numerical
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo --test determinism
+
       # i586 has no SSE2, so every binary64 and binary32 operation runs on the x87,
       # which rounds to its register precision and again on every store. Every
       # result-affecting operation in the workspace computes through `purrdf_xsd::ieee`,
@@ -938,6 +1102,14 @@ jobs:
             --test binary_arithmetic
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
             --test float_environment_x87 --test float_environment_x87_rayon
+
+      - name: Replay certified geographic and cell laws on i586 x87
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: numeric:portable
+        run: |
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --test certified_numerical
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo --test determinism
 
   # Type-checking the Windows path cannot verify CreateFileW access rights or
   # timestamp resolution. Exercise file, directory, hardlink, and read-only
@@ -1101,6 +1273,9 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Exercise the declared minimum; uv's moving latest can outrun wheel support.
+      UV_PYTHON: "3.13"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1127,10 +1302,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Python binding tests (maturin build + pytest)
-        working-directory: bindings/python
-        run: |
-          uv sync --locked --group dev
-          uv run --locked pytest tests -q
+        run: make pytest
 
       - name: Pydantic emitter schema oracle
         run: make pydantic-oracle
@@ -1206,6 +1378,8 @@ jobs:
     name: conformance (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.13"
     strategy:
       fail-fast: false
       matrix:
@@ -1276,3 +1450,594 @@ jobs:
         env:
           SHARDS_RESULT: ${{ needs.conformance-shard.result }}
         run: test "$SHARDS_RESULT" = success
+  # Optional controlled experiment. Required workspace/test/capi jobs above are
+  # unchanged and continue to provide the strict lint/hygiene acceptance gates.
+  native-profile-admission:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+      - name: Admit the campaign compiler (floating channel, exact observed identity)
+        run: |
+          mkdir -p native-profile-admission
+          rustc -vV > native-profile-admission/admitted-rustc.txt
+          cargo -Vv > native-profile-admission/admitted-cargo.txt
+      - name: Retain compiler admission
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-admission
+          path: native-profile-admission/
+          if-no-files-found: error
+
+  native-profile:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_profile
+    needs: native-profile-admission
+    runs-on: ubuntu-latest
+    # The monolithic counterfactual must finish. Cancellation is not evidence.
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: 8
+      PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:sse2,blake3:sse2,deflate:sse2,csv:sse2
+    steps:
+      - name: Start task-owned disk setup evidence
+        run: |
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          sudo mkdir -p "$campaign"
+          sudo chown -R "$(id -u):$(id -g)" "$campaign"
+          date +%s%N > "$campaign/setup-start.txt"
+          mkdir -p "$campaign/resources"
+          cp "$campaign/setup-start.txt" "$campaign/resources/setup-start.txt"
+          df -h /opt > "$campaign/resources/setup-disk-before.txt"
+      - name: Reclaim unused runner toolchains before native links
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
+          df -h /opt > "/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/resources/setup-disk-after.txt"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+      # No artifact/dependency/compiler cache action runs in the experiment.
+      # Registry/download and OS page caches are separately declared, not flushed.
+      - name: Download exact compiler admission
+        id: native-profile-admission-download
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-admission
+          path: /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Refuse a partial rerun without current-attempt admission
+        if: failure() && steps.native-profile-admission-download.outcome == 'failure'
+        run: |
+          echo "::error::Current-attempt compiler admission is missing. Rerun ALL jobs in the profiling workflow; failed-jobs-only reruns cannot borrow evidence from older attempts."
+          exit 1
+      - name: Require the admitted compiler and Cargo before building the controller
+        run: |
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rustc -vV > "$campaign/resources/actual-rustc.txt"
+          cargo -Vv > "$campaign/resources/actual-cargo.txt"
+          diff -u "$campaign/admitted-rustc.txt" "$campaign/resources/actual-rustc.txt"
+          diff -u "$campaign/admitted-cargo.txt" "$campaign/resources/actual-cargo.txt"
+      - name: Install Node for the actual native ECMAScript oracle
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Install the pinned Binaryen validator
+        uses: ./.github/actions/binaryen-toolchain
+      - name: Install the pinned header-contract generator outside measured targets
+        run: cargo install cargo-c --version 0.10.23 --locked
+      - name: Build the original Rust controller outside cold target AND build directories
+        id: profile-setup
+        run: |
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          CARGO_TARGET_DIR="$campaign/controller-target" CARGO_BUILD_BUILD_DIR="$campaign/controller-build" \
+            cargo build --locked -p purrdf-capi --example native_ci_profile --profile test --jobs 8
+          echo "PURRDF_HOSTED_CONTROLLER=$campaign/controller-target/debug/examples/native_ci_profile" >> "$GITHUB_ENV"
+          echo "PURRDF_HOSTED_REAL_CARGO=$(command -v cargo)" >> "$GITHUB_ENV"
+          date +%s%N > "$campaign/resources/setup-finished.txt"
+      - name: Execute validated cold and unchanged warm before-monolithic
+        env:
+          PROFILE_CASE: before-monolithic
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain before-monolithic source-bound evidence even on failure
+        id: upload_before_monolithic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-before-monolithic
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-monolithic/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-monolithic/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-monolithic/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-monolithic/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-monolithic/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded before-monolithic evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: before-monolithic
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_before_monolithic.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_before_monolithic.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm before-capi
+        env:
+          PROFILE_CASE: before-capi
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain before-capi source-bound evidence even on failure
+        id: upload_before_capi
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-before-capi
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-capi/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-capi/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-capi/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-capi/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-capi/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded before-capi evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: before-capi
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_before_capi.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_before_capi.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm before-downstream
+        env:
+          PROFILE_CASE: before-downstream
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain before-downstream source-bound evidence even on failure
+        id: upload_before_downstream
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-before-downstream
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-downstream/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-downstream/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-downstream/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-downstream/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/before-downstream/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded before-downstream evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: before-downstream
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_before_downstream.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_before_downstream.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-lib
+        env:
+          PROFILE_CASE: after-lib
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-lib source-bound evidence even on failure
+        id: upload_after_lib
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-lib
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-lib/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-lib/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-lib/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-lib/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-lib/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-lib evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-lib
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_lib.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_lib.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-doc
+        env:
+          PROFILE_CASE: after-doc
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-doc source-bound evidence even on failure
+        id: upload_after_doc
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-doc
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-doc/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-doc/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-doc/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-doc/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-doc/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-doc evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-doc
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_doc.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_doc.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-integration-1
+        env:
+          PROFILE_CASE: after-integration-1
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-integration-1 source-bound evidence even on failure
+        id: upload_after_integration_1
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-integration-1
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-1/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-1/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-1/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-1/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-1/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-integration-1 evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-integration-1
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_1.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_1.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-integration-2
+        env:
+          PROFILE_CASE: after-integration-2
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-integration-2 source-bound evidence even on failure
+        id: upload_after_integration_2
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-integration-2
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-2/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-2/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-2/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-2/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-2/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-integration-2 evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-integration-2
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_2.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_2.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-integration-3
+        env:
+          PROFILE_CASE: after-integration-3
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-integration-3 source-bound evidence even on failure
+        id: upload_after_integration_3
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-integration-3
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-3/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-3/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-3/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-3/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-3/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-integration-3 evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-integration-3
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_3.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_3.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-integration-4
+        env:
+          PROFILE_CASE: after-integration-4
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-integration-4 source-bound evidence even on failure
+        id: upload_after_integration_4
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-integration-4
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-4/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-4/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-4/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-4/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-4/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-integration-4 evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-integration-4
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_4.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_4.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-integration-5
+        env:
+          PROFILE_CASE: after-integration-5
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-integration-5 source-bound evidence even on failure
+        id: upload_after_integration_5
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-integration-5
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-integration-5 evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-integration-5
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_5.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_5.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-capi
+        env:
+          PROFILE_CASE: after-capi
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-capi source-bound evidence even on failure
+        id: upload_after_capi
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-capi
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-capi/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-capi/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-capi/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-capi/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-capi/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-capi evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-capi
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_capi.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_capi.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-downstream
+        env:
+          PROFILE_CASE: after-downstream
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-downstream source-bound evidence even on failure
+        id: upload_after_downstream
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-downstream
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-downstream/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-downstream/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-downstream/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-downstream/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-downstream/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-downstream evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-downstream
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_downstream.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_downstream.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm profile-before-capi
+        env:
+          PROFILE_CASE: profile-before-capi
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain profile-before-capi source-bound evidence even on failure
+        id: upload_profile_before_capi
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-profile-before-capi
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/profile-before-capi/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/profile-before-capi/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/profile-before-capi/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/profile-before-capi/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/profile-before-capi/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded profile-before-capi evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: profile-before-capi
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_profile_before_capi.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_profile_before_capi.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Retain shared setup and attributable post-upload reclamation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-resources
+          path: /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/resources/
+          if-no-files-found: error
+          retention-days: 30
+
+  native-profile-comparison:
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.native_profile
+    needs: [native-profile-admission, native-profile]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 8
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+      - name: Prepare the original retained-evidence absolute path
+        run: |
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          sudo mkdir -p "$campaign"
+          sudo chown -R "$(id -u):$(id -g)" "$campaign"
+      - name: Download failure-preserving arm evidence
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-*
+          # Each artifact's case directory is restored explicitly below: upload's
+          # common parent is the case, not the campaign.
+          path: /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/downloads
+      - name: Build comparison controller outside arms
+        run: |
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          CARGO_TARGET_DIR="$campaign/comparison-target" CARGO_BUILD_BUILD_DIR="$campaign/comparison-build" \
+            cargo build --locked -p purrdf-capi --example native_ci_profile --profile test --jobs 8
+          echo "PURRDF_HOSTED_CONTROLLER=$campaign/comparison-target/debug/examples/native_ci_profile" >> "$GITHUB_ENV"
+      - name: Require the exact current-attempt inventory before restoring any evidence
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-restore "$campaign" 2>&1 | tee "$campaign/restore-refusals.txt"
+      - name: Validate all matching inputs and complete coverage before comparing either cold or warm
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-compare "$campaign" 2>&1 | tee "$campaign/comparison-refusals.txt"
+      - name: Retain comparison policies and outputs even on refusal
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-comparison
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/*-policy.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/*-comparison.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/comparison-refusals.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/restore-refusals.txt
+          if-no-files-found: error
+      - name: Require every actual arm to have finished successfully
+        env:
+          ARMS_RESULT: ${{ needs.native-profile.result }}
+          ADMISSION_RESULT: ${{ needs.native-profile-admission.result }}
+        run: test "$ARMS_RESULT" = success && test "$ADMISSION_RESULT" = success

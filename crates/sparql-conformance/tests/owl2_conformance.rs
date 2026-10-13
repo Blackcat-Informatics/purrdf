@@ -6,8 +6,8 @@
 //!
 //! # Read the row correctly
 //!
-//! This corpus is **consistency**-shaped. All 261 vendored cases are
-//! `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35); there is not
+//! This corpus is **consistency**-shaped. All 262 vendored cases are
+//! `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (36); there is not
 //! one `otest:PositiveEntailmentTest` or `otest:NegativeEntailmentTest` in it,
 //! because none was vendored into it. The upstream W3C material has 206 positive
 //! and 23 negative entailment tests — they are vendored and graded by
@@ -19,9 +19,9 @@
 //! `owl2_rl_conformance.rs`. The conformance matrix's `Entailment` row is fed from
 //! here and must be read as "open-world DL consistency", not "rule coverage".
 //!
-//! It is also a **subset**: 261 of the 482 consistency-shaped cases upstream. The
+//! It is also a **subset**: 262 of the 482 consistency-shaped cases upstream. The
 //! harness prints the exclusion tally next to the scoreboard and pins it with
-//! `EXPECTED_*_EXCLUDED` constants below, so the 221 left out — and in particular
+//! `EXPECTED_*_EXCLUDED` constants below, so the 220 left out — and in particular
 //! the ones the tableau cannot decide — cannot become invisible.
 //!
 //! # What fails this harness
@@ -57,8 +57,8 @@ const EXPECTED_CONSISTENT: usize = 226;
 /// vendored into the graded DL corpus.
 const EXPECTED_INCONSISTENT: usize = 36;
 
-/// Consistency-shaped upstream cases this corpus does NOT vendor. Lowered from 221 to 220 as
-/// `webont-description-logic-035` moved from the excluded set into the graded corpus.
+/// Consistency-shaped upstream cases this corpus does NOT vendor. This is the
+/// unchanged frozen exclusion tally, not a new probe of the excluded cases.
 const EXPECTED_EXCLUDED: usize = 220;
 /// …of which PurRDF's tableau does not terminate on. These are the cases the
 /// reasoner genuinely cannot decide; they are pinned here so their number is a
@@ -119,6 +119,16 @@ fn owl2_dl_consistency_conformance() {
          census, this constant and the corpus PROVENANCE.md moving together"
     );
 
+    assert_eq!(
+        summary.agreed(),
+        EXPECTED_CASES,
+        "every published verdict must agree"
+    );
+    assert_eq!(
+        summary.ledgered(),
+        0,
+        "the four repaired divergences stay closed"
+    );
     assert!(
         summary.unledgered().is_empty() && summary.stale().is_empty(),
         "W3C OWL 2 conformance failed:\n{}",
@@ -180,4 +190,32 @@ fn regenerate_ledger() {
     let summary = owl2::run(&owl2::suite_root()).expect("grade the vendored W3C OWL 2 corpus");
     println!("{}", summary.scoreboard_line());
     println!("{}", owl2::render_ledger_skeleton(&summary));
+}
+
+#[test]
+fn the_four_original_divergences_match_the_verbatim_published_cases() {
+    let cases = owl2::discover(&owl2::suite_root()).expect("frozen corpus");
+    for (name, published) in [
+        ("new-feature-bottomdataproperty-001", Verdict::Inconsistent),
+        (
+            "new-feature-bottomobjectproperty-001",
+            Verdict::Inconsistent,
+        ),
+        ("webont-thing-003", Verdict::Inconsistent),
+        ("webont-i5-26-007", Verdict::Consistent),
+    ] {
+        let case = cases
+            .iter()
+            .find(|case| case.name == name)
+            .expect("original case retained");
+        assert_eq!(
+            case.published, published,
+            "{name}: frozen published verdict"
+        );
+        assert!(
+            matches!(owl2::grade(case), owl2::Grade::Agree),
+            "{name}: actual public DL verdict"
+        );
+    }
+    assert!(owl2::LEDGER.is_empty());
 }

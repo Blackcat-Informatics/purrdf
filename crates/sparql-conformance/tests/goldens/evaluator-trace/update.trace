@@ -1174,7 +1174,7 @@ store quads=4
 | <http://example.com/s2> <http://example.com/salary> "1350"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | <http://example.com/s3> <http://example.com/salary> "1380"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | <http://example.com/s> <http://example.com/salary> "1300"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered applied fuel=32 intermediate-cells=24 scratch-bytes=304
+metered applied fuel=32 intermediate-cells=24 scratch-bytes=608
 fuel 0 tripped fuel-exhausted consumed=1 store=pre-state | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 store=pre-state | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 store=pre-state | fuel=3

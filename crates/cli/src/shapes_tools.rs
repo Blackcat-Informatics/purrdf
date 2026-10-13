@@ -5,7 +5,9 @@
 //!
 //! Each is a thin lane over one library entry point every other PurRDF host reaches too —
 //! `purrdf_shapes::infer` / `purrdf_shapes::srl::infer`,
-//! `purrdf_shapes::free_expression::evaluate` and `purrdf_shapes::lint::lint` — so the
+//! `purrdf_shapes::free_expression::evaluate` and `purrdf_shapes::lint::lint`, and for
+//! `rules` and `node-expr` under `--xpath-regex` their selected-law twins
+//! `purrdf_shapes::xpath::run_rules` and `purrdf_shapes::xpath::evaluate_free_expression` — so the
 //! command line cannot disagree with Python, WebAssembly or the C ABI about what a rule
 //! infers, what an expression evaluates to, or whether a shapes graph is well-formed. The
 //! shapes document is read through [`crate::shapes_source`], the seam `validate` reads it
@@ -30,7 +32,9 @@
 
 use purrdf::shapes::free_expression::{self, FreeExpression};
 use purrdf::shapes::srl;
+use purrdf::shapes::xpath::XPathValidationError;
 use purrdf::shapes::{Inference, lint};
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::ExprSelector;
 
@@ -73,6 +77,9 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) max_stored_facts: Option<u64>,
     /// `--max-join-steps`.
     pub(crate) max_join_steps: Option<u64>,
+    /// `--xpath-regex`: the dated native XPath pattern law every pattern the rules decide
+    /// is evaluated under. `None` keeps the compatibility pattern engine.
+    pub(crate) xpath_regex: Option<Profile>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--to`: the output format override.
@@ -194,13 +201,13 @@ pub(crate) fn run_rules(
                 shapes_error(error, &format!("--shapes {path}"), &root, "--shapes-base")
             })?;
             diagnostics = shapes.mandatory_diagnostics().to_vec();
-            purrdf::shapes::run_rules(
+            rules_run(
                 purrdf::shapes::RuleSource::Shapes(&shapes),
                 data.as_ref(),
                 &limits,
-                cli_limit_knobs(),
-            )
-            .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?
+                options.xpath_regex,
+                &format!("--shapes {path}"),
+            )?
         }
         RuleSource::Srl { path, base } => {
             let document = check_srl(
@@ -210,13 +217,13 @@ pub(crate) fn run_rules(
                 srl::CheckLevel::Stratified,
             )?
             .into_document();
-            purrdf::shapes::run_rules(
+            rules_run(
                 purrdf::shapes::RuleSource::Srl(&document),
                 data.as_ref(),
                 &limits,
-                cli_limit_knobs(),
-            )
-            .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?
+                options.xpath_regex,
+                &format!("--srl {path}"),
+            )?
         }
     };
 
@@ -240,6 +247,44 @@ pub(crate) fn run_rules(
         report::surface_rendered(&options.explain, &inference.proof_text())?;
     }
     ledger::surface(ledger_target, &ledger)
+}
+
+/// Run `source` over `data`, under the `--xpath-regex` law when one was named
+/// ([`purrdf::shapes::xpath::run_rules`]) and the compatibility pattern engine otherwise.
+///
+/// A refusal of the rule run itself is reported after `context`, the flag naming the rule
+/// source, under either law; a refusal only the selected law raises — a native pattern
+/// resource withheld, or a rule query's operational diagnostic — names the law instead.
+fn rules_run(
+    source: purrdf::shapes::RuleSource<'_>,
+    data: &purrdf_core::RdfDataset,
+    limits: &purrdf::shapes::RuleLimits,
+    xpath_regex: Option<Profile>,
+    context: &str,
+) -> Result<Inference, CliError> {
+    let Some(profile) = xpath_regex else {
+        return purrdf::shapes::run_rules(source, data, limits, cli_limit_knobs())
+            .map_err(|error| CliError::Runtime(format!("{context}: {error}")));
+    };
+    purrdf::shapes::xpath::run_rules(
+        source,
+        data,
+        limits,
+        cli_limit_knobs(),
+        profile,
+        Limits::new(),
+    )
+    .map_err(|error| match error {
+        XPathValidationError::Shapes(error) => CliError::Runtime(format!("{context}: {error}")),
+        other => xpath_regex_error(profile, &other),
+    })
+}
+
+/// A refusal only the `--xpath-regex` law raises, as the runtime failure (exit 1) it
+/// reports: the law's stable name, then the engine's own typed cause — the spelling
+/// `validate --xpath-regex` gives the same refusal.
+fn xpath_regex_error(profile: Profile, error: &XPathValidationError) -> CliError {
+    CliError::Runtime(format!("--xpath-regex {}: {error}", profile.name()))
 }
 
 /// The rule-evaluation limits' knobs, as this command spells them.
@@ -372,6 +417,9 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) focus: &'a str,
     /// `--scope NAME=TERM`, repeatable.
     pub(crate) scope: &'a [String],
+    /// `--xpath-regex`: the dated native XPath pattern law every pattern the expression
+    /// decides is evaluated under. `None` keeps the compatibility pattern engine.
+    pub(crate) xpath_regex: Option<Profile>,
     /// `--from`.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`.
@@ -510,7 +558,7 @@ pub(crate) fn run_node_expr(
             root_document.loaded.last().map(String::as_str),
         )
         .map_err(|error| CliError::Runtime(format!("{context}: {error}")))?;
-    let evaluated = free_expression::evaluate(&FreeExpression {
+    let expression = FreeExpression {
         shapes: &selected.shapes,
         prefixes: &root_document.prefixes,
         root: &selected.root,
@@ -518,8 +566,18 @@ pub(crate) fn run_node_expr(
         focus: &focus,
         scope: &scope,
         imports: &table,
-    })
-    .map_err(|error| shapes_error(error, &context, &root_document, "--shapes-base"))?;
+    };
+    let refused = |error| shapes_error(error, &context, &root_document, "--shapes-base");
+    let evaluated = match options.xpath_regex {
+        None => free_expression::evaluate(&expression).map_err(refused)?,
+        Some(profile) => {
+            purrdf::shapes::xpath::evaluate_free_expression(&expression, profile, Limits::new())
+                .map_err(|error| match error {
+                    XPathValidationError::Shapes(error) => refused(error),
+                    other => xpath_regex_error(profile, &other),
+                })?
+        }
+    };
     let mut text = String::new();
     for term in &evaluated.outputs {
         text.push_str(&term.to_string());

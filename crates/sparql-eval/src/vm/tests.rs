@@ -185,11 +185,21 @@ impl Walker {
             }
             Expression::UnaryPlus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric_unary_plus).unwrap())
+                Ok(helpers::unary_numeric_term(
+                    ctx,
+                    ta,
+                    purrdf_xsd::numeric::NumericUnaryOperator::Plus,
+                )
+                .unwrap())
             }
             Expression::UnaryMinus(a) => {
                 let ta = self.term(a, row, schema, ctx)?;
-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::value_unary_minus).unwrap())
+                Ok(helpers::unary_numeric_term(
+                    ctx,
+                    ta,
+                    purrdf_xsd::numeric::NumericUnaryOperator::Minus,
+                )
+                .unwrap())
             }
             Expression::FunctionCall(function, args) => {
                 self.function(function, args, row, schema, ctx)
@@ -268,7 +278,7 @@ impl Walker {
                 else {
                     return Ok(None);
                 };
-                return Ok(helpers::cached_regex(ctx, &pattern, &flags).map(|re| {
+                return Ok(helpers::build_regex(&pattern, &flags).map(|re| {
                     helpers::intern_boolean(ctx, re.as_regex().is_match(&text)).unwrap()
                 }));
             }
@@ -354,7 +364,8 @@ impl Walker {
                     Expression::Literal(lit) => Some(lit.value().to_owned()),
                     other => self
                         .term(other, row, schema, ctx)?
-                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap()),
+                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap())
+                        .map(|value| value.parts().0.to_owned()),
                 };
                 Ok(lexical.map(|s| (s, None, None)))
             }
@@ -366,7 +377,8 @@ impl Walker {
                     ),
                     other => self
                         .term(other, row, schema, ctx)?
-                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap()),
+                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap())
+                        .map(|value| value.parts().0.to_owned()),
                 };
                 Ok(lexical.map(|s| (s, None, None)))
             }
@@ -374,7 +386,12 @@ impl Walker {
                 let Some(term) = self.term(expr, row, schema, ctx)? else {
                     return Ok(None);
                 };
-                Ok(helpers::string_arg_of_term(ctx, term).unwrap())
+                Ok(helpers::string_arg_of_term(ctx, term)
+                    .unwrap()
+                    .map(|value| {
+                        let (lexical, language, direction) = value.parts();
+                        (lexical.to_owned(), language.map(str::to_owned), direction)
+                    }))
             }
         }
     }
@@ -1006,6 +1023,88 @@ fn the_vm_matches_the_tree_walk_over_generated_expressions() {
     }
 }
 
+fn typed(lexical: &str, datatype: &str) -> Expression {
+    Expression::Literal(Literal::new_typed(
+        lexical,
+        NamedNode::new_unchecked(format!("{XSD}{datatype}")),
+    ))
+}
+
+/// **A NaN comparison answers the same, and the specified, boolean on both
+/// evaluators**: `=`, `<`, `>`, `<=`, `>=` are `false` and `!=` is `true` for a NaN
+/// against any number (XPath F&O `op:numeric-equal`/`-less-than`/`-greater-than`);
+/// a NaN equals nothing and orders against nothing, itself included, so `!=` is the
+/// only relation true of `NaN` and `NaN` (SPARQL 1.2 §17.4.2.2).
+/// Over the palette's rows too, which put a NaN cell beside every other kind.
+#[test]
+fn the_vm_matches_the_tree_walk_over_nan_comparisons() {
+    let nan_double = || typed("NaN", "double");
+    let nan_float = || typed("NaN", "float");
+    let operands: Vec<fn() -> Expression> = vec![
+        || typed("NaN", "double"),
+        || typed("NaN", "float"),
+        || int(1),
+        || typed("2.5", "decimal"),
+        || typed("INF", "double"),
+        || var("a"),
+        || var("b"),
+    ];
+    type Build = fn(Expression, Expression) -> Expression;
+    let relations: [(&str, Build); 6] = [
+        ("=", |a, b| Expression::Equal(Child::new(a), Child::new(b))),
+        ("!=", |a, b| {
+            Expression::Not(Child::new(Expression::Equal(Child::new(a), Child::new(b))))
+        }),
+        ("<", |a, b| Expression::Less(Child::new(a), Child::new(b))),
+        (">", |a, b| {
+            Expression::Greater(Child::new(a), Child::new(b))
+        }),
+        ("<=", |a, b| {
+            Expression::LessOrEqual(Child::new(a), Child::new(b))
+        }),
+        (">=", |a, b| {
+            Expression::GreaterOrEqual(Child::new(a), Child::new(b))
+        }),
+    ];
+    for left in &operands {
+        for right in &operands {
+            for (name, build) in &relations {
+                let expr = build(left(), right());
+                assert_same(&expr, &format!("NaN comparison {name}"));
+            }
+        }
+    }
+    let answer = |expr: &Expression| match evaluate(expr) {
+        Some(TermValue::Literal { lexical_form, .. }) => Some(lexical_form == "true"),
+        Some(other) => panic!("a comparison bound {other:?}"),
+        None => None,
+    };
+    for nan in [nan_double(), nan_float()] {
+        for number in [int(1), typed("2.5", "decimal"), typed("INF", "double")] {
+            for (name, build) in &relations {
+                let expected = *name == "!=";
+                for expr in [
+                    build(nan.clone(), number.clone()),
+                    build(number.clone(), nan.clone()),
+                ] {
+                    assert_eq!(answer(&expr), Some(expected), "{name}: {expr:?}");
+                }
+            }
+        }
+    }
+    for (name, build) in &relations {
+        let expected = *name == "!=";
+        for (left, right) in [
+            (nan_double(), nan_double()),
+            (nan_float(), nan_float()),
+            (nan_double(), nan_float()),
+        ] {
+            let same = build(left, right);
+            assert_eq!(answer(&same), Some(expected), "NaN {name} NaN: {same:?}");
+        }
+    }
+}
+
 /// **Every numeric constructor cast evaluates as the tree walk evaluates it**: each
 /// numeric, boolean and string target over sources of every numeric type, a boolean, a
 /// string, an ill-typed literal and an IRI, alone and over a bound variable.
@@ -1244,8 +1343,14 @@ fn a_plan_site_compiles_once_and_every_call_shares_it() {
     let tree = crate::plan::Tree::build(&filter);
     let mut ctx = EvalCtx::new(&ds);
     ctx.install_plan(&tree);
-    let first = super::program_at(&ctx, &filter, expr);
-    let second = super::program_at(&ctx, &filter, expr);
+    let first = super::program_at(&ctx, &filter, expr)
+        .unwrap()
+        .caller_arc()
+        .unwrap();
+    let second = super::program_at(&ctx, &filter, expr)
+        .unwrap()
+        .caller_arc()
+        .unwrap();
     assert!(
         Arc::ptr_eq(&first, &second),
         "the site's program is kept on the plan"
@@ -1253,6 +1358,9 @@ fn a_plan_site_compiles_once_and_every_call_shares_it() {
 
     // A structurally equal expression that is not the node's own is compiled apart.
     let copy = expr.clone();
-    let apart = super::program_at(&ctx, &filter, &copy);
+    let apart = super::program_at(&ctx, &filter, &copy)
+        .unwrap()
+        .caller_arc()
+        .unwrap();
     assert!(!Arc::ptr_eq(&first, &apart));
 }

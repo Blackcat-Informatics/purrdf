@@ -551,8 +551,8 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 
 [packages.regex]
 category = "runtime"
-reason = "regex engine for SPARQL REGEX/REPLACE, XSD patterns and SHACL/ShEx pattern constraints"
-distinct = "the matching engine purrdf_core::xsd_regex compiles XSD, XPath, SHACL and ShEx patterns to; PurRDF translates patterns but has no matcher of its own"
+reason = "regex engine for legacy XSD patterns, SHACL/ShEx pattern constraints and JSON Schema regular expressions"
+distinct = "the regular matching backend for existing XSD and constraint APIs; SPARQL REGEX/REPLACE execute through the native owned XPath matcher"
 metrics = { direct = true, exclusive_closure = 4, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.regex-automata]

@@ -86,7 +86,7 @@ pub(super) fn verify_reference_corpus_with_population_mode(field_populations: bo
             })
             .collect();
         assert_eq!(
-            query.score(&inputs).expect(columns[0]).into_raw(),
+            query.score(&inputs).expect(columns[0]).value.into_raw(),
             columns[6].parse::<i128>().expect("raw score"),
             "{}",
             columns[0]

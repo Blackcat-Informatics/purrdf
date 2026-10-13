@@ -1453,11 +1453,34 @@ pub fn decode_uchar_at(peek: impl Fn(usize) -> Option<u8>) -> Result<(char, usiz
 /// ```
 #[must_use]
 pub fn expand_uchars(text: &str) -> Cow<'_, str> {
+    let mut resident = crate::allocation::Resident;
+    let mut memory = crate::allocation::Memory::new(&mut resident);
+    expand_uchars_with_memory(text, &mut memory)
+        .expect("resident UCHAR expansion allocation failed")
+}
+
+/// Expand UCHARs through the existing decoder with admitted UTF-8 ownership.
+///
+/// Malformed escapes remain verbatim, exactly as in [`expand_uchars`]. A text
+/// without a backslash is borrowed and acquires no allocation. For owned text,
+/// each valid UCHAR has six or ten ASCII source bytes and produces at most four
+/// UTF-8 bytes: the original source byte length is a certified exact capacity
+/// bound for this single destination, admitted before its fallible allocation.
+/// The caller retains the original memory's grant while the owned Cow lives.
+///
+/// # Errors
+/// Returns native checked-layout, admission or allocator refusal separately
+/// from malformed lexical input; malformed input is never disguised or lost.
+pub fn expand_uchars_with_memory<'a, S: crate::allocation::Admission + ?Sized>(
+    text: &'a str,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<Cow<'a, str>, crate::allocation::StorageError> {
     let bytes = text.as_bytes();
     let Some(first) = bytes.iter().position(|&b| b == b'\\') else {
-        return Cow::Borrowed(text);
+        return Ok(Cow::Borrowed(text));
     };
-    let mut out = String::with_capacity(text.len());
+    let mut out = String::new();
+    memory.reserve_string(&mut out, text.len())?;
     let mut copied = 0;
     let mut at = first;
     while at < bytes.len() {
@@ -1473,9 +1496,9 @@ pub fn expand_uchars(text: &str) -> Cow<'_, str> {
         }
     }
     // Every stop is an ASCII backslash or the end of an ASCII escape, so each
-    // slice starts and ends on a `char` boundary.
+    // slice starts and ends on a char boundary. Decoding never expands bytes.
     out.push_str(&text[copied..]);
-    Cow::Owned(out)
+    Ok(Cow::Owned(out))
 }
 
 /// The scalar an XML character reference names, given its body — the text

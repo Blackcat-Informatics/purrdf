@@ -96,6 +96,35 @@ Lower-level entry points build a `SarifLog` value instead of a string —
 host can merge runs or post-process before serializing with `to_json_pretty`.
 Output is byte-deterministic: the same inputs always produce the same JSON.
 
+## Complete contextual reports
+
+The additive Rust doors `validate_complete_documents`, `validate_complete_sources`
+and `validate_complete_product` return `CompleteValidationReport` with the
+request's `ValidationOptions`. Select a named SHACL bundle with `with_profile`;
+its required native XPath law follows that selection. `complete_profile` decodes
+only supported exact identifiers and reports an unsupported identifier without
+falling back to a default.
+
+`complete_validation_status` distinguishes conformance, nonconformance, typed
+admission/source/semantic/resource/product refusals and other execution errors.
+A refusal never yields a partial conformance verdict. Native query resource
+classification reads the stable `Resource::code` identity, never diagnostic
+wording.
+
+`complete_report_payload` and `complete_report_to_json` carry the full N-Quads
+report, its dedicated root, retained source graphs and authored-blank
+correspondence. Acquisition-local indices distinguish data from independently
+acquired shapes even when labels agree; deliberately shared acquisitions are
+encoded once. Each correspondence row retains the emitted report label and the
+original source scope and label. Generated report/path/query blanks are not
+presented as authored nodes.
+
+`complete_report_to_sarif_string` uses the existing SARIF mapper and attaches the
+complete payload as `runs[0].properties.shaclCompleteReport`. Required constraint
+identity, recursive details and multiplicity remain together in that RDF graph;
+they are not inferred from sorted SARIF result positions. Existing host exports,
+default payloads and SARIF bodies keep their compatibility projection.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)

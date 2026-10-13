@@ -220,20 +220,37 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
             },
         ) => {
             let expected = read_solutions(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
-            compare_solutions(variables, rows, &expected, ordered)
+            compare_case_solutions(case, variables, rows, &expected, ordered)
         }
-        (
-            ExpectedResult::ResultSetTurtle(path),
-            SparqlResult::Solutions {
-                variables, rows, ..
-            },
-        ) => {
-            let expected = crate::rs_resultset::parse(
+        (ExpectedResult::ResultSetRdf(path), result) => {
+            let expected = crate::rs_resultset::parse_result(
                 &case.base,
+                crate::run::data_media_type(path),
                 &std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?,
             )
             .map_err(|e| format!("parse expected rs:ResultSet {}: {e}", path.display()))?;
-            compare_solutions(variables, rows, &expected, ordered)
+            match (expected, result) {
+                (
+                    crate::rs_resultset::RdfResult::Boolean(expected),
+                    SparqlResult::Boolean(actual),
+                ) => {
+                    if expected == *actual {
+                        Ok(())
+                    } else {
+                        Err(format!("ASK mismatch: expected {expected}, got {actual}"))
+                    }
+                }
+                (
+                    crate::rs_resultset::RdfResult::Solutions {
+                        solutions,
+                        ordered: indexed,
+                    },
+                    SparqlResult::Solutions {
+                        variables, rows, ..
+                    },
+                ) => compare_case_solutions(case, variables, rows, &solutions, indexed),
+                _ => Err("DAWG RDF result kind differs from the query result".to_owned()),
+            }
         }
         (ExpectedResult::Graph(path), SparqlResult::Graph(actual)) => {
             let expected_bytes =
@@ -261,6 +278,70 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
     }
 }
 
+/// Apply the manifest's explicit REDUCED cardinality rule, otherwise exact equality.
+fn compare_case_solutions(
+    case: &SparqlTestCase,
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    expected: &ParsedSolutions,
+    ordered: bool,
+) -> Result<(), String> {
+    if !case.lax_cardinality {
+        return compare_solutions(variables, rows, expected, ordered);
+    }
+    // The W3C test-case rules require each solution at least once and no more
+    // often than its expected multiplicity. Match distinct rows with ONE global
+    // blank-node bijection: ordered prefix comparison pins each chosen row pair,
+    // so per-row aliases cannot conceal inconsistent cross-row coreference.
+    // <https://www.w3.org/2009/sparql/docs/tests/README.html>
+    let actual = row_multiplicities(rows);
+    let wanted = row_multiplicities(&expected.rows);
+    if actual.len() != wanted.len() {
+        return Err("REDUCED result has missing or extra distinct solutions".to_owned());
+    }
+    let actual_rows: Vec<_> = actual.iter().map(|(row, _)| (*row).clone()).collect();
+    let mut pending = vec![Vec::<usize>::new()];
+    while let Some(selected) = pending.pop() {
+        let at = selected.len();
+        if at == actual.len() {
+            return Ok(());
+        }
+        for (candidate, &(row, maximum)) in wanted.iter().enumerate() {
+            if selected.contains(&candidate) || actual[at].1 > maximum {
+                continue;
+            }
+            let mut paired: Vec<_> = selected
+                .iter()
+                .map(|&index| wanted[index].0.clone())
+                .collect();
+            paired.push(row.clone());
+            let paired = ParsedSolutions {
+                variables: expected.variables.clone(),
+                rows: paired,
+            };
+            if compare_solutions(variables, &actual_rows[..=at], &paired, true).is_ok() {
+                let mut next = selected.clone();
+                next.push(candidate);
+                pending.push(next);
+            }
+        }
+    }
+    Err("REDUCED multiplicities or global blank-node correspondence differ".to_owned())
+}
+
+/// Group equal rows without changing the identity of their value blank nodes.
+fn row_multiplicities(rows: &[Vec<Option<TermValue>>]) -> Vec<(&Vec<Option<TermValue>>, usize)> {
+    let mut groups: Vec<(&Vec<Option<TermValue>>, usize)> = Vec::new();
+    for row in rows {
+        if let Some((_, count)) = groups.iter_mut().find(|(value, _)| *value == row) {
+            *count += 1;
+        } else {
+            groups.push((row, 1));
+        }
+    }
+    groups
+}
+
 /// Compare a native solution sequence against the expected one under W3C
 /// solution-set equality with a **single global blank-node bijection**.
 ///
@@ -276,8 +357,13 @@ fn compare_solutions(
     expected: &ParsedSolutions,
     ordered: bool,
 ) -> Result<(), String> {
-    let actual_canon = encode_solution_set(variables, rows, ordered)?;
-    let expected_canon = encode_solution_set(&expected.variables, &expected.rows, ordered)?;
+    let actual_canon = encode_solution_set(variables, rows, ordered, Literals::ByValue)?;
+    let expected_canon = encode_solution_set(
+        &expected.variables,
+        &expected.rows,
+        ordered,
+        Literals::ByValue,
+    )?;
     if actual_canon == expected_canon {
         Ok(())
     } else {
@@ -287,9 +373,17 @@ fn compare_solutions(
             "multiset"
         };
         Err(format!(
-            "solution {mode} mismatch: {} expected rows vs {} actual rows",
+            "solution {mode} mismatch: {} expected rows vs {} actual rows; first canonical difference: {}",
             expected.rows.len(),
-            rows.len()
+            rows.len(),
+            actual_canon
+                .lines()
+                .zip(expected_canon.lines())
+                .find(|(actual, expected)| actual != expected)
+                .map_or_else(
+                    || "one result's canonical graph ends earlier".to_owned(),
+                    |(actual, expected)| format!("expected {expected} / actual {actual}")
+                )
         ))
     }
 }
@@ -322,7 +416,8 @@ use purrdf_core::datatype::XSD_INTEGER;
 /// set is one dataset canonicalized once, RDFC-1.0 must find a SINGLE bijection
 /// mapping every blank node across every row simultaneously — so a result whose
 /// blanks only line up row-by-row (but not globally) is correctly UNEQUAL.
-/// Value blank nodes are interned in [`VALUE_SCOPE`] keyed by `(label, scope)`,
+/// Value blank nodes are interned in [`VALUE_SCOPE`] under an injective encoding
+/// of their original `(scope, label)`,
 /// so a blank shared across rows keeps one [`TermId`] and its coreference is
 /// preserved; two structurally-identical rows produce two automorphic solution
 /// blanks that RDFC-1.0 still emits as two lines, preserving multiplicity.
@@ -342,6 +437,7 @@ fn encode_solution_set(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
+    literals: Literals,
 ) -> Result<String, String> {
     let mut builder = RdfDatasetBuilder::new();
     let index_predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}index"));
@@ -353,9 +449,15 @@ fn encode_solution_set(
         for (var, cell) in variables.iter().zip(row) {
             if let Some(term) = cell {
                 let predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}var:{var}"));
-                let object = intern_term_value(&mut builder, term);
+                let object = intern_term_value(&mut builder, term, literals);
                 builder.push_quad(solution, predicate, object, None);
             }
+        }
+        if !ordered && row.iter().all(Option::is_none) {
+            // A wholly unbound solution still has a multiplicity. Without a
+            // statement the synthetic solution node would vanish from RDF.
+            let empty = builder.intern_iri(&format!("{CONFORMANCE_NS}empty"));
+            builder.push_quad(solution, empty, empty, None);
         }
         if ordered {
             let ordinal = builder.intern_literal(RdfLiteral {
@@ -390,37 +492,55 @@ pub fn canonical_solutions(
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
 ) -> Result<String, String> {
-    encode_solution_set(variables, rows, ordered)
+    // Exact: a trace that records this string must see the lexical forms the
+    // evaluator produced, so a change in how it spells a number still moves it.
+    encode_solution_set(variables, rows, ordered, Literals::Exact)
+}
+
+/// How [`encode_solution_set`] spells a literal.
+#[derive(Clone, Copy)]
+enum Literals {
+    /// As written.
+    Exact,
+    /// A same-datatype numeric literal by its value ([`comparison_lexical`]): the
+    /// spelling result comparison uses.
+    ByValue,
 }
 
 /// Intern one [`TermValue`] into `builder`, recursively for triple terms.
 ///
 /// Every value blank node — top-level or nested in a triple term — is interned
-/// under the single shared [`VALUE_SCOPE`], keyed by its label, so a blank with
-/// the same label in two different rows resolves to ONE [`TermId`] and its
-/// coreference across the whole result set is preserved through
-/// canonicalization. (Result blank nodes are single-scope in practice: both the
-/// engine and the SRX/SRJ/`rs:ResultSet` readers mint them in the default
-/// scope, so forcing one scope here cannot merge two originally-distinct
-/// blanks.)
+/// under the single shared [`VALUE_SCOPE`], keyed by both its original scope
+/// and label. A scoped blank shared across rows keeps ONE [`TermId`], while
+/// equal labels from different source documents remain distinct. Canonicalization
+/// then normalizes those opaque identities with one global bijection.
 ///
 /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
 /// predicate and object, each fully before the next, then the triple itself.
-fn intern_term_value(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermId {
+fn intern_term_value(
+    builder: &mut RdfDatasetBuilder,
+    term: &TermValue,
+    literals: Literals,
+) -> TermId {
     let interned = try_fold_nested(
         term,
         builder,
         |builder, term| {
             Ok::<_, Infallible>(Nested::Leaf(match term {
                 TermValue::Iri(iri) => builder.intern_iri(iri),
-                TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
+                TermValue::Blank { label, scope } => {
+                    builder.intern_blank(&format!("{}:{label}", scope.0), VALUE_SCOPE)
+                }
                 TermValue::Literal {
                     lexical_form,
                     datatype,
                     language,
                     direction,
                 } => builder.intern_literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
+                    lexical_form: match literals {
+                        Literals::Exact => lexical_form.clone(),
+                        Literals::ByValue => comparison_lexical(lexical_form, datatype),
+                    },
                     datatype: Some(datatype.clone()),
                     language: language.clone(),
                     direction: *direction,
@@ -432,6 +552,33 @@ fn intern_term_value(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermI
     );
     match interned {
         Ok(id) => id,
+    }
+}
+
+/// The lexical form a literal is compared under: for a well-typed literal of an XSD
+/// NUMERIC datatype, the canonical spelling of its value under that same datatype;
+/// for every other literal, its own lexical form.
+///
+/// Two numeric literals of the same datatype therefore compare by value (the
+/// approach Jena's result-set comparison takes): `"2"^^xsd:decimal` matches
+/// `"2.0"^^xsd:decimal`, and `"1050"^^xsd:double` matches `"1.05E3"^^xsd:double`.
+/// The W3C expected results spell computed numbers inconsistently within one
+/// group (`"1050"` and `"2.5E0"` for `xsd:double`; `"2.0"` and `"2"` for an
+/// integer-valued `xsd:decimal`), so no single serializer could match them lexically.
+/// The datatype is never rewritten, so `"2"^^xsd:integer` still differs from
+/// `"2.0"^^xsd:decimal`. An ill-typed numeric literal keeps its spelling, and so
+/// does every non-numeric literal: those still compare as exact terms.
+///
+/// NaN: a result file holds RDF terms, and result-set equivalence is term identity,
+/// not `op:numeric-equal`, so a NaN cell matches a NaN cell of the same datatype
+/// (its canonical spelling is `NaN`); comparing by `=` would make a row holding one
+/// match nothing, itself included. The infinities match the same way.
+fn comparison_lexical(lexical: &str, datatype: &str) -> String {
+    use purrdf::xsd::XsdDatatype;
+    match XsdDatatype::from_iri(datatype) {
+        Some(dt) if dt.is_numeric() => purrdf::xsd::parse(lexical, dt)
+            .map_or_else(|_| lexical.to_owned(), |value| value.canonical_lexical()),
+        _ => lexical.to_owned(),
     }
 }
 
@@ -477,6 +624,8 @@ mod tests {
             regime: None,
             aggregate_namespace: None,
             expected,
+            lax_cardinality: false,
+            requires: Vec::new(),
         }
     }
 
@@ -554,7 +703,13 @@ mod tests {
 
     /// Encode a one-variable, one-row set (unordered) to its canonical form.
     fn one(term: TermValue) -> String {
-        encode_solution_set(&["x".to_owned()], &[vec![Some(term)]], false).expect("encode")
+        encode_solution_set(
+            &["x".to_owned()],
+            &[vec![Some(term)]],
+            false,
+            Literals::Exact,
+        )
+        .expect("encode")
     }
 
     /// `xsd:string`-shaped stand-in datatypes for the boundary fixtures below. They
@@ -602,16 +757,58 @@ mod tests {
     }
 
     #[test]
+    fn equal_labels_from_different_source_scopes_remain_distinct() {
+        let variables = vec!["x".to_owned(), "y".to_owned()];
+        let scoped = |scope| TermValue::Blank {
+            label: "same".to_owned(),
+            scope: BlankScope(scope),
+        };
+        let actual = vec![vec![Some(scoped(3)), Some(scoped(4))]];
+        let distinct = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![Some(blank("a")), Some(blank("b"))]],
+        };
+        assert!(compare_solutions(&variables, &actual, &distinct, false).is_ok());
+        let aliased = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![Some(blank("a")), Some(blank("a"))]],
+        };
+        assert!(compare_solutions(&variables, &actual, &aliased, false).is_err());
+    }
+
+    #[test]
+    fn unbound_solution_multiplicity_is_observable() {
+        let variables = vec!["x".to_owned()];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![None]],
+        };
+        assert!(compare_solutions(&variables, &[], &expected, false).is_err());
+        assert!(compare_solutions(&variables, &[vec![None]], &expected, false).is_ok());
+        assert!(
+            compare_solutions(&variables, &[vec![None], vec![None]], &expected, false).is_err()
+        );
+    }
+
+    #[test]
     fn shared_blank_across_columns_is_distinguished_from_two_distinct_blanks() {
         // ?x and ?y bound to the SAME blank (coreference) must differ from ?x
         // and ?y bound to two independent blanks, even though both relabel away.
         let vars = ["x".to_owned(), "y".to_owned()];
-        let shared =
-            encode_solution_set(&vars, &[vec![Some(blank("b0")), Some(blank("b0"))]], false)
-                .expect("encode");
-        let distinct =
-            encode_solution_set(&vars, &[vec![Some(blank("b0")), Some(blank("b1"))]], false)
-                .expect("encode");
+        let shared = encode_solution_set(
+            &vars,
+            &[vec![Some(blank("b0")), Some(blank("b0"))]],
+            false,
+            Literals::Exact,
+        )
+        .expect("encode");
+        let distinct = encode_solution_set(
+            &vars,
+            &[vec![Some(blank("b0")), Some(blank("b1"))]],
+            false,
+            Literals::Exact,
+        )
+        .expect("encode");
         assert_ne!(
             shared, distinct,
             "coreference between two variables is observable, not just blank count"
@@ -621,6 +818,7 @@ mod tests {
             &vars,
             &[vec![Some(blank("zzz")), Some(blank("zzz"))]],
             false,
+            Literals::Exact,
         )
         .expect("encode");
         assert_eq!(shared, shared_relabelled);
@@ -631,10 +829,20 @@ mod tests {
         // The same blank bound to ?x vs to ?y is a different row (position
         // matters); only blank *identity* is bijection-normalized.
         let vars = ["x".to_owned(), "y".to_owned()];
-        let a =
-            encode_solution_set(&vars, &[vec![Some(blank("b0")), None]], false).expect("encode");
-        let b =
-            encode_solution_set(&vars, &[vec![None, Some(blank("b0"))]], false).expect("encode");
+        let a = encode_solution_set(
+            &vars,
+            &[vec![Some(blank("b0")), None]],
+            false,
+            Literals::Exact,
+        )
+        .expect("encode");
+        let b = encode_solution_set(
+            &vars,
+            &[vec![None, Some(blank("b0"))]],
+            false,
+            Literals::Exact,
+        )
+        .expect("encode");
         assert_ne!(a, b, "variable position must still compare exactly");
     }
 
@@ -648,8 +856,8 @@ mod tests {
         let two_distinct = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
         let one_shared = &[vec![Some(blank("z"))], vec![Some(blank("z"))]];
         assert_ne!(
-            encode_solution_set(&vars, two_distinct, false).expect("encode"),
-            encode_solution_set(&vars, one_shared, false).expect("encode"),
+            encode_solution_set(&vars, two_distinct, false, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, one_shared, false, Literals::Exact).expect("encode"),
             "two distinct blanks must NOT equal the same blank repeated (no global bijection)"
         );
     }
@@ -662,8 +870,8 @@ mod tests {
         let ab = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
         let pq = &[vec![Some(blank("p"))], vec![Some(blank("q"))]];
         assert_eq!(
-            encode_solution_set(&vars, ab, false).expect("encode"),
-            encode_solution_set(&vars, pq, false).expect("encode"),
+            encode_solution_set(&vars, ab, false, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, pq, false, Literals::Exact).expect("encode"),
             "a global bijection over all rows must compare equal"
         );
     }
@@ -682,19 +890,19 @@ mod tests {
             vec![Some(lit("1", XSD_INTEGER))],
         ];
         assert_ne!(
-            encode_solution_set(&vars, forward, true).expect("encode"),
-            encode_solution_set(&vars, reverse, true).expect("encode"),
+            encode_solution_set(&vars, forward, true, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, reverse, true, Literals::Exact).expect("encode"),
             "ordered: a different row order must compare unequal"
         );
         assert_eq!(
-            encode_solution_set(&vars, forward, true).expect("encode"),
-            encode_solution_set(&vars, forward, true).expect("encode"),
+            encode_solution_set(&vars, forward, true, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, forward, true, Literals::Exact).expect("encode"),
             "ordered: identical order must compare equal"
         );
         // The SAME two orders compare EQUAL when unordered (multiset).
         assert_eq!(
-            encode_solution_set(&vars, forward, false).expect("encode"),
-            encode_solution_set(&vars, reverse, false).expect("encode"),
+            encode_solution_set(&vars, forward, false, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, reverse, false, Literals::Exact).expect("encode"),
             "unordered: row order must not matter"
         );
     }
@@ -728,6 +936,85 @@ mod tests {
         // Same rows, opposite order, compare EQUAL when unordered.
         assert!(compare_solutions(&vars, &two_rows, &reversed_expected, false).is_ok());
     }
+
+    #[test]
+    fn lax_cardinality_accepts_only_the_declared_multiplicity_range() {
+        let mut case = case_with(ExpectedResult::None);
+        case.lax_cardinality = true;
+        let variables = vec!["x".to_owned()];
+        let a = vec![Some(TermValue::simple_literal("a"))];
+        let b = vec![Some(TermValue::simple_literal("b"))];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![a.clone(), a.clone(), a.clone(), b.clone()],
+        };
+        for count in 1..=3 {
+            let mut rows = vec![a.clone(); count];
+            rows.push(b.clone());
+            assert!(compare_case_solutions(&case, &variables, &rows, &expected, false).is_ok());
+        }
+        for rows in [
+            vec![a.clone()],
+            vec![a.clone(), a.clone(), a.clone(), a.clone(), b.clone()],
+            vec![a.clone(), b.clone(), b.clone()],
+            vec![a, b, vec![None]],
+        ] {
+            assert!(compare_case_solutions(&case, &variables, &rows, &expected, false).is_err());
+        }
+    }
+
+    #[test]
+    fn lax_cardinality_preserves_global_blank_coreference_and_count_correspondence() {
+        let mut case = case_with(ExpectedResult::None);
+        case.lax_cardinality = true;
+        let variables = vec!["x".to_owned(), "y".to_owned()];
+        let expected_first = vec![Some(blank("a")), Some(blank("b"))];
+        let expected_second = vec![Some(blank("a")), Some(blank("c"))];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![expected_first.clone(), expected_first, expected_second],
+        };
+        let first = vec![Some(blank("renamed")), Some(blank("one"))];
+        let second = vec![Some(blank("renamed")), Some(blank("two"))];
+        assert!(
+            compare_case_solutions(
+                &case,
+                &variables,
+                &[first.clone(), first.clone(), second],
+                &expected,
+                false
+            )
+            .is_ok()
+        );
+        let inconsistent = vec![Some(blank("other")), Some(blank("two"))];
+        assert!(
+            compare_case_solutions(&case, &variables, &[first, inconsistent], &expected, false)
+                .is_err()
+        );
+        // Pin row identities with a ground cell so a valid bijection cannot swap
+        // the expected multiplicities between otherwise symmetric blank rows.
+        let actual_rows = vec![
+            vec![Some(blank("one")), Some(TermValue::simple_literal("a"))],
+            vec![Some(blank("two")), Some(TermValue::simple_literal("b"))],
+        ];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![
+                actual_rows[0].clone(),
+                actual_rows[1].clone(),
+                actual_rows[1].clone(),
+            ],
+        };
+        let swapped_counts = vec![
+            actual_rows[0].clone(),
+            actual_rows[0].clone(),
+            actual_rows[1].clone(),
+        ];
+        assert!(
+            compare_case_solutions(&case, &variables, &swapped_counts, &expected, false).is_err()
+        );
+        assert!(compare_case_solutions(&case, &variables, &actual_rows, &expected, false).is_ok());
+    }
 }
 
 #[cfg(test)]
@@ -738,7 +1025,7 @@ mod term_walk_tests {
     use purrdf_core::term_fixture::TermShape;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
 
-    use super::{VALUE_SCOPE, intern_term_value};
+    use super::intern_term_value;
 
     fn reference(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermId {
         match term {
@@ -748,7 +1035,9 @@ mod term_walk_tests {
                 let o = reference(builder, o);
                 builder.intern_triple(s, p, o)
             }
-            TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
+            // Keep source identity directly in this independent reference. The
+            // production encoder reserves its own scope with opaque labels.
+            TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
             TermValue::Literal {
                 lexical_form,
                 datatype,
@@ -779,7 +1068,7 @@ mod term_walk_tests {
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                intern_term_value(&mut found, &value),
+                intern_term_value(&mut found, &value, super::Literals::Exact),
                 reference(&mut expected, &value),
                 "seed {seed}"
             );
@@ -800,8 +1089,101 @@ mod term_walk_tests {
         purrdf_stack::on_stack(128 * 1024, || {
             let value = purrdf_core::term_fixture::triple_chain(LEVELS);
             let mut builder = RdfDatasetBuilder::new();
-            assert_eq!(intern_term_value(&mut builder, &value).index(), LEVELS + 2);
+            assert_eq!(
+                intern_term_value(&mut builder, &value, super::Literals::Exact).index(),
+                LEVELS + 2
+            );
         })
         .expect("the thread starts");
+    }
+}
+
+#[cfg(test)]
+mod numeric_value_tests {
+    //! Same-datatype numeric literals compare by value; everything else by term.
+
+    use purrdf_core::TermValue;
+    use purrdf_sparql_results::ParsedSolutions;
+
+    use super::compare_solutions;
+
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+
+    fn literal(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    fn xsd(lexical: &str, local: &str) -> TermValue {
+        literal(lexical, &format!("{XSD}{local}"))
+    }
+
+    /// Whether the actual cell `a` matches the expected cell `e` in a one-row result.
+    fn matches(a: TermValue, e: TermValue) -> bool {
+        let variables = vec!["x".to_owned()];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: vec![vec![Some(e)]],
+        };
+        compare_solutions(&variables, &[vec![Some(a)]], &expected, false).is_ok()
+    }
+
+    #[test]
+    fn same_datatype_value_equal_numerics_match() {
+        for (a, e, local) in [
+            ("2", "2.0", "decimal"),
+            ("1.05E3", "1050", "double"),
+            ("2.1E3", "2100", "double"),
+            ("2E-1", "2.0E-1", "double"),
+            ("1.5E0", "1.5", "float"),
+            ("7", "+007", "integer"),
+            ("3", "03", "int"),
+            ("NaN", "NaN", "double"),
+            ("INF", "INF", "float"),
+        ] {
+            assert!(
+                matches(xsd(a, local), xsd(e, local)),
+                "{a} vs {e} ^^{local}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_different_datatype_still_mismatches() {
+        assert!(!matches(xsd("2", "integer"), xsd("2.0", "decimal")));
+        assert!(!matches(xsd("2", "decimal"), xsd("2", "integer")));
+        assert!(!matches(xsd("1.0E0", "double"), xsd("1.0E0", "float")));
+        assert!(!matches(xsd("1", "int"), xsd("1", "integer")));
+    }
+
+    #[test]
+    fn a_different_value_still_mismatches() {
+        assert!(!matches(xsd("2", "decimal"), xsd("2.5", "decimal")));
+        assert!(!matches(xsd("1.05E3", "double"), xsd("1051", "double")));
+        assert!(!matches(xsd("NaN", "double"), xsd("INF", "double")));
+        assert!(!matches(xsd("0", "double"), xsd("NaN", "double")));
+    }
+
+    #[test]
+    fn a_non_numeric_lexical_difference_still_mismatches() {
+        assert!(!matches(xsd("true", "boolean"), xsd("1", "boolean")));
+        assert!(!matches(xsd("2.0", "string"), xsd("2", "string")));
+        assert!(!matches(
+            xsd("2002-10-10T17:00:00Z", "dateTime"),
+            xsd("2002-10-10T17:00:00+00:00", "dateTime")
+        ));
+        assert!(!matches(
+            literal("2.0", "http://example.org/num"),
+            literal("2", "http://example.org/num")
+        ));
+        // An ill-typed numeric literal keeps its spelling.
+        assert!(!matches(xsd("two", "decimal"), xsd("2", "decimal")));
+        // And exact neighbours still match.
+        assert!(matches(xsd("true", "boolean"), xsd("true", "boolean")));
+        assert!(matches(xsd("two", "decimal"), xsd("two", "decimal")));
     }
 }

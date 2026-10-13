@@ -4,6 +4,8 @@
 use crate::RdfLocation;
 use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
 
+mod traits;
+
 /// RDF term category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RdfTermKind {
@@ -178,7 +180,10 @@ impl RdfLiteral {
 /// Deliberately exhaustive (NOT `#[non_exhaustive]`): the RDF data model fixes the
 /// set of term kinds (IRI, blank node, literal, triple term), so consumers SHOULD
 /// match all four — there is no future variant to guard against.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Its value traits and its drop walk deep quoted triples on heap work lists
+/// rather than recursing through them; the published representation, and moving
+/// values out of its variants, are unchanged.
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum RdfTerm {
     /// An IRI, by its full string.
     Iri(String),
@@ -279,7 +284,12 @@ impl core::fmt::Display for RdfTerm {
 
 /// Owned RDF 1.2 triple. The model keeps triple-term subjects representable;
 /// downstream adapters decide whether a target store can encode them.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Dropping a triple never recurses once per quoted-triple level, so a term
+/// nested as deep as memory allows drops on any stack. That makes `RdfTriple`
+/// a `Drop` type: construct it with a struct literal or [`RdfTriple::new`],
+/// read and assign its fields in place, and take an owned triple apart with
+/// [`RdfTriple::into_parts`] rather than by moving its fields out.
 pub struct RdfTriple {
     /// The subject term (may itself be a triple term).
     pub subject: RdfTerm,
@@ -310,6 +320,19 @@ impl RdfTriple {
             self.location = Some(location);
         }
         self
+    }
+
+    /// The triple's subject, predicate, object and location, by value: what
+    /// destructuring the struct by value gave before it became a `Drop` type.
+    /// Nothing is copied or allocated.
+    #[must_use]
+    pub fn into_parts(mut self) -> (RdfTerm, String, RdfTerm, Option<RdfLocation>) {
+        (
+            core::mem::replace(&mut self.subject, traits::PLACEHOLDER),
+            core::mem::take(&mut self.predicate),
+            core::mem::replace(&mut self.object, traits::PLACEHOLDER),
+            self.location.take(),
+        )
     }
 }
 

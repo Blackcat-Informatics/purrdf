@@ -24,8 +24,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetMut, DatasetView, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues,
-    RdfDataset, RdfDatasetBuilder, TermValue,
+    DatasetMut, DatasetView, FastHasher, FastSet, GraphExistenceMode, GraphMatchValue,
+    MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, TermValue,
 };
 use purrdf_testkit::bench::{BatchSize, Bench, BenchmarkId, bench_group, bench_main};
 
@@ -374,8 +374,9 @@ const DECLARED_GRAPH_ROWS: [u32; 2] = [1_000, 10_000];
 fn declared_graph_with_rows(
     base: &Arc<RdfDataset>,
     rows: u32,
+    mode: GraphExistenceMode,
 ) -> (MutableDataset, Vec<QuadValues>) {
-    let mut cow = MutableDataset::new(Arc::clone(base));
+    let mut cow = MutableDataset::new_with_graph_existence(Arc::clone(base), mode);
     let graph = iri("declared");
     assert!(
         cow.declare_named_graph(graph.clone())
@@ -411,7 +412,7 @@ fn bench_declared_graph_removal(c: &mut Bench) {
     for rows in DECLARED_GRAPH_ROWS {
         group.bench_with_input(BenchmarkId::from_parameter(rows), &rows, |b, &rows| {
             b.iter_batched(
-                || declared_graph_with_rows(&base, rows),
+                || declared_graph_with_rows(&base, rows, GraphExistenceMode::Implicit),
                 |(mut cow, quads)| {
                     for q in &quads {
                         assert!(cow.remove(q), "every drained row was present");
@@ -426,6 +427,64 @@ fn bench_declared_graph_removal(c: &mut Bench) {
                 BatchSize::LargeInput,
             );
         });
+    }
+    group.finish();
+}
+
+/// Empty creation, last-row removal, clear and explicit withdrawal through the
+/// same registry, measured in both policies. Row setup is outside the timed path.
+fn bench_graph_slots(c: &mut Bench) {
+    let base = build_base();
+    let graph = iri("declared");
+    let mut group = c.benchmark_group("mut_graph_slots");
+    for (mode_name, mode) in [
+        ("implicit", GraphExistenceMode::Implicit),
+        ("remember", GraphExistenceMode::RememberEmpty),
+    ] {
+        for (operation, rows) in [
+            ("create", 0),
+            ("last_row", 1),
+            ("clear", 1_000),
+            ("drop", 1_000),
+        ] {
+            group.bench_function(BenchmarkId::new(mode_name, operation), |b| {
+                b.iter_batched(
+                    || {
+                        if rows == 0 {
+                            (
+                                MutableDataset::new_with_graph_existence(Arc::clone(&base), mode),
+                                Vec::new(),
+                            )
+                        } else {
+                            declared_graph_with_rows(&base, rows, mode)
+                        }
+                    },
+                    |(mut dataset, quads)| {
+                        if rows == 0 {
+                            assert_eq!(
+                                dataset
+                                    .create_named_graph(graph.clone())
+                                    .expect("fresh graph"),
+                                mode == GraphExistenceMode::RememberEmpty
+                            );
+                        } else {
+                            for quad in &quads {
+                                assert!(dataset.remove(quad));
+                            }
+                            if operation == "drop" {
+                                dataset.withdraw_graph_declaration(&graph);
+                            }
+                        }
+                        assert_eq!(
+                            dataset.has_named_graph(&graph),
+                            mode == GraphExistenceMode::RememberEmpty && operation != "drop"
+                        );
+                        std::hint::black_box(dataset)
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
     }
     group.finish();
 }
@@ -514,6 +573,7 @@ bench_group!(
     bench_freeze,
     bench_snapshot_graphs,
     bench_declared_graph_removal,
+    bench_graph_slots,
     bench_snapshot_with_delta
 );
 bench_main!(benches);

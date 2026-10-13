@@ -27,6 +27,7 @@
 //! to stdout; run with `--locked` per this workspace's convention.
 
 use purrdf_testkit::ucd::code_point_literal as format_codepoint_literal;
+use purrdf_testkit::ucd::xsd_block_escape_name;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
@@ -65,21 +66,6 @@ fn parse_blocks_txt(text: &str) -> Vec<RawBlock> {
         });
     }
     blocks
-}
-
-/// Applies XML Schema Part 2 Appendix G.4.2.3's "normalized block name"
-/// transform to a verbatim UCD block name, then prefixes `Is` to form the
-/// full `\p{IsX}` escape name: strip whitespace and underbar (`_`)
-/// characters, retain hyphens, preserve case.
-fn xsd_block_escape_name(ucd_name: &str) -> String {
-    let mut escape_name = String::from("Is");
-    for ch in ucd_name.chars() {
-        if ch.is_whitespace() || ch == '_' {
-            continue;
-        }
-        escape_name.push(ch);
-    }
-    escape_name
 }
 
 fn main() {

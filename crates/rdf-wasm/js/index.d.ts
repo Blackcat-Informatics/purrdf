@@ -111,8 +111,27 @@ export interface GovernorOptions {
   readonly cancel?: CancellationToken | null;
 }
 
+/**
+ * The stable name of a dated native XPath regex law: XPath F&O 2.0 Second Edition
+ * (14 December 2010) or XPath F&O 3.1 (21 March 2017). Both admit backreferences; only
+ * the 3.1 law admits non-capturing groups and the `q` flag. Names are matched exactly —
+ * no case folding, abbreviation or undated alias — and any other string is refused with
+ * the code `purrdf-wasm-options`, naming the accepted ones.
+ */
+export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
+
 export interface QueryOptions {
   readonly base?: string | null;
+  /**
+   * The dated native XPath law `REGEX` and `REPLACE` evaluate under, by its stable name.
+   * Honoured by every evaluating entry point and its asynchronous twin; omitted, the
+   * compatibility regex is unchanged. The law runs under finite production bounds: a
+   * pattern its grammar refuses is an ordinary expression error, while a resource
+   * refusal (an oversized pattern, a runaway match) throws — or rejects — with the
+   * resource's own code (`xpath-pattern-bytes`, `xpath-match-steps`, …) and never
+   * becomes an unbound, `false` or partial answer.
+   */
+  readonly xpathRegex?: XPathRegexLaw | null;
 }
 
 /**
@@ -754,7 +773,11 @@ export class Dataset implements Iterable<Quad> {
     yamlSchemaUrl?: string | null,
     base?: string | null,
   ): string;
-  query(sparql: string, base?: string | null): string;
+  /**
+   * `xpathRegex` selects the dated native XPath law `REGEX`/`REPLACE` evaluate under, as
+   * {@link QueryOptions.xpathRegex} does.
+   */
+  query(sparql: string, base?: string | null, xpathRegex?: XPathRegexLaw | null): string;
   /**
    * The asynchronous twin of `query`: the same document (SPARQL Results JSON for
    * SELECT/ASK, Turtle — TriG for a result carrying a named graph — for
@@ -1030,8 +1053,35 @@ export class Reasoner {
  */
 export type BlankScopeMode = "keep" | "merge";
 
+/** Immutable strict native geographic profile and scalar/batch request session. */
+export class GeoSession {
+  /** Omitted profile selects the standard CRS84 profile; invalid input throws. */
+  constructor(profile?: string | null);
+  /** Canonical strict version-one profile, including its explicit limits. */
+  profile(): string;
+  /**
+   * Return canonical JSON for completed and semantic refusal outcomes.
+   * Operational refusal throws before another JSON envelope is allocated.
+   */
+  call(request: string): string;
+  /** Construct immutable ordered buckets from a strict point-index request. */
+  pointIndex(request: string): GeoPointIndex;
+  free(): void;
+}
+
+/** Reusable immutable native point index created by GeoSession.pointIndex. */
+export class GeoPointIndex {
+  /** Search under the native physical/reported law; operational refusal throws. */
+  call(request: string): string;
+  free(): void;
+}
+
 export class QueryEngine {
   constructor();
+  /** Select this immutable profile for future operations; started jobs keep their snapshot. */
+  setGeoSession(session: GeoSession): void;
+  /** Select strict profile JSON; invalid input leaves the current selection intact. */
+  setGeoProfile(profile: string): void;
   /**
    * How a blank node's scope crosses to JS in the typed results this engine returns:
    * see {@link BlankScopeMode}. It applies to `query`, `select`, `queryGoverned` and
@@ -1045,12 +1095,13 @@ export class QueryEngine {
   /**
    * The precision of every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
    * engine forms, in its one text form: `"exact"`, `"N"` (`N` fractional digits
-   * truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
+   * truncated toward zero), `"N:ROUNDING"` or `"exact-or-N[:ROUNDING]"`, with `ROUNDING` one of `toward-zero`,
    * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
-   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers `"exact"` or
-   * `"N:ROUNDING"`. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
-   * fails the whole operation with an error naming `err:FOAR0002`; a terminating one
-   * (`1/8`) answers exactly.
+   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers the selected
+   * policy. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
+   * is a SPARQL expression error — unbound, like `1/0`, and counted as `err:FOAR0002` in
+   * a governed outcome's `evidence.expressionErrors` — while a terminating one (`1/8`)
+   * answers exactly.
    *
    * It applies to every query, update, explain, governed, entailment and serialized
    * entry of this engine, and a job started with a `…Async` twin takes the policy in
@@ -1058,7 +1109,7 @@ export class QueryEngine {
    * accepted form throws, with the code `purrdf-wasm-options`, and leaves the policy
    * unchanged.
    *
-   * @defaultValue `"18:toward-zero"`
+   * @defaultValue `"exact-or-18:half-even"`
    */
   divisionPolicy: string;
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
@@ -1133,6 +1184,7 @@ export class QueryEngine {
     base: string | null | undefined,
     format: "jsonld" | "yamlld" | string,
     optionsJson: string,
+    xpathRegex?: XPathRegexLaw | null,
   ): string;
   queryRawWithContext(
     dataset: Dataset,
@@ -1141,6 +1193,7 @@ export class QueryEngine {
     format: "jsonld" | "yamlld" | string,
     context: CompiledJsonLdContext,
     yamlSchemaUrl?: string | null,
+    xpathRegex?: XPathRegexLaw | null,
   ): string;
 
   // The asynchronous twins. Each runs the operation its synchronous twin runs, over a
@@ -2393,6 +2446,13 @@ export class ShaclImportError {
  * distinct input terms, 131072 stored facts and 1048576 join steps on this target. A run
  * past one throws naming the limit, the numbers and the argument that raises it
  * (`shaclEntail's maxStoredFacts`, …).
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) every pattern the
+ * run evaluates is decided under: the `REGEX`/`REPLACE` of a `sh:SPARQLRule`, a SHACL-AF function or a node
+ * expression, and the `sh:pattern` of a rule condition. Omitted, the compatibility pattern behaviour is
+ * unchanged. A name that selects no law throws, naming the accepted ones. A pattern the
+ * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
+ * throws with the resource's code and no dataset.
  */
 export function shaclEntail(
   shapesTtl: string,
@@ -2405,6 +2465,7 @@ export function shaclEntail(
   maxGeneratedTerms?: bigint,
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  xpathRegex?: XPathRegexLaw,
 ): ShaclEntailment;
 
 /**
@@ -2486,6 +2547,13 @@ export class ShaclRulesInference {
  * to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
  * against `shapesBase`; omitted, `$shapesGraph` is an ordinary variable. Naming one beside
  * `srl` throws: a SPARQL 1.2 RL rule set has no shapes graph.
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) every pattern the
+ * run evaluates is decided under: the `REGEX`/`REPLACE` of a SHACL rule, a SHACL-AF function, a node expression or
+ * a SPARQL 1.2 RL filter or assignment, and the `sh:pattern` of a rule condition. Omitted, the compatibility pattern behaviour is
+ * unchanged. A name that selects no law throws, naming the accepted ones. A pattern the
+ * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
+ * throws with the resource's code and no inference.
  */
 export function shaclApplyRules(
   dataNt: string,
@@ -2501,6 +2569,7 @@ export function shaclApplyRules(
   maxGeneratedTerms?: bigint,
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  xpathRegex?: XPathRegexLaw,
 ): ShaclRulesInference;
 
 /**
@@ -2606,6 +2675,13 @@ export class ShaclNodeExprOutcome {
  * selectors, a walk step reaching no value or several, an inline document without
  * exactly one root, a label the shapes document never wrote, a binding named
  * `focusNode` or bound twice, and any parse or evaluation failure.
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) every pattern the
+ * run evaluates is decided under: the `sh:pattern` of a filter shape, and the `REGEX`/`REPLACE` of a function call
+ * or a SPARQL-based expression. Omitted, the compatibility pattern behaviour is
+ * unchanged. A name that selects no law throws, naming the accepted ones. A pattern the
+ * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
+ * throws with the resource's code and no output.
  */
 export function shaclEvalNodeExpr(
   shapesTtl: string,
@@ -2619,6 +2695,7 @@ export function shaclEvalNodeExpr(
   exprAt?: string,
   exprVia?: readonly string[],
   exprTurtle?: string,
+  xpathRegex?: XPathRegexLaw,
 ): ShaclNodeExprOutcome;
 
 /**
@@ -2734,6 +2811,13 @@ export interface ShaclSarifMessage {
  * class targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`). Omitted or `false`,
  * the specification's default: the data graph alone. Only class membership changes;
  * `rdf:type` triples are always read from the data graph.
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) `sh:pattern`, and
+ * the `REGEX`/`REPLACE` of SPARQL-based targets, constraints and SHACL-AF functions,
+ * evaluate under. Omitted, the compatibility pattern behaviour is unchanged. A name that
+ * selects no law throws, naming the accepted ones. A pattern the law's grammar refuses
+ * stays an ordinary validation result; a resource refusal throws with the resource's code
+ * and no report.
  */
 export function shaclValidateToSarif(
   shapesTtl: string,
@@ -2744,6 +2828,7 @@ export function shaclValidateToSarif(
   importDocuments?: readonly string[],
   shapesGraph?: string,
   subClassOfInShapesGraph?: boolean,
+  xpathRegex?: XPathRegexLaw,
 ): string;
 
 /**
@@ -2805,6 +2890,8 @@ export function shaclValidateChangesToSarif(
   importDocuments?: readonly string[],
   /** The shapes-graph IRI, exactly as `shaclValidateToSarif` takes it. */
   shapesGraph?: string,
+  /** The dated pattern law, exactly as `shaclValidateToSarif` takes it. */
+  xpathRegex?: XPathRegexLaw,
 ): ShaclChangeValidation;
 
 /**
@@ -2818,11 +2905,17 @@ export function shaclValidateChangesToSarif(
  * and `function-registry` means the caller's own configuration differs from the one
  * the product was prepared against, which re-packing will not fix.
  *
+ * `code` is the stable code of a refusal that is not about the product: a resource
+ * refusal of the selected `xpathRegex` law carries its resource's own code
+ * (`xpath-pattern-bytes`, `xpath-match-steps`, …) — the `code` a SPARQL entry's `Error`
+ * carries for the same refusal — and every other refusal `undefined`.
+ *
  * `message` is prose that names the fix; do not match on it. Like every other class
  * in this package the instance owns wasm memory — call `free()` when done.
  */
 export class ShaclProductRefusal {
   readonly dimension: string | undefined;
+  readonly code: string | undefined;
   readonly message: string;
   toString(): string;
   free(): void;
@@ -2887,11 +2980,17 @@ export function shaclProductCertify(product: Uint8Array): void;
  * under a different prefix map, base, vocabulary or registry is refused rather than
  * validated into a report about a shapes graph nobody asked for.
  *
- * Throws a `ShaclProductRefusal`.
+ * `xpathRegex` selects the dated pattern law exactly as `shaclValidateToSarif` takes it,
+ * on this and the three other product entries; the product itself is unchanged by it.
+ *
+ * Throws a `ShaclProductRefusal`: a name that selects no law, and a resource refusal of
+ * the selected law, carry `dimension === undefined`, since neither is an admission
+ * dimension of the product; the resource refusal carries its resource's code as `code`.
  */
 export function shaclProductValidateToSarif(
   product: Uint8Array,
   dataNt: string,
+  xpathRegex?: XPathRegexLaw,
 ): string;
 
 /**
@@ -2916,6 +3015,7 @@ export function shaclProductValidateToSarif(
 export function shaclProductValidateToSarifRebuild(
   product: Uint8Array,
   dataNt: string,
+  xpathRegex?: XPathRegexLaw,
 ): string;
 
 /**
@@ -2940,6 +3040,7 @@ export function shaclProductValidateToSarifRebuildExpecting(
   product: Uint8Array,
   dataNt: string,
   expectIdentity: string,
+  xpathRegex?: XPathRegexLaw,
 ): string;
 
 /**
@@ -2962,6 +3063,7 @@ export function shaclProductValidateToSarifExpecting(
   product: Uint8Array,
   dataNt: string,
   expectIdentity: string,
+  xpathRegex?: XPathRegexLaw,
 ): string;
 
 /**
@@ -2971,6 +3073,16 @@ export function shaclProductValidateToSarifExpecting(
  * where the synchronous twin takes it; the host options follow them.
  */
 export interface AsyncShaclOptions extends AsyncHostOptions {}
+
+/**
+ * The options of a SHACL twin that evaluates patterns — every validation, entailment, rules
+ * and node-expression twin: the host options, and `xpathRegex`, the dated pattern law its
+ * synchronous twin takes as its trailing argument. It travels in the options object so
+ * the options keep following the positional arguments.
+ */
+export interface AsyncShaclValidationOptions extends AsyncShaclOptions {
+  readonly xpathRegex?: XPathRegexLaw | null;
+}
 
 /**
  * The asynchronous twin of `shaclValidateToSarif`, over exactly its arguments: resolves
@@ -2996,7 +3108,7 @@ export function shaclValidateToSarifAsync(
   importDocuments?: readonly string[] | null,
   shapesGraph?: string | null,
   subClassOfInShapesGraph?: boolean | null,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<string>;
 
 /**
@@ -3013,7 +3125,7 @@ export function shaclValidateChangesToSarifAsync(
   importIris?: readonly string[] | null,
   importDocuments?: readonly string[] | null,
   shapesGraph?: string | null,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<ShaclChangeValidation>;
 
 /**
@@ -3033,7 +3145,7 @@ export function shaclEntailAsync(
   maxGeneratedTerms?: bigint | null,
   maxStoredFacts?: bigint | null,
   maxJoinSteps?: bigint | null,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<ShaclEntailment>;
 
 /**
@@ -3055,7 +3167,7 @@ export function shaclApplyRulesAsync(
   maxGeneratedTerms?: bigint | null,
   maxStoredFacts?: bigint | null,
   maxJoinSteps?: bigint | null,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<ShaclRulesInference>;
 
 /**
@@ -3076,7 +3188,7 @@ export function shaclEvalNodeExprAsync(
   exprAt?: string | null,
   exprVia?: readonly string[] | null,
   exprTurtle?: string | null,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<ShaclNodeExprOutcome>;
 
 /**
@@ -3087,14 +3199,14 @@ export function shaclEvalNodeExprAsync(
 export function shaclProductValidateToSarifAsync(
   product: Uint8Array,
   dataNt: string,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<string>;
 
 /** The asynchronous twin of `shaclProductValidateToSarifRebuild`. */
 export function shaclProductValidateToSarifRebuildAsync(
   product: Uint8Array,
   dataNt: string,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<string>;
 
 /** The asynchronous twin of `shaclProductValidateToSarifExpecting`. */
@@ -3102,7 +3214,7 @@ export function shaclProductValidateToSarifExpectingAsync(
   product: Uint8Array,
   dataNt: string,
   expectIdentity: string,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<string>;
 
 /** The asynchronous twin of `shaclProductValidateToSarifRebuildExpecting`. */
@@ -3110,7 +3222,7 @@ export function shaclProductValidateToSarifRebuildExpectingAsync(
   product: Uint8Array,
   dataNt: string,
   expectIdentity: string,
-  options?: AsyncShaclOptions | null,
+  options?: AsyncShaclValidationOptions | null,
 ): Promise<string>;
 
 export function version(): string;

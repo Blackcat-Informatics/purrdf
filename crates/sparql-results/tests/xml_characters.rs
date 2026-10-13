@@ -15,7 +15,7 @@ fn result(value: &str) -> SparqlResult {
             language: None,
             direction: None,
         })]],
-        aux: RdfDatasetBuilder::new().freeze().unwrap(),
+        aux: RdfDatasetBuilder::new().freeze().unwrap().into(),
     }
 }
 

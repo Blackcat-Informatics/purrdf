@@ -34,7 +34,8 @@ use purrdf_rdf::{
 };
 use purrdf_shapes::data_view::ShaclDatasetView;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
-use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
+use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
+use purrdf_testkit::bench::{BatchSize, Bench, BenchmarkId, bench_group, bench_main};
 use std::sync::Arc;
 
 fn data(rows: usize) -> Arc<RdfDataset> {
@@ -379,5 +380,81 @@ fn named_graph_bench(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench, named_graph_bench);
+/// Matched Core and SELECT report costs. Product admission is untimed setup for
+/// each cold bind; warm evaluations reuse their admitted views and source context.
+fn report_context_bench(c: &mut Bench) {
+    let data = data(128);
+    let mut group = c.benchmark_group("shacl_complete_reports");
+    for (corpus, constraint) in [
+        ("core", "sh:nodeKind sh:BlankNode"),
+        (
+            "select",
+            "sh:sparql [ sh:select \"SELECT $this ?value WHERE { BIND(BNODE() AS ?value) }\" ]",
+        ),
+    ] {
+        let source = format!(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> . \
+             <https://example.org/S> a sh:NodeShape; \
+             sh:targetSubjectsOf <https://example.org/value>; {constraint} ."
+        );
+        let prepared = PreparedShapes::new(Arc::new(parse_shapes(&source, None).expect("shapes")));
+        let bytes = prepared.to_product(&ShapesProfile::CORE).expect("product");
+        let restore = || {
+            ShapesProduct::open(&bytes)
+                .expect("open")
+                .admit(&ShapesProfile::CORE, &HostBindings::empty())
+                .expect("admit")
+        };
+        let legacy = prepared
+            .bind_shared_dataset(Arc::clone(&data))
+            .expect("legacy bind");
+        let complete = prepared
+            .bind_complete_shared_dataset(Arc::clone(&data))
+            .expect("complete bind");
+        assert_eq!(legacy.validate().expect("legacy report").results.len(), 128);
+        assert_eq!(
+            complete
+                .validate()
+                .expect("complete report")
+                .results()
+                .len(),
+            128
+        );
+        group.bench_function(BenchmarkId::new("legacy/cold_bind", corpus), |b| {
+            b.iter_batched_ref(
+                &restore,
+                |prepared| {
+                    std::hint::black_box(
+                        prepared
+                            .bind_shared_dataset(Arc::clone(&data))
+                            .expect("bind"),
+                    )
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("complete/cold_bind", corpus), |b| {
+            b.iter_batched_ref(
+                &restore,
+                |prepared| {
+                    std::hint::black_box(
+                        prepared
+                            .bind_complete_shared_dataset(Arc::clone(&data))
+                            .expect("bind"),
+                    )
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("legacy/warm_report", corpus), |b| {
+            b.iter(|| std::hint::black_box(legacy.validate().expect("report")));
+        });
+        group.bench_function(BenchmarkId::new("complete/warm_report", corpus), |b| {
+            b.iter(|| std::hint::black_box(complete.validate().expect("report")));
+        });
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench, named_graph_bench, report_context_bench);
 bench_main!(benches);

@@ -747,9 +747,141 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
     parent(cvs[0], cvs[1])
 }
 
+/// A subtree's chaining value: the non-root output of a complete BLAKE3 subtree
+/// (specification §2.5), as its 32 little-endian bytes.
+///
+/// BLAKE3 is a Merkle tree over 1 KiB chunks, and the hash of an input is the root of
+/// that tree. Chaining values are its interior nodes, so a piece of an input can be
+/// proved to belong to an identifier by the chaining values of its siblings alone: verified
+/// streaming, verified range reads, and erasure shards checked against the identity of the
+/// artifact they belong to. The functions here are the same primitives as the `blake3`
+/// crate's `hazmat` module, with the same rules, so the two can be checked against each
+/// other.
+pub type ChainingValue = [u8; 32];
+
+/// The length of the left subtree of an input `input_len` bytes long, which must exceed
+/// one chunk: the largest power-of-two number of whole chunks that leaves the right
+/// subtree non-empty.
+///
+/// # Panics
+///
+/// If `input_len` is at most one chunk (1024 bytes): such an input has no subtrees.
+#[must_use]
+pub fn left_subtree_len(input_len: u64) -> u64 {
+    assert!(
+        input_len > CHUNK as u64,
+        "an input of at most one chunk has no subtrees"
+    );
+    (1u64 << ((input_len - 1) / CHUNK as u64).ilog2()) * CHUNK as u64
+}
+
+/// The chaining value of `data`, a complete subtree starting `input_offset` bytes into the
+/// input it belongs to.
+///
+/// `data` is a whole subtree: one chunk, a power-of-two number of chunks, or the final
+/// subtree of the input (any length), exactly as [`left_subtree_len`] splits an input.
+/// Its chaining value is never the input's hash, even when it covers the whole input; the
+/// hash is the root, produced by [`merge_subtrees_root`] or [`hash`].
+///
+/// # Panics
+///
+/// If `data` is empty, or `input_offset` is not a multiple of the chunk size and of the
+/// subtree's own size rounded up to a power of two chunks. A subtree at a misaligned
+/// offset has a chaining value no input produces, so it is refused rather than computed.
+#[must_use]
+pub fn subtree_chaining_value(data: &[u8], input_offset: u64) -> ChainingValue {
+    assert!(!data.is_empty(), "a subtree holds at least one byte");
+    let chunks = (data.len() as u64).div_ceil(CHUNK as u64);
+    let span = chunks.next_power_of_two() * CHUNK as u64;
+    assert!(
+        input_offset.is_multiple_of(span),
+        "a subtree starts at a multiple of its own size"
+    );
+    let backend = Backend::selected();
+    cv_bytes(tree_output(data, input_offset / CHUNK as u64, backend).chaining(backend))
+}
+
+/// The chaining value of the parent of two adjacent subtrees, when that parent is not the
+/// root of the tree.
+#[must_use]
+pub fn merge_subtrees_non_root(left: &ChainingValue, right: &ChainingValue) -> ChainingValue {
+    let backend = Backend::selected();
+    cv_bytes(parent(cv_words(left), cv_words(right)).chaining(backend))
+}
+
+/// The hash of an input whose two top-level subtrees have chaining values `left` and
+/// `right`: the tree's root.
+#[must_use]
+pub fn merge_subtrees_root(left: &ChainingValue, right: &ChainingValue) -> Hash {
+    parent(cv_words(left), cv_words(right)).root(Backend::selected())
+}
+
+fn cv_bytes(words: [u32; 8]) -> ChainingValue {
+    let mut bytes = [0; 32];
+    for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+        dest.copy_from_slice(&word.to_le_bytes());
+    }
+    bytes
+}
+
+fn cv_words(bytes: &ChainingValue) -> [u32; 8] {
+    let mut words = [0; 8];
+    for (word, source) in words.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*source);
+    }
+    words
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hash, rebuilt from the chaining values of its two top-level subtrees.
+    fn rebuilt(data: &[u8]) -> Hash {
+        let left = left_subtree_len(data.len() as u64) as usize;
+        merge_subtrees_root(
+            &subtree_chaining_value(&data[..left], 0),
+            &subtree_chaining_value(&data[left..], left as u64),
+        )
+    }
+
+    #[test]
+    fn subtree_chaining_values_rebuild_the_hash() {
+        // Every length class the tree code special-cases: just past one chunk, exact
+        // powers of two, the four-chunk subtree, a 64 KiB narrow tree, and a ragged
+        // final subtree.
+        for len in [
+            1025, 2048, 2049, 4096, 4097, 16_384, 65_536, 65_537, 300_001,
+        ] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+            assert_eq!(rebuilt(&data), hash(&data), "length {len}");
+        }
+    }
+
+    #[test]
+    fn four_kilobyte_shards_fold_to_the_hash() {
+        // The use this exists for: an input cut into 4 KiB pieces, each proved by its own
+        // chaining value and its siblings', folds back to the input's hash.
+        let data: Vec<u8> = (0..64 * 1024).map(|i: usize| (i * 7 % 253) as u8).collect();
+        let mut level: Vec<ChainingValue> = data
+            .chunks(4096)
+            .enumerate()
+            .map(|(index, shard)| subtree_chaining_value(shard, index as u64 * 4096))
+            .collect();
+        while level.len() > 2 {
+            level = level
+                .chunks(2)
+                .map(|pair| merge_subtrees_non_root(&pair[0], &pair[1]))
+                .collect();
+        }
+        assert_eq!(merge_subtrees_root(&level[0], &level[1]), hash(&data));
+    }
+
+    #[test]
+    #[should_panic(expected = "a subtree starts at a multiple of its own size")]
+    fn a_misaligned_subtree_is_refused() {
+        let _ = subtree_chaining_value(&[0u8; 2048], 1024);
+    }
 
     #[test]
     fn writer_rejects_length_overflow_without_mutation() {

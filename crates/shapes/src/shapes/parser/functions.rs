@@ -81,7 +81,8 @@ pub(crate) fn register_declared_sparql_functions(
     reached: &[Arc<CustomFunction>],
     node_shapes: &[crate::shapes::Shape],
     registry: &mut UserFunctionRegistry,
-) -> Result<BTreeSet<String>, String> {
+    profile: crate::profile::ShaclProfile,
+) -> Result<BTreeSet<String>, crate::report::CompleteValidationError> {
     let mut parser = Parser::new(
         dataset.as_ref(),
         provenance.base().map(ToOwned::to_owned),
@@ -89,12 +90,16 @@ pub(crate) fn register_declared_sparql_functions(
         provenance.box_role_vocab().cloned(),
         Arc::clone(dataset),
         provenance.shapes_graph().map(ToOwned::to_owned),
+        profile,
     );
-    let linked = parser.discover_custom_functions()?;
-    parser.custom_fns = linked.custom;
-    parser.parse_sparql_functions(registry)?;
-    parser.register_unreached_list_functions(reached, node_shapes, registry)?;
-    Ok(linked.native_list)
+    let mut register = |parser: &mut Parser<'_>| {
+        let linked = parser.discover_custom_functions()?;
+        parser.custom_fns = linked.custom;
+        parser.parse_sparql_functions(registry)?;
+        parser.register_unreached_list_functions(reached, node_shapes, registry)?;
+        Ok(linked.native_list)
+    };
+    register(&mut parser).map_err(|message| parser.load_complete_error(message))
 }
 
 impl Parser<'_> {
@@ -317,7 +322,8 @@ impl Parser<'_> {
     fn parse_one_sparql_function(
         &self,
         id: &Term,
-    ) -> Result<(UserFunction, Option<String>), crate::error::RuleViolation> {
+    ) -> Result<(UserFunction, Option<crate::shapes::QueryRefusal>), crate::error::RuleViolation>
+    {
         // ── Parameters, ordered by (sh:order, predicate IRI) ──────────────────
         struct RawParam {
             order: f64,
@@ -605,9 +611,19 @@ impl Parser<'_> {
         // The pre-binding restrictions, over the parameter variables the call pre-binds.
         // A violation is not a syntax error: it is judged where a call executes the body.
         let parameters: Vec<&str> = params.iter().map(|param| param.var.as_str()).collect();
-        let prebinding = crate::prebinding::check_function_body(&form, &parameters)
-            .err()
-            .map(|e| format!("sh:SPARQLFunction <{id}> violates pre-binding restrictions: {e}"));
+        let prebinding = crate::shapes::audit_query(
+            self.profile,
+            crate::profile::QueryPurpose::Function,
+            &form,
+            &parameters,
+            || crate::prebinding::check_function_body(&form, &parameters),
+        )
+        .err()
+        .map(|error| {
+            error.legacy_context(|message| {
+                format!("sh:SPARQLFunction <{id}> violates pre-binding restrictions: {message}")
+            })
+        });
 
         let return_constraint = TypeConstraint {
             datatype: self.first_iri_object(id, sh::RETURN_TYPE),

@@ -1,0 +1,5 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=699	consumed=700
+certificate	certain	positional-prefix=true
+variables	shifted	seconds
+row	"2024-01-02T03:04:05.12345678901234567891Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>	"5.12345678901234567891"^^<http://www.w3.org/2001/XMLSchema#decimal>

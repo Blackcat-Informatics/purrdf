@@ -65,13 +65,20 @@ fn query_answers_past_machine_words_exactly() {
 }
 
 #[test]
-fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
+fn division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbound() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
-    // The default: eighteen digits, truncated.
-    let out = query(dir.path(), &[], "SELECT (1 / 3 AS ?q) WHERE {}");
+    // The default keeps terminating digits and rounds repeating quotients.
+    let out = query(dir.path(), &[], "SELECT (2 / 3 AS ?q) WHERE {}");
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("0.333333333333333333"),
+        stdout(&out).contains("0.666666666666666667"),
+        "{}",
+        stdout(&out)
+    );
+    let out = query(dir.path(), &[], "SELECT (1 / 1048576 AS ?q) WHERE {}");
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("0.00000095367431640625"),
         "{}",
         stdout(&out)
     );
@@ -83,14 +90,20 @@ fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("0.125"), "{}", stdout(&out));
-    // …and refuses the run on a non-terminating one, by its F&O code.
+    // …and leaves a non-terminating one unbound, an expression error (SPARQL §17.2):
+    // the query answers, and a governed run names the F&O code on stderr.
     let out = query(
         dir.path(),
-        &["--division", "exact"],
-        "SELECT (1 / 3 AS ?q) WHERE {}",
+        &["--division", "exact", "--fuel", "1000000000"],
+        "SELECT (1 / 3 AS ?q) (COALESCE(1 / 3, \"caught\") AS ?c) WHERE {}",
     );
-    assert_eq!(code(&out), 1, "{}", stdout(&out));
-    assert!(stderr(&out).contains("FOAR0002"), "{}", stderr(&out));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"caught\""), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("purrdf-expression-errors 1\nabsorbed err:FOAR0002 2\n"),
+        "{}",
+        stderr(&out)
+    );
     // A scale and rounding.
     let out = query(
         dir.path(),
@@ -99,6 +112,32 @@ fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("0.6667"), "{}", stdout(&out));
+    let out = query(
+        dir.path(),
+        &["--division", "2:half-even"],
+        "SELECT (3 / 8 AS ?q) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("0.38"), "{}", stdout(&out));
+    let out = query(
+        dir.path(),
+        &["--division", "2"],
+        "SELECT (2 / 3 AS ?q) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("0.66"), "{}", stdout(&out));
+    let out = query(
+        dir.path(),
+        &[],
+        "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> \
+         SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^xsd:dateTime) AS ?s) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("5.123456789012345678901"),
+        "{}",
+        stdout(&out)
+    );
     // A malformed policy is a usage error; its neighbour parses.
     let out = query(
         dir.path(),
@@ -113,6 +152,97 @@ fn division_policy_is_selectable_and_refuses_only_a_non_terminating_quotient() {
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(stdout(&out).contains("0.6666"), "{}", stdout(&out));
+}
+
+/// A governed query reports the XPath F&O errors it absorbed into unbound values on
+/// stderr, one `absorbed CODE COUNT` line per code, while stdout keeps the rows; the
+/// same query without the failing expression writes no block.
+#[test]
+fn a_governed_query_names_the_errors_it_absorbed() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let governed = ["--fuel", "1000000000"];
+    let out = query(
+        dir.path(),
+        &governed,
+        "SELECT (1 / 0 AS ?q) (\"x\" + 1 AS ?s) (1 / 0 AS ?r) (2 AS ?k) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = stderr(&out);
+    assert!(report.contains("purrdf-expression-errors 1\n"), "{report}");
+    assert!(report.contains("absorbed err:FOAR0001 2\n"), "{report}");
+    assert!(report.contains("absorbed err:XPTY0004 1\n"), "{report}");
+    assert!(stdout(&out).contains('2'), "{}", stdout(&out));
+    // Neighbour: nothing fails, nothing is reported.
+    let out = query(
+        dir.path(),
+        &governed,
+        "SELECT (1 / 2 AS ?q) (2 AS ?k) WHERE {}",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("purrdf-expression-errors"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// `purrdf update` takes `--division` as `purrdf query` does, and a governed update
+/// names on stderr the F&O errors its expressions absorbed: `1/0` and, under `exact`,
+/// `1/3` are unbound, so nothing is inserted for them, and each is counted. A request
+/// whose quotients all answer writes the rows and no block.
+#[test]
+fn a_governed_update_divides_under_its_policy_and_names_what_it_absorbed() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "seed.ttl",
+        "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+    );
+    let update = |extra: &[&str], quotient: &str| {
+        let text = format!(
+            "INSERT {{ <http://example.org/s> <http://example.org/q> ?x }} \
+             WHERE {{ BIND({quotient} AS ?x) }}"
+        );
+        let mut args = vec!["update", "--data", &data, "--to", "ntriples"];
+        args.extend_from_slice(extra);
+        args.push(&text);
+        run(&args)
+    };
+    let governed = ["--fuel", "1000000000"];
+    let out = update(&governed, "1/0");
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("purrdf-expression-errors 1\nabsorbed err:FOAR0001 1\n"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("example.org/q"), "{}", stdout(&out));
+
+    let exact = ["--fuel", "1000000000", "--division", "exact"];
+    let out = update(&exact, "1/3");
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("absorbed err:FOAR0002 1\n"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("example.org/q"), "{}", stdout(&out));
+
+    // Neighbours: a terminating quotient under exact, and a rounding policy, insert
+    // their value and report nothing.
+    let out = update(&exact, "1/8");
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"0.125\""), "{}", stdout(&out));
+    assert!(
+        !stderr(&out).contains("purrdf-expression-errors"),
+        "{}",
+        stderr(&out)
+    );
+    let out = update(&["--division", "5:half-even"], "2/3");
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"0.66667\""), "{}", stdout(&out));
+    // A malformed policy is a usage error.
+    assert_eq!(code(&update(&["--division", "5:sideways"], "2/3")), 2);
 }
 
 #[test]

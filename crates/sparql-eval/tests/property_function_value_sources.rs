@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// The pre-binding lane is deprecated and inert; these tests still name it.
+#![allow(deprecated)]
 
 //! What feeds a property function's input position: every pattern that binds a
 //! variable on every row the query text lets reach the call, not only a triple.
@@ -2080,7 +2082,7 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
         ));
     }
     // A `GROUP BY` the substituted variable is a key of, which the rewrite enters.
-    for (body, expected) in group_key_shapes() {
+    for (body, _, expected) in group_key_shapes() {
         shapes.push((body, alpha(), ShaclPrebinding::None, expected));
     }
     // A `FILTER` over a built-in strict in the variable it reads, which drops `<b>`'s
@@ -2133,13 +2135,20 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
 
 // ── a GROUP BY the pushdown enters ──────────────────────────────────────────
 
+/// A grouped shape: its body, the body with the value written in by hand, and its
+/// answer.
+type GroupKeyShape = (String, String, Vec<(String, String)>);
+
 /// The three shapes whose `GROUP BY` the substituted `?q` is a key of — a grouped
 /// sub-`SELECT` joined, the same reached through a `LATERAL`, and one grouping a `UNION`
-/// whose second arm leaves `?q` unbound — with their exact answers for `?q = "alpha"`
-/// over [`lateral_dataset`]'s three left rows. `"alpha"` has two table rows, so its
-/// group counts `2`; the unbound arm's group counts the three `<p>` triples, and keeps
-/// its row, which the seed then binds to `"alpha"`.
-fn group_key_shapes() -> Vec<(String, Vec<(String, String)>)> {
+/// whose second arm never mentions `?q` — with their exact answers for `?q = "alpha"`
+/// over [`lateral_dataset`]'s three left rows, and each written by hand with the
+/// value as a `VALUES` where the rows it binds are made. `"alpha"` has two table rows,
+/// so its group counts `2`. The substituted `?q` is one value for the whole
+/// evaluation, so the second arm's three `<p>` rows carry it too and fall in the same
+/// group, which counts `5` — the answer the shape gives alone, and rdflib's under
+/// `initBindings` — rather than a group of their own.
+fn group_key_shapes() -> Vec<GroupKeyShape> {
     let call = format!("?q <{PAIRS}> ?x");
     let left = format!("?s <{EX}p> ?v");
     let times = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
@@ -2147,23 +2156,25 @@ fn group_key_shapes() -> Vec<(String, Vec<(String, String)>)> {
         expected.sort();
         expected
     };
+    let by_hand = |body: &str| format!("{body} VALUES ?q {{ \"alpha\" }}");
+    let joined =
+        format!("{left} {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}");
+    let lateral = format!(
+        "{left} LATERAL {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"
+    );
+    let union = |values: &str| {
+        format!(
+            "{left} {{ SELECT ?q (COUNT(*) AS ?out) WHERE {{ {values}{{ {{ {call} }} UNION \
+             {{ ?z <{EX}p> ?w }} }} }} GROUP BY ?q }}"
+        )
+    };
     vec![
+        (joined.clone(), by_hand(&joined), times(&[("alpha", "2")])),
+        (lateral.clone(), by_hand(&lateral), times(&[("alpha", "2")])),
         (
-            format!("{left} {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"),
-            times(&[("alpha", "2")]),
-        ),
-        (
-            format!(
-                "{left} LATERAL {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"
-            ),
-            times(&[("alpha", "2")]),
-        ),
-        (
-            format!(
-                "{left} {{ SELECT ?q (COUNT(*) AS ?out) WHERE {{ {{ {call} }} UNION \
-                 {{ ?z <{EX}p> ?w }} }} GROUP BY ?q }}"
-            ),
-            times(&[("alpha", "2"), ("alpha", "3")]),
+            union(""),
+            union("VALUES ?q { \"alpha\" } "),
+            times(&[("alpha", "5")]),
         ),
     ]
 }
@@ -2179,12 +2190,11 @@ fn alpha_substitution() -> Vec<(String, TermValue)> {
 /// substitution's seed drops — so the rewrite writes `"alpha"` into the call inside.
 /// Each shape is admitted for the relation serving only `bf`, which is invoked with
 /// `"alpha"` and nothing else, and answers exactly what the query with the value
-/// written in by hand as `VALUES` answers — the documented meaning of a substitution —
+/// written in by hand as a `VALUES` where the rows it binds are made answers —
 /// evaluated bottom-up by a relation that ignores its input.
 #[test]
 fn a_group_by_keyed_by_the_substituted_variable_is_entered() {
-    for (body, expected) in group_key_shapes() {
-        let by_hand = format!("{body} VALUES ?q {{ \"alpha\" }}");
+    for (body, by_hand, expected) in group_key_shapes() {
         let oracle = run_pairs_with(&["ff"], true, &by_hand, &[], ShaclPrebinding::None);
         assert_eq!(
             oracle.answer.as_ref(),
@@ -2215,15 +2225,14 @@ fn a_group_by_keyed_by_the_substituted_variable_is_entered() {
     }
 }
 
-/// **A `GROUP BY` the substituted variable is not a key of is not entered.** An
-/// expression key `(STR(?q) AS ?k)` groups by `?k`, and two values of `?q` can share
-/// one; an aggregate `COUNT(?q)` folds every value into one row that does not carry
-/// `?q`; a key `?x` other than `?q` partitions by something else. In each the
-/// substitution cannot reach the call, so the relation serving only `bf` is refused at
-/// prepare and never invoked, and the free-capable one is invoked free and answers
-/// exactly the bottom-up reference — every group, joined with the seed afterwards.
+/// **A `GROUP BY` is reached by the substitution whatever its keys.** An expression key
+/// `(STR(?q) AS ?k)`, an aggregate `COUNT(?q)` and a key `?x` other than `?q` all sit
+/// over a call on `?q`, and the one pre-binding rewrite writes the substituted value
+/// into that call wherever it is — the variable is one value at every depth. So the
+/// relation serving only `bf` is admitted and invoked with `"alpha"` alone, and every
+/// group is computed over `"alpha"`'s pairs only.
 #[test]
-fn a_group_by_not_keyed_by_the_substituted_variable_is_not_entered() {
+fn a_group_by_is_reached_by_the_substitution_whatever_its_keys() {
     let call = format!("?q <{PAIRS}> ?x");
     let left = format!("?s <{EX}p> ?v");
     let times = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
@@ -2237,67 +2246,31 @@ fn a_group_by_not_keyed_by_the_substituted_variable_is_not_entered() {
                 "{left} {{ SELECT ?k (COUNT(?x) AS ?out) WHERE {{ {call} }} \
                  GROUP BY (STR(?q) AS ?k) }}"
             ),
-            times(&[("alpha", "2"), ("alpha", "1"), ("alpha", "1")]),
+            times(&[("alpha", "2")]),
         ),
         (
             format!("{left} {{ SELECT (COUNT(?q) AS ?out) WHERE {{ {call} }} }}"),
-            times(&[("alpha", "4")]),
+            times(&[("alpha", "2")]),
         ),
         (
             format!("{left} {{ SELECT ?x (COUNT(*) AS ?out) WHERE {{ {call} }} GROUP BY ?x }}"),
-            times(&[
-                ("alpha", "1"),
-                ("alpha", "1"),
-                ("alpha", "1"),
-                ("alpha", "1"),
-            ]),
+            times(&[("alpha", "1"), ("alpha", "1")]),
         ),
     ] {
-        let refused = run_pairs_with(
+        let bound = run_pairs_with(
             &["bf"],
             false,
             &body,
             &alpha_substitution(),
             ShaclPrebinding::None,
         );
-        let Err(message) = &refused.answer else {
-            panic!("{body}: the bound-only relation is refused, got {refused:?}");
-        };
-        assert!(
-            message.contains("no feasible evaluation order")
-                && message.contains(&format!("<{PAIRS}> reachable only as `ff`")),
-            "{body}: the refusal names the call and its free input: {message}"
-        );
-        assert_eq!(refused.invocations, Vec::<String>::new(), "{body}");
-
-        let reference = run_pairs_with(
-            &["ff"],
-            true,
-            &body,
-            &alpha_substitution(),
-            ShaclPrebinding::None,
-        );
+        assert_eq!(bound.answer.as_ref(), Ok(&expected), "{body}");
+        let mut invoked = bound.invocations;
+        invoked.dedup();
         assert_eq!(
-            reference.answer.as_ref(),
-            Ok(&expected),
-            "{body}: the reference"
-        );
-        let free = run_pairs_with(
-            &["bf", "ff"],
-            false,
-            &body,
-            &alpha_substitution(),
-            ShaclPrebinding::None,
-        );
-        assert_eq!(
-            free.answer.as_ref(),
-            Ok(&expected),
-            "{body}: the free-capable answer"
-        );
-        assert_eq!(
-            free.invocations,
-            calls(&["ff:-"]),
-            "{body}: the free-capable relation is invoked free"
+            invoked,
+            calls(&["bf:alpha"]),
+            "{body}: the relation is invoked with \"alpha\" only"
         );
     }
 }

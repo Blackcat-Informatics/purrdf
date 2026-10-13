@@ -384,9 +384,19 @@ impl Parser<'_> {
                  without it no call site could be recognised"
             ));
         }
-        let required = raw.iter().filter(|p| !p.optional).count();
-        let params = raw.iter().map(|p| ArgKey::Named(p.path.clone())).collect();
-        Ok((params, required))
+        // `required` counts the LEADING required keys of `params` (the body scope at
+        // `parse_custom_function_bodies` and every other reader slice it that way), and
+        // §6.1 places no order on a named function's parameters. So the required ones
+        // go first, each block in `sh:path` order: an optional `ex:a` beside a required
+        // `ex:b` must leave `ex:b`, not `ex:a`, in the required prefix.
+        let (required, optional): (Vec<&RawParam>, Vec<&RawParam>) =
+            raw.iter().partition(|p| !p.optional);
+        let params = required
+            .iter()
+            .chain(optional.iter())
+            .map(|p| ArgKey::Named(p.path.clone()))
+            .collect();
+        Ok((params, required.len()))
     }
 
     /// Parse every declared function's `sh:bodyExpression`, keyed by function IRI.
@@ -427,7 +437,17 @@ impl Parser<'_> {
             // a legitimate shared sub-expression look like a cycle.
             let saved = std::mem::take(&mut self.in_flight);
             self.in_flight.insert(InFlight::NodeExpr(id));
-            let parsed = self.parse_node_expr(body_node);
+            // The body runs with the function's arguments bound under their names. Only
+            // the required ones are certain to be in the call's scope (an optional one a
+            // call omits is absent), so only they are declared to the load-time grouping
+            // check; an optional one may still never be assigned. What the load admits,
+            // every call's evaluation admits too.
+            let names = |keys: &[ArgKey]| keys.iter().map(ArgKey::variable_name).collect();
+            let parsed = self.with_node_expr_scopes(
+                names(&func.params[..func.required]),
+                names(&func.params[func.required..]),
+                |parser| parser.parse_node_expr(body_node),
+            );
             self.in_flight = saved;
             let body = parsed.map_err(|e| {
                 format!(

@@ -78,6 +78,7 @@
 //! which is what makes the median of per-iteration times meaningful.
 
 mod args;
+pub mod counter;
 pub mod estimates;
 pub mod stats;
 pub mod store;

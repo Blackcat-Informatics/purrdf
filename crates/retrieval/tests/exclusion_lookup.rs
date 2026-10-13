@@ -401,9 +401,7 @@ impl ScriptedStream {
     fn attesting_short(mut self) -> Self {
         self.attested = PfAttestation {
             generation: IndexGeneration::Undeclared,
-            service: ServiceLevel::Incomplete {
-                reason: "fixture shard offline".to_owned(),
-            },
+            service: ServiceLevel::incomplete_static("fixture shard offline"),
         };
         self
     }
@@ -843,7 +841,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
 fn drive(
     streams: Vec<(Iri, ScriptedStream)>,
 ) -> Result<(Vec<FusedRow>, FusionTrailer), FusionError> {
-    let mut fusion = FusionStream::new(streams, weighted_profile());
+    let mut fusion = FusionStream::new(streams, weighted_profile())?;
     let mut rows = Vec::new();
     while rows.len() < 2 {
         let Some(row) = block_on(fusion.next())? else {

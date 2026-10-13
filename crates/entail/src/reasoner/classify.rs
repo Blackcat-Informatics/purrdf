@@ -93,10 +93,13 @@ impl Subsumptions {
     /// it did not derive, and only when the saturation was not complete for this ontology.
     /// Reflexive pairs are never sent to the tableau: `C ⊑ C` holds in every interpretation,
     /// so asking would spend a decision to learn an axiom of the logic.
-    pub(crate) fn decide(session: &mut Session<'_>, classes: &[(u32, u32)]) -> Self {
+    pub(crate) fn decide(
+        session: &mut Session<'_>,
+        classes: &[(u32, u32)],
+    ) -> Result<Self, crate::EntailError> {
         let kb = session.kb();
         let seeds: Vec<u32> = classes.iter().map(|&(_, concept)| concept).collect();
-        let taxonomy = saturate(kb, &seeds);
+        let taxonomy = saturate(kb, &seeds)?;
         let complete = taxonomy.is_complete();
         let n = classes.len();
         let mut verdicts = vec![Verdict::False; n * n];
@@ -144,7 +147,7 @@ impl Subsumptions {
                 }
             }
         }
-        Self { n, verdicts, bases }
+        Ok(Self { n, verdicts, bases })
     }
 
     /// The CLAIMS a classification reports, each naming what decided it.
@@ -756,7 +759,8 @@ mod tests {
             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
             let (mut derived_session, usable) = reasoner.open().expect("consistent");
             assert!(usable, "{name}: the fixture must be decidable in budget");
-            let derived = Subsumptions::decide(&mut derived_session, &reasoner.classes);
+            let derived = Subsumptions::decide(&mut derived_session, &reasoner.classes)
+                .expect("fixture classification");
             let (mut refuted_session, _) = reasoner.open().expect("consistent");
             let refuted = Subsumptions::decide_by_tableau(&mut refuted_session, &reasoner.classes);
             assert_eq!(
@@ -822,7 +826,7 @@ mod tests {
         for (name, dataset, _) in corpus() {
             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
             let seeds: Vec<u32> = reasoner.classes.iter().map(|&(_, c)| c).collect();
-            let taxonomy = saturate(&reasoner.kb, &seeds);
+            let taxonomy = saturate(&reasoner.kb, &seeds).expect("fixture saturation");
             let complete = taxonomy.is_complete();
             for &(_, sub) in &reasoner.classes {
                 for &(_, sup) in &reasoner.classes {
@@ -853,7 +857,9 @@ mod tests {
             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
             let seeds: Vec<u32> = reasoner.classes.iter().map(|&(_, c)| c).collect();
             assert_eq!(
-                saturate(&reasoner.kb, &seeds).is_complete(),
+                saturate(&reasoner.kb, &seeds)
+                    .expect("fixture saturation")
+                    .is_complete(),
                 expected,
                 "{name}: fragment membership"
             );

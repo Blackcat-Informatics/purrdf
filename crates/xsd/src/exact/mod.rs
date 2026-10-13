@@ -4,9 +4,8 @@
 //! The arbitrary-precision numeric tower: exact `xsd:integer`, `xsd:decimal` and
 //! `owl:rational` values of any size, beside the machine-word representations.
 //!
-//! [`crate::XsdValue`] holds an integer or decimal that fits machine words in
-//! its bounded variants and every other one on this tower
-//! ([`crate::XsdValue::BigInteger`], [`crate::XsdValue::BigDecimal`]); the
+//! [`crate::XsdValue`] holds exact integer and decimal values on this tower;
+//! each uses inline words where possible and arbitrary-precision storage otherwise. The
 //! types here are also usable on their own for exact reasoned mathematics
 //! (combinatorics, partition functions, exact quotients).
 //!
@@ -29,8 +28,8 @@
 //! let b: Decimal = "-0.1".parse()?;
 //! assert_eq!((&a + &b).canonical_lexical(), "0.0000000000000000000000000000000000000001");
 //!
-//! // Division under a stated precision policy; the default matches the bounded
-//! // machine-word quotient (18 digits, truncated).
+//! // The default keeps terminating quotients exact and rounds repeating ones
+//! // to eighteen fractional digits, half to even.
 //! let third = Decimal::ONE.div(&Decimal::from(3), DivisionPolicy::default())?;
 //! assert_eq!(third.canonical_lexical(), "0.333333333333333333");
 //! let rounded = Decimal::from(2).div(&Decimal::from(3), DivisionPolicy::scale(5, Rounding::HalfEven))?;
@@ -54,10 +53,10 @@
 //!   alone — no floating-point operation, so the bits are identical on every
 //!   target, wasm32 and the x87 included. Every conversion from `f64`/`f32` is
 //!   exact.
-//! * **Never wraps.** Narrowing to a bounded type ([`Integer::to_i128`],
-//!   [`Decimal::to_bounded`], [`Rational::to_bounded`]) returns the value or a
-//!   typed [`ExactError::OutOfRange`] carrying the F&O error code; it never
-//!   wraps, saturates or rounds.
+//! * **Never wraps.** Explicit integer narrowing through [`Integer::to_i128`]
+//!   or [`Integer::to_i64`] returns the value or a typed
+//!   [`ExactError::OutOfRange`] carrying the F&O error code; it never wraps,
+//!   saturates or rounds. Decimal and rational values have no bounded public form.
 //! * **Governable.** Every operation has a cost method returning a [`Cost`]
 //!   computed in constant time from operand sizes, so a governor can refuse a
 //!   hostile operation before it allocates; see [`cost`].
@@ -72,9 +71,8 @@
 //! stated [`Rounding`] direction; [`DivisionPolicy::Exact`] returns the exact
 //! expansion or refuses a non-terminating quotient with
 //! [`ExactError::NonTerminating`]. The default, [`DivisionPolicy::xsd_default`],
-//! is eighteen digits truncated toward zero — the quotient the bounded
-//! [`crate::numeric::Decimal`] produces wherever its `i128` coefficient holds the
-//! result.
+//! keeps a terminating quotient exact and otherwise rounds to eighteen
+//! fractional digits, half to even.
 //!
 //! # Why an exact rational type
 //!
@@ -91,18 +89,27 @@
 //! charge.
 //!
 
+mod certified_cost;
 pub mod cost;
+pub use certified_cost::{ExactArithmeticCost, ExactOperation};
 
-mod binary;
-mod decimal;
+pub(crate) mod binary;
+pub(crate) mod decimal;
 mod error;
 mod integer;
 mod rational;
 mod rounding;
 
 pub use cost::Cost;
-pub use decimal::Decimal;
-pub use error::{BoundedTarget, ExactError, ExactKind};
+pub use decimal::{
+    Decimal, DecimalTextError, PreparedDecimalText, append_scaled_integer_with_memory,
+};
+pub use error::{BoundedTarget, ExactError, ExactKind, ExactOperationError, ExactParseError};
 pub use integer::Integer;
 pub use rational::Rational;
+pub use rational::certified::{
+    DecimalConstructionError, RationalComparisonBody, RationalComparisonError,
+    RationalNativeComparisonBody,
+};
+pub use rational::geometry::Rat as GeometricRational;
 pub use rounding::{DivisionPolicy, DivisionPolicyError, Rounding};

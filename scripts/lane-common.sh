@@ -73,16 +73,6 @@
 # either. The certificate is only worth as much as the enumeration behind it,
 # and the cheapest way to enumerate collation is to remove it as a variable.
 #
-# A change justified by enumeration must not itself be under-enumerated, so the
-# one locale-derived JVM behaviour that could reach generated output is written
-# down: on JDK 18 and later, JEP 400 fixes `file.encoding` to UTF-8 regardless of
-# locale (measured: `LC_ALL=C java -XshowSettings:properties` reports
-# `file.encoding = UTF-8`, with only `native.encoding`/`sun.jnu.encoding` becoming
-# ASCII, and those govern FILENAME decoding rather than content). On JDK 17 and
-# earlier `file.encoding` did follow the locale, and UBA writes through a
-# default-charset `FileWriter` -- so on such a JVM a non-ASCII character would be
-# emitted as `?`. LUBM content is ASCII, which is why this is benign rather than
-# why it is unexamined.
 export LC_ALL=C
 
 die() {
@@ -728,7 +718,7 @@ lane_require_executable() {
 # in `LANE_PROBE_OUT`.
 #
 # This runs BEFORE the lane's first step, which is the whole point: a knob error
-# is not worth a download, a JRE, and eight megabytes of generated input before
+# is not worth a download or generated corpus before
 # it is noticed, and every one of those is a chance for the real fault to be
 # mistaken for a problem with the corpus.
 lane_run_probe() {

@@ -28,8 +28,6 @@
 //! plain object that must not be shared between threads; `run` takes `&mut self`, so
 //! two concurrent calls on one object raise rather than interleave.
 
-use std::sync::Arc;
-
 use purrdf_core::TermValue;
 use purrdf_sparql_eval::{
     AggregateRegistry, DivisionPolicy, ExtensionEnv, InternedOutcome, NativeSparqlEngine,
@@ -177,6 +175,7 @@ impl GraphDerivedRelations {
         &self,
         engine: &NativeSparqlEngine,
         dataset: &RdfDataset,
+        geo: &purrdf_validate::geo::GeoProfile,
     ) -> PyResult<(PreparedExecution, ExtensionEnv)> {
         let registry = build_relations(self.specs.clone(), dataset)?;
         let aggregates =
@@ -193,6 +192,7 @@ impl GraphDerivedRelations {
                 None,
                 &borrowed,
                 purrdf_sparql_eval::QueryOptions::new()
+                    .with_geo(geo)
                     .with_env(&env)
                     .with_division(self.division),
             )
@@ -263,6 +263,14 @@ pub(crate) struct PyPreparedQuery {
     /// answer `heldIn` the same way the engine `prepare` admitted the plan under
     /// would have.
     standpoint_predicates: Option<(String, String)>,
+    /// The dated native XPath law `Store.prepare`'s `xpath_regex` selected, if any.
+    ///
+    /// Like [`Self::standpoint_predicates`] it is read at EVALUATION time, off the
+    /// engine, by `REGEX` and `REPLACE`, so the fresh engine [`run`](Self::run) builds
+    /// is given it again; `None` keeps the compatibility pattern behaviour.
+    xpath_regex: Option<crate::xpath_regex::Selection>,
+    /// The immutable profile and identity retained from admission through each run.
+    geo: purrdf_validate::geo::GeoProfileSnapshot,
     /// The precision policy `Store.prepare`'s `division` named: the plan is admitted
     /// under it and every [`run`](Self::run) evaluates under it, so a quotient reads the
     /// same on the first run and the hundredth.
@@ -336,21 +344,24 @@ impl PyPreparedQuery {
             // object at all. What a fresh engine gives up is the join-order memo
             // between runs, which is a plan-shaped hint rather than the plan.
             //
-            // `standpoint_predicates` is reapplied to it because that axis is read at
-            // evaluation time, off the engine, not admitted into the plan — and the
-            // re-admission below is handed this same engine, so a re-admitted plan is
-            // read under the configuration the evaluation runs under.
+            // `standpoint_predicates` and `xpath_regex` are reapplied to it because those
+            // axes are read at evaluation time, off the engine, not admitted into the
+            // plan — and the re-admission below is handed this same engine, so a
+            // re-admitted plan is read under the configuration the evaluation runs under.
             let mut engine = NativeSparqlEngine::new();
             if let Some((according_to, sharpens)) = self.standpoint_predicates.clone() {
                 engine = engine
                     .with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
+            }
+            if let Some((profile, limits)) = self.xpath_regex {
+                engine = engine.with_xpath_regex(profile, limits);
             }
             // A relation read out of the store's graph is rebuilt against THIS run's
             // dataset and the plan re-admitted under it, so the whole answer comes
             // from one point in time. Both fields are replaced together, and only on
             // success: a rebuild that fails leaves the handle exactly as it was.
             let readmitted = match self.graph_derived.as_ref() {
-                Some(sources) => Some(sources.readmit(&engine, &dataset)?),
+                Some(sources) => Some(sources.readmit(&engine, &dataset, &self.geo)?),
                 None => None,
             };
             if let Some((execution, env)) = readmitted {
@@ -385,6 +396,7 @@ impl PyPreparedQuery {
             // `execute` refuses, and the pairing is what keeps that refusal a guard
             // against a caller's mistake rather than a trap this surface walks into.
             let options = purrdf_sparql_eval::QueryOptions::new()
+                .with_geo(&self.geo)
                 .with_env(&self.env)
                 .with_division(self.division);
             engine
@@ -412,7 +424,7 @@ fn materialize_interned<
 ) -> purrdf_core::SparqlResult {
     match outcome {
         InternedOutcome::Boolean(value) => purrdf_core::SparqlResult::Boolean(*value),
-        InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(Arc::clone(graph)),
+        InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(graph.dataset_handle()),
         InternedOutcome::Solutions(solutions) => {
             let variables = solutions
                 .variables()
@@ -431,7 +443,7 @@ fn materialize_interned<
             purrdf_core::SparqlResult::Solutions {
                 variables,
                 rows,
-                aux: solutions.constructed_dataset(),
+                aux: solutions.constructed_dataset().dataset_handle(),
             }
         }
     }
@@ -469,6 +481,8 @@ pub(super) fn prepare(
     property_functions: Option<&PropertyFunctionRegistry>,
     aggregates: Option<&AggregateRegistry>,
     standpoint_predicates: Option<(String, String)>,
+    xpath_regex: Option<crate::xpath_regex::Selection>,
+    geo: purrdf_validate::geo::GeoProfileSnapshot,
     graph_derived: Option<GraphDerivedRelations>,
     division: DivisionPolicy,
 ) -> PyResult<PyPreparedQuery> {
@@ -480,6 +494,7 @@ pub(super) fn prepare(
             None,
             &borrowed,
             purrdf_sparql_eval::QueryOptions::new()
+                .with_geo(&geo)
                 .with_env(&env)
                 .with_division(division),
         )
@@ -497,6 +512,8 @@ pub(super) fn prepare(
         env,
         graph_derived,
         standpoint_predicates,
+        xpath_regex,
+        geo,
         division,
     })
 }

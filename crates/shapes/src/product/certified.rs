@@ -74,6 +74,7 @@ use purrdf_sparql_eval::{UserFunctionRegistry, user_fn};
 use crate::engine::PreparedShapes;
 use crate::plan::ClassCatalog;
 use crate::provenance::{ProductRestore, ValidatorProvenance};
+use crate::report::CompleteValidationError;
 use crate::shapes::{Shapes, link};
 
 use super::error::{ProductDimension, ShapesProductError};
@@ -118,7 +119,7 @@ impl CertifiedParts {
         mut shapes: Shapes,
         host: &HostBindings<'_>,
         classes: ClassCatalog,
-    ) -> Result<Self, ShapesProductError> {
+    ) -> Result<Self, CompleteValidationError> {
         install(&mut shapes, host)?;
 
         let shapes = Arc::new(shapes);
@@ -177,7 +178,7 @@ impl CertifiedParts {
         declared: &Identity,
         mut shapes: Shapes,
         host: &HostBindings<'_>,
-    ) -> Result<Self, ShapesProductError> {
+    ) -> Result<Self, CompleteValidationError> {
         install(&mut shapes, host)?;
         Ok(Self {
             prepared: PreparedShapes::with_provenance(
@@ -212,8 +213,8 @@ impl CertifiedParts {
 /// [`ProductDimension::DepthLimit`] or [`ProductDimension::Malformed`] when the
 /// declaration walk refuses or the carried shapes dataset does not re-derive its own
 /// SPARQL function declarations.
-fn install(shapes: &mut Shapes, host: &HostBindings<'_>) -> Result<(), ShapesProductError> {
-    let assembled = assemble_functions(shapes, host)?;
+fn install(shapes: &mut Shapes, host: &HostBindings<'_>) -> Result<(), CompleteValidationError> {
+    let assembled = assemble_functions_request(shapes, host)?;
     verify_declared_functions(&shapes.functions, &assembled)?;
     shapes.functions = Arc::new(assembled);
     shapes.aggregates = Arc::new(host.aggregates().clone());
@@ -259,6 +260,13 @@ pub(super) fn assemble_functions(
     shapes: &Shapes,
     host: &HostBindings<'_>,
 ) -> Result<UserFunctionRegistry, ShapesProductError> {
+    assemble_functions_request(shapes, host).map_err(CompleteValidationError::into_product)
+}
+
+fn assemble_functions_request(
+    shapes: &Shapes,
+    host: &HostBindings<'_>,
+) -> Result<UserFunctionRegistry, CompleteValidationError> {
     let declarations = ast::custom_functions(shapes)?;
     let mut registry = host.functions().clone();
     let native_list = crate::shapes::register_declared_sparql_functions(
@@ -267,8 +275,12 @@ pub(super) fn assemble_functions(
         &declarations,
         &shapes.node_shapes,
         &mut registry,
+        shapes.validation_options.shacl_profile,
     )
     .map_err(|error| {
+        if shapes.validation_options.shacl_profile != crate::profile::ShaclProfile::LEGACY {
+            return error;
+        }
         ShapesProductError::new(
             ProductDimension::Malformed,
             format!(
@@ -278,6 +290,7 @@ pub(super) fn assemble_functions(
                  describe one parse"
             ),
         )
+        .into()
     })?;
     // The built-in list-parameter functions the graph declares, registered with
     // their native implementations exactly as the linking pass registers them. A

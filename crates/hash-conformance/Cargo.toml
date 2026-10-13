@@ -80,3 +80,9 @@ harness = false
 [[test]]
 name = "frame_le"
 harness = false
+
+# FIPS 202 SHAKE known answers and independent absorption/output boundaries.
+# Its name is covered by the integration-4 shard's existing [!a-r]* pattern.
+[[test]]
+name = "shake"
+harness = false

@@ -19,17 +19,6 @@ use purrdf_xsd::{
     numeric_unary_minus, parse, value_eq,
 };
 
-/// Whether `value` is an integer held past the machine word (outside `i128`).
-fn big_integer(value: &XsdValue) -> bool {
-    matches!(value, XsdValue::Integer { value, .. } if value.as_i128().is_none())
-}
-
-/// Whether `value` is a decimal held past the machine words: a coefficient outside
-/// `i128`, or more than eighteen fractional digits.
-fn big_decimal(value: &XsdValue) -> bool {
-    matches!(value, XsdValue::Decimal(d) if d.unscaled().as_i128().is_none() || d.scale() > 18)
-}
-
 const I128_MAX_PLUS_ONE: &str = "170141183460469231731687303715884105728";
 
 fn int(text: &str) -> XsdValue {
@@ -49,12 +38,12 @@ fn integers_past_i128_parse_exactly_and_in_range_ones_stay_bounded() {
     let max = int(&i128::MAX.to_string());
     assert!(matches!(max, XsdValue::Integer { .. }));
     let past = int(I128_MAX_PLUS_ONE);
-    assert!(big_integer(&past));
+    assert!(matches!(past, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
     assert_eq!(past.canonical_lexical(), I128_MAX_PLUS_ONE);
     assert_eq!(past.datatype(), D::Integer);
     assert!(past.is_numeric());
     let below = int("-170141183460469231731687303715884105729");
-    assert!(big_integer(&below));
+    assert!(matches!(below, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
     let huge = format!("-{}", "9".repeat(300));
     assert_eq!(int(&huge).canonical_lexical(), huge);
     assert_eq!(int("+000123").canonical_lexical(), "123");
@@ -72,11 +61,10 @@ fn derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not() {
     assert!(parse("18446744073709551615", D::UnsignedLong).is_ok());
     // Unbounded derived types take a value of any size of the right sign.
     let big = "1".repeat(60);
-    assert!(
-        parse(&big, D::NonNegativeInteger)
-            .as_ref()
-            .is_ok_and(big_integer)
-    );
+    assert!(matches!(
+        parse(&big, D::NonNegativeInteger),
+        Ok(XsdValue::Integer { value, .. }) if value.as_i128().is_none()
+    ));
     assert!(parse(&big, D::PositiveInteger).is_ok());
     assert!(parse(&format!("-{big}"), D::NonNegativeInteger).is_err());
     assert!(parse(&format!("-{big}"), D::NegativeInteger).is_ok());
@@ -92,14 +80,14 @@ fn derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not() {
 #[test]
 fn decimals_past_the_bounded_form_parse_exactly() {
     let long = dec("0.1000000000000000000000000001");
-    assert!(big_decimal(&long));
+    assert!(matches!(long, XsdValue::Decimal(ref value) if value.scale() > 18));
     assert_eq!(long.canonical_lexical(), "0.1000000000000000000000000001");
     // Trailing zeros past eighteen digits are not significant.
     let padded = dec("2.50000000000000000000000000");
     assert!(matches!(padded, XsdValue::Decimal(_)));
     assert_eq!(padded.canonical_lexical(), "2.5");
     let wide = dec(&format!("{}.5", "7".repeat(50)));
-    assert!(big_decimal(&wide));
+    assert!(matches!(wide, XsdValue::Decimal(ref value) if value.unscaled().as_i128().is_none()));
     assert!(parse("1.2.3", D::Decimal).is_err());
     assert!(parse(".5", D::Decimal).is_ok());
 }
@@ -110,10 +98,12 @@ fn arithmetic_that_overflowed_now_returns_the_exact_value() {
     let one = int("1");
     let sum = numeric_add(&max, &one).expect("exact");
     assert_eq!(sum.canonical_lexical(), I128_MAX_PLUS_ONE);
-    assert!(big_integer(&sum));
+    assert!(matches!(sum, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
     // Coming back into range returns the bounded variant.
     let back = numeric_sub(&sum, &one).expect("exact");
-    assert_eq!(back.as_i128(), Some(i128::MAX));
+    assert!(
+        matches!(back, XsdValue::Integer { ref value, .. } if value.as_i128() == Some(i128::MAX))
+    );
     let square = numeric_mul(&max, &max).expect("exact");
     assert_eq!(
         square.canonical_lexical(),
@@ -161,7 +151,7 @@ fn division_follows_the_policy_and_refuses_only_what_it_must() {
     let one = int("1");
     let three = int("3");
     let eight = int("8");
-    // A quotient that does not terminate: eighteen digits, rounded half to even.
+    // The default rounds a repeating quotient to eighteen digits, half to even.
     assert_eq!(
         numeric_div(&one, &three)
             .expect("default")
@@ -291,7 +281,11 @@ fn cost_is_charged_for_every_tower_operation() {
     let big = int(&"9".repeat(1000));
     assert_eq!(numeric_cost(&small, &small, CostOp::Mul).work(), 0);
     let cost = numeric_cost(&big, &big, CostOp::Mul);
-    assert!(cost.work() > 10_000 && cost.bytes() > 400, "{cost:?}");
+    let limbs = big.to_exact_integer().expect("an integer").limb_len();
+    assert!(
+        cost.work() >= limbs * limbs && cost.bytes() >= 2 * limbs * size_of::<u64>() as u64,
+        "{cost:?} for {limbs} binary limbs"
+    );
     // A tower operand meeting a double pays for its conversion — constant past the
     // double range, where the answer is read off the length — and a bounded one
     // does not.
@@ -300,13 +294,21 @@ fn cost_is_charged_for_every_tower_operation() {
     let near = int(&"9".repeat(300));
     assert!(numeric_cost(&near, &dbl("1"), CostOp::Add).work() > 100);
     assert_eq!(numeric_cost(&small, &dbl("1"), CostOp::Add).work(), 0);
-    // A division under a non-default policy runs on the tower for any operands.
-    let exact = DivisionPolicy::Exact;
-    assert!(numeric_cost(&small, &int("3"), CostOp::Div(exact)).work() > 0);
+    // Bounded inputs can produce an exact-tower result. Charge the computation
+    // before running it, including scale alignment and a fractional product.
+    let max = int(&i128::MAX.to_string());
+    assert!(numeric_cost(&max, &int("1"), CostOp::Add).work() > 0);
+    assert!(numeric_cost(&max, &int("2"), CostOp::Mul).work() > 0);
     assert_eq!(
-        numeric_cost(&small, &int("3"), CostOp::Div(DivisionPolicy::default())).work(),
+        numeric_cost(&dec("1.0"), &dec("0.1"), CostOp::Add).work(),
         0
     );
+    assert!(numeric_cost(&max, &dec("0.000000000000000001"), CostOp::Add).work() > 0);
+    assert!(numeric_cost(&dec("0.0000000001"), &dec("0.0000000001"), CostOp::Mul).work() > 0);
+    // Every exact-value division, including the default, runs on the tower.
+    let exact = DivisionPolicy::Exact;
+    assert!(numeric_cost(&small, &int("3"), CostOp::Div(exact)).work() > 0);
+    assert!(numeric_cost(&small, &int("3"), CostOp::Div(DivisionPolicy::default())).work() > 0);
     assert!(
         numeric_cost(&big, &small, CostOp::Div(DivisionPolicy::default())).work()
             >= numeric_cost(&big, &small, CostOp::Add).work()
@@ -360,65 +362,4 @@ fn data_ranges_and_value_identity_are_exact_at_any_size() {
         ],
     };
     assert_eq!(satisfiability(&decimal_gap), Satisfiability::Inhabited);
-}
-
-/// The default division is exact whenever the quotient terminates and otherwise
-/// eighteen fractional digits rounded half to even. A terminating quotient keeps
-/// every digit however many it has (`1 / 1024`, `1 / 2^70`, `i128::MAX / 2`); a
-/// non-terminating one rounds to nearest (`2 / 3` ends in `7`), so it is never
-/// truncated. Ties exist only under a scale policy: under the default the same
-/// quotient terminates and is exact.
-#[test]
-fn the_default_division_is_exact_when_it_terminates_and_half_even_otherwise() {
-    let quotient = |a: &str, b: &str| {
-        numeric_div(&dec(a), &dec(b))
-            .unwrap_or_else(|error| panic!("{a} / {b}: {error}"))
-            .canonical_lexical()
-    };
-    assert_eq!(quotient("1", "8"), "0.125");
-    assert_eq!(quotient("1", "1024"), "0.0009765625");
-    let two_pow_70 = (1_u128 << 70).to_string();
-    assert_eq!(
-        quotient("1", &two_pow_70),
-        "0.0000000000000000000008470329472543003390683225006796419620513916015625"
-    );
-    assert_eq!(
-        quotient(&i128::MAX.to_string(), "2"),
-        "85070591730234615865843651857942052863.5"
-    );
-    assert_eq!(quotient("1", "3"), "0.333333333333333333");
-    assert_eq!(quotient("2", "3"), "0.666666666666666667");
-    assert_eq!(quotient("-2", "3"), "-0.666666666666666667");
-    assert_eq!(quotient("1", "7"), "0.142857142857142857");
-    // A tie: 1/(2·10^18) is exactly half a unit in the eighteenth place. A scale
-    // policy rounds it half to even (down to zero, and 3/(2·10^18) up to 2e-18);
-    // the default keeps the terminating quotient exactly.
-    let half_unit = "2000000000000000000";
-    let at_eighteen = DivisionPolicy::scale(18, Rounding::HalfEven);
-    let tie = |a: &str| {
-        numeric_div_with_policy(&dec(a), &dec(half_unit), at_eighteen)
-            .expect("nonzero")
-            .canonical_lexical()
-    };
-    assert_eq!(tie("1"), "0");
-    assert_eq!(tie("3"), "0.000000000000000002");
-    assert_eq!(quotient("1", half_unit), "0.0000000000000000005");
-    assert_eq!(quotient("3", half_unit), "0.0000000000000000015");
-    // The text form of the default, and its neighbours in the one grammar.
-    assert_eq!(
-        DivisionPolicy::default().to_string(),
-        "exact-or-18:half-even"
-    );
-    assert_eq!(
-        "exact-or-18:half-even".parse(),
-        Ok(DivisionPolicy::default())
-    );
-    assert_eq!(
-        "exact-or-5".parse(),
-        Ok(DivisionPolicy::exact_or_scale(5, Rounding::TowardZero))
-    );
-    assert!("exact-or-x".parse::<DivisionPolicy>().is_err());
-    // Division by zero is still refused, beside the unit divisor that answers.
-    assert!(numeric_div(&dec("1"), &dec("0")).is_err());
-    assert_eq!(quotient("1", "1"), "1");
 }

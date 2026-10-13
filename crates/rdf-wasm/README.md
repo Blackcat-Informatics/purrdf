@@ -81,6 +81,28 @@ const reparsed = Dataset.parse(nq, "nquads");
   path — the rows already reached together with a certificate saying whether they are a
   lower bound, an upper bound, or neither. A tripped UPDATE applies nothing at all.
   `explainQuery` renders the metered charge ledger those budgets are sized from.
+- **Dated native XPath regex laws** — every evaluating `QueryEngine` method takes an
+  `xpathRegex` option naming the law `REGEX` and `REPLACE` evaluate under:
+  `"xpath-2.0-2010-12-14"` (XPath F&O 2.0 Second Edition) or `"xpath-3.1-2017-03-21"`
+  (XPath F&O 3.1). Both admit backreferences; only the 3.1 law admits non-capturing
+  groups and the `q` flag. `Dataset.query`, `queryRawConfigured` and
+  `queryRawWithContext` take it as their trailing argument, and the SHACL validation
+  entries (`shaclValidateToSarif`, `shaclValidateChangesToSarif` and the four
+  `shaclProductValidateToSarif…` entries) as theirs, where it governs `sh:pattern` and
+  the `REGEX`/`REPLACE` of SPARQL-based targets, constraints and SHACL-AF functions. The
+  shapes-graph tools that evaluate patterns take it as their trailing argument too:
+  `shaclEntail` and `shaclApplyRules` (the `REGEX`/`REPLACE` of SHACL rules, SHACL-AF
+  functions, node expressions and SPARQL 1.2 RL filters and assignments, and the
+  `sh:pattern` of rule conditions) and `shaclEvalNodeExpr` (filter-shape `sh:pattern`s
+  and function-call or SPARQL-based `REGEX`/`REPLACE`). `shaclLintShapes` compiles and
+  matches no pattern, so it takes none. The asynchronous twins take it in their options
+  object. Absent, the compatibility regex
+  is unchanged. Names match exactly; any other string is refused with the code
+  `purrdf-wasm-options`, naming the accepted ones. A selected law runs under finite
+  production bounds: a pattern its grammar refuses keeps the ordinary expression-error
+  (or SHACL finding) behaviour, while a resource refusal throws with the resource's own
+  code (`xpath-pattern-bytes`, `xpath-match-steps`, …) and never becomes an unbound,
+  `false`, partial or conforming answer.
 - **Asynchronous twins** — every evaluating `QueryEngine` method, and `Dataset.query`,
   has a Promise-returning twin (`queryAsync` … `updateGovernedAsync`) that takes host
   handlers for `SERVICE` and `LOAD`. See

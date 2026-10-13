@@ -10,8 +10,8 @@ The sole library exclusion is the Python extension, whose manifest disables test
 import argparse
 import json
 
-SHARDS = ("lib", "doc", "integration-1", "integration-2", "integration-3", "integration-4")
-PATTERNS = ("[a-d]*", "[e-o]*", "[p-r]*", "[!a-r]*")
+SHARDS = ("lib", "doc", "integration-1", "integration-2", "integration-3", "integration-4", "integration-5")
+PATTERNS = ("[a-d]*", "[e-j]*", "[p-r]*", "[!a-r]*", "[k-o]*")
 
 
 def integration_shard(name: str) -> str:
@@ -19,7 +19,7 @@ def integration_shard(name: str) -> str:
     if not name:
         raise ValueError("an integration test target must have a name")
     first = name[0]
-    index = 1 if "a" <= first <= "d" else 2 if "e" <= first <= "o" else 3 if "p" <= first <= "r" else 4
+    index = 1 if "a" <= first <= "d" else 2 if "e" <= first <= "j" else 5 if "k" <= first <= "o" else 3 if "p" <= first <= "r" else 4
     return f"integration-{index}"
 
 

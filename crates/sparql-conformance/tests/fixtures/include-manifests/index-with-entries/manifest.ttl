@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# A manifest named like a discovered one that includes a group AND declares
+# entries of its own: both a group and an index. Refused, because running it as
+# a group would run its member's cases a second time.
+@prefix : <manifest#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:entries ( :own-case-01 ) ;
+    mf:include ( <group/manifest.ttl> ) .
+
+:own-case-01 a mf:PositiveSyntaxTest ;
+    mf:name "own-case-01" ;
+    mf:action <own-case-01.rq> .

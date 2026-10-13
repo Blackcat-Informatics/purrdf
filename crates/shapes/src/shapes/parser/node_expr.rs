@@ -15,7 +15,7 @@ use crate::expression::{
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::spec::{ExprKind, non_function_keys, primary_keys};
-use crate::term::{NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term};
 
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
@@ -25,6 +25,54 @@ use crate::shapes::{
 use super::annotations::Annotated;
 
 impl Parser<'_> {
+    /// Run `parse` with `names` added to the variables a node expression's context
+    /// binds when it runs ([`Parser::node_expr_scope`]), and remove them after,
+    /// whatever `parse` returns.
+    pub(crate) fn with_node_expr_scope<T>(
+        &mut self,
+        names: Vec<String>,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.with_node_expr_scopes(names, Vec::new(), parse)
+    }
+
+    /// [`Self::with_node_expr_scope`], also adding `optional` — names the context may
+    /// leave unbound ([`Parser::node_expr_optional`]).
+    pub(crate) fn with_node_expr_scopes<T>(
+        &mut self,
+        names: Vec<String>,
+        optional: Vec<String>,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let depth = self.node_expr_scope.len();
+        let optional_depth = self.node_expr_optional.len();
+        self.node_expr_scope.extend(names);
+        self.node_expr_optional.extend(optional);
+        let out = parse(self);
+        self.node_expr_scope.truncate(depth);
+        self.node_expr_optional.truncate(optional_depth);
+        out
+    }
+
+    /// Run `parse` with NO enclosing node-expression scope, and restore the scope
+    /// after, whatever `parse` returns.
+    ///
+    /// A custom function's argument is a node expression evaluated where the body
+    /// reads it, in the EMPTY scope (`evalExpr(a, focusGraph, focusNode, {})`, SHACL
+    /// 1.2 Node Expressions §6.3), so it binds nothing of the call site's scope: a
+    /// query inside it may read `$this` alone, exactly what that evaluation binds.
+    pub(crate) fn with_empty_node_expr_scope<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let scope = std::mem::take(&mut self.node_expr_scope);
+        let optional = std::mem::take(&mut self.node_expr_optional);
+        let out = parse(self);
+        self.node_expr_scope = scope;
+        self.node_expr_optional = optional;
+        out
+    }
+
     /// Parse all constraints declared directly on a shape node.
     ///
     /// Does NOT include `sh:property` sub-shapes (handled separately).
@@ -483,55 +531,7 @@ impl Parser<'_> {
         let mut sparql_cnodes: Vec<Term> = self.objects_of(id, sh::SPARQL);
         crate::term::sort_terms_canonical(&mut sparql_cnodes);
         for c_node in sparql_cnodes {
-            // sh:select is required.
-            let raw_select = self
-                .first_object_of(&c_node, sh::SELECT)
-                .and_then(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "sh:sparql constraint on shape {id} is missing a sh:select string literal"
-                    )
-                })?;
-            // SHACL-AF sh:prefixes may be declared on the shape or the sh:sparql node.
-            let select = format!("{}{raw_select}", self.prefix_header(&[id, &c_node])?);
-
-            // Parse-time query validation via the native parser (hard-fail on
-            // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
-            // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
-            // at the boundary.
-            match SparqlParser::new().parse_query(&select) {
-                Ok(query @ Query::Select { .. }) => {
-                    // The query runs with $this pre-bound to each focus node;
-                    // the pre-binding restrictions of SHACL 1.2 SPARQL
-                    // Extensions, Appendix A (no
-                    // MINUS / SERVICE / VALUES, no `AS $this`, subqueries must
-                    // project $this) reject it as a hard failure at load.
-                    // Typed ([`crate::error::ShapesError::Prebinding`]) like every other
-                    // executed query's violation: this constraint executes wherever the
-                    // shape does.
-                    if let Err(e) = crate::prebinding::check_select(&query, &["this"]) {
-                        return Err(self.refuse_prebinding(
-                            crate::error::PrebindingViolation::new(
-                                format!("sh:sparql constraint {c_node} on shape {id}"),
-                                e,
-                            ),
-                        ));
-                    }
-                }
-                Ok(_) => {
-                    return Err(format!(
-                        "sh:sparql constraint on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
-                    ));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "sh:sparql constraint on shape {id} has an unparsable sh:select query: {e}"
-                    ));
-                }
-            }
+            let select = self.sparql_constraint_query(id, &c_node)?;
 
             // Optional per-constraint sh:message / sh:severity overrides.
             let messages = self.messages_of(&c_node)?;
@@ -547,6 +547,25 @@ impl Parser<'_> {
             let annotated = self.constraint_annotation(id, &[(sh::SPARQL, &c_node)])?;
             if self.deactivated_of(&c_node)? {
                 continue;
+            }
+            if !matches!(annotated, Annotated::Deactivated) {
+                self.sparql_sources
+                    .borrow_mut()
+                    .constraints
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        (is_property_shape, out.constraints.len()),
+                        crate::shapes::ConstraintOccurrence::Sparql(
+                            crate::shapes::SparqlOccurrence {
+                                source_constraint: c_node.clone(),
+                                select: select.clone(),
+                                messages: messages.clone(),
+                                severity: severity.clone(),
+                                annotations: annotations.clone(),
+                            },
+                        ),
+                    );
             }
             out.push(
                 Constraint::Sparql {
@@ -566,7 +585,12 @@ impl Parser<'_> {
         let mut expr_nodes: Vec<Term> = self.objects_of(id, sh::EXPRESSION);
         crate::term::sort_terms_canonical(&mut expr_nodes);
         for expr_node in expr_nodes {
-            let expr = self.parse_node_expr(&expr_node)?;
+            // Evaluated with the value node bound as `value` (SHACL 1.2 Node
+            // Expressions §7.1).
+            let expr = self
+                .with_node_expr_scope(vec![crate::expression::VALUE_VAR.to_owned()], |parser| {
+                    parser.parse_node_expr(&expr_node)
+                })?;
 
             let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
@@ -682,7 +706,14 @@ impl Parser<'_> {
         // pushed with its reifier annotations. Statements of a usage SHACL-SPARQL
         // says to ignore (no validator for this shape kind), or of a component
         // missing a required parameter, represent no constraint.
-        let mut usages: Vec<(Constraint, Vec<(String, Term)>)> = Vec::new();
+        struct Usage {
+            constraint: Constraint,
+            triples: Vec<(String, Term)>,
+            validator_messages: Vec<Literal>,
+            component_messages: Vec<Literal>,
+            parameters: Vec<String>,
+        }
+        let mut usages = Vec::new();
         let mut inert: Vec<(String, Term)> = Vec::new();
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -727,28 +758,24 @@ impl Parser<'_> {
                 }
                 continue;
             };
-            // The selected validator is the query this use executes, with `$this`, the
-            // parameters and (for ASK) `$value` pre-bound: a pre-binding violation in it
-            // is the failure SHACL 1.2 SPARQL Extensions, Appendix A requires ("MUST
-            // report a failure when it is operating on a shapes graph that contains
-            // SHACL-SPARQL queries ... that are executed with pre-bound variables and
-            // violate any of these MUST restrictions"). A violating validator no use
-            // selects never executes and does not refuse; `lint` lists it.
-            if let Some(message) = &validator.prebinding {
-                return Err(
-                    self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                        format!(
-                            "{}, which shape {id} executes on a {} shape",
-                            validator.declaration(component.id.as_str()),
-                            if is_property_shape {
-                                "property"
-                            } else {
-                                "node"
-                            },
-                        ),
-                        message.clone(),
-                    )),
-                );
+            // REC component declarations were admitted graph-wide. Compatibility
+            // keeps its selected-validator boundary; the draft checks actual
+            // execution, so deactivation and empty focus/value sets do not trip it.
+            if let Some(message) = &validator.prebinding
+                && message.requires_parse_failure()
+            {
+                return Err(self.refuse_query(
+                    format!(
+                        "{}, which shape {id} executes on a {} shape",
+                        validator.declaration(component.id.as_str()),
+                        if is_property_shape {
+                            "property"
+                        } else {
+                            "node"
+                        },
+                    ),
+                    message.clone(),
+                ));
             }
 
             for bindings in instances {
@@ -774,8 +801,8 @@ impl Parser<'_> {
                     .unwrap_or_default();
 
                 let triples = triples_of(&bindings);
-                usages.push((
-                    Constraint::Component {
+                usages.push(Usage {
+                    constraint: Constraint::Component {
                         component: component.id.clone(),
                         source_shape: id.clone(),
                         bindings,
@@ -785,18 +812,50 @@ impl Parser<'_> {
                         annotations: validator.annotations.clone(),
                     },
                     triples,
-                ));
+                    validator_messages: validator.messages.clone(),
+                    component_messages: component.messages.clone(),
+                    parameters: component
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.name.clone())
+                        .collect(),
+                });
             }
         }
         for (predicate, value) in &inert {
             self.apply_to_nothing(id, predicate, value)?;
         }
-        for (constraint, triples) in usages {
+        for Usage {
+            constraint,
+            triples,
+            validator_messages,
+            component_messages,
+            parameters,
+        } in usages
+        {
             let triples: Vec<(&str, &Term)> = triples
                 .iter()
                 .map(|(predicate, value)| (predicate.as_str(), value))
                 .collect();
             let annotated = self.constraint_annotation(id, &triples)?;
+            if !matches!(annotated, Annotated::Deactivated) {
+                self.sparql_sources
+                    .borrow_mut()
+                    .constraints
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        (is_property_shape, out.constraints.len()),
+                        crate::shapes::ConstraintOccurrence::Component(
+                            crate::shapes::ComponentOccurrence {
+                                definition: constraint.clone(),
+                                validator_messages,
+                                component_messages,
+                                parameters,
+                            },
+                        ),
+                    );
+            }
             out.push(constraint, annotated);
         }
 
@@ -1725,9 +1784,26 @@ impl Parser<'_> {
                         "sh:sparqlExpr",
                     )
                 };
-                let parsed = SparqlParser::new().parse_query(&query).map_err(|e| {
-                    format!("{key} node expression on {node} has an unparsable query: {e}")
-                })?;
+                let prebound = crate::sparql::node_expression_prebound_names(&self.node_expr_scope);
+                let parsed = SparqlParser::new()
+                    .with_prebound_variables(prebound.iter())
+                    .parse_query(&query)
+                    .map_err(|e| {
+                        format!("{key} node expression on {node} has an unparsable query: {e}")
+                    })?;
+                // The names the context binds — or may bind — are pre-bound.
+                let potentially_prebound: Vec<&str> = prebound
+                    .iter()
+                    .copied()
+                    .chain(self.node_expr_optional.iter().map(String::as_str))
+                    .collect();
+                // Appendix A holds for every one of these names where a shape reaches
+                // the expression (`reachable_select_expression_violation`).
+                self.select_prebound
+                    .borrow_mut()
+                    .entry(query.clone())
+                    .or_default()
+                    .extend(potentially_prebound.iter().map(|name| (*name).to_owned()));
                 if !matches!(parsed, Query::Select { .. }) {
                     return Err(format!(
                         "{key} node expression on {node} must be a SELECT query"
@@ -1759,14 +1835,11 @@ impl Parser<'_> {
                             if !value.is_negative() =>
                         {
                             let index = value
-                                .as_i128()
-                                .and_then(|index| u64::try_from(index).ok())
+                                .to_i128()
+                                .ok()
+                                .and_then(|value| u64::try_from(value).ok())
                                 .ok_or_else(|| {
-                                    format!(
-                                        "shnex:arg index {value} on {node} is not usable: it \
-                                         is past the largest index, {}",
-                                        u64::MAX
-                                    )
+                                    format!("shnex:arg index {value} on {node} exceeds u64")
                                 })?;
                             Ok(NodeExpr::Arg(ArgKey::Index(index)))
                         }
@@ -1897,7 +1970,11 @@ impl Parser<'_> {
                     predicate.as_str()
                 ));
             }
-            bound.push((key, self.parse_node_expr(object)?));
+            // Evaluated in the empty scope where the body reads it (§6.3).
+            bound.push((
+                key,
+                self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(object))?,
+            ));
         }
         Ok(Some(NodeExpr::CustomCall { func, args: bound }))
     }
@@ -2032,9 +2109,17 @@ impl Parser<'_> {
         } else {
             vec![args_head]
         };
+        // A custom function's argument is evaluated where its body reads it, in the
+        // empty scope (§6.3), so it is parsed in that scope; every other call's
+        // arguments are evaluated in the call site's own scope.
+        let custom = self.custom_fns.get(fn_iri.as_str()).is_some();
         let mut args = Vec::with_capacity(items.len());
         for item in items {
-            args.push(self.parse_node_expr(&item)?);
+            args.push(if custom {
+                self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(&item))?
+            } else {
+                self.parse_node_expr(&item)?
+            });
         }
         // A custom LIST parameter function call (SHACL 1.2 Node Expressions §6.2):
         // the function's own IRI IS its list parameter property, so the call site is

@@ -27,6 +27,99 @@
 
 use super::error::ReplacementError;
 
+/// A borrowed replacement piece; absent groups deliberately expand to nothing.
+pub(super) enum Part<'a> {
+    Literal(&'a str),
+    Group(Option<usize>),
+}
+
+pub(super) enum ParseFailure<E> {
+    Replacement(ReplacementError),
+    Work(E),
+}
+
+/// The one replacement cursor, shared by owned compatibility templates and
+/// bounded native expansion. It retains no source-sized allocation.
+pub(super) struct Cursor<'a> {
+    source: &'a str,
+    chars: std::iter::Peekable<std::str::CharIndices<'a>>,
+    groups: usize,
+    suffix: Option<&'a str>,
+}
+
+impl<'a> Cursor<'a> {
+    pub(super) fn new(source: &'a str, groups: usize) -> Self {
+        Self {
+            source,
+            chars: source.char_indices().peekable(),
+            groups,
+            suffix: None,
+        }
+    }
+
+    /// Charge before scanning; even a discarded out-of-range reference spends
+    /// work, and operational refusal remains separate from FORX0004.
+    pub(super) fn next<E>(
+        &mut self,
+        charge: &mut impl FnMut(u64) -> Result<(), E>,
+    ) -> Result<Option<Part<'a>>, ParseFailure<E>> {
+        if let Some(suffix) = self.suffix.take() {
+            return Ok(Some(Part::Literal(suffix)));
+        }
+        let Some(&(offset, ch)) = self.chars.peek() else {
+            return Ok(None);
+        };
+        charge(1).map_err(ParseFailure::Work)?;
+        self.chars.next();
+        match ch {
+            '\\' => {
+                charge(1).map_err(ParseFailure::Work)?;
+                match self.chars.next() {
+                    Some((_, '\\')) => Ok(Some(Part::Literal("\\"))),
+                    Some((_, '$')) => Ok(Some(Part::Literal("$"))),
+                    _ => Err(ParseFailure::Replacement(
+                        ReplacementError::UnescapedBackslash { offset },
+                    )),
+                }
+            }
+            '$' => {
+                let start = offset + 1;
+                let mut end = start;
+                while let Some(&(position, digit)) = self.chars.peek() {
+                    if !digit.is_ascii_digit() {
+                        break;
+                    }
+                    charge(1).map_err(ParseFailure::Work)?;
+                    self.chars.next();
+                    end = position + 1;
+                }
+                if end == start {
+                    return Err(ParseFailure::Replacement(
+                        ReplacementError::DollarWithoutGroup { offset },
+                    ));
+                }
+                let digits = &self.source[start..end];
+                charge(digits.len() as u64).map_err(ParseFailure::Work)?;
+                let (group, suffix) = resolve_group(digits, self.groups);
+                self.suffix = (!suffix.is_empty()).then_some(suffix);
+                Ok(Some(Part::Group(group)))
+            }
+            _ => {
+                let mut end = offset + ch.len_utf8();
+                while let Some(&(position, next)) = self.chars.peek() {
+                    if matches!(next, '\\' | '$') {
+                        break;
+                    }
+                    charge(1).map_err(ParseFailure::Work)?;
+                    self.chars.next();
+                    end = position + next.len_utf8();
+                }
+                Ok(Some(Part::Literal(&self.source[offset..end])))
+            }
+        }
+    }
+}
+
 /// One piece of a parsed replacement template, in output order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Piece {
@@ -57,41 +150,25 @@ impl Template {
     ) -> Result<Self, ReplacementError> {
         let mut pieces = Vec::new();
         let mut literal = String::new();
-        let mut chars = replacement.char_indices().peekable();
-        while let Some((offset, c)) = chars.next() {
-            match c {
-                '\\' => match chars.next() {
-                    Some((_, '\\')) => literal.push('\\'),
-                    Some((_, '$')) => literal.push('$'),
-                    _ => return Err(ReplacementError::UnescapedBackslash { offset }),
-                },
-                '$' => {
-                    // `$N` consumes the whole run of consecutive digits: the
-                    // number N is "all the digits that consecutively follow".
-                    let mut digits = String::new();
-                    while let Some(&(_, d)) = chars.peek() {
-                        if d.is_ascii_digit() {
-                            digits.push(d);
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    if digits.is_empty() {
-                        return Err(ReplacementError::DollarWithoutGroup { offset });
-                    }
+        let mut cursor = Cursor::new(replacement, capture_groups);
+        let mut unmetered = |_| Ok::<(), std::convert::Infallible>(());
+        while let Some(part) = cursor
+            .next(&mut unmetered)
+            .map_err(|failure| match failure {
+                ParseFailure::Replacement(error) => error,
+                ParseFailure::Work(never) => match never {},
+            })?
+        {
+            match part {
+                Part::Literal(text) => literal.push_str(text),
+                Part::Group(group) => {
                     if !literal.is_empty() {
                         pieces.push(Piece::Literal(std::mem::take(&mut literal)));
                     }
-                    let (group, suffix) = resolve_group(&digits, capture_groups);
                     if let Some(n) = group {
                         pieces.push(Piece::Group(n));
                     }
-                    if !suffix.is_empty() {
-                        pieces.push(Piece::Literal(suffix.to_owned()));
-                    }
                 }
-                other => literal.push(other),
             }
         }
         if !literal.is_empty() {
@@ -133,30 +210,31 @@ impl Template {
 /// * `N > S` and `N > 9` → the last digit is literal text, and the rule is
 ///   reapplied to the number formed by stripping it.
 ///
-/// The last case is the "peel from the right" loop below: `$23` with five
-/// groups is group 2 followed by the literal digit `3`.
+/// The final case is resolved by its equivalent longest admissible prefix:
+/// `$23` with five groups is group 2 followed by the literal digit `3`.
 fn resolve_group(digits: &str, capture_groups: usize) -> (Option<usize>, &str) {
-    let s = u64::try_from(capture_groups).unwrap_or(u64::MAX);
-    let mut end = digits.len();
-    loop {
-        // A run long enough to overflow `u64` is certainly larger than any
-        // real group count, so saturating is exactly the comparison wanted.
-        let n = digits[..end].parse::<u64>().unwrap_or(u64::MAX);
-        if n == 0 {
-            return (Some(0), &digits[end..]);
-        }
-        if n <= s {
-            let group = usize::try_from(n).expect("n <= s, and s was a usize");
-            return (Some(group), &digits[end..]);
-        }
-        if n <= 9 {
-            return (None, &digits[end..]);
-        }
-        // `N > S` and `N > 9`: the last digit is literal text, so peel it off
-        // and reapply the rule to the remaining prefix. `end` cannot reach 0:
-        // a single digit always satisfies `n <= 9`.
-        end -= 1;
+    // Decimal extension is monotone. The longest prefix at most max(S,9) is
+    // exactly the prefix left by the specified right-peeling rule, including
+    // arbitrarily many leading zeroes. Overflow means greater, never saturation.
+    let ceiling = capture_groups.max(9);
+    let mut number = 0_usize;
+    let mut end = 0;
+    for (index, digit) in digits.bytes().enumerate() {
+        let Some(next) = number
+            .checked_mul(10)
+            .and_then(|n| n.checked_add(usize::from(digit - b'0')))
+            .filter(|&n| n <= ceiling)
+        else {
+            break;
+        };
+        number = next;
+        end = index + 1;
     }
+    debug_assert!(end > 0, "the first ASCII digit always fits the ceiling");
+    (
+        (number == 0 || number <= capture_groups).then_some(number),
+        &digits[end..],
+    )
 }
 
 #[cfg(test)]

@@ -3,13 +3,12 @@
 
 //! The pull reader, and the tree, skip and occurrence readers built on it.
 
+use crate::allocation::{Admission, Memory, Resident, StorageError};
 use std::borrow::Cow;
-use std::collections::HashSet;
 
-use purrdf_hash::fixed::FixedState;
 use std::ops::Range;
 
-use super::number::number_end;
+use super::number::{number_end, number_end_observed};
 use super::{Error, ErrorKind, Number, Object, Value};
 use crate::json_escape::{self, JsonEscapeErrorKind};
 use crate::scan::find_first_json_string_special;
@@ -25,6 +24,14 @@ const SHORT_RUN: usize = 16;
 /// The whitespace run, in bytes, past which [`Reader`] hands the rest of the
 /// run to the chunked scan: one scan chunk.
 const WS_RUN: usize = 16;
+const PROGRESS_CHUNK: usize = 256;
+
+/// Borrowed input-work capability, without access to the reader or its caller.
+/// The reader polls inside long lexical runs as well as between value events.
+pub trait ReadObserver {
+    /// Admit the next scanned byte chunk. `false` latches an interrupted read.
+    fn advance(&mut self, bytes: usize) -> bool;
+}
 
 /// The resource bounds of one read.
 ///
@@ -150,10 +157,20 @@ impl<'a> Str<'a> {
     ///
     /// [`ErrorKind::Escape`] at the escape's byte in the document.
     pub fn decode(&self) -> Result<Cow<'a, str>, Error> {
+        self.decode_with_memory(&mut Memory::new(&mut Resident))
+    }
+
+    /// Decode with original admission before creating escaped text.
+    /// # Errors
+    /// Returns the original JSON escape or physical refusal.
+    pub fn decode_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Cow<'a, str>, Error> {
         if !self.escaped {
             return Ok(Cow::Borrowed(self.raw));
         }
-        json_escape::unescape(self.raw)
+        json_escape::unescape_with_memory(self.raw, memory)
             .map_err(|error| Error::new(ErrorKind::Escape(error.kind), self.at + error.offset))
     }
 }
@@ -235,7 +252,6 @@ enum Expect {
 ///
 /// The open containers are a heap stack, so no step spends a machine-stack
 /// frame per nesting level; [`Limits::max_depth`] bounds that stack.
-#[derive(Debug)]
 pub struct Reader<'a> {
     text: &'a str,
     pos: usize,
@@ -244,7 +260,11 @@ pub struct Reader<'a> {
     open: Vec<bool>,
     expect: Expect,
     values: u64,
+    observer: Option<&'a mut dyn ReadObserver>,
+    observed: usize,
+    interrupted: bool,
 }
+purrdf_hash::debug_non_exhaustive!(Reader<'_> { pos, limits, values, interrupted });
 
 impl<'a> Reader<'a> {
     /// A reader over `text`, bounded by `limits`.
@@ -256,7 +276,36 @@ impl<'a> Reader<'a> {
             open: Vec::new(),
             expect: Expect::Value,
             values: 0,
+            observer: None,
+            observed: 0,
+            interrupted: false,
         }
+    }
+
+    /// A reader with bounded progress polling, including long strings,
+    /// numbers and whitespace. Completed events retain their ordinary bytes.
+    pub fn new_observed(text: &'a str, limits: Limits, observer: &'a mut dyn ReadObserver) -> Self {
+        Self {
+            observer: Some(observer),
+            ..Self::new(text, limits)
+        }
+    }
+
+    fn progress(&mut self, force: bool) -> Result<(), Error> {
+        if self.interrupted {
+            return Err(self.error(ErrorKind::Interrupted));
+        }
+        let bytes = self.pos.saturating_sub(self.observed);
+        if (force || bytes >= PROGRESS_CHUNK)
+            && let Some(observer) = self.observer.as_deref_mut()
+        {
+            self.observed = self.pos;
+            if !observer.advance(bytes) {
+                self.interrupted = true;
+                return Err(self.error(ErrorKind::Interrupted));
+            }
+        }
+        Ok(())
     }
 
     /// A reader over `bytes`, refused unless they are UTF-8 (RFC 8259 §8.1).
@@ -278,6 +327,13 @@ impl<'a> Reader<'a> {
     /// How many arrays and objects are open.
     pub fn depth(&self) -> usize {
         self.open.len()
+    }
+
+    /// Original nesting-buffer layout, including reusable capacity. Native
+    /// callers resume only the same account that allocated this buffer.
+    #[must_use]
+    pub fn stack_storage_bytes(&self) -> usize {
+        self.open.capacity()
     }
 
     /// The document.
@@ -309,6 +365,18 @@ impl<'a> Reader<'a> {
     )]
     #[inline(always)]
     fn skip_whitespace(&mut self) {
+        if self.observer.is_some() {
+            loop {
+                let end = self.pos.saturating_add(PROGRESS_CHUNK).min(self.text.len());
+                let length = end - self.pos;
+                let consumed = skip_ws(&self.text.as_bytes()[self.pos..end], 0);
+                self.pos += consumed;
+                if self.progress(false).is_err() || consumed < length || self.pos == self.text.len()
+                {
+                    return;
+                }
+            }
+        }
         let bytes = self.text.as_bytes();
         let mut pos = self.pos;
         while let Some(&byte) = bytes.get(pos) {
@@ -342,6 +410,26 @@ impl<'a> Reader<'a> {
         self.step()
     }
 
+    /// Pull an event with original admission before growing the nesting stack.
+    /// # Errors
+    /// Returns JSON syntax, limit or native physical refusal.
+    pub fn next_event_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Event<'a>, Error> {
+        self.step_with_memory(memory)
+    }
+
+    /// Destroy the original nesting stack before releasing its grant.
+    /// # Errors
+    /// Returns an unbalanced original admission invariant.
+    pub fn release_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        memory.release_vec(self.open)
+    }
+
     /// [`Reader::next_event`], inlined into the loops of this module that
     /// build or check a value, so the event it returns never passes through
     /// memory.
@@ -352,16 +440,30 @@ impl<'a> Reader<'a> {
     )]
     #[inline(always)]
     fn step(&mut self) -> Result<Event<'a>, Error> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.step_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    fn step_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Event<'a>, Error> {
         loop {
             self.skip_whitespace();
+            self.progress(false)?;
+            self.progress(self.pos == self.text.len())?;
             match self.expect {
                 Expect::Done => return Ok(Event::End),
-                Expect::Value => return self.value(),
+                Expect::Value => return self.value_with_memory(memory),
                 Expect::FirstItem => {
                     if self.peek() == Some(b']') {
                         return Ok(self.close(false));
                     }
-                    return self.value();
+                    return self.value_with_memory(memory);
                 }
                 Expect::FirstMember => {
                     if self.peek() == Some(b'}') {
@@ -422,7 +524,10 @@ impl<'a> Reader<'a> {
         reason = "one arm of the event step, inlined into it with the step"
     )]
     #[inline(always)]
-    fn value(&mut self) -> Result<Event<'a>, Error> {
+    fn value_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Event<'a>, Error> {
         if self.values >= self.limits.max_values {
             return Err(self.error(ErrorKind::Values {
                 limit: self.limits.max_values,
@@ -438,7 +543,9 @@ impl<'a> Reader<'a> {
                 }
                 self.pos += 1;
                 let object = open == b'{';
-                self.open.push(object);
+                memory
+                    .push(&mut self.open, object)
+                    .map_err(|error| self.error(ErrorKind::Storage(error)))?;
                 self.values += 1;
                 if object {
                     self.expect = Expect::FirstMember;
@@ -461,7 +568,14 @@ impl<'a> Reader<'a> {
                 Event::Null { at }
             }
             Some(b'-' | b'0'..=b'9') => {
-                self.pos = number_end(self.text.as_bytes(), at)?;
+                self.pos = if self.observer.is_some() {
+                    number_end_observed(self.text.as_bytes(), at, &mut |offset| {
+                        self.pos = offset;
+                        self.progress(false)
+                    })?
+                } else {
+                    number_end(self.text.as_bytes(), at)?
+                };
                 Event::Number {
                     lexeme: &self.text[at..self.pos],
                     at,
@@ -486,6 +600,7 @@ impl<'a> Reader<'a> {
         }
         let name = self.string()?;
         self.skip_whitespace();
+        self.progress(false)?;
         if self.peek() != Some(b':') {
             return Err(self.error(ErrorKind::Expected("`:` after a member name")));
         }
@@ -530,10 +645,23 @@ impl<'a> Reader<'a> {
                 Some(run) => run,
                 None if rest.len() <= SHORT_RUN => rest.len(),
                 None => {
-                    let long = &rest[SHORT_RUN..];
+                    let end = if self.observer.is_some() {
+                        rest.len().min(PROGRESS_CHUNK)
+                    } else {
+                        rest.len()
+                    };
+                    let long = &rest[SHORT_RUN..end];
                     SHORT_RUN + find_first_json_string_special(long).unwrap_or(long.len())
                 }
             };
+            self.progress(false)?;
+            if self.observer.is_some()
+                && self
+                    .peek()
+                    .is_some_and(|byte| !is_json_string_forbidden_byte(byte))
+            {
+                continue;
+            }
             match self.peek() {
                 None => {
                     return Err(self.error(ErrorKind::Expected("the `\"` that closes a string")));
@@ -541,6 +669,7 @@ impl<'a> Reader<'a> {
                 Some(b'"') => {
                     let raw = &self.text[start..self.pos];
                     self.pos += 1;
+                    self.progress(true)?;
                     return Ok(Str {
                         raw,
                         at: start,
@@ -598,6 +727,9 @@ impl<'a> Reader<'a> {
     /// ```
     pub fn peek_kind(&mut self) -> Option<Kind> {
         self.skip_whitespace();
+        if self.progress(false).is_err() {
+            return None;
+        }
         match self.peek()? {
             b'{' => Some(Kind::Object),
             b'[' => Some(Kind::Array),
@@ -618,6 +750,18 @@ impl<'a> Reader<'a> {
     /// [`Error`] at a grammar refusal, or where the reader is not between an
     /// object's members.
     pub fn next_key(&mut self) -> Result<Option<Str<'a>>, Error> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.next_key_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    pub fn next_key_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Str<'a>>, Error> {
         if !matches!(
             self.expect,
             Expect::FirstMember | Expect::Member | Expect::Next
@@ -625,7 +769,7 @@ impl<'a> Reader<'a> {
         {
             return Err(self.error(ErrorKind::Expected("an object member")));
         }
-        match self.next_event()? {
+        match self.step_with_memory(memory)? {
             Event::Key(name) => Ok(Some(name)),
             Event::EndObject { .. } => Ok(None),
             _ => Err(self.error(ErrorKind::Expected("an object member"))),
@@ -670,9 +814,21 @@ impl<'a> Reader<'a> {
     /// [`Error`] at a grammar refusal, or `expected an object` where another
     /// value begins.
     pub fn begin_object(&mut self) -> Result<(), Error> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.begin_object_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    pub fn begin_object_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), Error> {
         self.skip_whitespace();
         let at = self.pos;
-        match self.next_event()? {
+        match self.step_with_memory(memory)? {
             Event::BeginObject { .. } => Ok(()),
             _ => Err(Error::new(ErrorKind::Expected("an object"), at)),
         }
@@ -685,9 +841,21 @@ impl<'a> Reader<'a> {
     /// [`Error`] at a grammar refusal, or `expected an array` where another
     /// value begins.
     pub fn begin_array(&mut self) -> Result<(), Error> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.begin_array_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    pub fn begin_array_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), Error> {
         self.skip_whitespace();
         let at = self.pos;
-        match self.next_event()? {
+        match self.step_with_memory(memory)? {
             Event::BeginArray { .. } => Ok(()),
             _ => Err(Error::new(ErrorKind::Expected("an array"), at)),
         }
@@ -705,11 +873,23 @@ impl<'a> Reader<'a> {
     ///
     /// [`Error`] at a grammar or bound refusal.
     pub fn skip_value(&mut self) -> Result<Range<usize>, Error> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.skip_value_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    pub fn skip_value_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Range<usize>, Error> {
         self.skip_whitespace();
         let start = self.pos;
         let mut depth = 0_usize;
         loop {
-            match self.next_event()? {
+            match self.step_with_memory(memory)? {
                 Event::BeginObject { .. } | Event::BeginArray { .. } => depth += 1,
                 Event::EndObject { .. } | Event::EndArray { .. } if depth > 0 => depth -= 1,
                 Event::Key(_) if depth > 0 => {}
@@ -739,89 +919,166 @@ impl<'a> Reader<'a> {
     /// [`Error`] at a grammar refusal, an unpaired surrogate, or a [`Limits`]
     /// bound.
     pub fn read_value(&mut self) -> Result<Value, Error> {
-        /// An open container: where its elements or members begin on the
-        /// shared stack, and which kind it is.
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.read_value_with_memory(&mut memory)
+    }
+
+    /// Build the original value tree under one caller-owned physical account.
+    /// Every string, container and working buffer is admitted before its birth.
+    /// The returned tree retains the original account; destroy it before refund.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original grammar, caller limit or physical storage refusal.
+    /// Partial trees die before their original admission is released.
+    pub fn read_value_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Value, Error> {
         #[derive(Clone, Copy)]
         struct Open {
             base: usize,
             object: bool,
         }
-        let mut open: Vec<Open> = Vec::new();
-        let mut items: Vec<Value> = Vec::new();
-        let mut members: Vec<(String, Value)> = Vec::new();
-        // The name of each open object's member whose value is being read.
-        let mut names: Vec<String> = Vec::new();
-        // Each open object's names so far, when repeats are refused.
-        let mut seen: Vec<HashSet<String, FixedState>> = Vec::new();
-        // A finished value goes to the innermost open container, or is the
-        // result.
-        macro_rules! finish {
-            ($value:expr) => {
-                match open.last() {
-                    None => return Ok($value),
-                    Some(Open { object: false, .. }) => {
-                        items.push($value);
+        let baseline = memory.admitted_bytes();
+        let reader_capacity = self.open.capacity();
+        let result = (|| {
+            let mut open: Vec<Open> = Vec::new();
+            let mut items: Vec<Value> = Vec::new();
+            let mut members: Vec<(String, Value)> = Vec::new();
+            let mut names: Vec<String> = Vec::new();
+            // The same ordered-name law as check_value: unescaped names borrow
+            // source text, escaped names own an admitted copy.
+            let mut seen: Vec<Option<Vec<Cow<'a, str>>>> = Vec::new();
+            macro_rules! storage {
+                ($result:expr) => {
+                    $result.map_err(|error| self.error(ErrorKind::Storage(error)))?
+                };
+            }
+            macro_rules! finish {
+                ($value:expr) => {
+                    match open.last() {
+                        None => {
+                            let value = $value;
+                            storage!(memory.release_vec(open));
+                            storage!(memory.release_vec(items));
+                            storage!(memory.release_vec(members));
+                            storage!(memory.release_vec(names));
+                            storage!(memory.release_vec(seen));
+                            return Ok(value);
+                        }
+                        Some(Open { object: false, .. }) => {
+                            storage!(memory.push(&mut items, $value));
+                        }
+                        Some(Open { object: true, .. }) => {
+                            let name = names.pop().expect("a member's value follows its name");
+                            storage!(memory.push(&mut members, (name, $value)));
+                        }
                     }
-                    Some(Open { object: true, .. }) => {
-                        let name = names.pop().expect("a member's value follows its name");
-                        members.push((name, $value));
+                };
+            }
+            loop {
+                match self.step_with_memory(memory)? {
+                    Event::BeginObject { .. } => {
+                        storage!(memory.push(
+                            &mut open,
+                            Open {
+                                base: members.len(),
+                                object: true,
+                            }
+                        ));
+                        storage!(memory.push(&mut seen, self.limits.unique_members.then(Vec::new)));
                     }
-                }
-            };
-        }
-        loop {
-            match self.step()? {
-                Event::BeginObject { .. } => {
-                    open.push(Open {
-                        base: members.len(),
-                        object: true,
-                    });
-                    if self.limits.unique_members {
-                        seen.push(HashSet::with_hasher(FixedState::new()));
+                    Event::BeginArray { .. } => {
+                        storage!(memory.push(
+                            &mut open,
+                            Open {
+                                base: items.len(),
+                                object: false,
+                            }
+                        ));
                     }
-                }
-                Event::BeginArray { .. } => open.push(Open {
-                    base: items.len(),
-                    object: false,
-                }),
-                Event::Key(raw) => {
-                    let decoded = self.decoded(raw)?.into_owned();
-                    if let Some(seen) = seen.last_mut()
-                        && !seen.insert(decoded.clone())
-                    {
-                        return Err(Error::new(ErrorKind::DuplicateMember, raw.at - 1));
+                    Event::Key(raw) => {
+                        let decoded = self.decoded_with_memory(raw, memory)?;
+                        if let Some(Some(seen)) = seen.last_mut() {
+                            match seen.binary_search_by(|name| name.as_ref().cmp(decoded.as_ref()))
+                            {
+                                Ok(_) => {
+                                    storage!(release_text(decoded, memory));
+                                    return Err(Error::new(ErrorKind::DuplicateMember, raw.at - 1));
+                                }
+                                Err(index) => {
+                                    storage!(memory.reserve_for_push(seen));
+                                    let identity = match &decoded {
+                                        Cow::Borrowed(text) => Cow::Borrowed(*text),
+                                        Cow::Owned(text) => {
+                                            Cow::Owned(storage!(memory.string(text)))
+                                        }
+                                    };
+                                    seen.insert(index, identity);
+                                }
+                            }
+                        }
+                        let name = match decoded {
+                            Cow::Borrowed(text) => storage!(memory.string(text)),
+                            Cow::Owned(text) => text,
+                        };
+                        storage!(memory.push(&mut names, name));
                     }
-                    names.push(decoded);
-                }
-                Event::String(raw) => {
-                    let text = self.decoded(raw)?.into_owned();
-                    finish!(Value::String(text));
-                }
-                Event::Number { lexeme, .. } => {
-                    finish!(Value::Number(Number::from_valid(lexeme.to_owned())));
-                }
-                Event::Bool { value, .. } => finish!(Value::Bool(value)),
-                Event::Null { .. } => finish!(Value::Null),
-                Event::EndArray { .. } => {
-                    let Some(Open { base, .. }) = open.pop() else {
-                        unreachable!("`]` closes the array the reader opened");
-                    };
-                    let array = items.split_off(base);
-                    finish!(Value::Array(array));
-                }
-                Event::EndObject { .. } => {
-                    let Some(Open { base, .. }) = open.pop() else {
-                        unreachable!("`}}` closes the object the reader opened");
-                    };
-                    if self.limits.unique_members {
-                        seen.pop();
+                    Event::String(raw) => {
+                        let decoded = self.decoded_with_memory(raw, memory)?;
+                        let text = match decoded {
+                            Cow::Borrowed(text) => storage!(memory.string(text)),
+                            Cow::Owned(text) => text,
+                        };
+                        finish!(Value::String(text));
                     }
-                    let object = members.split_off(base);
-                    finish!(Value::Object(Object::from(object)));
+                    Event::Number { lexeme, .. } => {
+                        let text = storage!(memory.string(lexeme));
+                        finish!(Value::Number(Number::from_valid(text)));
+                    }
+                    Event::Bool { value, .. } => finish!(Value::Bool(value)),
+                    Event::Null { .. } => finish!(Value::Null),
+                    Event::EndArray { .. } => {
+                        let Open { base, .. } = open
+                            .pop()
+                            .expect("a close pairs with an original open container");
+                        let mut array = Vec::new();
+                        storage!(memory.reserve(&mut array, items.len() - base));
+                        // The source stack's buffer must stay alive and admitted
+                        // until release_vec after all open containers complete.
+                        array.extend(items.drain(base..));
+                        finish!(Value::Array(array));
+                    }
+                    Event::EndObject { .. } => {
+                        let Open { base, .. } = open
+                            .pop()
+                            .expect("a close pairs with an original open container");
+                        storage!(release_names(
+                            seen.pop().expect("an original object name frame"),
+                            memory,
+                        ));
+                        let mut object = Vec::new();
+                        storage!(memory.reserve(&mut object, members.len() - base));
+                        object.extend(members.drain(base..));
+                        finish!(Value::Object(Object::from(object)));
+                    }
+                    Event::End => return Err(self.error(ErrorKind::Expected("a JSON value"))),
                 }
-                Event::End => return Err(self.error(ErrorKind::Expected("a JSON value"))),
+            }
+        })();
+        if result.is_err() {
+            // All local strings and partial trees are already destroyed. Only
+            // the reader's original nesting buffer survives this failed call.
+            let retained = baseline.checked_add(self.open.capacity() - reader_capacity);
+            if let Some(released) =
+                retained.and_then(|retained| memory.admitted_bytes().checked_sub(retained))
+            {
+                let _ = memory.release_bytes(released);
             }
         }
+        result
     }
 
     /// Check the next value exactly as [`Reader::read_value`] would, without
@@ -842,62 +1099,112 @@ impl<'a> Reader<'a> {
     /// [`Error`] at a grammar refusal, an unpaired surrogate, or a [`Limits`]
     /// bound.
     pub fn check_value(&mut self) -> Result<Range<usize>, Error> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.check_value_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    pub fn check_value_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Range<usize>, Error> {
         self.skip_whitespace();
         let start = self.pos;
-        self.check(start)?;
+        self.check_with_memory(start, memory)?;
         Ok(start..self.pos)
     }
 
     /// The loop behind [`Reader::check_value`], for the value that starts at
     /// `start`.
-    fn check(&mut self, start: usize) -> Result<(), Error> {
-        // One entry per container open inside the value: the names its
-        // members have used, when repeats are refused.
-        let mut open: Vec<Option<HashSet<String, FixedState>>> = Vec::new();
-        loop {
-            match self.step()? {
-                Event::BeginObject { .. } => open.push(
-                    self.limits
-                        .unique_members
-                        .then(|| HashSet::with_hasher(FixedState::new())),
-                ),
-                Event::BeginArray { .. } => open.push(None),
-                Event::EndObject { .. } | Event::EndArray { .. } => {
-                    if open.pop().is_none() {
-                        // The cursor was not on a value: a container closes.
+    fn check_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        start: usize,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), Error> {
+        // Sorted names borrow unescaped keys and own escaped keys under the
+        // same grant. No opaque table allocation bypasses admission.
+        let mut open: Vec<Option<Vec<Cow<'a, str>>>> = Vec::new();
+        let result = (|| {
+            loop {
+                match self.step_with_memory(memory)? {
+                    Event::BeginObject { .. } => memory
+                        .push(&mut open, self.limits.unique_members.then(Vec::new))
+                        .map_err(|error| self.error(ErrorKind::Storage(error)))?,
+                    Event::BeginArray { .. } => memory
+                        .push(&mut open, None)
+                        .map_err(|error| self.error(ErrorKind::Storage(error)))?,
+                    Event::EndObject { .. } | Event::EndArray { .. } => {
+                        let Some(names) = open.pop() else {
+                            return Err(Error::new(ErrorKind::Expected("a JSON value"), start));
+                        };
+                        release_names(names, memory)
+                            .map_err(|error| self.error(ErrorKind::Storage(error)))?;
+                    }
+                    Event::Key(raw) => {
+                        let Some(names) = open.last_mut() else {
+                            return Err(Error::new(ErrorKind::Expected("a JSON value"), start));
+                        };
+                        let decoded = self.decoded_with_memory(raw, memory)?;
+                        if let Some(names) = names {
+                            match names.binary_search_by(|name| name.as_ref().cmp(decoded.as_ref()))
+                            {
+                                Ok(_) => {
+                                    release_text(decoded, memory)
+                                        .map_err(|error| self.error(ErrorKind::Storage(error)))?;
+                                    return Err(Error::new(ErrorKind::DuplicateMember, raw.at - 1));
+                                }
+                                Err(index) => {
+                                    let required = names.len().checked_add(1).ok_or_else(|| {
+                                        self.error(ErrorKind::Storage(StorageError::SizeOverflow))
+                                    })?;
+                                    memory
+                                        .reserve(names, required)
+                                        .map_err(|error| self.error(ErrorKind::Storage(error)))?;
+                                    names.insert(index, decoded);
+                                }
+                            }
+                        } else {
+                            release_text(decoded, memory)
+                                .map_err(|error| self.error(ErrorKind::Storage(error)))?;
+                        }
+                        continue;
+                    }
+                    Event::String(raw) => {
+                        let decoded = self.decoded_with_memory(raw, memory)?;
+                        release_text(decoded, memory)
+                            .map_err(|error| self.error(ErrorKind::Storage(error)))?;
+                    }
+                    Event::Number { .. } | Event::Bool { .. } | Event::Null { .. } => {}
+                    Event::End => {
                         return Err(Error::new(ErrorKind::Expected("a JSON value"), start));
                     }
                 }
-                Event::Key(raw) => {
-                    let Some(names) = open.last_mut() else {
-                        // The cursor was between an object's members.
-                        return Err(Error::new(ErrorKind::Expected("a JSON value"), start));
-                    };
-                    let decoded = self.decoded(raw)?;
-                    if let Some(names) = names
-                        && !names.insert(decoded.into_owned())
-                    {
-                        return Err(Error::new(ErrorKind::DuplicateMember, raw.at - 1));
-                    }
-                    continue;
+                if open.is_empty() {
+                    return Ok(());
                 }
-                Event::String(raw) => {
-                    self.decoded(raw)?;
-                }
-                Event::Number { .. } | Event::Bool { .. } | Event::Null { .. } => {}
-                Event::End => return Err(Error::new(ErrorKind::Expected("a JSON value"), start)),
             }
-            if open.is_empty() {
-                return Ok(());
-            }
+        })();
+        while let Some(names) = open.pop() {
+            release_names(names, memory).map_err(|error| self.error(ErrorKind::Storage(error)))?;
         }
+        memory
+            .release_vec(open)
+            .map_err(|error| self.error(ErrorKind::Storage(error)))?;
+        result
     }
 
-    /// A string or member name, decoded (borrowed when it holds no escape)
-    /// and held to the string bound.
-    fn decoded(&self, raw: Str<'a>) -> Result<Cow<'a, str>, Error> {
-        let decoded = raw.decode()?;
+    /// A string or member name, decoded and held to the string bound.
+    fn decoded_with_memory<S: Admission + ?Sized>(
+        &self,
+        raw: Str<'a>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Cow<'a, str>, Error> {
+        let decoded = raw.decode_with_memory(memory)?;
         if decoded.len() > self.limits.max_string_bytes {
+            release_text(decoded, memory).map_err(|error| self.error(ErrorKind::Storage(error)))?;
             return Err(Error::new(
                 ErrorKind::StringBytes {
                     limit: self.limits.max_string_bytes,
@@ -916,11 +1223,46 @@ impl<'a> Reader<'a> {
     /// [`ErrorKind::Trailing`] at the first byte after the value that is not
     /// whitespace, or a grammar refusal where the value is not complete.
     pub fn finish(&mut self) -> Result<(), Error> {
-        match self.next_event()? {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.open.capacity());
+        self.finish_with_memory(&mut memory)
+    }
+
+    /// The same original reader law under caller-owned physical admission.
+    /// # Errors
+    /// Returns JSON syntax, limit or physical storage refusal.
+    pub fn finish_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), Error> {
+        match self.step_with_memory(memory)? {
             Event::End => Ok(()),
             _ => Err(self.error(ErrorKind::Expected("the end of the document"))),
         }
     }
+}
+
+fn release_text<S: Admission + ?Sized>(
+    text: Cow<'_, str>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    match text {
+        Cow::Borrowed(_) => Ok(()),
+        Cow::Owned(text) => memory.release_string(text),
+    }
+}
+
+fn release_names<S: Admission + ?Sized>(
+    names: Option<Vec<Cow<'_, str>>>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    if let Some(mut names) = names {
+        while let Some(name) = names.pop() {
+            release_text(name, memory)?;
+        }
+        memory.release_vec(names)?;
+    }
+    Ok(())
 }
 
 /// Read `text` as one JSON document under [`Limits::DEFAULT`].

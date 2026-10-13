@@ -78,6 +78,7 @@ pub mod files;
 #[doc(hidden)]
 pub mod fixture;
 pub mod from_tar;
+pub mod mldsa65;
 pub mod mmr;
 pub mod model;
 pub mod nested;

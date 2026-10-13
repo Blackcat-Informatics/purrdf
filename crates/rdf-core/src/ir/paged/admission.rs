@@ -248,19 +248,157 @@ pub(crate) fn candidate_pages_for_stream(
     g: GraphMatch<GlobalTermId>,
     stream: PageStream,
 ) -> PageCandidates<'_> {
-    match g {
-        GraphMatch::Named(global_graph) => {
-            PageCandidates::Listed(graph_index.pages_for_named(global_graph, stream).iter())
-        }
-        GraphMatch::Default => PageCandidates::Listed(graph_index.pages_for_default(stream).iter()),
-        GraphMatch::Any => PageCandidates::All(0..page_count),
+    candidate_pages_for_stream_in_range(graph_index, page_count, g, stream, 0..page_count)
+}
+
+/// Restrict the same graph postings to one chronological physical range before
+/// iteration. Sorted postings need only binary boundaries, never a scan over
+/// other layers' postings; `Any` directly addresses the requested dense range.
+pub(crate) fn candidate_pages_for_stream_in_range(
+    graph_index: &GraphPageIndex,
+    page_count: u64,
+    g: GraphMatch<GlobalTermId>,
+    stream: PageStream,
+    range: std::ops::Range<u64>,
+) -> PageCandidates<'_> {
+    let start = range.start.min(page_count);
+    let end = range.end.min(page_count);
+    if start >= end {
+        return PageCandidates::All(0..0);
     }
+    let postings = match g {
+        GraphMatch::Named(global_graph) => graph_index.pages_for_named(global_graph, stream),
+        GraphMatch::Default => graph_index.pages_for_default(stream),
+        GraphMatch::Any => return PageCandidates::All(start..end),
+    };
+    let lower = if start == 0 {
+        0
+    } else {
+        postings.partition_point(|page| {
+            #[cfg(test)]
+            tests::record_boundary();
+            page.0 < start
+        })
+    };
+    let rest = &postings[lower..];
+    let upper = if end == page_count {
+        rest.len()
+    } else {
+        rest.partition_point(|page| {
+            #[cfg(test)]
+            tests::record_boundary();
+            page.0 < end
+        })
+    };
+    PageCandidates::Listed(rest[..upper].iter())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::{GlobalDictionary, RdfDatasetBuilder};
+
+    // Private, per-test-thread measurement of production posting comparisons.
+    thread_local! {
+        static BOUNDARY_COMPARISONS: std::cell::Cell<usize> = const {
+            std::cell::Cell::new(0)
+        };
+    }
+    pub(super) fn record_boundary() {
+        BOUNDARY_COMPARISONS.with(|count| count.set(count.get() + 1));
+    }
+
+    #[test]
+    fn posting_range_work_is_logarithmic_and_any_uses_the_exact_dense_range() {
+        use crate::{InMemoryPageProvider, PagedDataset, TermFactory, TermValue};
+        use std::sync::Arc;
+        for count in [8_u64, 128, 1024] {
+            let pages = (0..count)
+                .map(|i| {
+                    let mut builder = RdfDatasetBuilder::new();
+                    let s = builder.intern_iri(&format!("http://example.org/r{i}"));
+                    let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
+                    let g = builder.intern_iri("http://example.org/g");
+                    builder.push_reifier(s, o);
+                    builder.push_reifier_in_graph(s, o, Some(g));
+                    builder.freeze().unwrap()
+                })
+                .collect();
+            let paged =
+                PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages))).unwrap();
+            let graph = paged
+                .dictionary()
+                .term_id_by_value(&TermValue::iri("http://example.org/g"))
+                .unwrap();
+            for g in [
+                GraphMatch::Default,
+                GraphMatch::Named(graph),
+                GraphMatch::Any,
+            ] {
+                BOUNDARY_COMPARISONS.with(|calls| calls.set(0));
+                let middle = count / 2;
+                let candidates = candidate_pages_for_stream_in_range(
+                    paged.graph_index(),
+                    count,
+                    g,
+                    PageStream::Reifier,
+                    middle..middle + 3,
+                )
+                .collect::<Vec<_>>();
+                assert_eq!(
+                    candidates,
+                    vec![PageId(middle), PageId(middle + 1), PageId(middle + 2)]
+                );
+                let comparisons = BOUNDARY_COMPARISONS.with(std::cell::Cell::get);
+                eprintln!(
+                    "postings={count} graph={g:?} candidates=3 boundary_comparisons={comparisons}"
+                );
+                if g == GraphMatch::Any {
+                    assert_eq!(comparisons, 0);
+                } else {
+                    assert!(comparisons <= 2 * (count.ilog2() as usize + 2));
+                }
+                BOUNDARY_COMPARISONS.with(|calls| calls.set(0));
+                assert_eq!(
+                    candidate_pages_for_stream_in_range(
+                        paged.graph_index(),
+                        count,
+                        g,
+                        PageStream::Reifier,
+                        middle..middle
+                    )
+                    .count(),
+                    0
+                );
+                assert_eq!(
+                    candidate_pages_for_stream_in_range(
+                        paged.graph_index(),
+                        count,
+                        g,
+                        PageStream::Annotation,
+                        0..count
+                    )
+                    .count(),
+                    if g == GraphMatch::Any {
+                        count as usize
+                    } else {
+                        0
+                    }
+                );
+                assert_eq!(BOUNDARY_COMPARISONS.with(std::cell::Cell::get), 0);
+                assert_eq!(
+                    candidate_pages_for_stream(paged.graph_index(), count, g, PageStream::Reifier)
+                        .count(),
+                    count as usize
+                );
+                assert_eq!(
+                    BOUNDARY_COMPARISONS.with(std::cell::Cell::get),
+                    0,
+                    "the unbounded native candidate path needs no range searches"
+                );
+            }
+        }
+    }
 
     /// Subject-axis admission boundary. The invalid case is `b`, present on the page
     /// only as an object and bound as the subject — must skip; the neighbouring valid

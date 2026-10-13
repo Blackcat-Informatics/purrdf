@@ -14,7 +14,10 @@ use super::env::{division_policy, extension_env};
 use super::presentation;
 use std::sync::Arc;
 
-use purrdf_core::ir::MutableDataset;
+use purrdf_core::{
+    DatasetView,
+    ir::{GraphExistenceMode, MutableDataset},
+};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyDict};
@@ -27,12 +30,58 @@ use super::query::{
     materialize_update_outcome, registry_over, run_governed,
 };
 use super::store::PyQuadIter;
-use super::term::{PyVariable, extract_term, rdf_term_to_value, values_to_rdf_quad};
+use super::term::{
+    PyVariable, extract_graph_name, extract_term, rdf_term_to_value, term_to_py, values_to_rdf_quad,
+};
 use crate::{
     ClosureRelations, DatasetMut, EntailmentClosure, GraphMatchValue, QueryEntailmentPlan,
     RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, SparqlRequest, TermValue,
     query_with_entailment_closure_governed,
 };
+
+/// Static host selection: the ordinary query captures no graph-selection state.
+trait QueryMode {
+    type Selection: Send;
+    const RDFLIB: bool;
+    fn selection(self) -> PyResult<Self::Selection>;
+    fn dataset(selection: &Self::Selection, dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>>;
+    fn single_graph(selection: &Self::Selection) -> bool;
+}
+
+impl QueryMode for () {
+    type Selection = ();
+    const RDFLIB: bool = false;
+    fn selection(self) -> PyResult<()> {
+        Ok(())
+    }
+    fn dataset((): &(), dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>> {
+        Ok(dataset)
+    }
+    fn single_graph((): &()) -> bool {
+        false
+    }
+}
+
+impl QueryMode for (bool, Option<&Bound<'_, PyAny>>, bool) {
+    type Selection = (bool, Option<TermValue>, bool);
+    const RDFLIB: bool = true;
+    fn selection(self) -> PyResult<Self::Selection> {
+        Ok((
+            self.0,
+            extract_graph_name(self.1)?.as_ref().map(rdf_term_to_value),
+            self.2,
+        ))
+    }
+    fn dataset(scope: &Self::Selection, dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>> {
+        purrdf_sparql_eval::select_query_dataset(&dataset, scope.0, scope.1.as_ref(), scope.2)
+            .map_err(|error| {
+                PyValueError::new_err(format!("query graph selection failed: {error}"))
+            })
+    }
+    fn single_graph(scope: &Self::Selection) -> bool {
+        !scope.0
+    }
+}
 
 /// The copy-on-write RDF 1.2 quad store `Store` and `MutableDataset` extend: the
 /// one home of the query, UPDATE, iteration and validation-capsule surface they
@@ -45,6 +94,47 @@ pub struct PyQuadStore {
 
 #[pymethods]
 impl PyQuadStore {
+    /// Create an empty named graph under this store's selected graph policy.
+    /// In implicit mode this succeeds without registering a slot. Remembered
+    /// mode refuses an existing slot unless `silent` is true. Invalid graph
+    /// names are refused even when `silent` is true; the default graph always exists.
+    #[pyo3(signature = (graph, *, silent=false))]
+    fn add_graph(&mut self, graph: &Bound<'_, PyAny>, silent: bool) -> PyResult<()> {
+        let graph = extract_graph_name(Some(graph))?.ok_or_else(|| {
+            PyTypeError::new_err(
+                "add_graph requires a NamedNode or BlankNode; the default graph always exists",
+            )
+        })?;
+        match self.inner.create_named_graph(rdf_term_to_value(&graph)) {
+            Ok(_) => Ok(()),
+            Err(error) if silent && error.code == "rdf-ir-graph-already-exists" => Ok(()),
+            Err(error) => Err(presentation::value_error(
+                format!("{}: {error}", error.code),
+                &error,
+            )),
+        }
+    }
+
+    /// Every effective named graph, including declared empty graphs, as native
+    /// `NamedNode` or `BlankNode` values. The mandatory default graph is excluded.
+    fn named_graphs(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let graphs: Vec<RdfTerm> = py.detach(|| {
+            let view = self.inner.snapshot_view().map_err(|error| {
+                PyValueError::new_err(format!("named graph snapshot failed: {error}"))
+            })?;
+            Ok::<_, PyErr>(
+                view.named_graphs()
+                    .map(|graph| {
+                        view.term_value(graph)
+                            .to_rdf_term()
+                            .expect("an admitted graph name has an owned form")
+                    })
+                    .collect(),
+            )
+        })?;
+        graphs.iter().map(|graph| term_to_py(py, graph)).collect()
+    }
+
     /// Run a SPARQL query. Returns `QuerySolutions` (SELECT), `QueryTriples`
     /// (CONSTRUCT/DESCRIBE), or `QueryBoolean` (ASK). Optional `substitutions`
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
@@ -75,6 +165,17 @@ impl PyQuadStore {
     /// `AGG(<{NAMESPACE}NAME>, args…)` (see
     /// [`statistical_aggregates`](purrdf_validate::query::statistical_aggregates)). Unset (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
+    ///
+    /// `xpath_regex` selects the dated native XPath law `REGEX` and `REPLACE` evaluate
+    /// under, by its stable name: `"xpath-2.0-2010-12-14"` (XPath F&O 2.0 Second
+    /// Edition) or `"xpath-3.1-2017-03-21"` (XPath F&O 3.1), the module's
+    /// `XPATH_REGEX_PROFILES`. The name is matched exactly; any other value raises
+    /// `ValueError` naming the accepted ones. `None` (the default) keeps the
+    /// compatibility pattern behaviour unchanged. Under a selected law a pattern or flag
+    /// the law refuses is an expression error, exactly as SPARQL treats any other one (a
+    /// `FILTER` drops the row), while a native resource refusal (a `xpath-*` code, under
+    /// the finite production bounds) aborts the call with `ValueError` rather than
+    /// answering empty or false.
     #[pyo3(signature = (
         query,
         *,
@@ -86,6 +187,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None, geo=None,
         division=None,
     ))]
     #[allow(
@@ -104,56 +206,70 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        presentation::settled(move || {
-            // Parsed before any work, so an unreadable policy runs nothing.
-            let division = division_policy(division.as_deref())?;
-            let subs = collect_substitutions(substitutions)?;
-            // Python data is converted to owned `TermValue`s HERE, while the GIL is
-            // held; nothing below re-enters the interpreter.
-            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-            let config = EngineConfig {
-                extension_namespaces,
-                property_fn_namespaces,
-                standpoint_predicates,
-            };
-            let inner = &self.inner;
-            // Snapshot + engine build + evaluation run detached (GIL released);
-            // results are materialized into Python objects after reacquiring.
-            let result = py.detach(move || {
-                let dataset = inner
-                    .freeze()
-                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-                let registry = build_relations(specs, &dataset)?;
-                let aggregates =
-                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-                let parser_options = engine_parser_options(&config);
-                let engine = build_engine(config);
-                engine
-                    .query_with_options_view(
-                        &*dataset,
-                        SparqlRequest {
-                            query,
-                            base_iri: None,
-                            substitutions: &subs,
-                        },
-                        purrdf_sparql_eval::QueryOptions::new()
-                            .with_env(&extension_env(
-                                parser_options,
-                                registry.as_ref(),
-                                aggregates.as_ref(),
-                            )?)
-                            .with_division(division),
-                    )
-                    .map_err(|e| {
-                        presentation::value_error(format!("query evaluation error: {e}"), &e)
-                    })
-            })?;
-            materialize_results(py, result)
-        })
+        self.query_impl(
+            py,
+            query,
+            substitutions,
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+            relations,
+            relations_from_graph,
+            path_relations,
+            aggregate_namespace,
+            xpath_regex,
+            geo,
+            division,
+            (),
+        )
     }
 
+    /// Execute RDFLib contextual assignment semantics through the native compiler.
+    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, property_fn_namespaces=None, standpoint_predicates=None, relations=None, relations_from_graph=None, path_relations=None, aggregate_namespace=None, xpath_regex=None, geo=None, division=None, named_graphs=true, default_graph=None, default_union=false))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each engine-configuration axis is named explicitly at the call site"
+    )]
+    fn query_rdflib(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
+        division: Option<String>,
+        named_graphs: bool,
+        default_graph: Option<&Bound<'_, PyAny>>,
+        default_union: bool,
+    ) -> PyResult<Py<PyAny>> {
+        self.query_impl(
+            py,
+            query,
+            substitutions,
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+            relations,
+            relations_from_graph,
+            path_relations,
+            aggregate_namespace,
+            xpath_regex,
+            geo,
+            division,
+            (named_graphs, default_graph, default_union),
+        )
+    }
     /// Run a SPARQL query under caller-supplied execution governors, returning a
     /// `QueryOutcome` rather than the results directly.
     ///
@@ -178,8 +294,8 @@ impl PyQuadStore {
     /// of being noticed only once it has finished.
     ///
     /// `substitutions` / `extension_namespaces` / `property_fn_namespaces` /
-    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` behave exactly
-    /// as on [`query`](Self::query). A relation's rows are charged through the same
+    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` /
+    /// `xpath_regex` behave exactly as on [`query`](Self::query). A relation's rows are charged through the same
     /// governors as every other row source, so a ceiling bounds a call as it bounds a
     /// scan.
     #[pyo3(signature = (
@@ -193,6 +309,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None, geo=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -220,6 +337,8 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -239,6 +358,8 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let args = GovernorArgs {
                 fuel,
@@ -260,6 +381,7 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 engine
                     .query_governed(
@@ -270,6 +392,10 @@ impl PyQuadStore {
                             substitutions: &subs,
                         },
                         purrdf_sparql_eval::QueryOptions::new()
+                            .with_geo(
+                                geo.as_deref()
+                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                            )
                             .with_env(&extension_env(
                                 parser_options,
                                 registry.as_ref(),
@@ -296,7 +422,8 @@ impl PyQuadStore {
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     ///
     /// `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations` behave exactly as on
-    /// [`query_governed`](Self::query_governed): a registered relation is reachable from the
+    /// [`query_governed`](Self::query_governed), and `xpath_regex` selects the pattern law
+    /// of the closure query exactly as it does there: a registered relation is reachable from the
     /// closure query exactly as it is from an ordinary one, so registering an IRI here and
     /// omitting it there cannot silently change which rows the SAME predicate position
     /// yields. `relations_from_graph` reads its table — and `path_relations` snapshots its
@@ -339,6 +466,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None, geo=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -371,6 +499,8 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -411,6 +541,8 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let outcome = run_governed(py, args, cancel, move |governors| {
                 let dataset = inner
@@ -435,6 +567,7 @@ impl PyQuadStore {
                     ClosureRelations::rebuilt_by(&rebuild)
                 };
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
@@ -449,6 +582,10 @@ impl PyQuadStore {
                     &EntailmentClosure::new(plan.entailment(), &imports)
                         .with_limits(limits.eval_options()),
                     purrdf_sparql_eval::QueryOptions::new()
+                        .with_geo(
+                            geo.as_deref()
+                                .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                        )
                         .with_env(&extension_env(
                             parser_options,
                             registry.as_ref(),
@@ -483,8 +620,8 @@ impl PyQuadStore {
 
     /// Run a SPARQL UPDATE against the store (COW-atomic: a failed update leaves the
     /// store unchanged). `extension_namespaces` / `property_fn_namespaces` /
-    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` configure the
-    /// engine exactly as on [`query`](Self::query); a registered relation is reachable
+    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` /
+    /// `xpath_regex` configure the engine exactly as on [`query`](Self::query); a registered relation is reachable
     /// from a `DELETE`/`INSERT … WHERE` clause, which is a triple-pattern context
     /// exactly as a query's is. A `relations_from_graph` table is read — and a
     /// `path_relations` traversal is snapshotted — from the PRE-update state, which is
@@ -499,6 +636,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None, geo=None,
         division=None,
     ))]
     #[allow(
@@ -516,6 +654,8 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
     ) -> PyResult<()> {
         presentation::settled(move || {
@@ -526,10 +666,13 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             // Snapshot + evaluation run detached (GIL released); the fresh frozen
             // base is adopted after reacquiring.
             let inner = &self.inner;
+            let mode = inner.graph_existence();
             let dataset = py.detach(move || {
                 let mut dataset = inner
                     .freeze()
@@ -538,6 +681,7 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let engine = build_engine(config);
                 engine
                     .update_with_options(
@@ -548,6 +692,11 @@ impl PyQuadStore {
                             substitutions: &[],
                         },
                         purrdf_sparql_eval::QueryOptions::new()
+                            .with_geo(
+                                geo.as_deref()
+                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                            )
+                            .with_graph_existence(mode)
                             .with_env(&extension_env(
                                 parser_options,
                                 registry.as_ref(),
@@ -561,7 +710,7 @@ impl PyQuadStore {
                 Ok::<_, PyErr>(dataset)
             })?;
             // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
-            self.inner = MutableDataset::new(dataset);
+            self.inner = MutableDataset::new_with_graph_existence(dataset, mode);
             Ok(())
         })
     }
@@ -591,6 +740,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None, geo=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -616,6 +766,8 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -633,6 +785,8 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
             let args = GovernorArgs {
                 fuel,
@@ -644,6 +798,7 @@ impl PyQuadStore {
                 no_ceiling,
             };
             let inner = &self.inner;
+            let mode = inner.graph_existence();
             // Snapshot + governed evaluation run detached (GIL released).
             let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
                 let mut dataset = inner
@@ -653,6 +808,7 @@ impl PyQuadStore {
                 let aggregates =
                     purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
                 let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
                 let outcome = build_engine(config)
                     .update_governed(
                         &mut dataset,
@@ -662,6 +818,11 @@ impl PyQuadStore {
                             substitutions: &[],
                         },
                         purrdf_sparql_eval::QueryOptions::new()
+                            .with_geo(
+                                geo.as_deref()
+                                    .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                            )
+                            .with_graph_existence(mode)
                             .with_env(&extension_env(
                                 parser_options,
                                 registry.as_ref(),
@@ -680,7 +841,7 @@ impl PyQuadStore {
             // only when the request applied, and the tripped path leaves this store's COW
             // base untouched.
             if outcome.is_applied() {
-                self.inner = MutableDataset::new(dataset);
+                self.inner = MutableDataset::new_with_graph_existence(dataset, mode);
             }
             materialize_update_outcome(py, &outcome)
         })
@@ -781,12 +942,17 @@ impl PyQuadStore {
     /// # Errors
     ///
     /// `ValueError` if the empty base cannot be frozen.
-    pub(super) fn empty() -> PyResult<Self> {
+    pub(super) fn empty(remember_empty_graphs: bool) -> PyResult<Self> {
         let base = RdfDatasetBuilder::new()
             .freeze()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let mode = if remember_empty_graphs {
+            GraphExistenceMode::RememberEmpty
+        } else {
+            GraphExistenceMode::Implicit
+        };
         Ok(Self {
-            inner: MutableDataset::new(base),
+            inner: MutableDataset::new_with_graph_existence(base, mode),
         })
     }
 
@@ -894,4 +1060,87 @@ fn collect_substitutions(
         out.push((name, rdf_term_to_value(&extract_term(&value)?)));
     }
     Ok(out)
+}
+
+impl PyQuadStore {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "shared named host configuration axes"
+    )]
+    fn query_impl<M: QueryMode>(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
+        division: Option<String>,
+        mode: M,
+    ) -> PyResult<Py<PyAny>> {
+        presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
+            let selection = mode.selection()?;
+            let subs = collect_substitutions(substitutions)?;
+            // Python data is converted to owned `TermValue`s HERE, while the GIL is
+            // held; nothing below re-enters the interpreter.
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
+            };
+            let inner = &self.inner;
+            // Snapshot + engine build + evaluation run detached (GIL released);
+            // results are materialized into Python objects after reacquiring.
+            let result = py.detach(move || {
+                let dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let dataset = M::dataset(&selection, dataset)?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let parser_options = engine_parser_options(&config);
+                let geo = config.geo.clone();
+                let engine = build_engine(config);
+                let env = extension_env(parser_options, registry.as_ref(), aggregates.as_ref())?;
+                let options = purrdf_sparql_eval::QueryOptions::new()
+                    .with_geo(
+                        geo.as_deref()
+                            .unwrap_or(&purrdf_validate::geo::STANDARD_PROFILE),
+                    )
+                    .with_env(&env)
+                    .with_division(division);
+                let request = SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &subs,
+                };
+                let result = if M::RDFLIB {
+                    engine.query_rdflib_with_options_view(
+                        &*dataset,
+                        request,
+                        options,
+                        M::single_graph(&selection),
+                    )
+                } else {
+                    engine.query_with_options_view(&*dataset, request, options)
+                };
+                result.map_err(|e| {
+                    presentation::value_error(format!("query evaluation error: {e}"), &e)
+                })
+            })?;
+            materialize_results(py, result)
+        })
+    }
 }

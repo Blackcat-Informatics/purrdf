@@ -120,19 +120,22 @@ pub use ast::{
     NumericLiteral, ObjectLiteral, ObjectValue, Schema, SemAct, Shape, ShapeDecl, ShapeExpr,
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
-pub use error::{Result, ShexError};
-pub use exact::{ExactSchema, validate_exact, validate_shape_map_exact};
+pub use error::{Result, ShexError, XPathValidationError};
+pub use exact::{
+    ExactSchema, validate_exact, validate_exact_with_xpath, validate_shape_map_exact,
+    validate_shape_map_exact_with_xpath,
+};
 pub use imports::{ImportResolver, resolve_imports};
 pub use parser::parse_shexc;
 pub use semact::{SemActContext, SemActExtension, SemActRegistry, TEST_EXTENSION};
 pub use shapemap::{
     NodeSelector, ShapeAssociation, ShapeMap, parse_shape_map, resolve_shape_map,
-    validate_shape_map,
+    validate_shape_map, validate_shape_map_with_xpath,
 };
 pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};
 pub use structure::{StructureError, check_structure};
 pub use validate::{
     ConformanceStatus, ExternalResolver, ResultEntry, ResultShapeMap, ShapeSelector,
-    ValidationOptions, validate, validate_with,
+    ValidationOptions, XPathValidator, validate, validate_with, validate_with_xpath,
 };

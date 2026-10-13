@@ -26,7 +26,7 @@ pub(crate) struct ParsedTargetType {
     /// ([`crate::prebinding::check_target_type`]). Not a syntax error: it is judged where
     /// an instance executes the query, and a type no shape instantiates is reported by
     /// `lint` instead.
-    pub(crate) prebinding: Option<String>,
+    pub(crate) prebinding: Option<crate::shapes::QueryRefusal>,
 }
 
 impl Parser<'_> {
@@ -157,13 +157,21 @@ impl Parser<'_> {
         let prebinding = match SparqlParser::new().parse_query(&select) {
             Ok(query @ Query::Select { .. }) => {
                 let parameters: Vec<&str> = params.iter().map(|param| param.var.as_str()).collect();
-                crate::prebinding::check_target_type(&query, &parameters)
-                    .err()
-                    .map(|e| {
+                crate::shapes::audit_query(
+                    self.profile,
+                    crate::profile::QueryPurpose::TargetType,
+                    &query,
+                    &parameters,
+                    || crate::prebinding::check_target_type(&query, &parameters),
+                )
+                .err()
+                .map(|error| {
+                    error.legacy_context(|message| {
                         format!(
-                            "sh:SPARQLTargetType <{iri}> violates pre-binding restrictions: {e}"
+                            "sh:SPARQLTargetType <{iri}> violates pre-binding restrictions: {message}"
                         )
                     })
+                })
             }
             Ok(_) => {
                 return Err(format!(

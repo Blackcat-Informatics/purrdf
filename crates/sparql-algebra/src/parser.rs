@@ -28,15 +28,14 @@
 //! without recursion too (see [`crate::walk`]).
 
 mod machine;
+pub(crate) mod table;
 mod triples;
 
 use machine::Machine;
+use table::ScopeTable;
 use triples::{PathLevel, TFrame};
 
-use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-
-use purrdf_hash::fixed::FixedState;
 
 use crate::algebra::{
     AggregateFunction, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
@@ -48,7 +47,41 @@ use crate::ast::{
     TermPattern, TriplePattern, Variable,
 };
 use crate::error::{ParseError, Result};
-use crate::lexer::{Spanned, Token, tokenize};
+use crate::lexer::{Spanned, Token, tokenize_with_memory};
+use purrdf_lex::allocation::{Admission, Memory, OwnedText, Resident, SharedText, StorageError};
+
+/// Physical storage and immutable lexical publication for a native parser run.
+///
+/// Each published text keeps its own original owner. The surrounding `Memory`
+/// accounts for AST containers and boxes that the caller publishes together.
+pub trait ParserAdmission: Admission {
+    /// Publish a spelling before it is copied or its shared control is allocated.
+    ///
+    /// # Errors
+    /// Returns typed physical refusal, preserving the original backing cause.
+    fn text(
+        &mut self,
+        text: &dyn core::fmt::Display,
+    ) -> core::result::Result<SharedText, StorageError>;
+}
+
+struct ResidentParserAdmission;
+impl Admission for ResidentParserAdmission {
+    fn resize(&mut self, _live_bytes: usize) -> core::result::Result<(), StorageError> {
+        Ok(())
+    }
+}
+impl ParserAdmission for ResidentParserAdmission {
+    fn text(
+        &mut self,
+        text: &dyn core::fmt::Display,
+    ) -> core::result::Result<SharedText, StorageError> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let text = memory.format(text)?;
+        SharedText::try_from_admitted(text, ()).map_err(|_| StorageError::AllocationFailed)
+    }
+}
 use crate::tree::Child;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
@@ -287,6 +320,9 @@ pub struct SparqlParser {
     /// ([`SparqlParser::parse_query_with`]/[`SparqlParser::parse_update_with`])
     /// keeps the hard-fail doctrine without silently dropping the base.
     base: core::result::Result<BaseScope, ParseError>,
+    /// The variables the caller binds before evaluation, by name: see
+    /// [`SparqlParser::with_prebound_variables`].
+    prebound: Vec<Variable>,
 }
 
 purrdf_hash::default_from_new!(SparqlParser);
@@ -300,6 +336,7 @@ impl SparqlParser {
     pub fn new() -> Self {
         Self {
             base: Ok(BaseScope::empty()),
+            prebound: Vec::new(),
         }
     }
 
@@ -334,6 +371,44 @@ impl SparqlParser {
         self
     }
 
+    /// Declare the variables (named without their `?`/`$` sigil) the caller binds
+    /// before the query is evaluated — SHACL-SPARQL's pre-bound `$this`,
+    /// `$shapesGraph` and `$currentShape`, or a prepared execution's parameters.
+    ///
+    /// The grouping constraint (SPARQL 1.1 §11.4) holds for every other variable:
+    /// in an aggregate query, a projected variable or a variable read by a `SELECT`
+    /// expression outside an aggregate must be a `GROUP BY` key. A pre-bound
+    /// variable holds one value for the whole evaluation, so every group sees the
+    /// same value and reading it is well defined. Declaring a name exempts it from
+    /// that check and changes nothing else about the parse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_sparql_algebra::SparqlParser;
+    ///
+    /// let query = "SELECT (STR($this) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o }";
+    /// // `$this` is no group key, so a plain parse refuses the projection …
+    /// assert!(SparqlParser::new().parse_query(query).is_err());
+    /// // … and a caller that binds `$this` before evaluation declares it.
+    /// assert!(
+    ///     SparqlParser::new()
+    ///         .with_prebound_variables(["this"])
+    ///         .parse_query(query)
+    ///         .is_ok()
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_prebound_variables<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.prebound
+            .extend(names.into_iter().map(|name| Variable::new(name.as_ref())));
+        self
+    }
+
     /// Parse a SPARQL 1.1/1.2 query into the algebra, under [`ParserOptions::default`].
     ///
     /// # Examples
@@ -361,6 +436,18 @@ impl SparqlParser {
             .map(|split| split.query)
     }
 
+    /// Parse under RDFLib's assignment admission law, retaining group joins for
+    /// contextual algebra compilation. The ordinary SPARQL entry stays strict.
+    pub fn parse_rdflib_query_with(&self, query: &str, options: &ParserOptions) -> Result<Query> {
+        let mut resident = ResidentParserAdmission;
+        let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+        let mut p = self.parser_for::<true>(query, options, &mut memory)?;
+        p.parse_prologue()?;
+        let parsed = p.parse_query_form()?;
+        p.expect_eof()?;
+        Ok(parsed)
+    }
+
     /// [`Self::parse_query_with`], also reporting where the two parts of the text a
     /// wrapping layer has to *move* are written: see [`QuerySplit`].
     ///
@@ -374,7 +461,9 @@ impl SparqlParser {
     /// Exactly [`Self::parse_query_with`]'s: a [`ParseError`] for an unusable base
     /// IRI, a tokenizer refusal, a syntax error or trailing tokens after the form.
     pub fn parse_query_split(&self, query: &str, options: &ParserOptions) -> Result<QuerySplit> {
-        let mut p = self.parser_for(query, options)?;
+        let mut resident = ResidentParserAdmission;
+        let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+        let mut p = self.parser_for::<false>(query, options, &mut memory)?;
         p.parse_prologue()?;
         let body_at = p.span();
         let q = p.parse_query_form()?;
@@ -397,7 +486,9 @@ impl SparqlParser {
         query: &str,
         options: &ParserOptions,
     ) -> Result<QueryDatasetSlot> {
-        let mut p = self.parser_for(query, options)?;
+        let mut resident = ResidentParserAdmission;
+        let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+        let mut p = self.parser_for::<false>(query, options, &mut memory)?;
         p.parse_prologue()?;
         let q = p.parse_query_form()?;
         p.expect_eof()?;
@@ -451,7 +542,9 @@ impl SparqlParser {
     ///
     /// Exactly [`Self::parse_update_with`]'s.
     pub fn parse_update_split(&self, update: &str, options: &ParserOptions) -> Result<UpdateSplit> {
-        let mut p = self.parser_for(update, options)?;
+        let mut resident = ResidentParserAdmission;
+        let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+        let mut p = self.parser_for::<false>(update, options, &mut memory)?;
         let u = p.parse_update()?;
         p.expect_eof()?;
         Ok(UpdateSplit {
@@ -460,21 +553,123 @@ impl SparqlParser {
         })
     }
 
+    /// Parse a query while retaining its original AST allocation account.
+    ///
+    /// Authored lexical leaves carry immutable owners supplied by `admission`;
+    /// the caller publishes the remaining AST buffers and boxes with the surviving
+    /// `memory.admitted_bytes()` grant. Configuration is borrowed until parsing ends.
+    ///
+    /// # Errors
+    /// Returns the original parse error or a physical storage refusal.
+    pub fn parse_query_admitted<'s>(
+        text: &str,
+        options: &ParserOptions,
+        base: Option<&str>,
+        prebound_names: &[&str],
+        memory: &mut Memory<'s, dyn ParserAdmission + 's>,
+    ) -> Result<Query> {
+        let original_live = memory.admitted_bytes();
+        let outcome = (|| {
+            let mut scope = BaseScope::empty();
+            if let Some(base) = base {
+                match scope.rebind_with_memory(base, BaseOrigin::Caller, memory) {
+                    Ok(()) => (),
+                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+                    Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                        return Err(iri_error_with_memory(base, error, memory)?);
+                    }
+                }
+            }
+            let mut prebound = Vec::new();
+            memory.reserve(&mut prebound, prebound_names.len())?;
+            for name in prebound_names {
+                let variable = Variable::from_admitted(memory.admission_mut().text(name)?);
+                prebound.push(variable);
+            }
+            let mut parser =
+                Self::parser_from_parts::<false>(text, options, scope, prebound, memory)?;
+            parser.parse_prologue()?;
+            let query = parser.parse_query_form()?;
+            parser.expect_eof()?;
+            parser.release_working()?;
+            Ok(query)
+        })();
+        if let Ok(query) = &outcome {
+            let retained = query.raw_owned_bytes_with_memory(memory)?;
+            let transient = memory
+                .admitted_bytes()
+                .checked_sub(original_live)
+                .and_then(|bytes| bytes.checked_sub(retained))
+                .ok_or(StorageError::SizeOverflow)?;
+            // Original storage was admitted before construction. Every parser
+            // scratch owner has died; this only releases that original excess.
+            memory.release_bytes(transient)?;
+        }
+        if let Err(error) = &outcome
+            && !matches!(error, ParseError::Storage(_))
+        {
+            // The closure has destroyed the parser and every partial AST.
+            // Only this original raw error payload survives; no new grant is
+            // inferred or acquired from its census.
+            let retained = error.owned_text_bytes().ok_or(StorageError::SizeOverflow)?;
+            let scratch = memory
+                .admitted_bytes()
+                .checked_sub(original_live)
+                .and_then(|bytes| bytes.checked_sub(retained))
+                .ok_or(StorageError::SizeOverflow)?;
+            memory.release_bytes(scratch)?;
+        }
+        outcome
+    }
+
     /// Tokenize `text` and assemble the internal parser state.
-    fn parser_for<'a, 'o>(
+    fn parser_for<'a, 'o, 'm, 's, const RDFLIB: bool>(
         &self,
         text: &'a str,
         options: &'o ParserOptions,
-    ) -> Result<Parser<'a, 'o>> {
-        let base = self.base.clone()?;
-        let tokens: Vec<Option<Spanned<'a>>> = tokenize(text)?.into_iter().map(Some).collect();
-        let anon_prefix = anon_label_prefix(&tokens);
+        memory: &'m mut Memory<'s, dyn ParserAdmission + 's>,
+    ) -> Result<Parser<'a, 'o, 'm, 's, RDFLIB>> {
+        let base = match &self.base {
+            Ok(base) => match base.clone_with_memory(memory) {
+                Ok(base) => base,
+                Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+                Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                    return Err(iri_error_with_memory("", error, memory)?);
+                }
+            },
+            Err(error) => return Err(error.clone()),
+        };
+        let mut prebound = Vec::new();
+        memory.reserve(&mut prebound, self.prebound.len())?;
+        prebound.extend(self.prebound.iter().cloned());
+        Self::parser_from_parts::<RDFLIB>(text, options, base, prebound, memory)
+    }
+
+    fn parser_from_parts<'a, 'o, 'm, 's, const RDFLIB: bool>(
+        text: &'a str,
+        options: &'o ParserOptions,
+        base: BaseScope,
+        prebound: Vec<Variable>,
+        memory: &'m mut Memory<'s, dyn ParserAdmission + 's>,
+    ) -> Result<Parser<'a, 'o, 'm, 's, RDFLIB>> {
+        let mut lexemes =
+            tokenize_with_memory(text, crate::lexer::LexerOptions::default(), memory)?;
+        let mut tokens = Vec::new();
+        memory.reserve(&mut tokens, lexemes.len())?;
+        #[expect(
+            clippy::iter_with_drain,
+            reason = "token payloads move while the original admitted lexeme Vec buffer remains live until release_vec destroys it before refund"
+        )]
+        tokens.extend(lexemes.drain(..).map(Some));
+        memory.release_vec(lexemes)?;
+        let anon_prefix = anon_label_prefix_with_memory(&tokens, memory)?;
         Ok(Parser {
+            memory,
             tokens,
             pos: 0,
             src: text,
             end: text.len(),
-            prefixes: HashMap::with_hasher(FixedState::new()),
+            prefixes: ScopeTable::default(),
             base,
             version: None,
             agg_counter: 0,
@@ -492,13 +687,14 @@ impl SparqlParser {
             pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: 0,
-            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
+            blank_label_bgps: ScopeTable::default(),
             bgp_counter: 0,
             bgp_scope: None,
             machine: Machine::default(),
             triple_frames: Vec::new(),
             path_levels: Vec::new(),
             options,
+            prebound,
         })
     }
 }
@@ -510,14 +706,32 @@ impl SparqlParser {
 /// A minted label must never equal one the author wrote, or `[]` and `_:label` would
 /// be read as one node. Any label is a legal `BLANK_NODE_LABEL`, so no fixed prefix
 /// is out of an author's reach; one chosen against the text in hand is.
-fn anon_label_prefix(tokens: &[Option<Spanned<'_>>]) -> String {
-    let mut prefix = String::from("__purrdf_anon_");
+fn anon_label_prefix_with_memory(
+    tokens: &[Option<Spanned<'_>>],
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> Result<String> {
+    let mut prefix = memory.string("__purrdf_anon_")?;
     while tokens.iter().flatten().any(|spanned| {
         matches!(spanned.token, Token::BlankNodeLabel(label) if label.starts_with(prefix.as_str()))
     }) {
+        let next_len = prefix.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        memory.reserve_string(&mut prefix, next_len)?;
         prefix.insert(0, '_');
     }
-    prefix
+    Ok(prefix)
+}
+
+fn iri_error_with_memory(
+    lexical: &str,
+    error: IriError,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> Result<ParseError> {
+    let reason = memory.format(&format_args!("{}: {error}", error.diagnostic_code()))?;
+    let lexical = memory.string(lexical)?;
+    let bytes = error.owned_text_bytes();
+    drop(error);
+    memory.release_bytes(bytes)?;
+    Ok(ParseError::Iri { lexical, reason })
 }
 
 /// Which grammar production a `SELECT` is being read under.
@@ -538,7 +752,8 @@ enum SelectPosition {
     SubSelect,
 }
 
-struct Parser<'a, 'o> {
+struct Parser<'a, 'o, 'm, 's, const RDFLIB: bool> {
+    memory: &'m mut Memory<'s, dyn ParserAdmission + 's>,
     tokens: Vec<Option<Spanned<'a>>>,
     pos: usize,
     /// The original request text, kept only so a `BASE` directive can record the
@@ -546,7 +761,7 @@ struct Parser<'a, 'o> {
     /// The line table is built on that path alone, never on the happy path.
     src: &'a str,
     end: usize,
-    prefixes: HashMap<String, String, FixedState>,
+    prefixes: ScopeTable<OwnedText, OwnedText>,
     /// The base IRIs in scope: the caller-supplied base (if any) at the bottom,
     /// rebound in place by every prologue `BASE` directive. Resolution itself is
     /// [`BaseScope`]'s — this parser owns no RFC-3986 arithmetic.
@@ -656,7 +871,7 @@ struct Parser<'a, 'o> {
     /// One map per query, so a label reused in a sub-`SELECT` or an `EXISTS`
     /// body is caught too; one map per UPDATE operation, whose `WHERE` clauses
     /// are separate patterns ([`Parser::parse_update`] clears it between them).
-    blank_label_bgps: HashMap<String, usize, FixedState>,
+    blank_label_bgps: ScopeTable<OwnedText, usize>,
     /// The next basic-graph-pattern ordinal a group's triples block is given.
     bgp_counter: usize,
     /// The basic graph pattern the triples block being parsed belongs to, or
@@ -672,9 +887,64 @@ struct Parser<'a, 'o> {
     /// The open levels of the property path being read, reused likewise.
     path_levels: Vec<PathLevel>,
     options: &'o ParserOptions,
+    /// The variables the caller binds before evaluation
+    /// ([`SparqlParser::with_prebound_variables`]): exempt from the grouping check.
+    prebound: Vec<Variable>,
 }
 
-impl<'a> Parser<'a, '_> {
+impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
+    fn boxed<T>(&mut self, value: T) -> Result<Box<T>> {
+        self.memory
+            .add_bytes(core::alloc::Layout::new::<T>().size())?;
+        purrdf_lex::allocation::try_boxed(value)
+            .map_err(|_| ParseError::Storage(StorageError::AllocationFailed))
+    }
+    fn unsupported(&mut self, feature: &(impl std::fmt::Display + ?Sized)) -> ParseError {
+        match self.memory.format(feature) {
+            Ok(feature) => ParseError::Unsupported(feature),
+            Err(error) => ParseError::Storage(error),
+        }
+    }
+
+    fn release_working(mut self) -> Result<()> {
+        for token in self.tokens.drain(..).flatten() {
+            match token.token {
+                Token::Iri(std::borrow::Cow::Owned(text))
+                | Token::PrefixedName(_, std::borrow::Cow::Owned(text))
+                | Token::StringLit(std::borrow::Cow::Owned(text))
+                | Token::LongStringLit(std::borrow::Cow::Owned(text)) => {
+                    self.memory.release_string(text)?;
+                }
+                _ => (),
+            }
+        }
+        self.memory.release_vec(self.tokens)?;
+        self.prefixes.release(self.memory)?;
+        self.base
+            .release_with_memory(self.memory)
+            .map_err(|error| match error {
+                purrdf_iri::IriReadError::Storage(error) => ParseError::Storage(error),
+                purrdf_iri::IriReadError::Lexical(_) => {
+                    unreachable!("scope destruction does not recognize IRIs")
+                }
+            })?;
+        if let Some(SparqlVersion::Other(text)) = self.version {
+            self.memory.release_string(text)?;
+        }
+        self.memory.release_string(self.anon_prefix)?;
+        self.exists_scope_stack.release(self.memory)?;
+        self.blank_label_bgps.release(self.memory)?;
+        self.memory.release_vec(self.prebound)?;
+        self.memory.release_vec(self.projection_seen_targets)?;
+        debug_assert!(self.pending_exists_scope_checks.is_empty());
+        self.memory.release_vec(self.pending_exists_scope_checks)?;
+        self.memory.release_vec(self.update_slots)?;
+        self.machine.release(self.memory)?;
+        debug_assert!(self.triple_frames.is_empty() && self.path_levels.is_empty());
+        self.memory.release_vec(self.triple_frames)?;
+        self.memory.release_vec(self.path_levels)?;
+        Ok(())
+    }
     // ── token cursor ─────────────────────────────────────────────────────────
 
     fn peek(&self) -> Option<&Token<'a>> {
@@ -719,14 +989,16 @@ impl<'a> Parser<'a, '_> {
     /// scan never balances back to 0 — `self.pos` was not actually at a `{`,
     /// or the input is malformed — falls back to the full remaining suffix
     /// so behavior stays correct (just unoptimized) on that edge case.
-    fn fork_block(&self) -> Self {
+    fn fork_block<'f>(&'f mut self) -> Result<Parser<'a, 'o, 'f, 's, RDFLIB>> {
         let mut depth: i32 = 0;
         let mut block_end = None;
         for (offset, slot) in self.tokens[self.pos..].iter().enumerate() {
             match slot.as_ref().map(|s| &s.token) {
-                Some(Token::LBrace) => depth += 1,
+                Some(Token::LBrace) => {
+                    depth = depth.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+                }
                 Some(Token::RBrace) => {
-                    depth -= 1;
+                    depth = depth.checked_sub(1).ok_or(StorageError::SizeOverflow)?;
                     if depth == 0 {
                         block_end = Some(self.pos + offset);
                         break;
@@ -736,17 +1008,45 @@ impl<'a> Parser<'a, '_> {
             }
         }
         let end_idx = block_end.map_or(self.tokens.len(), |idx| idx + 1);
-        Self {
-            tokens: self.tokens[self.pos..end_idx].to_vec(),
+        let mut tokens = Vec::new();
+        self.memory.reserve(&mut tokens, end_idx - self.pos)?;
+        for token in &self.tokens[self.pos..end_idx] {
+            tokens.push(
+                token
+                    .as_ref()
+                    .map(|token| token.clone_with_memory(self.memory))
+                    .transpose()?,
+            );
+        }
+        let base = match self.base.clone_with_memory(self.memory) {
+            Ok(base) => base,
+            Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+            Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                return Err(iri_error_with_memory("", error, self.memory)?);
+            }
+        };
+        let anon_prefix = self.memory.string(&self.anon_prefix)?;
+        let mut prebound = Vec::new();
+        self.memory.reserve(&mut prebound, self.prebound.len())?;
+        prebound.extend(self.prebound.iter().cloned());
+        let prefixes = self.prefixes.try_clone(self.memory)?;
+        let version = self
+            .version
+            .as_ref()
+            .map(|version| SparqlVersion::parse_with_memory(version.raw(), self.memory))
+            .transpose()?;
+        Ok(Parser {
+            memory: self.memory,
+            tokens,
             pos: 0,
             src: self.src,
             end: self.end,
-            prefixes: self.prefixes.clone(),
-            base: self.base.clone(),
-            version: self.version.clone(),
+            prefixes,
+            base,
+            version,
             agg_counter: self.agg_counter,
             anon_counter: self.anon_counter,
-            anon_prefix: self.anon_prefix.clone(),
+            anon_prefix,
             group_counter: self.group_counter,
             // A fork reparses only a bounded braced block for a template/quad
             // reading (`CONSTRUCT`'s short-form template, `DELETE WHERE`'s
@@ -776,14 +1076,15 @@ impl<'a> Parser<'a, '_> {
             // A fork reads a template or quad-pattern block, which is not a basic
             // graph pattern of the query: nothing it reads is scoped to one, so it
             // starts with no scope and records nothing.
-            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
+            blank_label_bgps: ScopeTable::default(),
             bgp_counter: 0,
             bgp_scope: None,
             machine: Machine::default(),
             triple_frames: Vec::new(),
             path_levels: Vec::new(),
             options: self.options,
-        }
+            prebound,
+        })
     }
 
     fn set_counters(&mut self, counters: (usize, usize, usize)) {
@@ -803,7 +1104,7 @@ impl<'a> Parser<'a, '_> {
 
     #[cfg(not(debug_assertions))]
     #[inline(always)]
-    fn note_scope_consultation(&mut self) {}
+    fn note_scope_consultation(&self) {}
 
     /// The current value of the debug-only scope-consultation counter — the
     /// NON-COUNTING read `scope_set_stays_linear_over_two_thousand_binds`
@@ -841,23 +1142,21 @@ impl<'a> Parser<'a, '_> {
     // (`EXISTS` never joins its body's bindings out at all; `MINUS`'s right
     // operand is explicitly out of scope per §18.2.1), so the seeded frame is
     // POPPED AND DISCARDED, never merged back into what it was seeded from.
-    fn exists_scope(&self) -> &[Variable] {
-        self.exists_scope_stack.top()
-    }
-
     /// Open a fresh, EMPTY in-scope-set frame — nothing precedes it. Used at
     /// every query/update operation's own top-level `WHERE` clause and at a
     /// sub-`SELECT`'s (the one real scope boundary; see the module doc above).
-    fn push_exists_scope_boundary(&mut self) {
-        self.exists_scope_stack.push_boundary();
+    fn push_exists_scope_boundary(&mut self) -> Result<()> {
+        self.exists_scope_stack.push_boundary(self.memory)?;
+        Ok(())
     }
 
     /// Open a fresh in-scope-set frame SEEDED with a copy of the frame beneath
     /// it — reads see everything the enclosing rows already bound, but nothing
     /// this frame goes on to introduce is written back once it is popped. Used
     /// at an `EXISTS`/`NOT EXISTS`/`MINUS` body (see the module doc above).
-    fn push_exists_scope_isolated(&mut self) {
-        self.exists_scope_stack.push_isolated();
+    fn push_exists_scope_isolated(&mut self) -> Result<()> {
+        self.exists_scope_stack.push_isolated(self.memory)?;
+        Ok(())
     }
 
     /// Close the innermost in-scope-set frame, discarding it — the caller is
@@ -874,20 +1173,23 @@ impl<'a> Parser<'a, '_> {
     /// nothing when called on ITS right operand — callers simply never call
     /// this for a `Minus` right operand, matching the group loop's own
     /// pre-existing non-call for its local `VarScope`).
-    fn note_exists_scope(&mut self, pattern: &GraphPattern) {
+    fn note_exists_scope(&mut self, pattern: &GraphPattern) -> Result<()> {
         if self.exists_scope_stack.is_open() {
             let mut noted = VarScope::default();
-            collect_vars(pattern, &mut noted);
-            for v in noted.as_slice() {
-                self.exists_scope_stack.note(v);
+            collect_vars(pattern, &mut noted, self.memory)?;
+            for variable in noted.as_slice() {
+                self.exists_scope_stack.note(variable, self.memory)?;
             }
+            noted.release(self.memory)?;
         }
+        Ok(())
     }
 
     /// Record a single fresh binding (a `BIND` target) into the current
     /// in-scope-set frame.
-    fn note_exists_scope_var(&mut self, variable: &Variable) {
-        self.exists_scope_stack.note(variable);
+    fn note_exists_scope_var(&mut self, variable: &Variable) -> Result<()> {
+        self.exists_scope_stack.note(variable, self.memory)?;
+        Ok(())
     }
 
     /// Parse a query/update operation's own top-level `WHERE` group graph
@@ -901,11 +1203,12 @@ impl<'a> Parser<'a, '_> {
     /// have anything of their own that needs to keep consulting it
     /// afterward.
     fn parse_where_clause(&mut self) -> Result<GraphPattern> {
-        self.push_exists_scope_boundary();
+        self.push_exists_scope_boundary()?;
         let group = self.parse_group()?;
         for v in group.scope.as_slice() {
-            self.note_exists_scope_var(v);
+            self.note_exists_scope_var(v)?;
         }
+        group.scope.release(self.memory)?;
         self.pop_exists_scope_boundary();
         Ok(group.pattern)
     }
@@ -927,9 +1230,16 @@ impl<'a> Parser<'a, '_> {
         if self.eat(t) {
             Ok(())
         } else {
-            Err(ParseError::syntax(
-                format!("expected {t:?}, found {:?}", self.peek()),
+            Err(native_syntax(
+                &format_args!(
+                    "expected {t:?}, found {:?}",
+                    self.tokens
+                        .get(self.pos)
+                        .and_then(Option::as_ref)
+                        .map(|token| &token.token)
+                ),
                 self.span(),
+                self.memory,
             ))
         }
     }
@@ -956,20 +1266,34 @@ impl<'a> Parser<'a, '_> {
         if self.eat_kw(kw) {
             Ok(())
         } else {
-            Err(ParseError::syntax(
-                format!("expected keyword {kw}, found {:?}", self.peek()),
+            Err(native_syntax(
+                &format_args!(
+                    "expected keyword {kw}, found {:?}",
+                    self.tokens
+                        .get(self.pos)
+                        .and_then(Option::as_ref)
+                        .map(|token| &token.token)
+                ),
                 self.span(),
+                self.memory,
             ))
         }
     }
 
-    fn expect_eof(&self) -> Result<()> {
+    fn expect_eof(&mut self) -> Result<()> {
         if self.pos >= self.tokens.len() {
             Ok(())
         } else {
-            Err(ParseError::syntax(
-                format!("unexpected trailing token {:?}", self.peek()),
+            Err(native_syntax(
+                &format_args!(
+                    "unexpected trailing token {:?}",
+                    self.tokens
+                        .get(self.pos)
+                        .and_then(Option::as_ref)
+                        .map(|token| &token.token)
+                ),
                 self.span(),
+                self.memory,
             ))
         }
     }
@@ -981,7 +1305,7 @@ impl<'a> Parser<'a, '_> {
     /// reports. Split out of `parse_query` rather than duplicated, so the two
     /// entries cannot parse a form differently.
     fn parse_query_form(&mut self) -> Result<Query> {
-        let base_iri = self.base_named_node();
+        let base_iri = self.base_named_node()?;
         if self.peek_kw("SELECT") {
             self.parse_select(base_iri)
         } else if self.peek_kw("CONSTRUCT") {
@@ -991,9 +1315,10 @@ impl<'a> Parser<'a, '_> {
         } else if self.peek_kw("DESCRIBE") {
             self.parse_describe(base_iri)
         } else {
-            Err(ParseError::syntax(
-                "expected SELECT, CONSTRUCT, ASK or DESCRIBE",
+            Err(native_syntax(
+                &"expected SELECT, CONSTRUCT, ASK or DESCRIBE",
                 self.span(),
+                self.memory,
             ))
         }
     }
@@ -1044,14 +1369,26 @@ impl<'a> Parser<'a, '_> {
                 // `w3c-sparql12` is absolute), so the suite neither licenses nor
                 // forbids this; clause 3 above decides it.
                 let directive = self.expect_raw_iriref()?;
-                let origin = self.directive_origin(at);
-                self.base
-                    .rebind(&directive, origin)
-                    .map_err(|e| iri_error(&directive, &e))?;
+                let origin = self.directive_origin(at)?;
+                let rebound = self
+                    .base
+                    .rebind_with_memory(&directive, origin, self.memory);
+                let rebound = match rebound {
+                    Ok(()) => Ok(()),
+                    Err(purrdf_iri::IriReadError::Storage(error)) => Err(error.into()),
+                    Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                        Err(iri_error_with_memory(&directive, error, self.memory)?)
+                    }
+                };
+                self.memory.release_string(directive)?;
+                rebound?;
             } else if self.eat_kw("PREFIX") {
                 let (prefix, _) = self.expect_pname_ns()?;
                 let iri = self.expect_iriref()?;
-                self.prefixes.insert(prefix, iri);
+                let prefix: OwnedText = self.memory.admission_mut().text(&prefix)?.into();
+                let published: OwnedText = self.memory.admission_mut().text(&iri)?.into();
+                self.memory.release_string(iri)?;
+                let _ = self.prefixes.insert(prefix, published, self.memory)?;
             } else if self.eat_kw("VERSION") {
                 // SPARQL 1.2 version declaration: `VERSION <string>` (SPARQL 1.2 Query
                 // specification §4.4). Retained as `self.version`, last-wins across
@@ -1063,12 +1400,21 @@ impl<'a> Parser<'a, '_> {
                 // evaluation admission, not at parse time.
                 match self.bump() {
                     Some(Token::StringLit(s)) => {
-                        self.version = Some(SparqlVersion::parse(&s));
+                        let version = SparqlVersion::parse_with_memory(&s, self.memory)?;
+                        if let Some(SparqlVersion::Other(old)) = self.version.replace(version) {
+                            self.memory.release_string(old)?;
+                        }
+                        if let std::borrow::Cow::Owned(s) = s {
+                            self.memory.release_string(s)?;
+                        }
                     }
                     other => {
-                        return Err(ParseError::syntax(
-                            format!("expected a version string after VERSION, found {other:?}"),
+                        return Err(native_syntax(
+                            &format_args!(
+                                "expected a version string after VERSION, found {other:?}"
+                            ),
                             self.span(),
+                            self.memory,
                         ));
                     }
                 }
@@ -1090,10 +1436,11 @@ impl<'a> Parser<'a, '_> {
     /// already in force rather than as an ordinary reference under it.
     fn expect_raw_iriref(&mut self) -> Result<String> {
         match self.bump() {
-            Some(Token::Iri(s)) => Ok(s.into_owned()),
-            other => Err(ParseError::syntax(
-                format!("expected IRIREF, found {other:?}"),
+            Some(Token::Iri(s)) => self.own_lexeme(s),
+            other => Err(native_syntax(
+                &format_args!("expected IRIREF, found {other:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -1104,36 +1451,52 @@ impl<'a> Parser<'a, '_> {
     /// The line table is built here, on the directive path, for the same reason
     /// [`ParseError::locate`] builds one on the error path: the happy path keeps
     /// a bare byte offset and pays nothing.
-    fn directive_origin(&self, at: usize) -> BaseOrigin {
-        let position = LineIndex::new(self.src).locate(self.src, at);
-        BaseOrigin::Directive {
+    fn directive_origin(&mut self, at: usize) -> Result<BaseOrigin> {
+        let index = LineIndex::new_with_memory(self.src, self.memory)?;
+        let position = index.try_locate(self.src, at);
+        index.release_with_memory(self.memory)?;
+        let position = position.map_err(|error| native_syntax(&error, at, self.memory))?;
+        Ok(BaseOrigin::Directive {
             line: position.line,
             column: position.column,
-        }
+        })
     }
 
     /// The base currently in force as a [`NamedNode`], for the algebra's
     /// `base_iri` field. [`BaseIri`] already guarantees a valid absolute IRI, so
     /// there is nothing left here to validate or to fail on.
-    fn base_named_node(&self) -> Option<NamedNode> {
+    fn base_named_node(&mut self) -> Result<Option<NamedNode>> {
         self.base
             .current()
-            .map(|scoped| NamedNode::new_unchecked(scoped.iri().as_str()))
+            .map(|scoped| {
+                self.memory
+                    .admission_mut()
+                    .text(&scoped.iri().as_str())
+                    .map(NamedNode::from_admitted)
+                    .map_err(Into::into)
+            })
+            .transpose()
     }
 
     /// Expect a `prefix:` namespace token (PNAME_NS), i.e. an empty local part.
     fn expect_pname_ns(&mut self) -> Result<(String, String)> {
         match self.bump() {
-            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p.to_string(), l.into_owned())),
+            Some(Token::PrefixedName(p, l)) if l.is_empty() => {
+                let prefix = self.memory.string(p)?;
+                let local = self.own_lexeme(l)?;
+                Ok((prefix, local))
+            }
             // `PREFIX ex:local <...>` is malformed — a prologue prefix must be a
             // bare PNAME_NS (`ex:`). Reject rather than silently dropping `local`.
-            Some(Token::PrefixedName(p, l)) => Err(ParseError::syntax(
-                format!("PREFIX declaration must be a bare namespace, found {p}:{l}"),
+            Some(Token::PrefixedName(p, l)) => Err(native_syntax(
+                &format_args!("PREFIX declaration must be a bare namespace, found {p}:{l}"),
                 self.span(),
+                self.memory,
             )),
-            other => Err(ParseError::syntax(
-                format!("expected prefix declaration, found {other:?}"),
+            other => Err(native_syntax(
+                &format_args!("expected prefix declaration, found {other:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -1144,26 +1507,87 @@ impl<'a> Parser<'a, '_> {
     /// A relative reference with NO base in scope is a typed [`ParseError::Iri`]
     /// carrying [`IriError`]'s shared diagnostic code — never a raw relative
     /// string handed onward, and never a base fabricated from somewhere else.
-    fn resolve_iri(&self, s: &str) -> Result<String> {
-        self.base
-            .resolve(s)
-            .map(|iri| iri.as_str().to_owned())
-            .map_err(|e| iri_error(s, &e))
+    fn resolve_iri(&mut self, s: &str) -> Result<String> {
+        match self.base.resolve_with_memory(s, self.memory) {
+            Ok(iri) => Ok(iri.into_text()),
+            Err(purrdf_iri::IriReadError::Storage(error)) => Err(error.into()),
+            Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                Err(iri_error_with_memory(s, error, self.memory)?)
+            }
+        }
     }
 
-    fn resolve_prefixed(&self, prefix: &str, local: &str) -> Result<NamedNode> {
-        match self.prefixes.get(prefix) {
+    fn own_lexeme(&mut self, value: std::borrow::Cow<'a, str>) -> Result<String> {
+        match value {
+            std::borrow::Cow::Borrowed(value) => Ok(self.memory.string(value)?),
+            std::borrow::Cow::Owned(value) => Ok(value),
+        }
+    }
+
+    fn variable(&mut self, name: &dyn core::fmt::Display) -> Result<Variable> {
+        Ok(Variable::from_admitted(
+            self.memory.admission_mut().text(name)?,
+        ))
+    }
+
+    fn literal(
+        &mut self,
+        value: &dyn core::fmt::Display,
+        datatype: NamedNode,
+        language: Option<&str>,
+        direction: Option<BaseDirection>,
+    ) -> Result<Literal> {
+        let value = self.memory.admission_mut().text(value)?;
+        let language = language
+            .map(|language| self.memory.admission_mut().text(&language))
+            .transpose()?;
+        Ok(Literal::from_admitted(value, datatype, language, direction))
+    }
+
+    fn named_node(&mut self, text: &str) -> Result<NamedNode> {
+        match purrdf_iri::is_absolute_with_memory(text, self.memory) {
+            Ok(true) => Ok(NamedNode::from_admitted(
+                self.memory.admission_mut().text(&text)?,
+            )),
+            Ok(false) => Err(ParseError::Iri {
+                lexical: self.memory.string(text)?,
+                reason: self
+                    .memory
+                    .string("relative IRI reference in term position (no scheme)")?,
+            }),
+            Err(purrdf_iri::IriReadError::Storage(error)) => Err(error.into()),
+            Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                Err(iri_error_with_memory(text, error, self.memory)?)
+            }
+        }
+    }
+
+    fn resolve_prefixed(&mut self, prefix: &str, local: &str) -> Result<NamedNode> {
+        match self
+            .prefixes
+            .get_by(|candidate| prefix.cmp(candidate.as_ref()))
+            .cloned()
+        {
             Some(ns) => {
                 // Exact-fit concatenation: one allocation per prefixed name where
                 // `format!` grew a default buffer through the formatter.
-                let mut iri = String::with_capacity(ns.len() + local.len());
-                iri.push_str(ns);
+                let mut iri = String::new();
+                self.memory.reserve_string(
+                    &mut iri,
+                    ns.len()
+                        .checked_add(local.len())
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
+                iri.push_str(&ns);
                 iri.push_str(local);
-                NamedNode::new(iri)
+                let node = self.named_node(&iri);
+                self.memory.release_string(iri)?;
+                node
             }
-            None => Err(ParseError::syntax(
-                format!("undeclared prefix {prefix:?}"),
+            None => Err(native_syntax(
+                &format_args!("undeclared prefix {prefix:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -1212,7 +1636,7 @@ impl<'a> Parser<'a, '_> {
             // still owns the opening `{` at this point, so the sub-parser must consume its
             // own copy before reading the template.
             let (template, counters) = {
-                let mut template_parser = self.fork_block();
+                let mut template_parser = self.fork_block()?;
                 template_parser.expect(&Token::LBrace)?;
                 let template = template_parser.parse_short_form_template()?;
                 let counters = (
@@ -1220,6 +1644,7 @@ impl<'a> Parser<'a, '_> {
                     template_parser.anon_counter,
                     template_parser.group_counter,
                 );
+                template_parser.release_working()?;
                 (template, counters)
             };
             self.set_counters(counters);
@@ -1229,7 +1654,7 @@ impl<'a> Parser<'a, '_> {
             // The short form's block is a `TriplesTemplate`, so every statement
             // is unscoped; the `CONSTRUCT GRAPH …` shorthand — the only graph
             // name this form can carry — supplies the graph for all of them.
-            let template = scope_triples(template, default_graph.as_ref());
+            let template = scope_triples(template, default_graph.as_ref(), self.memory)?;
             let where_pat = GraphPattern::Bgp {
                 patterns: where_patterns,
             };
@@ -1239,26 +1664,26 @@ impl<'a> Parser<'a, '_> {
             // incrementally; a fresh EMPTY-then-bulk-mirrored frame covers an
             // `EXISTS` in the trailing `ORDER BY` exactly like the long form's
             // incrementally-built one does.
-            self.push_exists_scope_boundary();
-            self.note_exists_scope(&where_pat);
+            self.push_exists_scope_boundary()?;
+            self.note_exists_scope(&where_pat)?;
             let mut aggregates = Vec::new();
             let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
             if !aggregates.is_empty()
                 || !modifiers.group_by.is_empty()
                 || !modifiers.having.is_empty()
             {
-                return Err(ParseError::unsupported("aggregation/HAVING in CONSTRUCT"));
+                return Err(self.unsupported(&"aggregation/HAVING in CONSTRUCT"));
             }
             let mut p = where_pat;
             if !modifiers.order_by.is_empty() {
                 p = GraphPattern::OrderBy {
-                    inner: Child::new(p),
+                    inner: Child::try_new(p, self.memory)?,
                     expression: modifiers.order_by,
                 };
             }
             if modifiers.offset.is_some() || modifiers.limit.is_some() {
                 p = GraphPattern::Slice {
-                    inner: Child::new(p),
+                    inner: Child::try_new(p, self.memory)?,
                     start: modifiers.offset.unwrap_or(0),
                     length: modifiers.limit,
                 };
@@ -1269,7 +1694,11 @@ impl<'a> Parser<'a, '_> {
                 pattern: p,
                 dataset,
                 base_iri,
-                version: self.version.clone(),
+                version: self
+                    .version
+                    .as_ref()
+                    .map(|version| SparqlVersion::parse_with_memory(version.raw(), self.memory))
+                    .transpose()?,
             });
         }
         // Long form: CONSTRUCT { ConstructQuads } WHERE { ... }
@@ -1283,25 +1712,25 @@ impl<'a> Parser<'a, '_> {
         let template = scope_template(template, default_graph.as_ref());
         let dataset = self.parse_dataset_clauses()?;
         self.eat_kw("WHERE");
-        self.push_exists_scope_boundary();
+        self.push_exists_scope_boundary()?;
         let where_pat = self.parse_group_graph_pattern()?;
-        self.note_exists_scope(&where_pat);
+        self.note_exists_scope(&where_pat)?;
         let mut aggregates = Vec::new();
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
         if !aggregates.is_empty() || !modifiers.group_by.is_empty() || !modifiers.having.is_empty()
         {
-            return Err(ParseError::unsupported("aggregation/HAVING in CONSTRUCT"));
+            return Err(self.unsupported(&"aggregation/HAVING in CONSTRUCT"));
         }
         let mut p = where_pat;
         if !modifiers.order_by.is_empty() {
             p = GraphPattern::OrderBy {
-                inner: Child::new(p),
+                inner: Child::try_new(p, self.memory)?,
                 expression: modifiers.order_by,
             };
         }
         if modifiers.offset.is_some() || modifiers.limit.is_some() {
             p = GraphPattern::Slice {
-                inner: Child::new(p),
+                inner: Child::try_new(p, self.memory)?,
                 start: modifiers.offset.unwrap_or(0),
                 length: modifiers.limit,
             };
@@ -1312,7 +1741,11 @@ impl<'a> Parser<'a, '_> {
             pattern: p,
             dataset,
             base_iri,
-            version: self.version.clone(),
+            version: self
+                .version
+                .as_ref()
+                .map(|version| SparqlVersion::parse_with_memory(version.raw(), self.memory))
+                .transpose()?,
         })
     }
 
@@ -1326,13 +1759,17 @@ impl<'a> Parser<'a, '_> {
         // ASK ignores solution modifiers semantically; rather than silently
         // dropping a parsed one, hard-fail (no-optionality / no silent discard).
         if !modifiers.is_empty() || !aggregates.is_empty() {
-            return Err(ParseError::unsupported("solution modifiers on ASK"));
+            return Err(self.unsupported(&"solution modifiers on ASK"));
         }
         Ok(Query::Ask {
             pattern,
             dataset,
             base_iri,
-            version: self.version.clone(),
+            version: self
+                .version
+                .as_ref()
+                .map(|version| SparqlVersion::parse_with_memory(version.raw(), self.memory))
+                .transpose()?,
         })
     }
 
@@ -1343,18 +1780,29 @@ impl<'a> Parser<'a, '_> {
             // DESCRIBE * — no explicit targets.
         } else {
             loop {
-                match self.peek() {
+                match self
+                    .tokens
+                    .get(self.pos)
+                    .and_then(Option::as_ref)
+                    .map(|token| &token.token)
+                {
                     Some(Token::Variable(_)) => {
-                        targets.push(NamedNodePattern::Variable(self.expect_var()?));
+                        let target = NamedNodePattern::Variable(self.expect_var()?);
+                        self.memory.push(&mut targets, target)?;
                     }
                     Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
-                        targets.push(NamedNodePattern::NamedNode(self.expect_iri_node()?));
+                        let target = NamedNodePattern::NamedNode(self.expect_iri_node()?);
+                        self.memory.push(&mut targets, target)?;
                     }
                     _ => break,
                 }
             }
             if targets.is_empty() {
-                return Err(ParseError::syntax("DESCRIBE needs a target", self.span()));
+                return Err(native_syntax(
+                    &"DESCRIBE needs a target",
+                    self.span(),
+                    self.memory,
+                ));
             }
         }
         let dataset = self.parse_dataset_clauses()?;
@@ -1366,14 +1814,18 @@ impl<'a> Parser<'a, '_> {
         let mut aggregates = Vec::new();
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
         if !modifiers.is_empty() || !aggregates.is_empty() {
-            return Err(ParseError::unsupported("solution modifiers on DESCRIBE"));
+            return Err(self.unsupported(&"solution modifiers on DESCRIBE"));
         }
         Ok(Query::Describe {
             pattern,
             targets,
             dataset,
             base_iri,
-            version: self.version.clone(),
+            version: self
+                .version
+                .as_ref()
+                .map(|version| SparqlVersion::parse_with_memory(version.raw(), self.memory))
+                .transpose()?,
         })
     }
 
@@ -1392,9 +1844,11 @@ impl<'a> Parser<'a, '_> {
         let mut named = Vec::new();
         while self.eat_kw("FROM") {
             if self.eat_kw("NAMED") {
-                named.push(self.expect_iri_node()?);
+                let graph = self.expect_iri_node()?;
+                self.memory.push(&mut named, graph)?;
             } else {
-                default.push(self.expect_iri_node()?);
+                let graph = self.expect_iri_node()?;
+                self.memory.push(&mut default, graph)?;
             }
         }
         let end = self.span();
@@ -1421,13 +1875,14 @@ impl<'a> Parser<'a, '_> {
             GraphPattern::Bgp { patterns } => Ok(patterns),
             // A template asserts triples; neither a property path nor a property
             // function (a relation call) can be asserted.
-            other => Err(ParseError::syntax(
-                if block_has_property_function(&other) {
+            other => Err(native_syntax(
+                &if block_has_property_function(&other, self.memory)? {
                     "property functions are not allowed in a CONSTRUCT template"
                 } else {
                     "property paths are not allowed in a CONSTRUCT template"
                 },
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -1448,12 +1903,13 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Refuse a graph block at the cursor with the short form's own diagnostic.
-    fn reject_graph_block_in_short_form(&self) -> Result<()> {
+    fn reject_graph_block_in_short_form(&mut self) -> Result<()> {
         if self.peek_kw("GRAPH") || self.at(&Token::LBrace) {
-            return Err(ParseError::syntax(
-                "a GRAPH block is not allowed in the CONSTRUCT short form; write the long form \
+            return Err(native_syntax(
+                &"a GRAPH block is not allowed in the CONSTRUCT short form; write the long form \
                  `CONSTRUCT { GRAPH … { … } } WHERE { … }` instead",
                 self.span(),
+                self.memory,
             ));
         }
         Ok(())
@@ -1477,14 +1933,23 @@ impl<'a> Parser<'a, '_> {
     /// binding decides the graph per solution row.
     fn parse_construct_quads(&mut self) -> Result<Vec<QuadPattern>> {
         let mut quads = Vec::new();
+        // Whether a `.` may come next: once, straight after a graph block (a triples
+        // run reads its own separating dots).
+        let mut dot_ok = false;
         loop {
             if self.at(&Token::RBrace) {
                 break;
             }
             // The optional `.` separating a graph block from what follows it.
-            if self.eat(&Token::Dot) {
+            if self.at(&Token::Dot) {
+                if !dot_ok {
+                    return Err(stray_dot(self.span(), self.memory));
+                }
+                self.pos += 1;
+                dot_ok = false;
                 continue;
             }
+            dot_ok = true;
             if self.peek_kw("GRAPH") || self.at(&Token::LBrace) {
                 // `GRAPH` is optional in this production: a bare nested `{ … }`
                 // block is the default graph, spelled as a block.
@@ -1496,7 +1961,8 @@ impl<'a> Parser<'a, '_> {
                 self.expect(&Token::LBrace)?;
                 let triples = self.parse_triples_template()?;
                 self.expect(&Token::RBrace)?;
-                quads.extend(scope_triples(triples, graph.as_ref()));
+                let scoped = scope_triples(triples, graph.as_ref(), self.memory)?;
+                self.memory.append(&mut quads, scoped)?;
                 continue;
             }
             // An unscoped `TriplesTemplate` run. `parse_triples_block` always
@@ -1506,13 +1972,16 @@ impl<'a> Parser<'a, '_> {
             // failure of that property would be a hang rather than an error.
             let before = self.pos;
             let triples = self.parse_triples_template()?;
+            dot_ok = false;
             if self.pos == before {
-                return Err(ParseError::syntax(
-                    "expected a template statement, a GRAPH block, or `}`",
+                return Err(native_syntax(
+                    &"expected a template statement, a GRAPH block, or `}`",
                     self.span(),
+                    self.memory,
                 ));
             }
-            quads.extend(scope_triples(triples, None));
+            let scoped = scope_triples(triples, None, self.memory)?;
+            self.memory.append(&mut quads, scoped)?;
         }
         Ok(quads)
     }
@@ -1524,7 +1993,7 @@ impl<'a> Parser<'a, '_> {
     /// is valid, and a trailing `;` is allowed.
     fn parse_update(&mut self) -> Result<Update> {
         self.parse_prologue()?;
-        let base_iri = self.base_named_node();
+        let base_iri = self.base_named_node()?;
 
         let mut operations = Vec::new();
         // §4.1.1 + grammar note: a blank node label in `INSERT DATA` ground data
@@ -1537,11 +2006,9 @@ impl<'a> Parser<'a, '_> {
         // W3C `basic-update` `insert-where-same-bnode`). `DELETE DATA` / DELETE
         // templates are blank-free by invariant, and anonymous blanks carry
         // process-unique ids, so only author-written `_:label`s can collide.
-        let mut prior_bnode_labels: HashSet<String, FixedState> =
-            HashSet::with_hasher(FixedState::new());
+        let mut prior_bnode_labels: ScopeTable<BlankNode, ()> = ScopeTable::default();
         // Reused across iterations to avoid reallocating the set each loop.
-        let mut this_op_labels: HashSet<String, FixedState> =
-            HashSet::with_hasher(FixedState::new());
+        let mut this_op_labels: ScopeTable<BlankNode, ()> = ScopeTable::default();
         loop {
             if self.pos >= self.tokens.len() {
                 break;
@@ -1551,24 +2018,35 @@ impl<'a> Parser<'a, '_> {
             self.blank_label_bgps.clear();
             self.op_slot = UpdateDatasetSlot::NoWhereClause;
             let op = self.parse_update_operation()?;
-            self.update_slots.push(std::mem::replace(
-                &mut self.op_slot,
-                UpdateDatasetSlot::NoWhereClause,
-            ));
+            {
+                let native_value =
+                    std::mem::replace(&mut self.op_slot, UpdateDatasetSlot::NoWhereClause);
+                self.memory.push(&mut self.update_slots, native_value)?;
+            };
             this_op_labels.clear();
             if let GraphUpdateOperation::InsertData { data } = &op {
-                collect_quad_bnode_labels(data, &mut this_op_labels);
+                collect_quad_bnode_labels(data, &mut this_op_labels, self.memory)?;
             }
-            for label in &this_op_labels {
-                if prior_bnode_labels.contains(label) {
-                    return Err(ParseError::syntax(
-                        format!("blank node label _:{label} is reused across update operations"),
+            for (label, ()) in this_op_labels.iter() {
+                if prior_bnode_labels.get(label).is_some() {
+                    return Err(native_syntax(
+                        &format_args!(
+                            "blank node label _:{} is reused across update operations",
+                            label.as_str()
+                        ),
                         self.span(),
+                        self.memory,
                     ));
                 }
             }
-            prior_bnode_labels.extend(this_op_labels.drain());
-            operations.push(op);
+            for (label, ()) in this_op_labels.iter() {
+                prior_bnode_labels.insert(label.clone(), (), self.memory)?;
+            }
+            this_op_labels.clear();
+            {
+                let native_value = op;
+                self.memory.push(&mut operations, native_value)?;
+            };
             // An operation separator. Without it, the request is done (a stray
             // trailing token is caught by `expect_eof` at the public entry).
             if !self.eat(&Token::Semicolon) {
@@ -1578,10 +2056,16 @@ impl<'a> Parser<'a, '_> {
             // another operation, or by end-of-input.
             self.parse_prologue()?;
         }
+        this_op_labels.release(self.memory)?;
+        prior_bnode_labels.release(self.memory)?;
         Ok(Update {
             operations,
             base_iri,
-            version: self.version.clone(),
+            version: self
+                .version
+                .as_ref()
+                .map(|version| SparqlVersion::parse_with_memory(version.raw(), self.memory))
+                .transpose()?,
         })
     }
 
@@ -1603,12 +2087,16 @@ impl<'a> Parser<'a, '_> {
         } else if self.peek_kw("ADD") || self.peek_kw("MOVE") || self.peek_kw("COPY") {
             self.parse_add_move_copy()
         } else {
-            Err(ParseError::syntax(
-                format!(
+            Err(native_syntax(
+                &format_args!(
                     "expected an update operation keyword, found {:?}",
-                    self.peek()
+                    self.tokens
+                        .get(self.pos)
+                        .and_then(Option::as_ref)
+                        .map(|token| &token.token)
                 ),
                 self.span(),
+                self.memory,
             ))
         }
     }
@@ -1632,7 +2120,7 @@ impl<'a> Parser<'a, '_> {
             insert,
             with: None,
             using,
-            pattern: Box::new(pattern),
+            pattern: self.boxed(pattern)?,
         })
     }
 
@@ -1652,26 +2140,29 @@ impl<'a> Parser<'a, '_> {
             // `fork_block` bounds the clone to this operation's braced block, so a
             // `;`-separated multi-operation UPDATE stays linear instead of the whole
             // request being O(n²) in the number of `DELETE WHERE` operations.
-            let (delete, counters) = {
-                let mut delete_parser = self.fork_block();
+            let pattern_start = self.span();
+            let source_end = self.end;
+            let (delete, counters, pattern_end) = {
+                let mut delete_parser = self.fork_block()?;
                 // The fork holds exactly the braced block, so its last token is the
                 // matching `}` and its end is the end of the pattern's text.
                 let pattern_end = delete_parser
                     .tokens
                     .last()
                     .and_then(Option::as_ref)
-                    .map_or(self.end, |closing| closing.end);
-                self.op_slot = UpdateDatasetSlot::DeleteWhere {
-                    where_at,
-                    pattern_at: self.span()..pattern_end,
-                };
+                    .map_or(source_end, |closing| closing.end);
                 let delete = delete_parser.parse_quad_pattern_block(true)?;
                 let counters = (
                     delete_parser.agg_counter,
                     delete_parser.anon_counter,
                     delete_parser.group_counter,
                 );
-                (delete, counters)
+                delete_parser.release_working()?;
+                (delete, counters, pattern_end)
+            };
+            self.op_slot = UpdateDatasetSlot::DeleteWhere {
+                where_at,
+                pattern_at: pattern_start..pattern_end,
             };
             self.set_counters(counters);
             // Parse the same braces as a group graph pattern for the WHERE.
@@ -1681,7 +2172,7 @@ impl<'a> Parser<'a, '_> {
                 insert: Vec::new(),
                 with: None,
                 using: Vec::new(),
-                pattern: Box::new(pattern),
+                pattern: self.boxed(pattern)?,
             });
         }
         // DELETE { template } [INSERT { ... }] [USING ...] WHERE { ... }.
@@ -1699,7 +2190,7 @@ impl<'a> Parser<'a, '_> {
             insert,
             with: None,
             using,
-            pattern: Box::new(pattern),
+            pattern: self.boxed(pattern)?,
         })
     }
 
@@ -1719,9 +2210,10 @@ impl<'a> Parser<'a, '_> {
         } else if self.eat_kw("INSERT") {
             insert = self.parse_quad_pattern_block(false)?;
         } else {
-            return Err(ParseError::syntax(
-                "WITH must be followed by DELETE and/or INSERT",
+            return Err(native_syntax(
+                &"WITH must be followed by DELETE and/or INSERT",
                 self.span(),
+                self.memory,
             ));
         }
         let using = self.parse_using_clauses_at(Some(with_at))?;
@@ -1732,7 +2224,7 @@ impl<'a> Parser<'a, '_> {
             insert,
             with,
             using,
-            pattern: Box::new(pattern),
+            pattern: self.boxed(pattern)?,
         })
     }
 
@@ -1761,9 +2253,11 @@ impl<'a> Parser<'a, '_> {
         let mut using = Vec::new();
         while self.eat_kw("USING") {
             if self.eat_kw("NAMED") {
-                using.push(UsingClause::Named(self.expect_iri_node()?));
+                let clause = UsingClause::Named(self.expect_iri_node()?);
+                self.memory.push(&mut using, clause)?;
             } else {
-                using.push(UsingClause::Default(self.expect_iri_node()?));
+                let clause = UsingClause::Default(self.expect_iri_node()?);
+                self.memory.push(&mut using, clause)?;
             }
         }
         Ok(using)
@@ -1852,9 +2346,10 @@ impl<'a> Parser<'a, '_> {
         } else if self.eat_kw("GRAPH") {
             Ok(GraphTarget::Named(self.expect_iri_node()?))
         } else {
-            Err(ParseError::syntax(
-                "expected DEFAULT, NAMED, ALL or GRAPH <iri>",
+            Err(native_syntax(
+                &"expected DEFAULT, NAMED, ALL or GRAPH <iri>",
                 self.span(),
+                self.memory,
             ))
         }
     }
@@ -1876,26 +2371,57 @@ impl<'a> Parser<'a, '_> {
     fn parse_quad_pattern_block(&mut self, is_delete: bool) -> Result<Vec<QuadPattern>> {
         let mut quads = Vec::new();
         self.expect(&Token::LBrace)?;
+        // `Quads ::= TriplesTemplate? ( QuadsNotTriples '.'? TriplesTemplate? )*`: a
+        // `.` comes once after a `GRAPH` block, or separates two triples.
+        let mut dot_ok = false;
         loop {
             if self.at(&Token::RBrace) {
                 break;
             } else if self.eat_kw("GRAPH") {
                 let graph = self.parse_var_or_iri_name()?;
                 self.collect_quad_group(Some(&graph), is_delete, &mut quads)?;
-            } else if self.eat(&Token::Dot) {
-                // statement separator between triple blocks
+                dot_ok = true;
+            } else if self.at(&Token::Dot) {
+                if !dot_ok {
+                    return Err(stray_dot(self.span(), self.memory));
+                }
+                self.pos += 1;
+                dot_ok = false;
             } else {
                 let mut triples = Vec::new();
                 self.parse_template_triple(&mut triples)?;
-                self.eat(&Token::Dot);
+                dot_ok = false;
+                // `TriplesTemplate ::= TriplesSameSubject ( '.' TriplesTemplate? )?`:
+                // with no `.`, the template ends here. A `LATERAL` is left to
+                // `parse_template_triple`, which refuses it by name.
+                if !(self.eat(&Token::Dot)
+                    || self.at(&Token::RBrace)
+                    || self.peek_kw("GRAPH")
+                    || self.peek_kw("LATERAL"))
+                {
+                    return Err(native_syntax(
+                        &format_args!(
+                            "expected '.' between triples, found {:?}",
+                            self.tokens
+                                .get(self.pos)
+                                .and_then(Option::as_ref)
+                                .map(|token| &token.token)
+                        ),
+                        self.span(),
+                        self.memory,
+                    ));
+                }
                 for triple in triples {
                     if is_delete {
-                        reject_blank_in_triple_pattern(&triple, self.span())?;
+                        reject_blank_in_triple_pattern(&triple, self.span(), self.memory)?;
                     }
-                    quads.push(QuadPattern {
-                        triple,
-                        graph: None,
-                    });
+                    {
+                        let native_value = QuadPattern {
+                            triple,
+                            graph: None,
+                        };
+                        self.memory.push(&mut quads, native_value)?;
+                    };
                 }
             }
         }
@@ -1922,16 +2448,20 @@ impl<'a> Parser<'a, '_> {
         // [`Self::collect_quad_group`] — this function's only two callers, so one
         // check here covers `INSERT`/`DELETE`/`DELETE WHERE` templates alike).
         if self.peek_kw("LATERAL") {
-            return Err(ParseError::syntax(
-                "LATERAL is not allowed in an update template",
+            return Err(native_syntax(
+                &"LATERAL is not allowed in an update template",
                 self.span(),
+                self.memory,
             ));
         }
         let mut sink = BlockSink::new(TripleContext::Template);
-        let (subject, standalone_ok) = if self.at(&Token::LBracket) {
-            (self.parse_graph_node(&mut sink)?, true)
-        } else if self.at(&Token::LParen) {
-            (self.parse_graph_node(&mut sink)?, false)
+        // `TriplesSameSubject ::= VarOrTerm PropertyListNotEmpty | TriplesNode
+        // PropertyList`: a blank-node property list or a non-empty collection (the
+        // two `TriplesNode` forms) may stand alone, its own triples already emitted;
+        // `()` is the `NIL` term, a `VarOrTerm`.
+        let (subject, standalone_ok) = if self.at(&Token::LBracket) || self.at(&Token::LParen) {
+            let triples_node = !self.at_nil();
+            (self.parse_graph_node(&mut sink)?, triples_node)
         } else if self.at(&Token::TripleOpen) {
             let node = self.parse_graph_node(&mut sink)?;
             let standalone = !matches!(node, TermPattern::Triple(_));
@@ -1939,24 +2469,32 @@ impl<'a> Parser<'a, '_> {
         } else {
             (self.parse_term_pattern()?, false)
         };
+        // A standalone node ends its `TriplesSameSubject`, so what follows is what may
+        // follow one in `Quads`: a `.`, the block's `}`, or a `QuadsNotTriples`
+        // (`GRAPH … { … }`) with no `.` before it.
         let standalone = standalone_ok
-            && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.at(&Token::LBrace));
+            && (self.at(&Token::Dot)
+                || self.at(&Token::RBrace)
+                || self.at(&Token::LBrace)
+                || self.peek_kw("GRAPH"));
         if !standalone {
             self.parse_predicate_object_list(SubjectArgs::Term(subject), &mut sink)?;
         }
         if !sink.paths.is_empty() {
-            return Err(ParseError::syntax(
-                "property paths are not allowed in an update template",
+            return Err(native_syntax(
+                &"property paths are not allowed in an update template",
                 self.span(),
+                self.memory,
             ));
         }
         // A template asserts triples; a property function is a relation call and
         // has nothing to assert, so a configured property-function predicate is a
         // hard error here rather than a silently-asserted data triple.
         if !sink.prop_fns.is_empty() {
-            return Err(ParseError::syntax(
-                "property functions are not allowed in an update template",
+            return Err(native_syntax(
+                &"property functions are not allowed in an update template",
                 self.span(),
+                self.memory,
             ));
         }
         triples.append(&mut sink.triples);
@@ -1982,12 +2520,15 @@ impl<'a> Parser<'a, '_> {
         self.expect(&Token::RBrace)?;
         for triple in triples {
             if is_delete {
-                reject_blank_in_triple_pattern(&triple, self.span())?;
+                reject_blank_in_triple_pattern(&triple, self.span(), self.memory)?;
             }
-            quads.push(QuadPattern {
-                triple,
-                graph: graph.cloned(),
-            });
+            {
+                let native_value = QuadPattern {
+                    triple,
+                    graph: graph.cloned(),
+                };
+                self.memory.push(quads, native_value)?;
+            };
         }
         Ok(())
     }
@@ -2006,12 +2547,13 @@ impl<'a> Parser<'a, '_> {
     /// DELETE DATA (`reject_blank`), NO blank nodes either (§3.1.2). INSERT DATA
     /// permits blank nodes (§3.1.1: minted fresh per request). Any violation is a
     /// hard [`ParseError::syntax`].
-    fn enforce_data_invariants(&self, quads: &[QuadPattern], reject_blank: bool) -> Result<()> {
+    fn enforce_data_invariants(&mut self, quads: &[QuadPattern], reject_blank: bool) -> Result<()> {
         for q in quads {
             if let Some(NamedNodePattern::Variable(_)) = &q.graph {
-                return Err(ParseError::syntax(
-                    "variable graph in INSERT/DELETE DATA is not allowed",
+                return Err(native_syntax(
+                    &"variable graph in INSERT/DELETE DATA is not allowed",
                     self.span(),
+                    self.memory,
                 ));
             }
             self.check_data_triple(&q.triple, reject_blank)?;
@@ -2022,37 +2564,42 @@ impl<'a> Parser<'a, '_> {
     /// Walk one DATA triple pattern, rejecting variables (always) and blank nodes
     /// (when `reject_blank`). Descends into RDF 1.2 quoted triples over a work list,
     /// reporting the first violation in written order.
-    fn check_data_triple(&self, t: &TriplePattern, reject_blank: bool) -> Result<()> {
+    fn check_data_triple(&mut self, t: &TriplePattern, reject_blank: bool) -> Result<()> {
         let mut terms: Vec<&TermPattern> = Vec::new();
         let mut triple = Some(t);
         loop {
             if let Some(t) = triple.take() {
                 if let NamedNodePattern::Variable(_) = &t.predicate {
-                    return Err(ParseError::syntax(
-                        "variable predicate in INSERT/DELETE DATA is not allowed",
+                    return Err(native_syntax(
+                        &"variable predicate in INSERT/DELETE DATA is not allowed",
                         self.span(),
+                        self.memory,
                     ));
                 }
-                terms.extend([&t.object, &t.subject]);
+                self.memory.push(&mut terms, &t.object)?;
+                self.memory.push(&mut terms, &t.subject)?;
             }
             let Some(term) = terms.pop() else {
+                self.memory.release_vec(terms)?;
                 return Ok(());
             };
             match term {
                 TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
                 TermPattern::Triple(tp) => triple = Some(tp),
                 TermPattern::Variable(_) => {
-                    return Err(ParseError::syntax(
-                        "variable in INSERT/DELETE DATA is not allowed",
+                    return Err(native_syntax(
+                        &"variable in INSERT/DELETE DATA is not allowed",
                         self.span(),
+                        self.memory,
                     ));
                 }
                 TermPattern::BlankNode(_) => {
                     // INSERT DATA blanks are allowed (minted fresh per request).
                     if reject_blank {
-                        return Err(ParseError::syntax(
-                            "blank node in DELETE DATA is not allowed",
+                        return Err(native_syntax(
+                            &"blank node in DELETE DATA is not allowed",
                             self.span(),
+                            self.memory,
                         ));
                     }
                 }
@@ -2081,10 +2628,15 @@ impl<'a> Parser<'a, '_> {
                 // is settled by a pure token scan to the matching `)` (below),
                 // BEFORE anything is parsed, so the collection path is untouched
                 // whenever the seam does not fire.
-                if self.property_fn_after_group().is_some() {
+                if self.property_fn_after_group()? {
                     (SubjectArgs::Args(self.parse_prop_fn_arg_list()?), false)
                 } else {
-                    (SubjectArgs::Term(self.parse_graph_node(&mut sink)?), false)
+                    // `()` is the `NIL` term, a `VarOrTerm`, never a collection.
+                    let collection = !self.at_nil();
+                    (
+                        SubjectArgs::Term(self.parse_graph_node(&mut sink)?),
+                        collection,
+                    )
                 }
             } else if self.at(&Token::TripleOpen) {
                 // A reifying triple `<< s p o >>` emits its own reifier triples, so
@@ -2097,15 +2649,35 @@ impl<'a> Parser<'a, '_> {
             } else {
                 (SubjectArgs::Term(self.parse_term_pattern()?), false)
             };
-            // A standalone `[ … ] .` needs no following predicate-object list (its
-            // triples are already emitted); any other subject requires one. A
-            // collection always heads a predicate-object list (it is never standalone).
+            // A standalone `[ … ] .` or `( … ) .` needs no following predicate-object
+            // list (its triples are already emitted): `TriplesSameSubjectPath ::=
+            // VarOrTerm PropertyListPathNotEmpty | TriplesNodePath PropertyListPath`,
+            // and both `TriplesNodePath` forms take the possibly-empty list. Any other
+            // subject requires one.
             let standalone = standalone_capable
                 && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.block_boundary());
             if !standalone {
                 self.parse_predicate_object_list(subject, &mut sink)?;
             }
             if !self.eat(&Token::Dot) {
+                // `TriplesBlock ::= TriplesSameSubjectPath ( '.' TriplesBlock? )?`: with
+                // no `.`, the block ends here, so what follows must close the group or
+                // start a non-triples element. Anything else is a second triple with no
+                // `.` between the two (the W3C `syn-bad-02` negative syntax test), never
+                // the start of another block.
+                if !(self.at(&Token::RBrace) || self.block_boundary()) {
+                    return Err(native_syntax(
+                        &format_args!(
+                            "expected '.' between triples, found {:?}",
+                            self.tokens
+                                .get(self.pos)
+                                .and_then(Option::as_ref)
+                                .map(|token| &token.token)
+                        ),
+                        self.span(),
+                        self.memory,
+                    ));
+                }
                 break;
             }
             // After a `.`, stop if the block ends (`}` or a keyword/brace).
@@ -2113,7 +2685,7 @@ impl<'a> Parser<'a, '_> {
                 break;
             }
         }
-        Ok(sink.into_pattern())
+        sink.into_pattern(self.memory)
     }
 
     /// Pure lookahead over a parenthesized subject group starting at the cursor
@@ -2124,20 +2696,23 @@ impl<'a> Parser<'a, '_> {
     /// unbalanced group, an unresolvable predicate, or a predicate outside every
     /// configured namespace simply yields `None` and the ordinary collection path
     /// runs (and reports any real error itself).
-    fn property_fn_after_group(&self) -> Option<String> {
+    fn property_fn_after_group(&mut self) -> Result<bool> {
         if (self.options.property_fn_namespaces.is_empty()
             && self.options.property_fn_iris.is_empty())
             || !matches!(self.token_at(self.pos), Some(Token::LParen))
         {
-            return None;
+            return Ok(false);
         }
         let mut depth = 0usize;
         let mut idx = self.pos;
         let after = loop {
-            match self.token_at(idx)? {
+            let Some(token) = self.token_at(idx) else {
+                return Ok(false);
+            };
+            match token {
                 Token::LParen => depth += 1,
                 Token::RParen => {
-                    depth -= 1;
+                    depth = depth.checked_sub(1).ok_or(StorageError::SizeOverflow)?;
                     if depth == 0 {
                         break idx + 1;
                     }
@@ -2146,16 +2721,48 @@ impl<'a> Parser<'a, '_> {
             }
             idx += 1;
         };
-        let iri = match self.token_at(after)? {
-            Token::Iri(s) => self.resolve_iri(s).ok()?,
-            Token::PrefixedName(p, l) => self
-                .resolve_prefixed(p, l.as_ref())
-                .ok()?
-                .as_str()
-                .to_owned(),
+        let Some(token) = self.tokens.get(after).and_then(Option::as_ref) else {
+            return Ok(false);
+        };
+        let iri = match &token.token {
+            Token::Iri(s) => match self.base.resolve_with_memory(s, self.memory) {
+                Ok(iri) => iri.into_text(),
+                Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+                Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                    let bytes = error.owned_text_bytes();
+                    drop(error);
+                    self.memory.release_bytes(bytes)?;
+                    return Ok(false);
+                }
+            },
+            Token::PrefixedName(prefix, local) => {
+                let Some(namespace) = self
+                    .prefixes
+                    .get_by(|candidate| prefix.cmp(&candidate.as_ref()))
+                else {
+                    return Ok(false);
+                };
+                let mut text = self.memory.string(namespace.as_ref())?;
+                self.memory.push_str(&mut text, local)?;
+                match purrdf_iri::is_absolute_with_memory(&text, self.memory) {
+                    Ok(true) => text,
+                    Ok(false) => {
+                        self.memory.release_string(text)?;
+                        return Ok(false);
+                    }
+                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+                    Err(purrdf_iri::IriReadError::Lexical(error)) => {
+                        let bytes = error.owned_text_bytes();
+                        drop(error);
+                        self.memory.release_bytes(bytes)?;
+                        self.memory.release_string(text)?;
+                        return Ok(false);
+                    }
+                }
+            }
             // `a` is rdf:type spelled as a keyword.
-            Token::Word(w) if *w == "a" => RDF_TYPE.to_owned(),
-            _ => return None,
+            Token::Word(w) if *w == "a" => self.memory.string(RDF_TYPE)?,
+            _ => return Ok(false),
         };
         // Only a BARE predicate IRI can be a property function: a path operator
         // trailing it (`pf:p+`, `pf:p/q`, …) makes it a property path, which the
@@ -2171,9 +2778,12 @@ impl<'a> Parser<'a, '_> {
                     | Token::LBrace
             )
         ) {
-            return None;
+            self.memory.release_string(iri)?;
+            return Ok(false);
         }
-        self.options.is_property_fn(&iri).then_some(iri)
+        let is_property_fn = self.options.is_property_fn(&iri);
+        self.memory.release_string(iri)?;
+        Ok(is_property_fn)
     }
 
     /// The token at absolute index `idx`, or `None` past the end (or at an
@@ -2191,7 +2801,10 @@ impl<'a> Parser<'a, '_> {
         if self.at(&Token::LParen) {
             self.parse_prop_fn_arg_list()
         } else {
-            Ok(vec![self.parse_prop_fn_arg_term()?])
+            {
+                let term = self.parse_prop_fn_arg_term()?;
+                Ok(self.memory.collect([term])?)
+            }
         }
     }
 
@@ -2203,7 +2816,8 @@ impl<'a> Parser<'a, '_> {
         self.expect(&Token::LParen)?;
         let mut args = Vec::new();
         while !self.at(&Token::RParen) {
-            args.push(self.parse_prop_fn_arg_term()?);
+            let term = self.parse_prop_fn_arg_term()?;
+            self.memory.push(&mut args, term)?;
         }
         self.expect(&Token::RParen)?;
         Ok(args)
@@ -2214,20 +2828,27 @@ impl<'a> Parser<'a, '_> {
     /// blank-node property list are hard errors — each would need auxiliary
     /// triples that an argument vector cannot carry.
     fn parse_prop_fn_arg_term(&mut self) -> Result<TermPattern> {
-        match self.peek() {
-            Some(Token::LParen) => Err(ParseError::syntax(
-                "nested collection in property-function argument list",
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
+            Some(Token::LParen) => Err(native_syntax(
+                &"nested collection in property-function argument list",
                 self.span(),
+                self.memory,
             )),
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
                 if self.at(&Token::RBracket) {
                     return Err(self.empty_bracket_pair());
                 }
-                Err(ParseError::syntax(
-                    "a populated blank-node property list is not allowed in a \
+                Err(native_syntax(
+                    &"a populated blank-node property list is not allowed in a \
                      property-function argument list",
                     self.span(),
+                    self.memory,
                 ))
             }
             _ => self.parse_term_pattern(),
@@ -2252,35 +2873,46 @@ impl<'a> Parser<'a, '_> {
     /// `Token::Anon` and never reaches a bracket-pair site at all, and an
     /// `LBracket` immediately followed by an `RBracket` can only have come from a
     /// comment between the brackets — which is precisely the input to refuse.
-    fn empty_bracket_pair(&self) -> ParseError {
-        ParseError::syntax(
-            "`[` `]` with nothing between them is not a blank-node property list \
+    fn empty_bracket_pair(&mut self) -> ParseError {
+        native_syntax(
+            &"`[` `]` with nothing between them is not a blank-node property list \
              (which requires at least one predicate-object pair) and not an \
              anonymous blank node (`ANON` admits only whitespace between its \
              brackets, and a comment is not whitespace)",
             self.span(),
+            self.memory,
         )
     }
 
     /// Emit `reifier rdf:reifies <<( t )>>` for a reification.
     fn emit_reifies(
-        &self,
+        &mut self,
         reifier: &TermPattern,
         t: &TriplePattern,
         triples: &mut Vec<TriplePattern>,
-    ) {
-        triples.push(TriplePattern {
-            subject: reifier.clone(),
-            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_REIFIES)),
-            object: TermPattern::Triple(Child::new(t.clone())),
-        });
+    ) -> Result<()> {
+        let triple = TriplePattern {
+            subject: reifier.clone_with_memory(self.memory)?,
+            predicate: NamedNodePattern::NamedNode(self.named_node(RDF_REIFIES)?),
+            object: TermPattern::Triple(Child::try_new(
+                t.clone_with_memory(self.memory)?,
+                self.memory,
+            )?),
+        };
+        self.memory.push(triples, triple)?;
+        Ok(())
     }
 
     /// A reifier id after `~` (§ `Reifier ::= '~' VarOrReifierId?`): a variable,
     /// IRI, labelled blank node `_:b`, or anonymous `[]` — or, when none is
     /// present, a fresh blank node.
     fn parse_reifier_id(&mut self) -> Result<TermPattern> {
-        match self.peek() {
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
             Some(Token::Variable(_)) => Ok(TermPattern::Variable(self.expect_var()?)),
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                 Ok(TermPattern::NamedNode(self.expect_iri_node()?))
@@ -2294,22 +2926,30 @@ impl<'a> Parser<'a, '_> {
             }
             Some(Token::Anon) => {
                 self.pos += 1;
-                Ok(TermPattern::BlankNode(self.fresh_anon()))
+                Ok(TermPattern::BlankNode(self.fresh_anon()?))
             }
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
                 if self.at(&Token::RBracket) {
                     return Err(self.empty_bracket_pair());
                 }
-                Err(ParseError::syntax(
-                    "a blank-node property list is not a reifier id; \
+                Err(native_syntax(
+                    &"a blank-node property list is not a reifier id; \
                      `VarOrReifierId` admits a variable, an IRI, a labelled blank \
                      node or the anonymous `[]`",
                     self.span(),
+                    self.memory,
                 ))
             }
-            _ => Ok(TermPattern::BlankNode(self.fresh_anon())),
+            _ => Ok(TermPattern::BlankNode(self.fresh_anon()?)),
         }
+    }
+
+    /// Whether the cursor is at `NIL ::= '(' WS* ')'` — the `rdf:nil` term, which the
+    /// lexer hands over as its two brackets — rather than a `Collection ::= '('
+    /// GraphNode+ ')'`.
+    fn at_nil(&self) -> bool {
+        self.at(&Token::LParen) && self.peek2() == Some(&Token::RParen)
     }
 
     /// True when the next token starts a non-triples element of a group.
@@ -2332,18 +2972,26 @@ impl<'a> Parser<'a, '_> {
     fn parse_predicate_name(&mut self) -> Result<NamedNodePattern> {
         if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
-            return Ok(NamedNodePattern::NamedNode(NamedNode::new_unchecked(
-                RDF_TYPE,
-            )));
+            return Ok(NamedNodePattern::NamedNode(self.named_node(RDF_TYPE)?));
         }
-        match self.peek() {
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
             Some(Token::Variable(_)) => Ok(NamedNodePattern::Variable(self.expect_var()?)),
             _ => Ok(NamedNodePattern::NamedNode(self.expect_iri_node()?)),
         }
     }
 
     fn parse_var_or_iri_name(&mut self) -> Result<NamedNodePattern> {
-        match self.peek() {
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
             Some(Token::Variable(_)) => Ok(NamedNodePattern::Variable(self.expect_var()?)),
             _ => Ok(NamedNodePattern::NamedNode(self.expect_iri_node()?)),
         }
@@ -2367,7 +3015,12 @@ impl<'a> Parser<'a, '_> {
     /// leading sign IS a unary operator ([`Self::parse_unary`] consumes it
     /// first), so this function never observes one there.
     fn parse_literal(&mut self) -> Result<Literal> {
-        let sign = match self.peek() {
+        let sign = match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
             Some(Token::Minus) => {
                 self.pos += 1;
                 Some("-")
@@ -2378,69 +3031,106 @@ impl<'a> Parser<'a, '_> {
             }
             _ => None,
         };
-        let signed = |s: &str| match sign {
-            Some(sign) => format!("{sign}{s}"),
-            None => s.to_owned(),
-        };
         match self.bump() {
-            Some(Token::Integer(s)) => Ok(Literal::new_typed(
-                signed(s),
-                NamedNode::new_unchecked(XSD_INTEGER),
-            )),
-            Some(Token::Decimal(s)) => Ok(Literal::new_typed(
-                signed(s),
-                NamedNode::new_unchecked(XSD_DECIMAL),
-            )),
-            Some(Token::Double(s)) => Ok(Literal::new_typed(
-                signed(s),
-                NamedNode::new_unchecked(XSD_DOUBLE),
-            )),
-            Some(Token::Word(w)) if sign.is_none() && (w == "true" || w == "false") => {
-                Ok(Literal::new_typed(w, NamedNode::new_unchecked(XSD_BOOLEAN)))
+            Some(Token::Integer(s)) => {
+                let datatype = self.named_node(XSD_INTEGER)?;
+                self.literal(
+                    &format_args!("{}{s}", sign.unwrap_or("")),
+                    datatype,
+                    None,
+                    None,
+                )
+            }
+            Some(Token::Decimal(s)) => {
+                let datatype = self.named_node(XSD_DECIMAL)?;
+                self.literal(
+                    &format_args!("{}{s}", sign.unwrap_or("")),
+                    datatype,
+                    None,
+                    None,
+                )
+            }
+            Some(Token::Double(s)) => {
+                let datatype = self.named_node(XSD_DOUBLE)?;
+                self.literal(
+                    &format_args!("{}{s}", sign.unwrap_or("")),
+                    datatype,
+                    None,
+                    None,
+                )
+            }
+            Some(Token::Word(w)) if sign.is_none() && boolean_keyword(w).is_some() => {
+                let lexical = boolean_keyword(w).expect("checked by the guard");
+                let datatype = self.named_node(XSD_BOOLEAN)?;
+                self.literal(&lexical, datatype, None, None)
             }
             Some(Token::StringLit(s) | Token::LongStringLit(s)) if sign.is_none() => {
-                if let Some(Token::LangTag(_)) = self.peek() {
+                let literal = if let Some(Token::LangTag(_)) = self.peek() {
                     let at = self.span();
                     let Some(Token::LangTag(tag)) = self.bump() else {
                         unreachable!()
                     };
-                    let (lang, dir) = split_lang_dir(tag, at)?;
-                    Ok(Literal::new_lang(s, lang, dir))
+                    let (lang, dir) = split_lang_dir_with_memory(tag, at, self.memory)?;
+                    let datatype = self.named_node(if dir.is_some() {
+                        crate::ast::RDF_DIR_LANG_STRING
+                    } else {
+                        crate::ast::RDF_LANG_STRING
+                    })?;
+                    self.literal(&s, datatype, Some(lang), dir)
                 } else if self.eat(&Token::HatHat) {
                     let dt = self.expect_iri_node()?;
-                    Ok(Literal::new_typed(s, dt))
+                    self.literal(&s, dt, None, None)
                 } else {
-                    Ok(Literal::new_simple(s))
+                    let datatype = self.named_node(crate::ast::XSD_STRING)?;
+                    self.literal(&s, datatype, None, None)
+                };
+                if let std::borrow::Cow::Owned(s) = s {
+                    self.memory.release_string(s)?;
                 }
+                literal
             }
-            other => Err(ParseError::syntax(
-                if sign.is_some() {
-                    format!("expected a numeral after the sign, found {other:?}")
-                } else {
-                    format!("expected a literal, found {other:?}")
-                },
+            other => Err(native_syntax(
+                &format_args!(
+                    "expected {}, found {other:?}",
+                    if sign.is_some() {
+                        "a numeral after the sign"
+                    } else {
+                        "a literal"
+                    }
+                ),
                 self.span(),
+                self.memory,
             )),
         }
     }
 
     fn expect_var(&mut self) -> Result<Variable> {
         match self.bump() {
-            Some(Token::Variable(n)) => Ok(Variable::new(n)),
-            other => Err(ParseError::syntax(
-                format!("expected a variable, found {other:?}"),
+            Some(Token::Variable(n)) => self.variable(&n),
+            other => Err(native_syntax(
+                &format_args!("expected a variable, found {other:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
 
     fn expect_iri_node(&mut self) -> Result<NamedNode> {
         match self.bump() {
-            Some(Token::Iri(s)) => NamedNode::new(self.resolve_iri(&s)?),
+            Some(Token::Iri(s)) => {
+                let text = self.resolve_iri(&s)?;
+                let node = self.named_node(&text);
+                self.memory.release_string(text)?;
+                if let std::borrow::Cow::Owned(s) = s {
+                    self.memory.release_string(s)?;
+                }
+                node
+            }
             Some(Token::PrefixedName(p, l)) => self.resolve_prefixed(p, l.as_ref()),
-            other => Err(ParseError::syntax(
-                format!("expected an IRI, found {other:?}"),
+            other => Err(native_syntax(
+                &format_args!("expected an IRI, found {other:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -2456,39 +3146,46 @@ impl<'a> Parser<'a, '_> {
             while let Some(Token::Variable(_)) = self.peek() {
                 let v = self.expect_var()?;
                 if variables.contains(&v) {
-                    return Err(ParseError::syntax(
-                        format!("duplicate variable ?{} in VALUES clause", v.as_str()),
+                    return Err(native_syntax(
+                        &format_args!("duplicate variable ?{} in VALUES clause", v.as_str()),
                         self.span(),
+                        self.memory,
                     ));
                 }
-                variables.push(v);
+                self.memory.push(&mut variables, v)?;
             }
             self.expect(&Token::RParen)?;
             self.expect(&Token::LBrace)?;
             while self.eat(&Token::LParen) {
                 let mut row = Vec::new();
                 while !self.at(&Token::RParen) {
-                    row.push(self.parse_data_cell()?);
+                    let cell = self.parse_data_cell()?;
+                    self.memory.push(&mut row, cell)?;
                 }
                 self.expect(&Token::RParen)?;
                 if row.len() != variables.len() {
-                    return Err(ParseError::syntax(
-                        format!(
+                    return Err(native_syntax(
+                        &format_args!(
                             "VALUES row has {} cells for {} variable(s)",
                             row.len(),
                             variables.len()
                         ),
                         self.span(),
+                        self.memory,
                     ));
                 }
-                bindings.push(row);
+                self.memory.push(&mut bindings, row)?;
             }
         } else {
             // VALUES ?a { v v ... }
-            variables.push(self.expect_var()?);
+            let variable = self.expect_var()?;
+            self.memory.push(&mut variables, variable)?;
             self.expect(&Token::LBrace)?;
             while !self.at(&Token::RBrace) {
-                bindings.push(vec![self.parse_data_cell()?]);
+                let cell = self.parse_data_cell()?;
+                let mut row = Vec::new();
+                self.memory.push(&mut row, cell)?;
+                self.memory.push(&mut bindings, row)?;
             }
         }
         self.expect(&Token::RBrace)?;
@@ -2512,20 +3209,27 @@ impl<'a> Parser<'a, '_> {
     /// `BuiltInCall` or `FunctionCall`: the bare alternative of a `Constraint`
     /// (`Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`) and,
     /// by the same productions, of a `GROUP BY` `GroupCondition`. Every bare call
-    /// begins with a callee token (a builtin keyword, an IRI or a prefixed name);
-    /// the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/`OFFSET`/`VALUES`)
+    /// begins with a callee token (a builtin keyword, or an IRI or prefixed name
+    /// followed by its `ArgList`'s `(`); the modifier-list terminators (`HAVING`/`ORDER`/`LIMIT`/`OFFSET`/`VALUES`)
     /// and boolean literals are excluded so a `GROUP BY`, `HAVING` or `ORDER BY`
     /// list stops cleanly at the next clause.
     ///
     /// Used by `GROUP BY`'s condition loop, by `HAVING`'s `Constraint+` list (both
     /// to decide whether the first, mandatory constraint is bare, and whether a
-    /// subsequent one begins) and by `ORDER BY`'s `OrderCondition ::= ... |
-    /// (Constraint | Var)` alternative. The bracketed form (`Token::LParen`) is
+    /// subsequent one begins), by `FILTER`'s single `Constraint`, and by `ORDER
+    /// BY`'s `OrderCondition ::= ... | (Constraint | Var)` alternative. The bracketed form (`Token::LParen`) is
     /// recognized separately at each call site, so this deliberately excludes a
     /// bare `Var` or literal (neither is a call).
     fn at_bare_constraint(&self) -> bool {
-        match self.peek() {
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => true,
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
+            // `FunctionCall ::= iri ArgList`: an IRI alone is not a call, and the
+            // `ArgList` always opens with `(` (`NIL` lexes as its two brackets).
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => self.peek2() == Some(&Token::LParen),
             Some(Token::Word(w)) => !is_modifier_terminator_word(w),
             _ => false,
         }
@@ -2543,12 +3247,13 @@ impl<'a> Parser<'a, '_> {
 
     fn expect_integer(&mut self) -> Result<usize> {
         match self.bump() {
-            Some(Token::Integer(s)) => s
-                .parse::<usize>()
-                .map_err(|_| ParseError::syntax(format!("bad integer {s:?}"), self.span())),
-            other => Err(ParseError::syntax(
-                format!("expected an integer, found {other:?}"),
+            Some(Token::Integer(s)) => s.parse::<usize>().map_err(|_| {
+                native_syntax(&format_args!("bad integer {s:?}"), self.span(), self.memory)
+            }),
+            other => Err(native_syntax(
+                &format_args!("expected an integer, found {other:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -2576,17 +3281,25 @@ impl<'a> Parser<'a, '_> {
         let mut scalarvals = Vec::new();
         while self.eat(&Token::Semicolon) {
             let name = match self.bump() {
-                Some(Token::Word(w)) => w.to_ascii_uppercase(),
+                Some(Token::Word(w)) => {
+                    let mut name = self.memory.string(w)?;
+                    name.make_ascii_uppercase();
+                    name
+                }
                 other => {
-                    return Err(ParseError::syntax(
-                        format!("expected a scalarval name, found {other:?}"),
+                    return Err(native_syntax(
+                        &format_args!("expected a scalarval name, found {other:?}"),
                         self.span(),
+                        self.memory,
                     ));
                 }
             };
             self.expect(&Token::Eq)?;
             let value = self.parse_literal()?;
-            scalarvals.push((name, value));
+            {
+                let native_value = (name, value);
+                self.memory.push(&mut scalarvals, native_value)?;
+            };
         }
         Ok(scalarvals)
     }
@@ -2596,10 +3309,11 @@ impl<'a> Parser<'a, '_> {
             self.expect_kw("SEPARATOR")?;
             self.expect(&Token::Eq)?;
             match self.bump() {
-                Some(Token::StringLit(s) | Token::LongStringLit(s)) => Ok(Some(s.into_owned())),
-                other => Err(ParseError::syntax(
-                    format!("expected SEPARATOR string, found {other:?}"),
+                Some(Token::StringLit(s) | Token::LongStringLit(s)) => self.own_lexeme(s).map(Some),
+                other => Err(native_syntax(
+                    &format_args!("expected SEPARATOR string, found {other:?}"),
                     self.span(),
+                    self.memory,
                 )),
             }
         } else {
@@ -2607,19 +3321,35 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
-    fn fresh_agg_var(&mut self) -> Variable {
-        let v = Variable::new(format!("__purrdf_agg_{}", self.agg_counter));
-        self.agg_counter += 1;
-        v
+    fn fresh_agg_var(&mut self) -> Result<Variable> {
+        let next = self
+            .agg_counter
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        let v = Variable::from_admitted(
+            self.memory
+                .admission_mut()
+                .text(&format_args!("__purrdf_agg_{}", self.agg_counter))?,
+        );
+        self.agg_counter = next;
+        Ok(v)
     }
 
     /// Mint a fresh, unique grouping variable for an expression-valued
     /// `GROUP BY (Expr)` condition with no explicit `AS`. Distinct namespace from
     /// `fresh_agg_var` so the two never collide.
-    fn fresh_group_var(&mut self) -> Variable {
-        let v = Variable::new(format!("__purrdf_group_{}", self.group_counter));
-        self.group_counter += 1;
-        v
+    fn fresh_group_var(&mut self) -> Result<Variable> {
+        let next = self
+            .group_counter
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        let v = Variable::from_admitted(
+            self.memory
+                .admission_mut()
+                .text(&format_args!("__purrdf_group_{}", self.group_counter))?,
+        );
+        self.group_counter = next;
+        Ok(v)
     }
 
     /// A blank node the query author labelled `_:label`, recorded against the
@@ -2639,29 +3369,49 @@ impl<'a> Parser<'a, '_> {
     /// nothing is recorded: a template's labels mint fresh nodes per solution
     /// and are not the pattern's.
     fn scoped_blank_label(&mut self, label: &str, at: usize) -> Result<BlankNode> {
+        let spelling = self.memory.admission_mut().text(&label)?;
         if let Some(bgp) = self.bgp_scope {
-            let first = *self.blank_label_bgps.entry(label.to_owned()).or_insert(bgp);
+            let first = match self
+                .blank_label_bgps
+                .get_by(|candidate| label.cmp(candidate.as_ref()))
+            {
+                Some(first) => *first,
+                None => {
+                    self.blank_label_bgps
+                        .insert(spelling.clone().into(), bgp, self.memory)?;
+                    bgp
+                }
+            };
             if first != bgp {
-                return Err(ParseError::syntax(
-                    format!(
+                return Err(native_syntax(
+                    &format_args!(
                         "blank node label _:{label} is used in two different basic graph \
                          patterns; a blank node label is scoped to the one basic graph \
                          pattern it appears in"
                     ),
                     at,
+                    self.memory,
                 ));
             }
         }
-        Ok(BlankNode::new(label))
+        Ok(BlankNode::from_admitted(spelling))
     }
 
     /// Mint a fresh, unique label for an anonymous blank node (`[]`). Each
     /// occurrence is a distinct existential; reusing one label (e.g. `""`) would
     /// wrongly fuse separate blank nodes into a single AST node.
-    fn fresh_anon(&mut self) -> BlankNode {
-        let b = BlankNode::new(format!("{}{}", self.anon_prefix, self.anon_counter));
-        self.anon_counter += 1;
-        b
+    fn fresh_anon(&mut self) -> Result<BlankNode> {
+        let next = self
+            .anon_counter
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        let b = BlankNode::from_admitted(
+            self.memory
+                .admission_mut()
+                .text(&format_args!("{}{}", self.anon_prefix, self.anon_counter))?,
+        );
+        self.anon_counter = next;
+        Ok(b)
     }
 }
 
@@ -2688,23 +3438,39 @@ impl SubjectArgs {
     /// The subject as a single term. An argument vector has no term form: it is
     /// only meaningful to a property function, so pairing it with a data
     /// predicate is a hard error.
-    fn as_term(&self, at: usize) -> Result<&TermPattern> {
+    fn as_term(
+        &self,
+        at: usize,
+        memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    ) -> Result<&TermPattern> {
         match self {
             Self::Term(t) => Ok(t),
-            Self::Args(_) => Err(ParseError::syntax(
-                "a property-function argument list `( … )` cannot be the subject of \
-                 an ordinary triple pattern",
+            Self::Args(_) => Err(ParseError::Syntax {
+                reason: memory.string("a property-function argument list `( … )` cannot be the subject of an ordinary triple pattern")?,
                 at,
-            )),
+            }),
         }
     }
 
     /// The subject as an argument vector: a plain term is a ONE-element vector.
-    fn as_args(&self) -> Vec<TermPattern> {
+    fn as_args(
+        &self,
+        memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    ) -> Result<Vec<TermPattern>> {
+        let mut arguments = Vec::new();
         match self {
-            Self::Term(t) => vec![t.clone()],
-            Self::Args(a) => a.clone(),
+            Self::Term(term) => {
+                let value = term.clone_with_memory(memory)?;
+                memory.push(&mut arguments, value)?;
+            }
+            Self::Args(terms) => {
+                for term in terms {
+                    let value = term.clone_with_memory(memory)?;
+                    memory.push(&mut arguments, value)?;
+                }
+            }
         }
+        Ok(arguments)
     }
 }
 
@@ -2736,112 +3502,159 @@ impl BlockSink {
     }
 
     /// Record a property-function call at the current position in the block.
-    fn push_property_function(&mut self, call: PropertyFunctionCall) {
-        self.prop_fns.push((self.triples.len(), call));
+    fn push_property_function(
+        &mut self,
+        call: PropertyFunctionCall,
+        memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    ) -> Result<()> {
+        memory.push(&mut self.prop_fns, (self.triples.len(), call))?;
+        Ok(())
     }
 
     /// Assemble the block: the data triples as a `Bgp`, each property-function
     /// call laterally joined onto everything written before it, then the
     /// property-path nodes joined on.
-    fn into_pattern(mut self) -> GraphPattern {
+    fn into_pattern(
+        mut self,
+        memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    ) -> Result<GraphPattern> {
         if self
             .paths
             .iter()
             .any(|path| !matches!(path, GraphPattern::Path { .. }))
         {
-            self.promote_path_blanks();
+            self.promote_path_blanks(memory)?;
         }
+        if self.prop_fns.is_empty() && self.paths.is_empty() {
+            memory.release_vec(self.prop_fns)?;
+            memory.release_vec(self.paths)?;
+            return Ok(GraphPattern::Bgp {
+                patterns: self.triples,
+            });
+        }
+        let triples_capacity = self.triples.capacity();
+        let calls_capacity = self.prop_fns.capacity();
+        let paths_capacity = self.paths.capacity();
         let mut triples = self.triples.into_iter();
         let mut taken = 0usize;
         let mut g = GraphPattern::Bgp { patterns: vec![] };
         for (at, call) in self.prop_fns {
-            let residual: Vec<TriplePattern> = triples.by_ref().take(at - taken).collect();
+            let residual = memory.collect(triples.by_ref().take(at - taken))?;
             taken = at;
             g = GraphPattern::Lateral {
-                left: Child::new(join(g, GraphPattern::Bgp { patterns: residual })),
-                right: Child::new(GraphPattern::PropertyFunction(call)),
+                left: Child::try_new(
+                    join_with_memory(g, GraphPattern::Bgp { patterns: residual }, memory)?,
+                    memory,
+                )?,
+                right: Child::try_new(GraphPattern::PropertyFunction(call), memory)?,
             };
         }
-        g = join(
-            g,
-            GraphPattern::Bgp {
-                patterns: triples.collect(),
-            },
-        );
+        memory.release_bytes(
+            calls_capacity
+                .checked_mul(size_of::<(usize, PropertyFunctionCall)>())
+                .ok_or(StorageError::SizeOverflow)?,
+        )?;
+        let residual = memory.collect(triples)?;
+        memory.release_bytes(
+            triples_capacity
+                .checked_mul(size_of::<TriplePattern>())
+                .ok_or(StorageError::SizeOverflow)?,
+        )?;
+        g = join_with_memory(g, GraphPattern::Bgp { patterns: residual }, memory)?;
         for path in self.paths {
-            g = join(g, path);
+            g = join_with_memory(g, path, memory)?;
         }
-        g
+        memory.release_bytes(
+            paths_capacity
+                .checked_mul(size_of::<GraphPattern>())
+                .ok_or(StorageError::SizeOverflow)?,
+        )?;
+        Ok(g)
     }
 
     /// A lowered alternative splits one source triples block into multiple BGPs.
     /// Preserve that block's blank identities before those new UNION boundaries
     /// acquire their own scopes. A source UNION has separate BlockSinks, so its
     /// arm-local blanks are never joined by this translation.
-    fn promote_path_blanks(&mut self) {
-        let mut labels = std::collections::BTreeMap::new();
+    fn promote_path_blanks(
+        &mut self,
+        memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    ) -> Result<()> {
+        let mut labels = ScopeTable::default();
         let mut pending = Vec::new();
-        let mut patterns: Vec<_> = self
-            .paths
-            .iter_mut()
-            .filter(|path| !matches!(path, GraphPattern::Path { .. }))
-            .collect();
+        let mut patterns = memory.collect(
+            self.paths
+                .iter_mut()
+                .filter(|path| !matches!(path, GraphPattern::Path { .. })),
+        )?;
         while let Some(pattern) = patterns.pop() {
             match pattern {
                 GraphPattern::Bgp { patterns: triples } => {
                     for triple in triples {
-                        pending.extend([&mut triple.subject, &mut triple.object]);
+                        memory.extend(&mut pending, [&mut triple.subject, &mut triple.object])?;
                     }
                 }
-                GraphPattern::Join { left, right } => patterns.extend([&mut **left, &mut **right]),
-                GraphPattern::Union { arms } => patterns.extend(arms.iter_mut()),
+                GraphPattern::Join { left, right } => {
+                    memory.extend(&mut patterns, [&mut **left, &mut **right])?;
+                }
+                GraphPattern::Union { arms } => memory.extend(&mut patterns, arms.iter_mut())?,
                 _ => unreachable!("a translated path contains only BGP, Join and Union"),
             }
         }
-        Self::promote_terms(pending, &mut labels, true);
+        memory.release_vec(patterns)?;
+        Self::promote_terms(pending, &mut labels, true, memory)?;
         let mut pending = Vec::new();
         for triple in &mut self.triples {
-            pending.extend([&mut triple.subject, &mut triple.object]);
+            memory.extend(&mut pending, [&mut triple.subject, &mut triple.object])?;
         }
         for (_, call) in &mut self.prop_fns {
-            pending.extend(call.subject_args.iter_mut().chain(&mut call.object_args));
+            memory.extend(
+                &mut pending,
+                call.subject_args.iter_mut().chain(&mut call.object_args),
+            )?;
         }
         for path in &mut self.paths {
             if let GraphPattern::Path {
                 subject, object, ..
             } = path
             {
-                pending.extend([subject, object]);
+                memory.extend(&mut pending, [subject, object])?;
             }
         }
-        Self::promote_terms(pending, &mut labels, false);
+        Self::promote_terms(pending, &mut labels, false, memory)?;
+        labels.release(memory)?;
+        Ok(())
     }
 
     /// Rename the selected source labels, descending into quoted endpoints too.
     fn promote_terms(
         mut pending: Vec<&mut TermPattern>,
-        labels: &mut std::collections::BTreeMap<String, Variable>,
+        labels: &mut ScopeTable<BlankNode, Variable>,
         discover: bool,
-    ) {
+        memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    ) -> Result<()> {
         while let Some(term) = pending.pop() {
             match term {
                 TermPattern::BlankNode(blank) => {
-                    if discover && !labels.contains_key(blank.as_str()) {
-                        labels
-                            .entry(blank.as_str().to_owned())
-                            .or_insert_with(|| Variable::hidden_blank(blank.as_str()));
+                    if discover && labels.get(blank).is_none() {
+                        let variable = Variable::try_hidden_blank(blank.as_str(), |name| {
+                            Ok::<_, ParseError>(memory.admission_mut().text(name)?)
+                        })?;
+                        let _ = labels.insert(blank.clone(), variable, memory)?;
                     }
-                    if let Some(variable) = labels.get(blank.as_str()) {
+                    if let Some(variable) = labels.get(blank) {
                         *term = TermPattern::Variable(variable.clone());
                     }
                 }
                 TermPattern::Triple(triple) => {
                     let triple = &mut **triple;
-                    pending.extend([&mut triple.subject, &mut triple.object]);
+                    memory.extend(&mut pending, [&mut triple.subject, &mut triple.object])?;
                 }
                 _ => {}
             }
         }
+        memory.release_vec(pending)?;
+        Ok(())
     }
 }
 
@@ -2884,38 +3697,73 @@ impl Modifiers {
 /// Join two patterns, merging adjacent BGPs and absorbing the empty pattern (the
 /// identity table `Z`) on either side so a group that opens with a non-triple
 /// element (`UNION`, a property path, …) is not wrapped in a vacuous `Join`.
-fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
+fn join_with_memory<S: Admission + ?Sized>(
+    left: GraphPattern,
+    right: GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<GraphPattern, StorageError> {
     if left.is_empty_bgp() {
-        return right;
+        if let GraphPattern::Bgp { patterns } = left {
+            memory.release_vec(patterns)?;
+        }
+        return Ok(right);
     }
     if right.is_empty_bgp() {
-        return left;
+        if let GraphPattern::Bgp { patterns } = right {
+            memory.release_vec(patterns)?;
+        }
+        return Ok(left);
     }
-    match (left, right) {
-        (GraphPattern::Bgp { mut patterns }, GraphPattern::Bgp { patterns: r }) => {
-            patterns.extend(r);
+    Ok(match (left, right) {
+        (GraphPattern::Bgp { mut patterns }, GraphPattern::Bgp { patterns: other }) => {
+            let original_capacity = other.capacity();
+            memory.extend(&mut patterns, other)?;
+            memory.release_bytes(
+                original_capacity
+                    .checked_mul(size_of::<TriplePattern>())
+                    .ok_or(StorageError::SizeOverflow)?,
+            )?;
             GraphPattern::Bgp { patterns }
         }
-        (l, r) => GraphPattern::Join {
-            left: Child::new(l),
-            right: Child::new(r),
+        (left, right) => GraphPattern::Join {
+            left: Child::try_new(left, memory)?,
+            right: Child::try_new(right, memory)?,
         },
+    })
+}
+
+impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+    /// A nested source group remains a separate operand under contextual admission.
+    fn group_join(&mut self, left: GraphPattern, right: GraphPattern) -> Result<GraphPattern> {
+        if RDFLIB && !left.is_empty_bgp() && !right.is_empty_bgp() {
+            Ok(GraphPattern::Join {
+                left: Child::try_new(left, self.memory)?,
+                right: Child::try_new(right, self.memory)?,
+            })
+        } else {
+            Ok(join_with_memory(left, right, self.memory)?)
+        }
     }
 }
 
 /// Lift a run of template triples into quad patterns, all scoped to `graph`
 /// (`None` = the default graph).
-fn scope_triples(
+fn scope_triples<S: Admission + ?Sized>(
     triples: Vec<TriplePattern>,
     graph: Option<&NamedNodePattern>,
-) -> Vec<QuadPattern> {
-    triples
-        .into_iter()
-        .map(|triple| QuadPattern {
-            triple,
-            graph: graph.cloned(),
-        })
-        .collect()
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Vec<QuadPattern>, StorageError> {
+    let capacity = triples.capacity();
+    let quads = memory.collect(triples.into_iter().map(|triple| QuadPattern {
+        triple,
+        graph: graph.cloned(),
+    }))?;
+    memory.release_bytes(
+        core::alloc::Layout::array::<TriplePattern>(capacity)
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size(),
+    )?;
+    Ok(quads)
 }
 
 /// Apply the `CONSTRUCT GRAPH VarOrIri …` whole-template shorthand: it is the
@@ -2942,18 +3790,26 @@ fn scope_template(
 /// the shapes [`BlockSink::into_pattern`] can build (`Bgp`/`Path` leaves under
 /// `Join`/`Lateral` spines), which is all the template callers need to tell a
 /// property-function refusal from a property-path one.
-fn block_has_property_function(p: &GraphPattern) -> bool {
-    let mut pending = vec![p];
+fn block_has_property_function<S: Admission + ?Sized>(
+    p: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<bool, StorageError> {
+    let mut pending = memory.collect([p])?;
+    let mut found = false;
     while let Some(p) = pending.pop() {
         match p {
-            GraphPattern::PropertyFunction(_) => return true,
+            GraphPattern::PropertyFunction(_) => {
+                found = true;
+                break;
+            }
             GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-                pending.extend([&**right, &**left]);
+                memory.extend(&mut pending, [&**right, &**left])?;
             }
             _ => {}
         }
     }
-    false
+    memory.release_vec(pending)?;
+    Ok(found)
 }
 
 /// If a property path is length-1 (a single predicate), return it as a triple
@@ -2965,265 +3821,390 @@ fn simple_predicate(path: &PropertyPathExpression) -> Option<NamedNodePattern> {
     }
 }
 
-/// Lift a trailing `Filter` out of an `OPTIONAL` body so it becomes the
-/// `LeftJoin` join condition (§18.2.2.3 "filter-in-optional").
-fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) {
-    match p {
-        GraphPattern::Filter { expr, inner } => (inner.into_inner(), Some(expr)),
-        other => (other, None),
+/// Lift only the OPTIONAL group's own filters into its LeftJoin condition,
+/// conjoined in written order (§18.3.2.7–9). Nested groups' filters remain in
+/// the independent right operand, even after an empty-BGP join was simplified.
+fn split_trailing_filters<S: Admission + ?Sized>(
+    mut pattern: GraphPattern,
+    filter_count: usize,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(GraphPattern, Option<Expression>), StorageError> {
+    let mut filters = Vec::new();
+    memory.reserve(&mut filters, filter_count)?;
+    for _ in 0..filter_count {
+        let GraphPattern::Filter { expr, inner } = pattern else {
+            unreachable!("the group wraps each of its own filters around its pattern");
+        };
+        memory.push(&mut filters, expr)?;
+        pattern = inner.into_inner();
+        memory.release_bytes(size_of::<GraphPattern>())?;
     }
+    let capacity = filters.capacity();
+    let mut expressions = filters.into_iter().rev();
+    let mut expression = expressions.next();
+    for next in expressions {
+        expression = Some(Expression::and_with_memory(
+            expression.expect("first filter"),
+            next,
+            memory,
+        )?);
+    }
+    memory.release_bytes(
+        core::alloc::Layout::array::<Expression>(capacity)
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size(),
+    )?;
+    Ok((pattern, expression))
 }
 
-/// An order-preserving set of [`Variable`]s with O(log n) membership and
-/// insertion — the group-parsing loop's incremental in-scope set, and
-/// [`visible_variables`]'s own collection buffer.
+/// First-appearance scope with logarithmic lexical membership.
 ///
-/// Two structures move together: `order` is the first-appearance sequence
-/// SPARQL's "in scope" (`SELECT *`'s projection order, the LATERAL scope
-/// walk's deterministic first-conflict order) needs, and `seen` is what makes
-/// membership and insertion O(log n) instead of the O(n) linear scan a bare
-/// `Vec<Variable>::contains` forces. That scan is what made both this loop
-/// (recomputing it from scratch on every `BIND`/`LATERAL`, discussed at this
-/// module's group-loop) and a single [`visible_variables`] call over a
-/// `BIND`-heavy pattern quadratic; the `BTreeSet` (not a hash set — this
-/// crate is wasm32-clean and deliberately depends on no hasher crate, and a
-/// membership set that is never iterated for its OWN order — only `order`
-/// ever is — needs no hash at all) removes both.
+/// The declaration order is separate from the balanced lookup arena. Both
+/// backing arrays are admitted at their concrete native layouts before growth;
+/// immutable variable spellings retain their original leaf owners.
 #[derive(Default)]
 struct VarScope {
     order: Vec<Variable>,
-    seen: std::collections::BTreeSet<Variable>,
+    seen: ScopeTable<Variable, ()>,
 }
 
 impl VarScope {
-    /// Record `v` as in scope; a no-op if it already is (first-appearance
-    /// order is preserved, so a later re-mention never moves it).
-    fn note(&mut self, v: &Variable) {
-        if !v.is_hidden() && self.seen.insert(v.clone()) {
-            self.order.push(v.clone());
+    /// Record one visible variable; repeated mentions preserve the first order.
+    /// All destinations are reserved before changing logical scope membership.
+    fn note<S: Admission + ?Sized>(
+        &mut self,
+        variable: &Variable,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<bool, StorageError> {
+        if variable.is_hidden() || self.seen.get(variable).is_some() {
+            return Ok(false);
         }
+        let required = self
+            .order
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        if required > self.order.capacity() {
+            let capacity = self
+                .order
+                .capacity()
+                .checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?
+                .max(required);
+            memory.reserve(&mut self.order, capacity)?;
+        }
+        self.seen.insert(variable.clone(), (), memory)?;
+        self.order.push(variable.clone());
+        Ok(true)
     }
 
-    fn contains(&self, v: &Variable) -> bool {
-        self.seen.contains(v)
+    fn contains(&self, variable: &Variable) -> bool {
+        self.seen.get(variable).is_some()
     }
 
     fn as_slice(&self) -> &[Variable] {
         &self.order
     }
 
-    fn into_vec(self) -> Vec<Variable> {
-        self.order
+    /// Publish the already-admitted projection array; the lookup arena dies first.
+    fn into_vec<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<Vec<Variable>, StorageError> {
+        self.seen.release(memory)?;
+        Ok(self.order)
+    }
+
+    fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        memory.release_vec(self.order)?;
+        self.seen.release(memory)
     }
 }
 
-/// Every open `EXISTS` in-scope-set frame (see [`Parser::exists_scope`]), stored once.
+/// Every open EXISTS in-scope-set frame, sharing one variable trail.
 ///
-/// Only the top frame is ever written, so the frames' variables form one trail: a
-/// frame owns the trail's tail from its `mark` on, and sees the trail from its `start`
-/// on. A boundary frame starts empty (`start` = `mark` = the trail's length); an
-/// isolated frame sees everything the frame beneath it sees (`start` = that frame's
-/// `start`) and owns only what it adds itself (`mark` = the trail's length). Popping a
-/// frame truncates the trail to its `mark`. Seeding an isolated frame therefore copies
-/// nothing, so `EXISTS`/`NOT EXISTS`/`MINUS` bodies nested `n` deep hold `O(n)`
-/// variables in all rather than a copy of every enclosing frame per level.
+/// A boundary sees only its own trail tail; an isolated frame sees the enclosing
+/// tail without copying it. For each trail entry, previous links to the earlier
+/// occurrence of the same lexical identity. The lookup arena stores only its
+/// latest position. Popping restores those links without allocating or copying
+/// enclosing sets; all nested frames together occupy linear storage.
 #[derive(Default)]
 struct ExistsScopes {
-    /// The variables of every open frame, each frame's own after the frame beneath's.
     trail: Vec<Variable>,
-    /// For every variable on the trail, its positions there, ascending.
-    positions: std::collections::BTreeMap<Variable, Vec<usize>>,
-    /// The open frames, innermost last.
+    previous: Vec<Option<usize>>,
+    positions: ScopeTable<Variable, usize>,
     frames: Vec<ExistsFrame>,
 }
 
-/// One open frame of [`ExistsScopes`].
 #[derive(Clone, Copy)]
 struct ExistsFrame {
-    /// Where on the trail the variables this frame sees begin.
     start: usize,
-    /// Where on the trail the variables this frame added begin.
     mark: usize,
 }
 
 impl ExistsScopes {
-    /// Whether any frame is open.
     fn is_open(&self) -> bool {
         !self.frames.is_empty()
     }
 
-    /// The variables the top frame sees, in first-appearance order; empty when no frame
-    /// is open.
     fn top(&self) -> &[Variable] {
         self.frames
             .last()
             .map_or(&[], |frame| &self.trail[frame.start..])
     }
 
-    /// Open an empty frame.
-    fn push_boundary(&mut self) {
+    fn push_boundary<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
         let len = self.trail.len();
-        self.frames.push(ExistsFrame {
-            start: len,
-            mark: len,
-        });
+        memory.push(
+            &mut self.frames,
+            ExistsFrame {
+                start: len,
+                mark: len,
+            },
+        )
     }
 
-    /// Open a frame that sees everything the current top frame sees; with no frame open,
-    /// an empty one.
-    fn push_isolated(&mut self) {
+    fn push_isolated<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
         let len = self.trail.len();
         let start = self.frames.last().map_or(len, |frame| frame.start);
-        self.frames.push(ExistsFrame { start, mark: len });
+        memory.push(&mut self.frames, ExistsFrame { start, mark: len })
     }
 
-    /// Close the top frame, discarding what it added.
+    /// Restore the latest-position index while discarding only this frame's tail.
+    /// Vector/arena capacities stay admitted and are reused by later frames.
     fn pop(&mut self) {
         let Some(frame) = self.frames.pop() else {
             return;
         };
-        for variable in self.trail.drain(frame.mark..) {
-            if let Some(at) = self.positions.get_mut(&variable) {
-                at.pop();
-                if at.is_empty() {
-                    self.positions.remove(&variable);
-                }
+        while self.trail.len() > frame.mark {
+            let variable = self.trail.pop().expect("checked nonempty scope trail");
+            let previous = self
+                .previous
+                .pop()
+                .expect("scope trails have equal lengths");
+            if let Some(previous) = previous {
+                *self
+                    .positions
+                    .get_mut(&variable)
+                    .expect("every live trail identity has a latest position") = previous;
+            } else {
+                assert!(
+                    self.positions.remove(&variable).is_some(),
+                    "every first trail occurrence has a latest position"
+                );
             }
         }
+        debug_assert!(
+            !self.frames.is_empty()
+                || (self.trail.is_empty() && self.previous.is_empty() && self.positions.is_empty())
+        );
     }
 
-    /// Record `variable` in the top frame; a no-op when the top frame already sees it,
-    /// or when no frame is open.
-    fn note(&mut self, variable: &Variable) {
+    fn note<S: Admission + ?Sized>(
+        &mut self,
+        variable: &Variable,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
         let Some(frame) = self.frames.last() else {
-            return;
+            return Ok(());
         };
-        let seen = self
-            .positions
-            .get(variable)
-            .and_then(|at| at.last())
-            .is_some_and(|&at| at >= frame.start);
-        if !seen {
-            self.positions
-                .entry(variable.clone())
-                .or_default()
-                .push(self.trail.len());
-            self.trail.push(variable.clone());
+        let previous = self.positions.get(variable).copied();
+        if previous.is_some_and(|previous| previous >= frame.start) {
+            return Ok(());
         }
+
+        let required = self
+            .trail
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        if required > self.trail.capacity() {
+            let capacity = self
+                .trail
+                .capacity()
+                .checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?
+                .max(required);
+            memory.reserve(&mut self.trail, capacity)?;
+        }
+        if required > self.previous.capacity() {
+            let capacity = self
+                .previous
+                .capacity()
+                .checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?
+                .max(required);
+            memory.reserve(&mut self.previous, capacity)?;
+        }
+        // The lookup insertion is the last fallible step. Updating all parallel
+        // destinations afterward cannot allocate or lose the preceding frame.
+        self.positions
+            .insert(variable.clone(), self.trail.len(), memory)?;
+        self.trail.push(variable.clone());
+        self.previous.push(previous);
+        Ok(())
+    }
+
+    fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        memory.release_vec(self.trail)?;
+        memory.release_vec(self.previous)?;
+        self.positions.release(memory)?;
+        memory.release_vec(self.frames)
     }
 }
 
-/// Collect the in-scope variables of a pattern in first-appearance order
-/// (used for `SELECT *` projection). Non-distinguished translation identities
-/// are omitted; projection and grouping boundaries expose only their outputs.
-/// Serializers and callers share this scope census rather than infer visibility
-/// from every variable mentioned by an expression or a nested pattern.
+/// Collect the in-scope variables in first-appearance order. The resident API
+/// and bounded parser call this same visibility body.
 #[must_use]
-pub fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
-    let mut scope = VarScope::default();
-    collect_vars(p, &mut scope);
-    scope.into_vec()
+pub fn visible_variables(pattern: &GraphPattern) -> Vec<Variable> {
+    let mut resident = Resident;
+    visible_variables_with_memory(pattern, &mut Memory::new(&mut resident))
+        .expect("resident visible-variable storage allocation failed")
 }
 
-/// One entry of [`collect_vars`]'s work list.
+/// The native visibility census, retaining the output's original array admission.
+///
+/// # Errors
+/// Returns the original admission/allocator failure before storage growth.
+pub fn visible_variables_with_memory<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Vec<Variable>, StorageError> {
+    let mut scope = VarScope::default();
+    collect_vars(pattern, &mut scope, memory)?;
+    scope.into_vec(memory)
+}
+
+fn contextual_visible_variables<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Vec<Variable>, StorageError> {
+    let mut scope = VarScope::default();
+    let mut pending = Vec::new();
+    memory.push(&mut pending, VarStep::Pattern(pattern))?;
+    note_vars::<true, S>(&mut pending, &mut scope, memory)?;
+    memory.release_vec(pending)?;
+    scope.into_vec(memory)
+}
+
 enum VarStep<'a> {
-    /// A pattern whose in-scope variables are still to be noted.
     Pattern(&'a GraphPattern),
-    /// A term whose variables are still to be noted.
     Term(&'a TermPattern),
-    /// A variable to note.
     Note(&'a Variable),
 }
 
-/// Queue a triple pattern's variables: subject, predicate, object.
-fn push_triple_vars<'a>(tp: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>) {
-    pending.push(VarStep::Term(&tp.object));
-    if let NamedNodePattern::Variable(v) = &tp.predicate {
-        pending.push(VarStep::Note(v));
+fn push_triple_vars<'a, S: Admission + ?Sized>(
+    triple: &'a TriplePattern,
+    pending: &mut Vec<VarStep<'a>>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    memory.push(pending, VarStep::Term(&triple.object))?;
+    if let NamedNodePattern::Variable(variable) = &triple.predicate {
+        memory.push(pending, VarStep::Note(variable))?;
     }
-    pending.push(VarStep::Term(&tp.subject));
+    memory.push(pending, VarStep::Term(&triple.subject))
 }
 
-/// Note the variables `p` makes visible in its enclosing group, in the order a
-/// left-to-right reading of it introduces them.
-fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
-    let mut pending = vec![VarStep::Pattern(p)];
-    note_vars(&mut pending, out);
+fn collect_vars<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    out: &mut VarScope,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    let mut pending = Vec::new();
+    memory.push(&mut pending, VarStep::Pattern(pattern))?;
+    note_vars::<false, S>(&mut pending, out, memory)?;
+    memory.release_vec(pending)
 }
 
-/// Drain `pending`, noting each variable as it is reached. Every entry pushes what
-/// follows it in reverse, so the work list pops them in written order.
-fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
+/// Drain in written order, pushing subsequent work in reverse. Visibility,
+/// projection/grouping boundaries and contextual MINUS treatment are unchanged.
+fn note_vars<const RDFLIB: bool, S: Admission + ?Sized>(
+    pending: &mut Vec<VarStep<'_>>,
+    out: &mut VarScope,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
     while let Some(step) = pending.pop() {
-        let p = match step {
-            VarStep::Note(v) => {
-                out.note(v);
+        let pattern = match step {
+            VarStep::Note(variable) => {
+                out.note(variable, memory)?;
                 continue;
             }
-            VarStep::Term(t) => {
-                match t {
-                    TermPattern::Variable(v) => out.note(v),
-                    TermPattern::Triple(tp) => push_triple_vars(tp, pending),
+            VarStep::Term(term) => {
+                match term {
+                    TermPattern::Variable(variable) => {
+                        out.note(variable, memory)?;
+                    }
+                    TermPattern::Triple(triple) => push_triple_vars(triple, pending, memory)?,
                     _ => {}
                 }
                 continue;
             }
-            VarStep::Pattern(p) => p,
+            VarStep::Pattern(pattern) => pattern,
         };
-        match p {
+        match pattern {
             GraphPattern::Bgp { patterns } => {
-                for tp in patterns.iter().rev() {
-                    push_triple_vars(tp, pending);
+                for triple in patterns.iter().rev() {
+                    push_triple_vars(triple, pending, memory)?;
                 }
             }
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                pending.extend([VarStep::Term(object), VarStep::Term(subject)]);
+                memory.push(pending, VarStep::Term(object))?;
+                memory.push(pending, VarStep::Term(subject))?;
             }
-            // Every argument variable of a property function — on either side — is
-            // in scope in the enclosing group: the arguments are the call's inputs
-            // AND its bindings.
             GraphPattern::PropertyFunction(call) => {
-                pending.extend(
-                    call.subject_args
-                        .iter()
-                        .chain(&call.object_args)
-                        .rev()
-                        .map(VarStep::Term),
-                );
+                for term in call.subject_args.iter().chain(&call.object_args).rev() {
+                    memory.push(pending, VarStep::Term(term))?;
+                }
             }
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => {
-                pending.extend([VarStep::Pattern(right), VarStep::Pattern(left)]);
+                memory.push(pending, VarStep::Pattern(right))?;
+                memory.push(pending, VarStep::Pattern(left))?;
             }
             GraphPattern::Union { arms } => {
-                pending.extend(arms.iter().rev().map(VarStep::Pattern));
+                for arm in arms.iter().rev() {
+                    memory.push(pending, VarStep::Pattern(arm))?;
+                }
             }
-            // SPARQL §18.2.1: variables occurring only in the right operand of
-            // MINUS are not in scope in the enclosing group graph pattern, so we
-            // descend into `left` only.
-            GraphPattern::Minus { left, .. } => pending.push(VarStep::Pattern(left)),
+            GraphPattern::Minus { left, right } => {
+                if RDFLIB {
+                    memory.push(pending, VarStep::Pattern(right))?;
+                }
+                memory.push(pending, VarStep::Pattern(left))?;
+            }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice { inner, .. } => pending.push(VarStep::Pattern(inner)),
+            | GraphPattern::Slice { inner, .. } => memory.push(pending, VarStep::Pattern(inner))?,
             GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
-                pending.push(VarStep::Pattern(inner));
-                if let NamedNodePattern::Variable(v) = name {
-                    pending.push(VarStep::Note(v));
+                memory.push(pending, VarStep::Pattern(inner))?;
+                if let NamedNodePattern::Variable(variable) = name {
+                    memory.push(pending, VarStep::Note(variable))?;
                 }
             }
             GraphPattern::Extend {
                 inner, variable, ..
             } => {
-                pending.extend([VarStep::Note(variable), VarStep::Pattern(inner)]);
+                memory.push(pending, VarStep::Note(variable))?;
+                memory.push(pending, VarStep::Pattern(inner))?;
             }
-            // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
-            // enclosing group, exactly like `BIND`'s single one: `SELECT *`
-            // projects them and a later `FILTER` in the same group sees them.
             GraphPattern::Unfold {
                 inner,
                 element,
@@ -3231,13 +4212,14 @@ fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
                 ..
             } => {
                 if let Some(companion) = companion {
-                    pending.push(VarStep::Note(companion));
+                    memory.push(pending, VarStep::Note(companion))?;
                 }
-                pending.extend([VarStep::Note(element), VarStep::Pattern(inner)]);
+                memory.push(pending, VarStep::Note(element))?;
+                memory.push(pending, VarStep::Pattern(inner))?;
             }
             GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
-                for v in variables {
-                    out.note(v);
+                for variable in variables {
+                    out.note(variable, memory)?;
                 }
             }
             GraphPattern::Group {
@@ -3245,15 +4227,16 @@ fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
                 aggregates,
                 ..
             } => {
-                for v in variables {
-                    out.note(v);
+                for variable in variables {
+                    out.note(variable, memory)?;
                 }
-                for (v, _) in aggregates {
-                    out.note(v);
+                for (variable, _) in aggregates {
+                    out.note(variable, memory)?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// An `EXISTS`/`NOT EXISTS` scope check deferred out of
@@ -3279,6 +4262,8 @@ struct PendingExistsScopeCheck {
     /// The already-parsed `EXISTS`/`NOT EXISTS` body, re-walked with
     /// [`find_scope_conflict`] once `local_scope` is completed by the root.
     body: GraphPattern,
+    /// Original raw clone layouts retained until this deferred body dies.
+    body_bytes: usize,
     /// Where to anchor the syntax error, captured at the `EXISTS`/`NOT
     /// EXISTS` keyword — mirrors [`Parser::check_exists_body`]'s own `at`.
     at: usize,
@@ -3415,8 +4400,12 @@ impl ScopeConstruct {
 /// omits the `SERVICE` endpoint variable from its own left-scope set; this
 /// function does not follow it here, on the ground above. Pinned by
 /// `lateral_left_scope_includes_a_service_endpoint_variable`.
-fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
-    visible_variables(p)
+#[cfg(debug_assertions)]
+fn compute_lateral_left_scope<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Vec<Variable>, StorageError> {
+    visible_variables_with_memory(pattern, memory)
 }
 
 /// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
@@ -3562,127 +4551,127 @@ fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
 /// first collision in a pre-order, left-to-right walk (and, within one node,
 /// the introducing construct's own declaration order) is reported, so the
 /// variable named in the error is reproducible across runs.
-fn find_scope_conflict<'a>(
-    scope: &[Variable],
+fn find_scope_conflict<'a, S: Admission + ?Sized>(
+    outer: &[Variable],
     pattern: &'a GraphPattern,
-) -> Option<(&'a Variable, ScopeIntro)> {
-    // Nothing in an empty scope can be rebound.
-    if scope.is_empty() {
-        return None;
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
+    if outer.is_empty() {
+        return Ok(None);
     }
-    // The scopes in force: the outer one, and each narrowing a sub-SELECT's
-    // projection made. A pending pattern names the scope it is checked against.
-    let mut scopes: Vec<Vec<Variable>> = vec![scope.to_vec()];
-    let mut pending: Vec<(&'a GraphPattern, usize)> = vec![(pattern, 0)];
-    while let Some((pattern, at)) = pending.pop() {
-        let scope = &scopes[at];
-        match pattern {
-            // Leaves: nothing is introduced.
-            GraphPattern::Bgp { .. }
-            | GraphPattern::Path { .. }
-            | GraphPattern::PropertyFunction(_) => {}
-            // Binary nodes are transparent to scope: both operands are checked at
-            // the SAME scope level (see the scope-level argument above), left first.
-            GraphPattern::Join { left, right }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::LeftJoin { left, right, .. } => {
-                pending.extend([(&**right, at), (&**left, at)]);
-            }
-            GraphPattern::Union { arms } => pending.extend(arms.iter().rev().map(|arm| (arm, at))),
-            // `MINUS` is the one binary node that is NOT scope-transparent on its
-            // right operand: §18.2.1 puts a MINUS-right-only variable out of
-            // scope, and §18.5's evaluation only ever uses the right side for the
-            // compatibility test — its bindings are discarded, never carried
-            // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
-            // MINUS right operand can never be observed as a rebinding, at ANY
-            // depth, not only under a `SELECT *` sub-select (which was one route
-            // to this same shape, not a separate rule). Only the left operand is
-            // walked.
-            GraphPattern::Minus { left, .. } => pending.push((left, at)),
-            // Unary wrappers are transparent to scope; any expression operand is
-            // never visited.
-            GraphPattern::Filter { inner, .. }
-            | GraphPattern::Graph { inner, .. }
-            | GraphPattern::Service { inner, .. }
-            | GraphPattern::OrderBy { inner, .. }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice { inner, .. } => pending.push((inner, at)),
-            // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
-            // condition all lower to `Extend` — a fresh binding at this scope
-            // level.
-            GraphPattern::Extend {
-                inner, variable, ..
-            } => {
-                if scope.contains(variable) {
-                    return Some((variable, ScopeIntro::Bind));
+    let mut root = VarScope::default();
+    for variable in outer {
+        root.note(variable, memory)?;
+    }
+    let mut scopes = Vec::new();
+    memory.push(&mut scopes, root)?;
+    let mut pending = Vec::new();
+    memory.push(&mut pending, (pattern, 0))?;
+    let found = (|| -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
+        while let Some((pattern, at)) = pending.pop() {
+            let scope = &scopes[at];
+            match pattern {
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::PropertyFunction(_) => {}
+                GraphPattern::Join { left, right }
+                | GraphPattern::Lateral { left, right }
+                | GraphPattern::Apply { left, right, .. }
+                | GraphPattern::LeftJoin { left, right, .. } => {
+                    memory.push(&mut pending, (&**right, at))?;
+                    memory.push(&mut pending, (&**left, at))?;
                 }
-                pending.push((inner, at));
-            }
-            // `UNFOLD` introduces one or two fresh bindings at this scope level,
-            // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
-            // side that re-introduces an outer variable through `UNFOLD` is the
-            // same conflict, reported in declaration order (element, then
-            // companion). Its expression operand is never visited, for the reason
-            // stated for `Extend`'s above.
-            GraphPattern::Unfold {
-                inner,
-                element,
-                companion,
-                ..
-            } => {
-                for variable in std::iter::once(element).chain(companion.as_ref()) {
-                    if scope.contains(variable) {
-                        return Some((variable, ScopeIntro::Unfold));
+                GraphPattern::Union { arms } => {
+                    for arm in arms.iter().rev() {
+                        memory.push(&mut pending, (arm, at))?;
                     }
                 }
-                pending.push((inner, at));
-            }
-            // `VALUES`: the first declared column that collides, in declaration
-            // order.
-            GraphPattern::Values { variables, .. } => {
-                if let Some(v) = variables.iter().find(|v| scope.contains(v)) {
-                    return Some((v, ScopeIntro::Values));
+                // MINUS-right bindings are never observable in the enclosing scope.
+                GraphPattern::Minus { left, .. } => memory.push(&mut pending, (&**left, at))?,
+                GraphPattern::Filter { inner, .. }
+                | GraphPattern::Graph { inner, .. }
+                | GraphPattern::Service { inner, .. }
+                | GraphPattern::OrderBy { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice { inner, .. } => memory.push(&mut pending, (&**inner, at))?,
+                GraphPattern::Extend {
+                    inner, variable, ..
+                } => {
+                    if scope.contains(variable) {
+                        return Ok(Some((variable, ScopeIntro::Bind)));
+                    }
+                    memory.push(&mut pending, (&**inner, at))?;
                 }
-            }
-            // A sub-SELECT's projection is the one scope boundary in the
-            // grammar: narrow to the variables it actually carries out,
-            // preserving `scope`'s own order, and stop once nothing survives
-            // the narrowing — nothing beneath an empty narrowed scope could ever
-            // be observed as a rebinding of an outer variable. Projecting is not
-            // introducing: the projection's own `(expr AS ?v)` extends live
-            // beneath it and are caught, narrowed, by the `Extend` arm above.
-            GraphPattern::Project { inner, variables } => {
-                let narrowed: Vec<Variable> = scope
-                    .iter()
-                    .filter(|v| variables.contains(*v))
-                    .cloned()
-                    .collect();
-                if !narrowed.is_empty() {
-                    scopes.push(narrowed);
-                    pending.push((inner, scopes.len() - 1));
+                GraphPattern::Unfold {
+                    inner,
+                    element,
+                    companion,
+                    ..
+                } => {
+                    for variable in std::iter::once(element).chain(companion.as_ref()) {
+                        if scope.contains(variable) {
+                            return Ok(Some((variable, ScopeIntro::Unfold)));
+                        }
+                    }
+                    memory.push(&mut pending, (&**inner, at))?;
                 }
-            }
-            // `GROUP BY`'s aggregate output variables are fresh bindings at this
-            // scope level (see "Group's synthetic targets" above); then the
-            // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
-            // `Extend`s directly beneath `Group` — and nothing past it, the
-            // pattern being grouped is never walked.
-            GraphPattern::Group {
-                inner,
-                variables,
-                aggregates,
-            } => {
-                if let Some((v, _)) = aggregates.iter().find(|(v, _)| scope.contains(v)) {
-                    return Some((v, ScopeIntro::Bind));
+                GraphPattern::Values { variables, .. } => {
+                    if let Some(variable) =
+                        variables.iter().find(|variable| scope.contains(variable))
+                    {
+                        return Ok(Some((variable, ScopeIntro::Values)));
+                    }
                 }
-                if let Some(conflict) = find_group_extend_conflict(inner, variables, scope) {
-                    return Some(conflict);
+                GraphPattern::Project { inner, variables } => {
+                    // Build each projection's lookup once, preserving the enclosing
+                    // scope's written order in the narrowed scope.
+                    let mut projected = VarScope::default();
+                    for variable in variables {
+                        projected.note(variable, memory)?;
+                    }
+                    let mut narrowed = VarScope::default();
+                    for variable in scope.as_slice() {
+                        if projected.contains(variable) {
+                            narrowed.note(variable, memory)?;
+                        }
+                    }
+                    projected.release(memory)?;
+                    if narrowed.as_slice().is_empty() {
+                        narrowed.release(memory)?;
+                    } else {
+                        let at = scopes.len();
+                        memory.push(&mut scopes, narrowed)?;
+                        memory.push(&mut pending, (&**inner, at))?;
+                    }
+                }
+                GraphPattern::Group {
+                    inner,
+                    variables,
+                    aggregates,
+                } => {
+                    if let Some((variable, _)) = aggregates
+                        .iter()
+                        .find(|(variable, _)| scope.contains(variable))
+                    {
+                        return Ok(Some((variable, ScopeIntro::Bind)));
+                    }
+                    if let Some(conflict) =
+                        find_group_extend_conflict(inner, variables, scope, memory)?
+                    {
+                        return Ok(Some(conflict));
+                    }
                 }
             }
         }
+        Ok(None)
+    })()?;
+    memory.release_vec(pending)?;
+    while let Some(scope) = scopes.pop() {
+        scope.release(memory)?;
     }
-    None
+    memory.release_vec(scopes)?;
+    Ok(found)
 }
 
 /// Walk the chain of `Extend` nodes the parser lowers each expression-valued
@@ -3699,70 +4688,107 @@ fn find_scope_conflict<'a>(
 /// The first conflict reported is the earliest-DECLARED `GROUP BY (expr AS ?v)`
 /// condition (the innermost `Extend`, closest to the ungrouped pattern),
 /// preserving the walker's left-to-right determinism contract.
-fn find_group_extend_conflict<'a>(
+fn find_group_extend_conflict<'a, S: Admission + ?Sized>(
     mut inner: &'a GraphPattern,
     variables: &[Variable],
-    lhs_scope: &[Variable],
-) -> Option<(&'a Variable, ScopeIntro)> {
-    let mut chain: Vec<&'a Variable> = Vec::new();
+    lhs_scope: &VarScope,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
+    let mut grouped = VarScope::default();
+    for variable in variables {
+        grouped.note(variable, memory)?;
+    }
+    let mut chain = Vec::new();
     while let GraphPattern::Extend {
         inner: next,
         variable,
         ..
     } = inner
     {
-        if !variables.contains(variable) {
+        if !grouped.contains(variable) {
             break;
         }
-        chain.push(variable);
+        memory.push(&mut chain, variable)?;
         inner = next;
     }
-    chain
-        .into_iter()
+    let found = chain
+        .iter()
         .rev()
+        .copied()
         .find(|variable| lhs_scope.contains(variable))
-        .map(|variable| (variable, ScopeIntro::Bind))
+        .map(|variable| (variable, ScopeIntro::Bind));
+    memory.release_vec(chain)?;
+    grouped.release(memory)?;
+    Ok(found)
 }
 
 /// Collect the labels of every blank node in a run of quad patterns, descending
 /// into RDF-1.2 quoted triples. Used to enforce the §19.6 rule that a blank node
 /// label may not be shared across two operations of one update request.
-fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut HashSet<String, FixedState>) {
-    for q in quads {
-        collect_triple_bnode_labels(&q.triple, out);
+fn collect_quad_bnode_labels<S: Admission + ?Sized>(
+    quads: &[QuadPattern],
+    out: &mut ScopeTable<BlankNode, ()>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    for quad in quads {
+        collect_triple_bnode_labels(&quad.triple, out, memory)?;
     }
+    Ok(())
 }
 
-fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut HashSet<String, FixedState>) {
-    let mut pending = vec![&t.object, &t.subject];
+fn collect_triple_bnode_labels<S: Admission + ?Sized>(
+    triple: &TriplePattern,
+    out: &mut ScopeTable<BlankNode, ()>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    let mut pending = Vec::new();
+    memory.reserve(&mut pending, 2)?;
+    pending.extend([&triple.object, &triple.subject]);
     while let Some(term) = pending.pop() {
         match term {
-            TermPattern::BlankNode(b) => {
-                out.insert(b.as_str().to_owned());
+            TermPattern::BlankNode(blank) => {
+                out.insert(blank.clone(), (), memory)?;
             }
-            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+            TermPattern::Triple(triple) => {
+                memory.push(&mut pending, &triple.object)?;
+                memory.push(&mut pending, &triple.subject)?;
+            }
             _ => {}
         }
     }
+    memory.release_vec(pending)
 }
 
 /// Hard-fail if any subject/object position of a triple pattern (descending into
 /// RDF 1.2 quoted triples) is a blank node. Blank nodes are disallowed in DELETE
 /// templates and `DELETE WHERE` (SPARQL 1.1 Update §3.1.3 / §3.1.3.2).
-fn reject_blank_in_triple_pattern(t: &TriplePattern, at: usize) -> Result<()> {
-    let mut pending = vec![&t.object, &t.subject];
+fn reject_blank_in_triple_pattern(
+    t: &TriplePattern,
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> Result<()> {
+    let mut pending = Vec::new();
+    memory.reserve(&mut pending, 2)?;
+    pending.extend([&t.object, &t.subject]);
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::BlankNode(_) => {
-                return Err(ParseError::syntax(
-                    "blank node in a DELETE template is not allowed",
+                let error = native_syntax(
+                    &"blank node in a DELETE template is not allowed",
                     at,
-                ));
+                    memory,
+                );
+                memory.release_vec(pending)?;
+                return Err(error);
             }
-            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+            TermPattern::Triple(tp) => {
+                memory.push(&mut pending, &tp.object)?;
+                memory.push(&mut pending, &tp.subject)?;
+            }
             _ => {}
         }
     }
+    memory.release_vec(pending)?;
     Ok(())
 }
 
@@ -3789,13 +4815,66 @@ const MODIFIER_TERMINATOR_WORDS: [&str; 8] = [
 /// (`LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause
 /// LimitClause?`). `kw` names the clause that repeated, and `at` is the byte
 /// offset of that repeat's keyword.
-fn repeated_bound_clause(kw: &str, at: usize) -> ParseError {
-    ParseError::syntax(
-        format!(
+fn repeated_bound_clause(
+    kw: &str,
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> ParseError {
+    native_syntax(
+        &format_args!(
             "repeated {kw} clause: LimitOffsetClauses allows at most one LIMIT \
-             and at most one OFFSET, in either order"
+         and at most one OFFSET, in either order"
         ),
         at,
+        memory,
+    )
+}
+
+/// The refusal for a `GROUP BY` or `ORDER BY` keyword pair with no condition after
+/// it: `GroupClause ::= 'GROUP' 'BY' GroupCondition+` and `OrderClause ::= 'ORDER'
+/// 'BY' OrderCondition+` each require at least one. `clause` names the keywords,
+/// `condition` the production that must follow, and `at` is the byte offset where
+/// the first condition was expected.
+fn empty_modifier_clause(
+    clause: &str,
+    condition: &str,
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> ParseError {
+    native_syntax(
+        &format_args!("{clause} needs at least one {condition}"),
+        at,
+        memory,
+    )
+}
+
+/// The `xsd:boolean` lexical form a `BooleanLiteral` keyword spells, or `None` when
+/// `w` is not one.
+///
+/// SPARQL keywords match case-insensitively — the grammar's one exception is `a`
+/// (SPARQL 1.1 §19.8, carried into SPARQL 1.2) — so `TRUE`, `True` and `fAlSe` are
+/// the boolean literals too, as the W3C `case-insensitive-booleans` test requires.
+/// The literal is always written in its lower-case canonical form, the only spelling
+/// in the `xsd:boolean` lexical space (`"TRUE"^^xsd:boolean` would be ill-typed).
+pub(crate) fn boolean_keyword(w: &str) -> Option<&'static str> {
+    if w.eq_ignore_ascii_case("true") {
+        Some("true")
+    } else if w.eq_ignore_ascii_case("false") {
+        Some("false")
+    } else {
+        None
+    }
+}
+
+/// The refusal for a `.` the grammar has no place for: a `.` separates two triples,
+/// or follows a non-triples element (a group graph pattern element, a `GRAPH`
+/// block) once — never a group's first token or a second `.` in a row.
+fn stray_dot(at: usize, memory: &mut Memory<'_, dyn ParserAdmission + '_>) -> ParseError {
+    native_syntax(
+        &"unexpected '.': a '.' separates triples or follows a group graph pattern \
+         element, once",
+        at,
+        memory,
     )
 }
 
@@ -3834,16 +4913,28 @@ fn is_modifier_terminator_word(w: &str) -> bool {
 /// [`purrdf_iri::langtag`] under [`LANGTAG_PROFILE`], which is the same
 /// acceptance language every RDF codec in the workspace applies, so that a tag
 /// a query may write is a tag a document may hold.
+#[cfg(test)]
 fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>)> {
+    let mut resident = ResidentParserAdmission;
+    let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+    split_lang_dir_with_memory(tag, at, &mut memory)
+        .map(|(language, direction)| (language.to_owned(), direction))
+}
+
+fn split_lang_dir_with_memory<'a>(
+    tag: &'a str,
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> Result<(&'a str, Option<BaseDirection>)> {
     let (lang, dir) = match tag.split_once("--") {
         Some((lang, dir)) => match BaseDirection::from_str_token(dir) {
             Some(direction) => (lang, Some(direction)),
             None => {
                 return Err(ParseError::syntax(
-                    format!(
+                    memory.format(&format_args!(
                         "invalid base direction `--{dir}` in `@{tag}`: \
                          must be exactly `ltr` or `rtl` (lower case)"
-                    ),
+                    ))?,
                     at,
                 ));
             }
@@ -3852,14 +4943,14 @@ fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>
     };
     if let Err(error) = langtag::parse_with(lang, LANGTAG_PROFILE) {
         return Err(ParseError::syntax(
-            format!(
+            memory.format(&format_args!(
                 "invalid language tag `@{tag}`: {error} [{code}]",
                 code = error.diagnostic_code()
-            ),
+            ))?,
             at,
         ));
     }
-    Ok((lang.to_owned(), dir))
+    Ok((lang, dir))
 }
 
 /// The acceptance language every language tag in a SPARQL query is held to.
@@ -3895,13 +4986,31 @@ pub(crate) fn is_langtag(lang: &str) -> bool {
     langtag::is_well_formed_with(lang, LANGTAG_PROFILE)
 }
 
-fn expect_arity(args: &[Expression], n: usize, name: &str, at: usize) -> Result<()> {
+fn native_syntax(
+    reason: &(impl std::fmt::Display + ?Sized),
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> ParseError {
+    match memory.format(reason) {
+        Ok(reason) => ParseError::syntax(reason, at),
+        Err(error) => ParseError::Storage(error),
+    }
+}
+
+fn expect_arity(
+    args: &[Expression],
+    n: usize,
+    name: &str,
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> Result<()> {
     if args.len() == n {
         Ok(())
     } else {
-        Err(ParseError::syntax(
-            format!("{name} expects {n} arguments, got {}", args.len()),
+        Err(native_syntax(
+            &format_args!("{name} expects {n} arguments, got {}", args.len()),
             at,
+            memory,
         ))
     }
 }
@@ -4578,6 +5687,57 @@ mod tests {
             panic!("expected LeftJoin, got {where_pat:?}");
         };
         assert!(expression.is_some(), "FILTER should lift into the LeftJoin");
+    }
+
+    #[test]
+    fn optional_lifts_the_conjunction_of_its_own_filters() {
+        let q = format!(
+            "{GM}SELECT * {{ ?x purrdf:p ?v . OPTIONAL {{ ?y purrdf:q ?w . FILTER(?v=2) FILTER(?w=3) }} }}"
+        );
+        let GraphPattern::LeftJoin {
+            right, expression, ..
+        } = unproject(select_pattern(&q))
+        else {
+            panic!("expected LeftJoin");
+        };
+        let Some(Expression::And(filters)) = expression else {
+            panic!("both group-owned filters must be the LeftJoin condition");
+        };
+        assert_eq!(filters.len(), 2);
+        assert!(matches!(*right, GraphPattern::Bgp { .. }));
+    }
+
+    #[test]
+    fn optional_keeps_a_nested_groups_filter_in_the_right_operand() {
+        let q = format!(
+            "{GM}SELECT * {{ ?x purrdf:p ?v . OPTIONAL {{ {{ ?y purrdf:q ?w . FILTER(?v=2) }} }} }}"
+        );
+        let GraphPattern::LeftJoin {
+            right, expression, ..
+        } = unproject(select_pattern(&q))
+        else {
+            panic!("expected LeftJoin");
+        };
+        assert!(expression.is_none());
+        assert!(matches!(*right, GraphPattern::Filter { .. }));
+    }
+
+    #[test]
+    fn optional_lifts_only_its_own_conjunction_around_a_nested_filter() {
+        let q = format!(
+            "{GM}SELECT * {{ ?x purrdf:p ?v . OPTIONAL {{ {{ ?y purrdf:q ?w . FILTER(?w=3) }} FILTER(?v=2) FILTER(?w<4) }} }}"
+        );
+        let GraphPattern::LeftJoin {
+            right, expression, ..
+        } = unproject(select_pattern(&q))
+        else {
+            panic!("expected LeftJoin");
+        };
+        let Some(Expression::And(filters)) = expression else {
+            panic!("only the two enclosing filters belong to the LeftJoin condition");
+        };
+        assert_eq!(filters.len(), 2);
+        assert!(matches!(*right, GraphPattern::Filter { .. }));
     }
 
     #[test]
@@ -6129,6 +7289,464 @@ mod tests {
         assert_eq!(l3.value(), "false");
     }
 
+    /// `BooleanLiteral` is a keyword, so it matches case-insensitively (SPARQL 1.1
+    /// §19.8) in every literal position, and is written in its canonical lower-case
+    /// lexical form; `a` stays the one case-sensitive keyword.
+    #[test]
+    fn boolean_literals_match_case_insensitively_in_every_position() {
+        let xsd_boolean = |l: &Literal, value: &str| {
+            assert_eq!(l.value(), value);
+            assert_eq!(l.datatype().as_str(), XSD_BOOLEAN);
+        };
+        let Query::Select { pattern, .. } = parse("SELECT (TRUE AS ?t) (False AS ?f) {}") else {
+            panic!("expected SELECT");
+        };
+        let rendered = format!("{pattern:?}");
+        assert!(
+            rendered.contains("\"true\"") && rendered.contains("\"false\""),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("TRUE") && !rendered.contains("False"),
+            "{rendered}"
+        );
+        let where_pat = unproject(select_pattern("SELECT * WHERE { ?s ?p FALSE }"));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        let TermPattern::Literal(l) = &patterns[0].object else {
+            panic!("expected a literal object, got {:?}", patterns[0].object);
+        };
+        xsd_boolean(l, "false");
+        let GraphPattern::Values { bindings, .. } =
+            unproject(select_pattern("SELECT ?x WHERE { VALUES ?x { tRuE } }"))
+        else {
+            panic!("expected VALUES");
+        };
+        let Some(GroundTerm::Literal(l)) = &bindings[0][0] else {
+            panic!("expected a literal binding, got {:?}", bindings[0][0]);
+        };
+        xsd_boolean(l, "true");
+        assert!(try_parse("SELECT * WHERE { ?s A ?o }").is_err());
+        assert!(try_parse("SELECT * WHERE { ?s a ?o }").is_ok());
+    }
+
+    /// Dots and `FILTER` constraints follow the group grammar: a `.` separates two
+    /// triples or follows a non-triples element once, two triples need a `.` between
+    /// them, and a `FILTER` takes a `Constraint`. The same `.` rules hold in a
+    /// `CONSTRUCT` template and an update's quad data. Each refusal sits beside a
+    /// neighbour that still parses.
+    #[test]
+    fn dots_and_filter_constraints_follow_the_group_grammar() {
+        for refused in [
+            "SELECT * WHERE { . }",
+            "SELECT * WHERE { . . }",
+            "SELECT * WHERE { . ?s ?p ?o }",
+            "SELECT * WHERE { . FILTER(?x) }",
+            "SELECT * WHERE { ?s ?p ?o . . }",
+            "SELECT * WHERE { <http://a> <http://b> <http://c> <http://d> <http://e> <http://f> . }",
+            "SELECT * WHERE { OPTIONAL { ?s ?p ?o } . . }",
+            "SELECT * WHERE { ?s ?p ?o FILTER ?x }",
+            "SELECT * WHERE { ?s ?p ?o FILTER true }",
+            "SELECT * WHERE { ?s ?p ?o FILTER 1 }",
+            "CONSTRUCT { . } WHERE { }",
+            "CONSTRUCT { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> } WHERE { }",
+            "CONSTRUCT WHERE { ?s ?p ?o ?s ?p ?o }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "SELECT * WHERE { }",
+            "SELECT * WHERE { ?s ?p ?o . }",
+            "SELECT * WHERE { ?s ?p ?o . ?s ?q ?r }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(?o) . }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(?o) . ?s ?q ?r . }",
+            "SELECT * WHERE { OPTIONAL { ?s ?p ?o } . ?s ?q ?r }",
+            "SELECT * WHERE { { ?s ?p ?o } . { ?s ?q ?r } }",
+            "SELECT * WHERE { BIND(1 AS ?x) . VALUES ?y { 1 } . }",
+            "SELECT * WHERE { ?s ?p ?o FILTER bound(?s) FILTER NOT EXISTS { ?s ?q ?o } }",
+            "SELECT * WHERE { ?s ?p ?o FILTER <http://example.org/f>(?o) }",
+            "CONSTRUCT { <http://a> <http://b> <http://c> . <http://a> <http://b> <http://d> . } WHERE { }",
+            "CONSTRUCT { GRAPH <http://g> { <http://a> <http://b> <http://c> } . <http://a> <http://b> <http://d> } WHERE { }",
+            "CONSTRUCT WHERE { ?s ?p ?o . ?s ?q ?r }",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        let update = |text: &str| SparqlParser::new().parse_update(text);
+        for refused in [
+            "INSERT DATA { . }",
+            "INSERT DATA { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> }",
+            "INSERT DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . . }",
+            "INSERT { ?s ?p 2 ?s ?p 3 } WHERE { ?s ?p ?o }",
+            "DELETE DATA { . }",
+            "DELETE DATA { <http://a> <http://b> <http://c> . . }",
+            "DELETE DATA { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> }",
+            "DELETE DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . . }",
+            "DELETE DATA { GRAPH <http://g> { . } }",
+            "DELETE WHERE { . }",
+            "DELETE WHERE { ?s ?p ?o ?s ?q ?r }",
+            "DELETE WHERE { ?s ?p ?o . . }",
+            "DELETE { ?s ?p ?o ?s ?q ?r } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(update(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "INSERT DATA { <http://a> <http://b> <http://c> . }",
+            "INSERT DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . <http://a> <http://b> <http://c> }",
+            "INSERT DATA { <http://a> <http://b> <http://c> GRAPH <http://g> { <http://a> <http://b> <http://c> } }",
+            "DELETE WHERE { ?s ?p ?o . }",
+            "INSERT { ?s ?p 2 . ?s ?p 3 } WHERE { ?s ?p ?o }",
+            "DELETE DATA { <http://a> <http://b> <http://c> . }",
+            "DELETE DATA { <http://a> <http://b> <http://c> . <http://a> <http://b> <http://d> }",
+            "DELETE DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> . } . <http://a> <http://b> <http://c> }",
+            "DELETE WHERE { ?s ?p ?o . ?s ?q ?r . }",
+            "DELETE WHERE { GRAPH ?g { ?s ?p ?o } ?s ?q ?r }",
+            "DELETE { ?s ?p ?o . ?s ?q ?r } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(update(accepted).is_ok(), "{accepted}");
+        }
+    }
+
+    /// `PropertyListNotEmpty ::= Verb ObjectList ( ';' ( Verb ObjectList )? )*` and its
+    /// path twin (grammar productions [77] and [83]) make the verb after a `;`
+    /// optional, so `;` may repeat, and may trail, in a pattern, a template, a
+    /// blank-node property list and update quad data. What may not stand there is a
+    /// `;` with no verb before it, or a `,` with no object.
+    #[test]
+    fn a_repeated_semicolon_in_a_property_list_is_allowed() {
+        for accepted in [
+            "SELECT * WHERE { ?s <http://p> 1 ; ; <http://q> 2 }",
+            "SELECT * WHERE { ?s <http://p> 1 ;; <http://q> 2 }",
+            "SELECT * WHERE { ?s <http://p> 1 ; ; }",
+            "SELECT * WHERE { ?s <http://p>/<http://q> 1 ; ; <http://r> 2 . }",
+            "SELECT * WHERE { ?s <http://p> [ <http://q> 1 ; ; <http://r> 2 ; ] }",
+            "CONSTRUCT { ?s <http://p> 1 ; ; <http://q> 2 } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(
+                try_parse(accepted).is_ok(),
+                "{accepted}: {:?}",
+                try_parse(accepted)
+            );
+        }
+        let update = |text: &str| SparqlParser::new().parse_update(text);
+        for accepted in [
+            "INSERT DATA { <http://a> <http://p> 1 ; ; <http://q> 2 }",
+            "INSERT DATA { GRAPH <http://g> { <http://a> <http://p> 1 ;; } }",
+            "DELETE WHERE { ?s <http://p> ?o ; ; <http://q> ?r }",
+        ] {
+            assert!(
+                update(accepted).is_ok(),
+                "{accepted}: {:?}",
+                update(accepted)
+            );
+        }
+        for refused in [
+            "SELECT * WHERE { ?s ; <http://p> 1 }",
+            "SELECT * WHERE { ?s <http://p> 1 , , 2 }",
+            "SELECT * WHERE { ?s <http://p> ; <http://q> 2 }",
+            "SELECT * WHERE { ?s <http://p> 1 ; ; 2 }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        assert!(update("INSERT DATA { <http://a> ; <http://p> 1 }").is_err());
+        // The repeated `;` adds no triple: two, as without it.
+        let where_pat = unproject(select_pattern(
+            "SELECT * WHERE { ?s <http://p> 1 ; ; <http://q> 2 }",
+        ));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert_eq!(patterns.len(), 2, "{patterns:?}");
+    }
+
+    /// In an update's quad data a standalone `TriplesNode` — a collection or a
+    /// blank-node property list — ends its `TriplesSameSubject`, so it may be followed
+    /// by whatever may follow one in `Quads ::= TriplesTemplate? ( QuadsNotTriples
+    /// '.'? TriplesTemplate? )*`: a `.`, the block's `}`, or a `GRAPH` block with no
+    /// `.` before it. A plain term or `()` still needs its predicate-object list.
+    #[test]
+    fn a_standalone_template_node_may_precede_a_graph_block() {
+        let update = |text: &str| SparqlParser::new().parse_update(text);
+        for accepted in [
+            "INSERT DATA { ( 1 ) GRAPH <http://g> { <http://a> <http://b> <http://c> } }",
+            "INSERT DATA { [ <http://p> 1 ] GRAPH <http://g> { } }",
+            "INSERT DATA { ( 1 ) . GRAPH <http://g> { } }",
+            "INSERT DATA { GRAPH <http://g> { ( 1 ) } ( 2 ) }",
+            "INSERT { ( ?o ) GRAPH <http://g> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(
+                update(accepted).is_ok(),
+                "{accepted}: {:?}",
+                update(accepted)
+            );
+        }
+        for refused in [
+            "INSERT DATA { <http://a> GRAPH <http://g> { } }",
+            "INSERT DATA { () GRAPH <http://g> { } }",
+            "INSERT DATA { ( 1 ) <http://a> GRAPH <http://g> { } }",
+            "INSERT DATA { GRAPH <http://g> { ( 1 ) GRAPH <http://h> { } } }",
+        ] {
+            assert!(update(refused).is_err(), "{refused}");
+        }
+        // The standalone collection asserts exactly its own two cons-cell triples,
+        // beside the GRAPH block's one.
+        let Ok(parsed) =
+            update("INSERT DATA { ( 1 ) GRAPH <http://g> { <http://a> <http://b> <http://c> } }")
+        else {
+            panic!("parses");
+        };
+        let rendered = format!("{parsed:?}");
+        assert_eq!(rendered.matches("QuadPattern").count(), 3, "{rendered}");
+    }
+
+    /// The SPARQL keyword rule (SPARQL 1.1 §19.8) applies to keywords only: `TRUE`
+    /// and `FALSE` are keywords, but a prefix or a prefixed name that happens to
+    /// spell one is not, and stays the name it is. As a keyword, `TRUE` follows the
+    /// grammar `true` does: a bare `FILTER TRUE` is no `Constraint`, `FILTER(TRUE)` is.
+    #[test]
+    fn a_boolean_keyword_spelled_as_a_name_stays_a_name() {
+        for accepted in [
+            "PREFIX TRUE: <http://example.org/> SELECT * WHERE { TRUE:s ?p ?o }",
+            "PREFIX FALSE: <http://example.org/> SELECT * WHERE { ?s FALSE:p FALSE:o }",
+            "PREFIX : <http://example.org/> SELECT * WHERE { :True :False ?o }",
+            "PREFIX TRUEx: <http://example.org/> SELECT * WHERE { ?s ?p TRUEx:o }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(TRUE) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(!BOUND(?x)) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(-1) }",
+        ] {
+            assert!(
+                try_parse(accepted).is_ok(),
+                "{accepted}: {:?}",
+                try_parse(accepted)
+            );
+        }
+        for refused in [
+            "SELECT * WHERE { ?s ?p ?o FILTER TRUE }",
+            "SELECT * WHERE { ?s ?p ?o FILTER False }",
+            // `Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`: a
+            // unary operator is none of them without its brackets.
+            "SELECT * WHERE { ?s ?p ?o FILTER !BOUND(?x) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER -1 }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        // The prefixed name is the IRI, not a boolean.
+        let where_pat = unproject(select_pattern(
+            "PREFIX TRUE: <http://example.org/> SELECT * WHERE { TRUE:s ?p ?o }",
+        ));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert!(
+            matches!(&patterns[0].subject, TermPattern::NamedNode(n) if n.as_str() == "http://example.org/s"),
+            "{patterns:?}"
+        );
+    }
+
+    /// Nested collections stand alone like a flat one (the W3C `syntax-lists-04` and
+    /// `-05` shapes): `( ( ?z ) )` and `( ( ) )` are each a non-empty outer
+    /// collection. Only a top-level `()` — the `NIL` term — needs a predicate.
+    #[test]
+    fn a_nested_collection_may_stand_alone() {
+        for accepted in [
+            "SELECT * WHERE { ( ( ?z ) ) }",
+            "SELECT * WHERE { ( ( ) ) }",
+            "SELECT * WHERE { ( ( ) ( ?z ) ) . }",
+            "INSERT DATA { ( ( 1 ) ) }",
+        ] {
+            let parsed = if accepted.starts_with("INSERT") {
+                SparqlParser::new().parse_update(accepted).map(|_| ())
+            } else {
+                try_parse(accepted).map(|_| ())
+            };
+            assert!(parsed.is_ok(), "{accepted}: {parsed:?}");
+        }
+        for refused in ["SELECT * WHERE { ( ) }", "SELECT * WHERE { ( ( ?z ) ) ?p }"] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+    }
+
+    /// `FunctionCall ::= iri ArgList`: a bare IRI or prefixed name is not a
+    /// `Constraint`, a `GroupCondition` or an `OrderCondition`, in any of the four
+    /// clauses; with its argument list it is.
+    #[test]
+    fn a_bare_iri_is_not_a_call_in_any_clause() {
+        let ex = "PREFIX : <http://example.org/> ";
+        for refused in [
+            "SELECT * WHERE { ?s ?p ?o FILTER :f }",
+            "SELECT * WHERE { ?s ?p ?o FILTER <http://example.org/f> }",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING :f",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING <http://example.org/f>",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY :f",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY <http://example.org/f>",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY :f",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY <http://example.org/f>",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s :f",
+            "SELECT (FOLD(?o ORDER BY :f) AS ?l) WHERE { ?s ?p ?o }",
+            "SELECT (FOLD(?o ORDER BY ?o :f) AS ?l) WHERE { ?s ?p ?o }",
+        ] {
+            let q = format!("{ex}{refused}");
+            assert!(try_parse(&q).is_err(), "{q}");
+        }
+        for accepted in [
+            "SELECT * WHERE { ?s ?p ?o FILTER :f(?o) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER <http://example.org/f>(?o) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER :f() }",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING :f(?s)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING <http://example.org/f>(?s)",
+            "SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY :f(?o)",
+            "SELECT (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY <http://example.org/f>(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY :f(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY <http://example.org/f>(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s :f(?o)",
+            "SELECT (FOLD(?o ORDER BY :f(?o)) AS ?l) WHERE { ?s ?p ?o }",
+            "SELECT (FOLD(?o ORDER BY ?o DESC(:f(?o))) AS ?l) WHERE { ?s ?p ?o }",
+        ] {
+            let q = format!("{ex}{accepted}");
+            assert!(try_parse(&q).is_ok(), "{q}");
+        }
+    }
+
+    /// In an aggregate query a `SELECT` expression reads, outside an aggregate, only
+    /// group keys, aggregate results and earlier `SELECT` targets; grouping by an
+    /// expression does not make its variables keys (the W3C `agg08`/`agg11` tests).
+    #[test]
+    fn an_aggregate_projection_expression_reads_only_group_keys() {
+        for refused in [
+            "SELECT ((?a + ?b) AS ?s) (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY (?a + ?b)",
+            "SELECT ((?a + ?b) AS ?s) (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY (?x)",
+            "SELECT (STR(?o) AS ?t) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (BOUND(?o) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "SELECT ?k (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY ((?a + ?b) AS ?k)",
+            "SELECT (STR(?s) AS ?t) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT ?s (COUNT(?o) + 1 AS ?n) (?n * 2 AS ?m) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (SUM(?o) / COUNT(?o) AS ?avg) WHERE { ?s ?p ?o }",
+            "SELECT ?s (EXISTS { ?s ?q ?z } AS ?e) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (STR(?o) AS ?t) WHERE { ?s ?p ?o }",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        // §11.4 holds for a variable the WHERE clause never binds, or binds only inside
+        // MINUS, too — unless the caller declares it pre-bound.
+        let unbound = "SELECT (STR(?z) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s";
+        let minus_only = "SELECT (STR(?z) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o \
+                          MINUS { ?s ?q ?z } } GROUP BY ?s";
+        let prebound_this =
+            "SELECT (IF(sameTerm(SAMPLE(?x), $this), ?k, 0) AS ?v) WHERE { ?x ?p ?k } GROUP BY ?k";
+        let bare_this = "SELECT $this (COUNT(*) AS ?c) WHERE { ?s ?p ?o }";
+        for refused in [unbound, minus_only, prebound_this, bare_this] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        let declared = SparqlParser::new().with_prebound_variables(["this", "z"]);
+        for accepted in [unbound, minus_only, prebound_this, bare_this] {
+            assert!(declared.parse_query(accepted).is_ok(), "{accepted}");
+        }
+        // Declaring one name exempts that name alone.
+        let only_this = SparqlParser::new().with_prebound_variables(["this"]);
+        assert!(only_this.parse_query(unbound).is_err());
+        assert!(only_this.parse_query(prebound_this).is_ok());
+        // The neighbours: the same shapes over a group key parse unchanged.
+        for accepted in [
+            "SELECT (STR(?s) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT (STR(?s) AS ?t) (COUNT(*) AS ?c) WHERE { ?s ?p ?o MINUS { ?s ?q ?z } } GROUP BY ?s",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+    }
+
+    /// A `GROUP BY` condition that is only a variable, bracketed or not, groups by
+    /// that variable, so the variable is a key the `SELECT` clause may project (§11.4);
+    /// grouping by any other expression still makes no key of its variables (`agg08`).
+    #[test]
+    fn a_bracketed_variable_group_condition_is_a_key() {
+        for accepted in [
+            "SELECT ?s (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY (?s)",
+            "SELECT ?s (COUNT(*) AS ?c) WHERE { ?s ?p ?o } GROUP BY ((?s))",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY (?s)",
+            "SELECT (STR(?s) AS ?t) WHERE { ?s ?p ?o } GROUP BY (?s) ?p",
+            "SELECT ?k WHERE { ?s ?p ?o } GROUP BY (?s AS ?k)",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            "SELECT ((?a + ?b) AS ?s) (COUNT(?a) AS ?c) WHERE { ?x ?a ?b } GROUP BY (?a + ?b)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY (STR(?s))",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY (?s AS ?k)",
+            "SELECT ?o WHERE { ?s ?p ?o } GROUP BY (?s)",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+    }
+
+    /// A collection is a `TriplesNode`, so like a blank-node property list it may
+    /// stand alone with an empty `PropertyList` (`TriplesSameSubject ::= VarOrTerm
+    /// PropertyListNotEmpty | TriplesNode PropertyList`), emitting only its own list
+    /// triples — the W3C `syntax-lists-03`/`-04`/`-05` and `syntax-forms-02` tests. A
+    /// plain term or `()` (the `NIL` term) still needs a predicate-object list.
+    #[test]
+    fn a_collection_subject_may_stand_alone() {
+        for accepted in [
+            "SELECT * WHERE { ( ?z ) }",
+            "SELECT * WHERE { ( [] [] ) }",
+            "SELECT * WHERE { ( 1 2\n) }",
+            "SELECT * WHERE { ( ?x ) . ?x ?p ?o }",
+            "SELECT * WHERE { ( ?x ) FILTER(bound(?x)) }",
+            "SELECT * WHERE { ( ?x ) <http://example.org/p> ?o }",
+            "CONSTRUCT { ( 1 2 ) } WHERE { }",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            "SELECT * WHERE { ?z }",
+            "SELECT * WHERE { () }",
+            "SELECT * WHERE { ( ?z ) ?p }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        // The standalone collection is exactly its cons cells: two per member.
+        let where_pat = unproject(select_pattern("SELECT * WHERE { ( ?z ) }"));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert_eq!(patterns.len(), 2, "{patterns:?}");
+        let update = SparqlParser::new().parse_update("INSERT DATA { ( 1 ) }");
+        assert!(update.is_ok(), "{update:?}");
+    }
+
+    /// `GROUP BY` and `ORDER BY` require at least one condition (`GroupCondition+`,
+    /// `OrderCondition+`), and a `HAVING` condition is a `Constraint` — never a bare
+    /// variable or literal. Each refusal sits beside a neighbour that still parses.
+    #[test]
+    fn solution_modifier_clauses_require_their_conditions() {
+        for refused in [
+            "SELECT * WHERE { ?s ?p ?o } GROUP BY",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY LIMIT 1",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY HAVING (true)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING ?s",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING 1",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING TRUE",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        for accepted in [
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s",
+            "SELECT ?k WHERE { ?s ?p ?o } GROUP BY (STR(?s) AS ?k)",
+            "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o } GROUP BY STR(?s) ORDER BY ?n",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY DESC(?o)",
+            "SELECT * WHERE { ?s ?p ?o } ORDER BY (?o + 1) LIMIT 1",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING (true)",
+            "SELECT ?s WHERE { ?s ?p ?o } GROUP BY ?s HAVING COUNT(?o) bound(?s)",
+        ] {
+            assert!(try_parse(accepted).is_ok(), "{accepted}");
+        }
+    }
+
     /// A triple pattern's object is the same ground-literal grammar too: a
     /// signed numeral parses exactly as it does inside `VALUES`.
     #[test]
@@ -7356,8 +8974,10 @@ mod tests {
         /// consultation, so this helper cannot inflate what it measures.
         fn consultations(query: &str) -> u64 {
             let options = ParserOptions::default();
+            let mut resident = ResidentParserAdmission;
+            let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
             let mut p = SparqlParser::new()
-                .parser_for(query, &options)
+                .parser_for::<false>(query, &options, &mut memory)
                 .expect("tokenize");
             p.parse_prologue().expect("prologue");
             p.parse_query_form().expect("parse");
@@ -7964,24 +9584,26 @@ mod tests {
     fn exists_scope_frames_share_the_enclosing_variables_and_discard_their_own() {
         let var = |name: &str| Variable::new(name);
         let mut scopes = ExistsScopes::default();
-        scopes.push_boundary();
-        scopes.note(&var("a"));
-        scopes.push_isolated();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        scopes.push_boundary(&mut memory).unwrap();
+        scopes.note(&var("a"), &mut memory).unwrap();
+        scopes.push_isolated(&mut memory).unwrap();
         assert_eq!(
             scopes.top(),
             [var("a")],
             "an isolated frame sees the one beneath"
         );
-        scopes.note(&var("a"));
-        scopes.note(&var("b"));
+        scopes.note(&var("a"), &mut memory).unwrap();
+        scopes.note(&var("b"), &mut memory).unwrap();
         assert_eq!(
             scopes.top(),
             [var("a"), var("b")],
             "a seen variable is not noted twice"
         );
-        scopes.push_boundary();
+        scopes.push_boundary(&mut memory).unwrap();
         assert_eq!(scopes.top(), [], "a boundary frame sees nothing beneath it");
-        scopes.note(&var("a"));
+        scopes.note(&var("a"), &mut memory).unwrap();
         assert_eq!(
             scopes.top(),
             [var("a")],
@@ -7994,7 +9616,7 @@ mod tests {
             [var("a")],
             "an isolated frame's own variables are discarded"
         );
-        scopes.note(&var("b"));
+        scopes.note(&var("b"), &mut memory).unwrap();
         assert_eq!(
             scopes.top(),
             [var("a"), var("b")],
@@ -8007,6 +9629,60 @@ mod tests {
             scopes.positions.is_empty(),
             "every position left the trail with its variable"
         );
+        scopes.release(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
+    #[test]
+    fn exists_scope_refusal_preserves_enclosing_identity_and_parallel_trails() {
+        struct Limit {
+            maximum: usize,
+        }
+        impl Admission for Limit {
+            fn resize(&mut self, live: usize) -> std::result::Result<(), StorageError> {
+                if live > self.maximum {
+                    Err(StorageError::AdmissionFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let a = Variable::new("a");
+        let b = Variable::new("b");
+        let mut storage = Limit {
+            maximum: usize::MAX,
+        };
+        let mut memory = Memory::new(&mut storage);
+        let mut scopes = ExistsScopes::default();
+        scopes.push_boundary(&mut memory).unwrap();
+        scopes.note(&a, &mut memory).unwrap();
+        scopes.push_boundary(&mut memory).unwrap();
+        let live = memory.admitted_bytes();
+        memory.admission_mut().maximum = live;
+        assert_eq!(
+            scopes.note(&b, &mut memory),
+            Err(StorageError::AdmissionFailed)
+        );
+        assert!(scopes.top().is_empty(), "refusal publishes no new binding");
+        assert_eq!(scopes.trail.as_slice(), core::slice::from_ref(&a));
+        assert_eq!(scopes.previous, [None]);
+        assert_eq!(scopes.positions.get(&a), Some(&0));
+        assert_eq!(scopes.positions.get(&b), None);
+        scopes.pop();
+        assert_eq!(
+            scopes.top(),
+            core::slice::from_ref(&a),
+            "the enclosing frame still sees its original identity"
+        );
+        let before_duplicate = memory.admitted_bytes();
+        scopes.note(&a, &mut memory).unwrap();
+        assert_eq!(
+            memory.admitted_bytes(),
+            before_duplicate,
+            "duplicate lookup needs no storage"
+        );
+        scopes.release(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

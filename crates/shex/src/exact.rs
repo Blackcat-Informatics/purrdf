@@ -77,6 +77,8 @@ impl ExactBound {
             return None;
         }
         let lexical = match self.value()? {
+            // JSON has no infinity: the bound keeps the lexeme it was written as.
+            XsdValue::Double(d) if d.is_infinite() => self.lexical.clone(),
             XsdValue::Double(d) => purrdf_xsd::numeric::canonical_double(d),
             value @ XsdValue::Decimal(_) => {
                 let digits = value.canonical_lexical();
@@ -510,5 +512,50 @@ pub fn validate_shape_map_exact(
         base,
         options,
         Some(&bounds),
+    )
+}
+
+/// [`validate_exact`] under an explicit native XPath law and finite limits: every
+/// numeric facet compares exactly, as [`validate_exact`] does, and every `PATTERN`
+/// facet matches under `profile`, as [`crate::validate_with_xpath`] does.
+///
+/// # Errors
+///
+/// As [`crate::validate_with_xpath`]: a typed operational refusal; pattern-language
+/// errors remain findings.
+pub fn validate_exact_with_xpath(
+    schema: &ExactSchema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    profile: purrdf_core::xsd_regex::xpath::Profile,
+    limits: purrdf_core::xsd_regex::xpath::Limits,
+) -> core::result::Result<ResultShapeMap, purrdf_core::xsd_regex::xpath::Error> {
+    crate::validate::XPathValidator::exact(schema).validate(data, map, options, profile, limits)
+}
+
+/// [`validate_shape_map_exact`] under an explicit native XPath law and finite limits,
+/// as [`crate::validate_shape_map_with_xpath`].
+///
+/// # Errors
+///
+/// As [`crate::validate_shape_map_with_xpath`].
+pub fn validate_shape_map_exact_with_xpath(
+    schema: &ExactSchema,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+    profile: purrdf_core::xsd_regex::xpath::Profile,
+    limits: purrdf_core::xsd_regex::xpath::Limits,
+) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
+    crate::shapemap::validate_shape_map_with_validator(
+        &mut crate::validate::XPathValidator::exact(schema),
+        data,
+        map_src,
+        base,
+        options,
+        profile,
+        limits,
     )
 }

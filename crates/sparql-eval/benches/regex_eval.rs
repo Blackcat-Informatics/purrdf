@@ -24,6 +24,10 @@
 //!   every row is a cache **miss** and pays a full compile. Laid beside
 //!   `regex_constant`, it is the control that shows the hit path is real.
 //!
+//! The same fixture and measurement loop run under compatibility routing and
+//! both explicitly dated native XPath laws. The native groups record whole-query
+//! compiler, cache, linking and matcher costs; no timing threshold is asserted.
+//!
 //! Both row counts are parameterized, and rayon's global pool is pinned to a
 //! fixed size before the first query. The evaluator forks a per-chunk context
 //! whose geometry follows `rayon::current_num_threads()`, so leaving the pool
@@ -49,6 +53,7 @@
 use purrdf_testkit::text::lowercase_filler as filler;
 use std::sync::Arc;
 
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
 };
@@ -141,34 +146,48 @@ fn bench_regex_eval(c: &mut Bench) {
         "the pinned global pool must report the size this benchmark asked for"
     );
 
-    let engine = NativeSparqlEngine::new();
     let queries = queries();
+    for (profile, engine) in [
+        (None, NativeSparqlEngine::new()),
+        (
+            Some(Profile::Xpath20),
+            NativeSparqlEngine::new().with_xpath_regex(Profile::Xpath20, Limits::new()),
+        ),
+        (
+            Some(Profile::Xpath31),
+            NativeSparqlEngine::new().with_xpath_regex(Profile::Xpath31, Limits::new()),
+        ),
+    ] {
+        let group_name = profile.map_or_else(
+            || "regex_eval".to_owned(),
+            |profile| format!("native_xpath_eval/{}", profile.name()),
+        );
+        let mut group = c.benchmark_group(group_name);
+        // Whole-query evaluations run milliseconds; keep sampling light like
+        // `query_eval` so the full matrix stays tractable.
+        group.sample_size(10);
 
-    let mut group = c.benchmark_group("regex_eval");
-    // Whole-query evaluations run milliseconds; keep sampling light like
-    // `query_eval` so the full matrix stays tractable.
-    group.sample_size(10);
-
-    for &rows in ROW_COUNTS {
-        let ds = name_dataset(rows);
-        for (label, query) in &queries {
-            // Warm the plan cache and prove the fixture does work: a regression
-            // that emptied the result would otherwise benchmark a no-op.
-            let observed = run(&engine, &ds, query);
-            assert!(
-                observed >= rows,
-                "case {label} returned {observed} rows (< {rows}) — the benchmark would be a no-op"
-            );
-            group.throughput(Throughput::Elements(rows as u64));
-            group.bench_with_input(BenchmarkId::new(*label, rows), &rows, |bencher, _| {
-                bencher.iter(|| {
-                    let count = run(black_box(&engine), black_box(&ds), black_box(query));
-                    black_box(count)
+        for &rows in ROW_COUNTS {
+            let ds = name_dataset(rows);
+            for (label, query) in &queries {
+                // Warm the plan cache and prove the fixture does work: a regression
+                // that emptied the result would otherwise benchmark a no-op.
+                let observed = run(&engine, &ds, query);
+                assert!(
+                    observed >= rows,
+                    "case {label} returned {observed} rows (< {rows}) — the benchmark would be a no-op"
+                );
+                group.throughput(Throughput::Elements(rows as u64));
+                group.bench_with_input(BenchmarkId::new(*label, rows), &rows, |bencher, _| {
+                    bencher.iter(|| {
+                        let count = run(black_box(&engine), black_box(&ds), black_box(query));
+                        black_box(count)
+                    });
                 });
-            });
+            }
         }
+        group.finish();
     }
-    group.finish();
 }
 
 /// The text every `regex_long_literals` pattern but the control matches in.

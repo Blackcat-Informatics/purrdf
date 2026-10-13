@@ -113,17 +113,10 @@ pub const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[
     ),
 ];
 
-const SHT: &str = "http://www.w3.org/ns/shacl-test#";
+const SHT: &str = sht12::NS;
 const SRLT: &str = "http://www.w3.org/ns/sparql-rl-tests#";
 
-mod sht12 {
-    pub(crate) const EVAL_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#EvalNodeExpr";
-    pub(crate) const INFER: &str = "http://www.w3.org/ns/shacl-test#Infer";
-    pub(crate) const NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#nodeExpr";
-    pub(crate) const FOCUS_NODE: &str = "http://www.w3.org/ns/shacl-test#focusNode";
-    pub(crate) const IGNORE_ORDER: &str = "http://www.w3.org/ns/shacl-test#ignoreOrder";
-    pub(crate) const SCOPE_PREFIX: &str = "http://www.w3.org/ns/shacl-test#scope-";
-}
+use purrdf_iri::vocab::sht as sht12;
 
 mod srlt {
     pub(crate) const RULESET: &str = "http://www.w3.org/ns/sparql-rl-tests#ruleset";

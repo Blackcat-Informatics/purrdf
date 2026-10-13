@@ -511,14 +511,29 @@ with all of them named.
 
 A pre-binding violation is judged where the query runs. SHACL 1.2 SPARQL
 Extensions requires a failure for a query "executed with pre-bound variables"
-that contains a `MINUS`, a `VALUES` or an `AS ?var` for a pre-bound variable.
+that contains a `MINUS`, a `VALUES` that mentions a pre-bound variable, or an
+`AS ?var` for one. A `sh:sparql` constraint, a component validator, a
+`sh:SPARQLTarget`'s `sh:ask` and a SPARQL rule refuse every `VALUES`, pre-bound
+or not, because the vendored W3C case `unsupported-sparql-002` requires the
+refusal of `VALUES ?any { true }`; a node expression, a `sh:SPARQLFunction` body
+and a `sh:SPARQLTargetType` query refuse only one that mentions a pre-bound name.
 The load therefore fails, with `ShapesError::Prebinding`, when a shape's
 `sh:sparql` constraint violates one, when a use of a custom component selects such
 a validator, when a node expression or a query a shape reaches calls such a
 `sh:SPARQLFunction`, when a shape instantiates such a `sh:SPARQLTargetType`, or
 when a shape reaches such a `sh:select` node expression. A function's or target
-type's parameters are its pre-bound variables, and a select expression's is
-`$this`. A validator of a built-in component never runs, and neither does a
+type's parameters are its potentially pre-bound variables, an optional one
+included, since a call that supplies it binds it. A node expression's are `$this`
+and every name its context binds: `$value` inside `sh:expression`, a custom
+function's arguments inside its body and a free evaluation's scope names. Each is
+held to the same rule as `$this`, and a node expression's query that breaks it
+fails the load when a shape reaches the expression. This is stricter than the engine's own lanes:
+a prepared execution or a request's substitutions admit `VALUES` and `MINUS` over
+a pre-bound name (see
+[Pre-bound variables](../sparql/querying.md#pre-bound-variables)). The grouping
+constraint is narrower: inside a custom function's body it treats as constants
+only the arguments every call binds, the required ones, because a call may omit
+an optional one. A validator of a built-in component never runs, and neither does a
 validator no use selects, a function nothing calls or a target type no shape
 instantiates. Those load, and `purrdf shapes lint` lists each one as a finding.
 
@@ -777,7 +792,107 @@ and inverse properties exchange domain and range. Strongly connected cycles
 are condensed deterministically. Multiple ranges remain conjunctive in emitted
 JSON Schema; union and intersection expressions map to `anyOf` and `allOf`.
 
-Direct SHACL remains authoritative. Ontology-only fields are optional;
+Anonymous class expressions are part of the theory. A restriction
+(`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`, and
+the unqualified and qualified cardinalities over `owl:onClass` or
+`owl:onDataRange`) or a boolean form (`owl:unionOf`, `owl:intersectionOf`,
+`owl:complementOf`, `owl:oneOf`) that a named class is `rdfs:subClassOf` or
+`owl:equivalentClass` to is recorded with its source axiom and inherited by
+every subclass; asserted of `owl:Thing`, it holds of every class, and a
+universal restriction on `owl:Thing` is the property's range. The property it
+names joins the catalog and is emitted on the class that carries the
+restriction, whatever its declared domain, and the axiom is provenance on the
+coverage rows of its owner and of the classes that reference it. A restriction
+on the inverse of a property whose inverse is named is a restriction on that
+named property. Data ranges built
+with `owl:onDatatype` and `owl:withRestrictions`, `owl:datatypeComplementOf`,
+or a literal `owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p
+]` is read wherever a property expression may stand. The OWL 2 datatype map
+and RDF 1.2 datatypes outside XSD (`owl:real`, `owl:rational`,
+`rdf:PlainLiteral`, `rdf:XMLLiteral`, `rdf:dirLangString`, `rdf:HTML`,
+`rdf:JSON`) are datatypes. An equivalence between an IRI and a data range, or
+another datatype, defines a datatype: a value is then held to the defining
+range, or typed with the datatype by name. Each named member of a union a class
+is equivalent to becomes its subclass, and an existential restriction places a
+class within the restricted property's domain, so that the domain's other
+properties reach it.
+
+What a developer schema can state is projected onto the class definition.
+`owl:allValuesFrom` holds every value to the filler; a class filler is checked
+only as a node reference, an approximation, and `owl:Nothing` forbids the
+property. An existential, `owl:hasValue` or a minimum makes the property
+required, with `contains` and `minContains` where the filler narrows the
+values. A maximum becomes `maxItems`, or `maxContains` over a qualifier whose
+value schema is exact. A datatype restriction's numeric, temporal, length and
+pattern facets are compiled by the SHACL value-constraint compiler, with the
+XSD pattern anchored; a datatype complement is judged on the literal's
+datatype tag rather than its value space, an approximation. An `owl:oneOf` of
+named individuals restricts `@id`, the complement of a named class excludes it
+from `@type`, and a union of restrictions becomes `anyOf` over the members'
+property constraints. Requiring a value and counting distinct terms read
+open-world axioms closed-world, so the coverage rows they touch are
+representation approximations.
+
+An inherited restriction is referenced, not copied: the class that owns it
+holds it in a `<Class>.Restriction.<property>` fragment definition, and each
+subclass and each descendant fragment references the nearest owner's fragment
+through `allOf` (disjunctions likewise through `<Class>.Disjunctions`), so
+schema, provenance and manifest grow with the restrictions rather than with the
+hierarchy's depth. A class constructor on an IRI, such as `ex:Day owl:oneOf (
+… )` or an IRI typed `owl:Restriction`, is the equivalence OWL gives it.
+
+What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
+restriction on an unnamed inverse or on several properties, a maximum over a
+class qualifier, the complement of an anonymous expression, a union with a
+named member the class does not already entail, the sufficient-condition
+direction of `owl:equivalentClass`, a general class inclusion with an anonymous
+subclass, anonymous classes in `owl:disjointWith`, `owl:AllDisjointClasses`,
+`owl:disjointUnionOf` and class assertions, and `owl:hasKey` on an anonymous
+class. `SchemaCompileRequest::class_expression_report` and
+`compile_schema_with_class_expressions` return the class-expression manifest:
+every such axiom once, with each component's outcome (projected, approximated,
+unrepresented or excluded) and reason, on the axiom itself or on each class
+that owns it; a class below an owner has its own row only where its outcome
+differs. The class definition names its unrepresented components in
+`$comment`. Nothing the surface accepted before is refused: a malformed
+anonymous part of an axiom it used to skip is reported as unrepresented. A
+malformed expression in an axiom it always read is refused: a restriction
+without a property, a cardinality that is no non-negative integer, a qualifier
+mismatch, `owl:hasSelf` other than true, a construct-less blank node or one
+that is both a class expression and a data range, an ill-formed enumeration,
+list or datatype restriction, an expression that contains itself, or a data
+range where a class is required. A blank node with several readings (several
+facets, facet values, properties, qualifiers or class constructs) is their
+conjunction, and a facet over a defined datatype restricts its definition's
+values. An empty, single-member or repeated union or intersection, an empty
+enumeration, an empty facet list and a cardinality beyond 64 bits are read by
+their meaning, and a punned property by the RDF-Based Semantics. Every
+property's values are read that way too, whatever its declared kind: a value is
+any node (an IRI may denote a data value) or any well-typed literal (one whose
+lexical form is in its datatype's lexical space; `"abc"^^xsd:integer` is none).
+A property no range constrains states that exactly. A data range holds
+literals to its value space and admits a node unjudged, and a class range or
+filler admits a well-typed literal unjudged, both reported as approximations,
+except that a class disjoint with `rdfs:Literal` rejects every literal
+exactly. A cross-kind `owl:hasValue` is `∃p.{v}`, and `owl:hasSelf` on a
+datatype property is the self restriction; each cell carrying an
+`owl:hasSelf` is reported as an approximation. `owl:Nothing`, and an
+expression empty by its form (`¬owl:Thing`, the empty enumeration), admits no
+value in any range or filler position, reported exactly: an existential or a
+qualified minimum over it leaves the class no instance. One request expands
+at most 1,048,576 expression nodes.
+
+OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a
+literal by its value, as OWL 2 reads a datatype, where `sh:datatype` judges its
+tag: `xsd:decimal` admits the integer `1`, `xsd:string` admits `xsd:token`,
+and an enumeration of `1` matches `"01"^^xsd:integer`. A decimal or integer
+range admits a literal typed `owl:rational` unjudged and is reported as an
+approximation; a length or pattern facet holds of every string literal's
+lexical form, its value. Under a hash namespace the schema `$id`
+drops the fragment, as draft 2020-12 requires.
+
+Direct SHACL remains authoritative. Ontology-only fields are optional unless a
+class restriction requires them;
 `owl:FunctionalProperty` gives a scalar representation with approximation
 provenance, while inverse functionality does not. Closed shapes reject
 unshaped fields unless they are directly present or ignored. Classes without a
@@ -791,7 +906,8 @@ exclusions, with sorted per-class outcomes and source-axiom provenance.
 request cache key binds RDFC-1.0 identities for the shapes and ontology graphs,
 caller namespaces, mode, value-vocabulary marker, compiler/policy salts, and
 the fixed ceilings: 65,536 properties, 65,536 classes, 1,048,576 relation or
-coverage cells, and expression depth 64. Malformed OWL lists, contradictory
+coverage cells, 16,777,216 class-hierarchy memberships, and expression depth
+64. Malformed OWL lists, contradictory
 property kinds/ranges, key collisions, and limit exhaustion are typed failures.
 
 Run the complete two-mode and four-emitter example with:
@@ -1046,9 +1162,10 @@ locations; an exact package has an empty ledger.
 Emission fails before returning bytes for invalid caller configuration,
 malformed schema keywords, `$id` rebasing, external/indirect/dangling `$ref`,
 `$dynamicRef`/`$recursiveRef`, alias cycles, unsatisfiable closed required
-fields, and generated-name collisions. The fixed limits are 16 MiB for the
-input schema, each artifact, and one codec value; 65,536 definitions, fields
-per object, or finite values; depth 128; and 255 bytes per GraphQL name.
+fields, and generated-name collisions. The input schema has no fixed size
+limit; each artifact is bounded at four bytes per input byte, and at least
+16 MiB. The fixed limits are 16 MiB for one codec value; 65,536 definitions,
+fields per object, or finite values; depth 128; and 255 bytes per GraphQL name.
 
 The independent dev oracle classifies source values with `purrdf-jsonschema`, builds the
 SDL with locked official GraphQL.js 16.14.0, and executes real variable
@@ -1325,6 +1442,52 @@ Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 dict with `text` and its `language` / `direction` / `datatype` when present).
 A result that carries SHACL-SPARQL result annotations also has `annotations`, a
 list of tuples, each a property IRI and a value in N-Triples syntax.
+
+## Dated XPath regex laws
+
+`sh:pattern` with its `sh:flags`, and the `REGEX` and `REPLACE` of SHACL-SPARQL
+targets, constraints and SHACL-AF functions, run on the compatibility regular
+expressions unless the caller selects a dated native XPath law by name:
+`xpath-2.0-2010-12-14` (XPath and XQuery Functions and Operators 2.0, Second
+Edition) or `xpath-3.1-2017-03-21` (Functions and Operators 3.1). Both admit
+backreferences, so `sh:pattern "^(a)\\1$"` accepts `"aa"`. Only 3.1 admits
+non-capturing groups and the `q` flag. The shapes-graph tools that evaluate
+patterns take the law too. For rules, it covers the `REGEX`/`REPLACE` of SHACL
+rules, SHACL-AF functions, node expressions and SPARQL 1.2 RL filters and
+assignments, and the `sh:pattern` of rule conditions. For node expressions, it
+covers filter-shape `sh:pattern`s and the `REGEX`/`REPLACE` of function calls
+and SPARQL-based expressions. A lint compiles and matches no pattern, so it
+takes no law.
+
+| Host | Spelling |
+|---|---|
+| Rust | `PreparedShapes::with_xpath_regex(profile, limits)`, which returns an `XPathPreparedShapes`, and the free `purrdf_shapes::xpath::validate_dataset`; the `purrdf-validate` `*_with_xpath_regex` twins (`validate_to_sarif_string`, `validate_changes_to_sarif_string`, `validate_with_shapes_product`, `validate_with_rebuilt_shapes_product`, `entail_to_ntriples`, `apply_rules_to_ntriples` and `eval_node_expr`) take the profile `xpath_regex::parse_profile` returns |
+| CLI | `--xpath-regex <NAME>` on `validate` (with `--shapes`, `--shapes-product` or `--changes`), `rules` and `node-expr`; `rules --check` refuses it and `shapes lint` does not offer it |
+| Python | `xpath_regex=` on `shapes.validate`, `Shapes.validate_nt`, `Shapes.validate_store`, `PreparedShapes.validate_nt`, `PreparedShapes.validate_store_changes`, `shapes.entail`, `shapes.apply_rules` and `shapes.eval_node_expr` |
+| WebAssembly | a trailing `xpathRegex` on `shaclValidateToSarif`, `shaclValidateChangesToSarif`, the four `shaclProductValidateToSarif…` entries, `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr`; their asynchronous twins take it in their options object |
+| C | `regex_profile` on `purrdf_shacl_validate_to_sarif_xpath_regex`, `purrdf_shacl_validate_changes_to_sarif_xpath_regex`, `purrdf_shapes_product_admit_xpath_regex`, `purrdf_shapes_product_admit_expecting_xpath_regex`, `purrdf_shapes_product_rebuild_xpath_regex`, `purrdf_shapes_product_rebuild_expecting_xpath_regex`, `purrdf_shacl_entail_to_ntriples_xpath_regex`, `purrdf_shacl_apply_rules_xpath_regex` and `purrdf_shacl_eval_node_expr_xpath_regex` |
+
+```python
+import purrdf
+
+report = purrdf.shapes.validate(
+    shapes_ttl, data_nt, xpath_regex="xpath-3.1-2017-03-21"
+)
+```
+
+Names match exactly, so `xpath-3.1` is refused with a list of the accepted
+names. With no selection (no keyword, option or flag, or a NULL
+`regex_profile`), the compatibility regular expressions behave exactly as
+before. A prepared product needs no re-packing, because the law belongs to the
+evaluation and not to the prepared shapes.
+
+A pattern or flag the selected law does not define is reported the way an
+invalid pattern always is: a result of the declaring shape. A selected law also
+runs under finite resource bounds, 64 KiB of pattern source among them.
+Exceeding one fails the validation with the resource's
+[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core)
+and writes no report, dataset or output. A resource refusal never becomes a
+conforming graph.
 
 ## The report is a dataset
 

@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 This tree vendors the official W3C SPARQL 1.1 test suite: the full query-eval,
 UPDATE-eval, entailment-regime, and **complete syntax** (query + update +
 federation) groups verbatim at a pinned commit, plus a small PurRDF-curated
-`aggregates`/`subquery`/`service` selector subset over the exotic-aggregation,
-deep-subquery, and federated-`SERVICE` surface. It is consumed by the native
+`subquery`/`service` selector subset over the deep-subquery and
+federated-`SERVICE` surface. It is consumed by the native
 conformance harness (`crates/sparql-conformance`).
 
 ## Source
@@ -18,15 +18,15 @@ conformance harness (`crates/sparql-conformance`).
   path `sparql/sparql11/`.
 - Mirror of the W3C DAWG/SPARQL-WG test suite at
   <https://www.w3.org/2009/sparql/docs/tests/>.
-- The curated `aggregates`/`subquery`/`service` subset was fetched from the
-  `main` branch on **2026-06-26**.
+- The curated `subquery`/`service` subset was fetched from the `main` branch on
+  **2026-06-26**.
 - The full query-eval groups (see below) are vendored **verbatim** at the pinned
   commit **`426c7df4b5d5d292e3ba09dc22e622ea301f230a`** — every file, `manifest.ttl`
   included, carries its own `LicenseRef-W3C-Test-Suite` `.license` sidecar.
 
 ## Full W3C query-eval groups (commit `426c7df`)
 
-Ten groups are vendored verbatim and discovered automatically by the harness
+Eleven groups are vendored verbatim and discovered automatically by the harness
 (one nextest case per `manifest.ttl`). Unlike the curated subset, these ship the
 **upstream** `manifest.ttl` verbatim (sidecar'd), so the whole group runs. Every
 non-passing case is recorded in `crates/sparql-conformance/src/xfail.rs` with a
@@ -34,12 +34,13 @@ typed reason — nothing is silently skipped.
 
 | Group | Cases | Green | Ledgered (reason) |
 |-------|------:|------:|-------------------|
+| aggregates | 47 | 47 | — |
 | bind | 10 | 10 | — |
 | bindings | 11 | 11 | — |
-| cast | 6 | 3 | 3 upstream-erratum (`cast-decimal`, `cast-double`, `cast-float`) |
+| cast | 6 | 6 | — |
 | construct | 7 | 7 | — |
 | exists | 6 | 6 | — |
-| functions | 75 | 73 | 2 upstream-erratum (`coalesce01`, `plus-1-corrected`) |
+| functions | 75 | 75 | — |
 | grouping | 6 | 6 | — |
 | negation | 12 | 12 | — |
 | project-expression | 7 | 7 | — |
@@ -47,12 +48,17 @@ typed reason — nothing is silently skipped.
 
 This table is derived from `crates/sparql-conformance/src/xfail.rs::XFAIL`, the
 same registry `run_manifest` honors, not maintained separately from it: every
-row's ledgered count is that registry's live count for the group, not a count
-that can drift out from under it. The 5 ledgered cases above are the entire
-`XFAIL` registry, and every one of them is `XfailReason::UpstreamErratum` — a
-fixture whose expected lexical form the W3C manifest itself states
-inconsistently (see the reasons recorded alongside each entry in `xfail.rs`),
-not a native-engine gap. `construct`, `exists`, `grouping`, and `property-path`
+row's ledgered count is that registry's live count for the group. The registry
+holds no query-eval entry. Ten cases (`cast-decimal`, `cast-double`,
+`cast-float`, `functions#coalesce01` and `#plus-1-corrected`, and five
+`aggregates` cases) differ from their expected results only in how a computed
+number is spelled, and the fixtures spell those numbers inconsistently within one
+group (`"1050"` beside `"2.5E0"` for `xsd:double`, `"2.0"` beside `"2"` for an
+integer-valued `xsd:decimal`). The harness compares two numeric literals of the
+SAME datatype by value (`compare::comparison_lexical`, Jena's approach); the
+datatype must still match exactly, every other literal compares as an exact term,
+and NaN matches NaN, as result-set equivalence is term identity. All ten pass.
+`construct`, `exists`, `grouping`, and `property-path`
 each once ledgered several `unsupported-construct`/`property-path` gaps
 (CONSTRUCT WHERE, EXISTS over a GRAPH variable, non-grouped-variable
 rejection, inverse paths inside a negated property set); all of them are
@@ -160,11 +166,10 @@ The selector `manifest.ttl` files and this document are PurRDF-authored
 
 | Group | Query / Data | Fidelity |
 |-------|--------------|----------|
-| aggregates | `agg-numeric.ttl`, `agg-group-builtin.rq`, `agg-sum-01.rq`, `agg-multiple-having.rq` | **verbatim** from `sparql/sparql11/aggregates/` |
 | subquery | `sq13.rq`, `sq13.ttl` | **verbatim** from `sparql/sparql11/subquery/` |
 | service | `service0{1,2,3,4a,5,6,7}.rq`, `service0{1..7}.srx`, `data*.ttl` (default-graph + per-endpoint) | **verbatim** from `sparql/sparql11/service/` |
 
-The expected-result files (`*.srx`) for the `aggregates` and `subquery` groups are
+The expected-result files (`*.srx`) for the `subquery` group are
 **reconstructed to a semantically equivalent** SPARQL Results XML document: the
 harness compares SELECT results as a W3C *solution-set multiset* (via the native
 `from_xml` reader), so the exact bytes of those upstream `.srx` are immaterial —
@@ -175,11 +180,6 @@ upstream-erratum note below).
 
 ## Curation rationale
 
-- `agg-group-builtin` — `GROUP BY (DATATYPE(?o) AS ?d)` directly exercises the
-  expression-valued `GROUP BY`.
-- `agg-multiple-having` — `HAVING (COUNT(*) > 1) (COUNT(*) < 3)` exercises
-  multi-condition `HAVING`.
-- `agg-sum-01` — `SUM` over the XSD decimal value space.
 - `subquery13` ("Subqueries don't inject bindings") — a nested `SELECT` whose
   inner variable scope is independent of the outer query; it also exercises
   blank-node property lists (`[ rdfs:label ?L ]`).

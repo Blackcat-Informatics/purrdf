@@ -34,7 +34,7 @@ fuel 12 tripped budget fuel fuel-exhausted limit=K consumed=13 certificate certa
 fuel 13 tripped budget fuel fuel-exhausted limit=K consumed=14 certificate certain positional-prefix=true budget-exhausted fuel rows=3 quads=0 digest=6effdb47d5daffe3 | fuel=14 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 14..=64 x51 complete rows=3 quads=0 digest=6effdb47d5daffe3 | fuel=14 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == scratch-bytes-zero cases/concat.ttl cases/concat.rq none emits=0
-metered complete | fuel=18 answer-rows=3 intermediate-cells=9 scratch-bytes=353 remote-requests=0
+metered complete | fuel=18 answer-rows=3 intermediate-cells=9 scratch-bytes=465 remote-requests=0
 node 0 depth=0 Project rows=3 cells=3 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Bgp rows=3 cells=6 algebra-node-entry=1 committed-output-row=3 bgp-candidate-quad=3
@@ -2810,7 +2810,7 @@ fuel 3607 tripped budget fuel fuel-exhausted limit=K consumed=3608 certificate c
 fuel 3608 tripped budget fuel fuel-exhausted limit=K consumed=3609 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=a7834e0921501984 | fuel=3609 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 3609 complete rows=1 quads=0 digest=a7834e0921501984 | fuel=3609 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == exists-inner-counters cases/exists-inner-counters.ttl cases/exists-inner-counters.rq none emits=0
-metered complete | fuel=48 answer-rows=2 intermediate-cells=4 scratch-bytes=76 remote-requests=0
+metered complete | fuel=48 answer-rows=2 intermediate-cells=4 scratch-bytes=153 remote-requests=0
 node 0 depth=0 Project rows=2 cells=2 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2 exists-definition-answered=2 exists-inner-solutions-consumed=2
 node 2 depth=2 Filter rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2 exists-probe-answered=1
@@ -2864,3 +2864,43 @@ fuel 45 tripped budget fuel fuel-exhausted limit=K consumed=46 certificate certa
 fuel 46 tripped budget fuel fuel-exhausted limit=K consumed=47 certificate certain positional-prefix=true budget-exhausted fuel rows=2 quads=0 digest=31c796c5a10587cf | fuel=47 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 47 tripped budget fuel fuel-exhausted limit=K consumed=48 certificate certain positional-prefix=true budget-exhausted fuel rows=2 quads=0 digest=31c796c5a10587cf | fuel=48 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 48..=64 x17 complete rows=2 quads=0 digest=31c796c5a10587cf | fuel=48 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+== numeric-default-fuel-boundary cases/numeric-default.ttl cases/numeric-default.rq none emits=0
+metered complete | fuel=1763 answer-rows=1 intermediate-cells=2 scratch-bytes=476 remote-requests=0
+node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
+node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=463
+node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1292
+node 3 depth=3 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
+fuel 0 tripped budget fuel fuel-exhausted limit=K consumed=1 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=1 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1 tripped budget fuel fuel-exhausted limit=K consumed=2 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=2 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 2 tripped budget fuel fuel-exhausted limit=K consumed=3 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=3 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 3 tripped budget fuel fuel-exhausted limit=K consumed=4 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=4 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 4 tripped budget fuel fuel-exhausted limit=K consumed=5 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=5 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 5 tripped budget fuel fuel-exhausted limit=K consumed=6 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=6 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 6..=1091 x1086 tripped budget fuel fuel-exhausted limit=K consumed=1092 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=1092 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1092..=1296 x205 tripped budget fuel fuel-exhausted limit=K consumed=1297 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=1297 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1297 tripped budget fuel fuel-exhausted limit=K consumed=1298 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=1298 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1298 tripped budget fuel fuel-exhausted limit=K consumed=1299 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=3720fb47dd13c6bf | fuel=1299 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1299..=1760 x462 tripped budget fuel fuel-exhausted limit=K consumed=1761 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=1761 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1761 tripped budget fuel fuel-exhausted limit=K consumed=1762 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=ae538e297df62316 | fuel=1762 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1762 tripped budget fuel fuel-exhausted limit=K consumed=1763 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=ae538e297df62316 | fuel=1763 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1763 complete rows=1 quads=0 digest=ae538e297df62316 | fuel=1763 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+== temporal-exact-fuel-boundary cases/numeric-default.ttl cases/temporal-exact.rq none emits=0
+metered complete | fuel=700 answer-rows=1 intermediate-cells=2 scratch-bytes=429 remote-requests=0
+node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
+node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=80
+node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=612
+node 3 depth=3 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
+fuel 0 tripped budget fuel fuel-exhausted limit=K consumed=1 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=1 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 1 tripped budget fuel fuel-exhausted limit=K consumed=2 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=2 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 2 tripped budget fuel fuel-exhausted limit=K consumed=3 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=3 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 3 tripped budget fuel fuel-exhausted limit=K consumed=4 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=4 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 4 tripped budget fuel fuel-exhausted limit=K consumed=5 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=5 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 5 tripped budget fuel fuel-exhausted limit=K consumed=6 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=6 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 6..=537 x532 tripped budget fuel fuel-exhausted limit=K consumed=538 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=538 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 538..=616 x79 tripped budget fuel fuel-exhausted limit=K consumed=617 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=617 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 617 tripped budget fuel fuel-exhausted limit=K consumed=618 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=618 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 618 tripped budget fuel fuel-exhausted limit=K consumed=619 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=619 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 619..=697 x79 tripped budget fuel fuel-exhausted limit=K consumed=698 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=698 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 698 tripped budget fuel fuel-exhausted limit=K consumed=699 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=784d163a389ac908 | fuel=699 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 699 tripped budget fuel fuel-exhausted limit=K consumed=700 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=784d163a389ac908 | fuel=700 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 700 complete rows=1 quads=0 digest=784d163a389ac908 | fuel=700 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0

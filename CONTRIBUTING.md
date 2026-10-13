@@ -42,6 +42,16 @@ Node; `make check`, `make test`, and `cargo test --workspace` require it. CI
 installs Node.js 24 explicitly. The oracle is mandatory and does not skip when
 Node is absent.
 
+The host-only native profiling safety and Cargo configuration tests use the
+workspace's owned temporary directories under Cargo's target directory. The
+configuration absence probe reads from the filesystem root with an isolated
+`CARGO_HOME` inside its fixture; it writes no files at the filesystem root.
+That root must have no Cargo configuration, since clearing the environment and
+selecting `CARGO_HOME` do not disable Cargo's ancestor discovery. Configured and
+malformed configuration probes run inside their owned fixtures. Measured
+profiling arms still require their task-owned `/opt` disk locations outside the
+source tree; the execution and hosted reclamation entry points enforce them.
+
 ```bash
 make doctor     # what this machine actually enforces (run when a gate prints SKIP)
 make metadata   # regenerate + verify generated artifacts (loss matrices, queries)

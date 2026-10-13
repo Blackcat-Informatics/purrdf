@@ -56,6 +56,7 @@ const HANDLER_KEYS = [
   "yieldEveryPolls",
   "maxRequestBytes",
   "onInternalError",
+  "xpathRegex",
 ];
 
 // A SPARQL query or update's text is a program, not a payload: even a large one — a
@@ -518,10 +519,21 @@ function handlerOptions(options) {
     }
     cors = { origins, maxAgeSeconds: given.maxAgeSeconds ?? undefined };
   }
+  if (isPresent(source.xpathRegex) && typeof source.xpathRegex !== "string") {
+    throw new TypeError(`${caller}: xpathRegex must be the stable name of a dated XPath law`);
+  }
   // The host options the twins take are passed through untouched; the twins validate
-  // them (and refuse a catalog with no resolveService).
+  // them (and refuse a catalog with no resolveService, or an xpathRegex that names no
+  // dated law).
   const host = {};
-  for (const key of ["resolveService", "resolveLoad", "catalog", "localServices", "yieldEveryPolls"]) {
+  for (const key of [
+    "resolveService",
+    "resolveLoad",
+    "catalog",
+    "localServices",
+    "yieldEveryPolls",
+    "xpathRegex",
+  ]) {
     if (isPresent(source[key])) host[key] = source[key];
   }
   const onInternalError = internalErrorOption(source.onInternalError, caller);

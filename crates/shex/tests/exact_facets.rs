@@ -11,10 +11,12 @@
 //! imports. Every refusal here runs beside a neighbour that is accepted.
 
 use purrdf_core::TermValue;
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_rdf::parse_dataset;
 use purrdf_shex::{
-    ConformanceStatus, ExactSchema, ShapeSelector, ShexError, ValidationOptions, to_shexj,
-    validate, validate_exact, validate_shape_map_exact,
+    ConformanceStatus, ExactSchema, ShapeSelector, ShexError, ValidationOptions, XPathValidator,
+    to_shexj, validate, validate_exact, validate_exact_with_xpath, validate_shape_map_exact,
+    validate_shape_map_exact_with_xpath, validate_with_xpath,
 };
 
 use ConformanceStatus::{Conformant, Nonconformant};
@@ -549,17 +551,179 @@ fn a_bound_past_the_f64_range_is_kept_by_the_exact_parsers_only() {
     assert!(plain_shexj("mininclusive", &bound).is_err());
     assert!(plain_shexj("mininclusive", &three_hundred).is_ok());
 
-    for (facet, ok) in [("MININCLUSIVE 1e400", false), ("MININCLUSIVE 1e300", true)] {
-        assert_eq!(plain_shexc(facet).is_ok(), ok, "{facet}");
-        assert_eq!(
+    // A DOUBLE past the double range is no such refusal: it is the infinity of its
+    // sign (see `a_double_bound_past_the_double_range_is_infinite`), in every parser.
+    for facet in ["MININCLUSIVE 1e400", "MININCLUSIVE 1e300"] {
+        assert!(plain_shexc(facet).is_ok(), "{facet}");
+        assert!(
             ExactSchema::parse_shexc(&shexc_src(facet), None).is_ok(),
-            ok,
             "{facet}"
         );
     }
-    for (lexeme, ok) in [("1e400", false), ("1e300", true)] {
-        assert_eq!(plain_shexj("mininclusive", lexeme).is_ok(), ok, "{lexeme}");
+    for lexeme in ["1e400", "1e300"] {
+        assert!(plain_shexj("mininclusive", lexeme).is_ok(), "{lexeme}");
         let doc = shexj_src("mininclusive", lexeme);
-        assert_eq!(ExactSchema::parse_shexj(&doc, None).is_ok(), ok, "{lexeme}");
+        assert!(ExactSchema::parse_shexj(&doc, None).is_ok(), "{lexeme}");
     }
+}
+
+/// A DOUBLE bound past the double range is the infinity of its sign, as the same
+/// lexical form is in the data (`"1E400"^^xsd:double` is `INF`): `MAXINCLUSIVE 1E400`
+/// admits every finite value and `INF` itself, `MAXEXCLUSIVE 1E400` admits the finite
+/// values and not `INF`, and `MININCLUSIVE -1E400` admits everything down to `-INF`.
+/// The finite neighbour `MAXINCLUSIVE 1E300` still refuses a larger value. Both
+/// syntaxes, and the ShExJ export, agree.
+#[test]
+fn a_double_bound_past_the_double_range_is_infinite() {
+    let past = r#""1E400"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let inf = r#""INF"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let neg_inf = r#""-INF"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let large = r#""1E301"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let huge_integer = format!("1{}", "0".repeat(500));
+    for (max_inclusive, max_exclusive, min_inclusive) in [
+        (
+            shexc("MAXINCLUSIVE 1E400"),
+            shexc("MAXEXCLUSIVE 1E400"),
+            shexc("MININCLUSIVE -1E400"),
+        ),
+        (
+            shexj("maxinclusive", "1E400"),
+            shexj("maxexclusive", "1E400"),
+            shexj("mininclusive", "-1E400"),
+        ),
+    ] {
+        assert_eq!(verdict(&max_inclusive, large), Conformant);
+        assert_eq!(verdict(&max_inclusive, &huge_integer), Conformant);
+        assert_eq!(verdict(&max_inclusive, inf), Conformant);
+        assert_eq!(verdict(&max_inclusive, past), Conformant);
+        assert_eq!(verdict(&max_exclusive, large), Conformant);
+        assert_eq!(verdict(&max_exclusive, inf), Nonconformant);
+        assert_eq!(verdict(&min_inclusive, neg_inf), Conformant);
+        assert_eq!(verdict(&min_inclusive, "-5"), Conformant);
+    }
+    // The finite neighbour keeps its bound.
+    let finite = shexc("MAXINCLUSIVE 1E300");
+    assert_eq!(verdict(&finite, large), Nonconformant);
+    assert_eq!(verdict(&finite, "5"), Conformant);
+    // The export writes a JSON number that reads back as the same infinite bound.
+    let exported = to_shexj(shexc("MAXINCLUSIVE 1E400").schema());
+    let reread = ExactSchema::parse_shexj(&exported, None).expect("the export parses");
+    assert_eq!(verdict(&reread, inf), Conformant);
+    assert_eq!(verdict(&reread, large), Conformant);
+}
+
+/// The data `ex:x ex:n <value>`.
+fn data_of(value: &str) -> std::sync::Arc<purrdf_core::RdfDataset> {
+    parse_dataset(
+        format!("<{EX}x> <{EX}n> {value} .").as_bytes(),
+        "text/turtle",
+        None,
+    )
+    .expect("data parses")
+}
+
+/// A bound past `i64` and a pattern only XPath 3.1 defines (a non-capturing group), on
+/// one node constraint: the exact entries keep the bound's digits AND match the pattern
+/// under the selected dated law.
+#[test]
+fn exact_bounds_hold_under_a_selected_xpath_law() {
+    let schema = shexc("MININCLUSIVE 100000000000000000001 /^(?:1)/");
+    let map = vec![(
+        TermValue::Iri(format!("{EX}x")),
+        ShapeSelector::Label(format!("{EX}S")),
+    )];
+    let options = ValidationOptions::default();
+    let under = |value: &str, profile: Profile| {
+        validate_exact_with_xpath(
+            &schema,
+            &data_of(value),
+            &map,
+            &options,
+            profile,
+            Limits::new(),
+        )
+        .expect("no operational refusal")
+        .entries[0]
+            .status
+    };
+    // The valid neighbour: the bound itself, matching the 3.1 pattern.
+    assert_eq!(under("100000000000000000001", Profile::Xpath31), Conformant);
+    // One below the bound fails it exactly, though its double is the bound's.
+    assert_eq!(
+        under("100000000000000000000", Profile::Xpath31),
+        Nonconformant
+    );
+    // The AST path loses those digits and accepts it: the exact path is what refuses.
+    let lossy = validate_with_xpath(
+        schema.schema(),
+        &data_of("100000000000000000000"),
+        &map,
+        &options,
+        Profile::Xpath31,
+        Limits::new(),
+    )
+    .expect("no operational refusal");
+    assert_eq!(lossy.entries[0].status, Conformant);
+    // The law is really selected: XPath 2.0 defines no non-capturing group.
+    assert_eq!(
+        under("100000000000000000001", Profile::Xpath20),
+        Nonconformant
+    );
+
+    // A reused validator keeps the exact bounds across laws.
+    let mut validator = XPathValidator::exact(&schema);
+    for (value, profile, expected) in [
+        ("100000000000000000001", Profile::Xpath31, Conformant),
+        ("100000000000000000000", Profile::Xpath31, Nonconformant),
+        ("100000000000000000001", Profile::Xpath20, Nonconformant),
+        ("100000000000000000001", Profile::Xpath31, Conformant),
+    ] {
+        let result = validator
+            .validate(&data_of(value), &map, &options, profile, Limits::new())
+            .expect("no operational refusal");
+        assert_eq!(
+            result.entries[0].status, expected,
+            "{value} under {profile:?}"
+        );
+    }
+}
+
+/// The shape-map form agrees with the fixed-map form, and still refuses a shape the
+/// schema does not declare beside a declared one that is answered.
+#[test]
+fn exact_shape_maps_hold_under_a_selected_xpath_law() {
+    let schema = shexc("MININCLUSIVE 100000000000000000001 /^(?:1)/");
+    let options = ValidationOptions::default();
+    let map = format!("<{EX}x>@<{EX}S>");
+    let status = |value: &str| {
+        validate_shape_map_exact_with_xpath(
+            &schema,
+            &data_of(value),
+            &map,
+            None,
+            &options,
+            Profile::Xpath31,
+            Limits::new(),
+        )
+        .expect("the map validates")
+        .entries[0]
+            .status
+    };
+    assert_eq!(status("100000000000000000001"), Conformant);
+    assert_eq!(status("100000000000000000000"), Nonconformant);
+    let undeclared = validate_shape_map_exact_with_xpath(
+        &schema,
+        &data_of("100000000000000000001"),
+        &format!("<{EX}x>@<{EX}Missing>"),
+        None,
+        &options,
+        Profile::Xpath31,
+        Limits::new(),
+    );
+    assert!(matches!(
+        undeclared,
+        Err(purrdf_shex::XPathValidationError::ShapeMap(
+            ShexError::UnknownShape(_)
+        ))
+    ));
 }

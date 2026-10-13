@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2, Task 5).
+//! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2).
 //!
 //! A [`CompactionCertificate`] is the correctness-critical proof that a
 //! streamable compaction (`purrdf_gts::compact::compact_streamable`) preserved
@@ -26,26 +26,19 @@
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
 
-use std::collections::HashMap;
-use std::hash::BuildHasher;
-
-use purrdf_ed25519::{SigningKey, VerifyingKey};
 use purrdf_lex::cbor::{Integer, Value};
 use sha2::{Digest, Sha256};
 
-use purrdf_gts::compact::{self, CompactionParams, DictPlan};
+use purrdf_gts::compact::{self, CompactionParams, DictPlan, PackagingSigner};
 use purrdf_gts::cose::{self, SigStatus};
 use purrdf_gts::model::{Graph, Suppression};
 use purrdf_gts::reader::read;
-use purrdf_gts::stream;
-use purrdf_gts::verify::verify_file_with_keyring;
+use purrdf_gts::verify::{SignatureKeyring, verify_file_with_keyring};
 use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
 use crate::{CanonError, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
-
-use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Blank-node count above which [`refold_digest`] refuses to canonicalize the
 /// content projection (a cheap structural pre-reject; RDFC-1.0's n-degree
@@ -125,120 +118,6 @@ impl From<compact::CompactRefusedError> for CertifyError {
 // Part 1 — content projection + refold digest
 // ---------------------------------------------------------------------------
 
-/// The CLOSED predicate vocabulary `purrdf_gts::compact::streaming_index`
-/// ever puts a `stream:Compaction` node (the `c` bnode) on the subject side
-/// of — see `crates/gts/src/compact.rs`'s `streaming_index`, the sole minter
-/// of this shape.
-const COMPACTION_PREDICATES: &[&str] = &[
-    RDF_TYPE,
-    stream::AGENT,
-    stream::TIMESTAMP,
-    stream::SOURCE_HEAD,
-    stream::SEALED_SOURCE,
-    stream::CONTENT_REFOLD_DIGEST,
-    stream::DETACHED_SIGNATURE_ROOT,
-];
-
-/// The CLOSED predicate vocabulary `streaming_index` ever puts a
-/// `stream:Manifestation` node (an `m{order}` bnode) on the subject side of.
-const MANIFESTATION_PREDICATES: &[&str] = &[
-    RDF_TYPE,
-    stream::DIGEST,
-    stream::MEDIA_TYPE,
-    stream::SIZE,
-    stream::ROLE,
-    stream::ORDER,
-];
-
-/// The CLOSED predicate vocabulary `streaming_index` ever puts a
-/// `stream:DetachedSignature` node (an `s{n}` bnode) on the subject side of.
-const DETACHED_SIGNATURE_PREDICATES: &[&str] = &[RDF_TYPE, stream::SOURCE_FRAME, stream::COSE];
-
-/// The closed provenance-predicate vocabulary for a reserved `stream:` class
-/// IRI, or `None` when `class_iri` names no reserved class at all.
-fn provenance_predicates_for_class(class_iri: &str) -> Option<&'static [&'static str]> {
-    if class_iri == stream::COMPACTION {
-        Some(COMPACTION_PREDICATES)
-    } else if class_iri == stream::MANIFESTATION {
-        Some(MANIFESTATION_PREDICATES)
-    } else if class_iri == stream::DETACHED_SIGNATURE {
-        Some(DETACHED_SIGNATURE_PREDICATES)
-    } else {
-        None
-    }
-}
-
-/// The term-ids that are genuine compaction-provenance nodes minted by
-/// `purrdf_gts::compact::streaming_index` — the `c` (`stream:Compaction`),
-/// `m{order}` (`stream:Manifestation`), and `s{n}` (`stream:DetachedSignature`)
-/// bnodes it emits — as opposed to any ordinary content node that merely
-/// happens to carry an `rdf:type` triple naming one of those same reserved
-/// class IRIs.
-///
-/// Nothing in RDF or GTS-SPEC reserves `stream:Compaction`/
-/// `stream:Manifestation`/`stream:DetachedSignature` from being used as an
-/// ordinary `rdf:type` object by a document's own content, so typing alone is
-/// not a safe anchor: a subject is only classed as provenance when BOTH (a)
-/// it has exactly one reserved-class `rdf:type` (an ambiguous double-typed
-/// subject is never something `streaming_index` itself would mint, so it is
-/// left alone — fail closed, keep it VISIBLE to the refold comparison rather
-/// than risk hiding a real content difference), AND (b) every quad the
-/// subject appears in (as subject) uses ONLY a predicate from that class's
-/// CLOSED provenance vocabulary (see `*_PREDICATES` above, mirroring exactly
-/// what `streaming_index` emits — never a superset). A content node reusing
-/// the reserved `rdf:type` but carrying so much as one foreign predicate
-/// (e.g. an application property) fails (b) and keeps every one of its quads.
-///
-/// Provenance nodes recognized by this closed-vocabulary test ARE the
-/// subjects of ALL their own quads (by construction: `streaming_index` never
-/// lets a content node reuse a provenance node's id, and the predicate-closure
-/// check above independently re-verifies it per graph), so dropping every
-/// quad whose subject is in this set removes provenance completely and
-/// leaves a lookalike content node's quads untouched.
-fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
-    // Every reserved-class `rdf:type` object claimed by each subject.
-    let mut reserved_types: crate::FastMap<usize, crate::FastSet<&str>> = crate::FastMap::default();
-    for &(s, p, o, _) in &g.quads {
-        if g.terms.get(p).and_then(|t| t.value.as_deref()) != Some(RDF_TYPE) {
-            continue;
-        }
-        let Some(class_iri) = g.terms.get(o).and_then(|t| t.value.as_deref()) else {
-            continue;
-        };
-        if provenance_predicates_for_class(class_iri).is_some() {
-            reserved_types.entry(s).or_default().insert(class_iri);
-        }
-    }
-
-    let mut ids = crate::FastSet::default();
-    'subjects: for (&s, classes) in &reserved_types {
-        let mut classes_iter = classes.iter();
-        let (Some(&class_iri), None) = (classes_iter.next(), classes_iter.next()) else {
-            // Zero (unreachable — the entry only exists with >=1) or more
-            // than one reserved class claimed: not a shape `streaming_index`
-            // would ever mint. Fail closed — leave the subject's quads alone.
-            continue;
-        };
-        let allowed = provenance_predicates_for_class(class_iri)
-            .expect("class_iri came from provenance_predicates_for_class returning Some");
-        for &(qs, p, _, _) in &g.quads {
-            if qs != s {
-                continue;
-            }
-            let Some(pv) = g.terms.get(p).and_then(|t| t.value.as_deref()) else {
-                // An unresolved predicate can never be verified as within the
-                // closed vocabulary — refuse-don't-trust, leave it alone.
-                continue 'subjects;
-            };
-            if !allowed.contains(&pv) {
-                continue 'subjects;
-            }
-        }
-        ids.insert(s);
-    }
-    ids
-}
-
 /// Project `g` down to its content: every quad whose subject is a
 /// compaction-provenance node (`stream:Compaction`, `stream:Manifestation`,
 /// `stream:DetachedSignature`) is dropped; everything else — including
@@ -252,14 +131,14 @@ fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
 /// removes on both sides of the comparison.
 #[must_use]
 pub fn content_projection(g: &Graph) -> Graph {
-    let provenance = provenance_subject_ids(g);
+    let provenance = compact::ProvenanceSubjects::from_graph(g);
     Graph {
         terms: g.terms.clone(),
         quads: g
             .quads
             .iter()
             .copied()
-            .filter(|&(s, _, _, _)| !provenance.contains(&s))
+            .filter(|&(s, _, _, _)| !provenance.contains(s))
             .collect(),
         reifiers: g.reifiers.clone(),
         annotations: g.annotations.clone(),
@@ -567,67 +446,37 @@ impl CompactionReport {
     }
 }
 
-/// Find the term-id whose `value` is exactly `value`.
-fn term_id_with_value(g: &Graph, value: &str) -> Option<usize> {
-    g.terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(value))
-}
-
-/// Whether any quad uses `predicate_iri` as its predicate.
-fn has_predicate(g: &Graph, predicate_iri: &str) -> bool {
-    let Some(p) = term_id_with_value(g, predicate_iri) else {
-        return false;
-    };
-    g.quads.iter().any(|&(_, pred, _, _)| pred == p)
-}
-
-/// The literal value of the object of the first quad using `predicate_iri`,
-/// scoped to a specific subject when `subject` is `Some`.
-fn literal_object(g: &Graph, subject: Option<usize>, predicate_iri: &str) -> Option<String> {
-    let p = term_id_with_value(g, predicate_iri)?;
-    g.quads
-        .iter()
-        .find(|&&(s, pred, _, _)| pred == p && subject.is_none_or(|want| s == want))
-        .and_then(|&(_, _, o, _)| g.terms.get(o))
-        .and_then(|t| t.value.clone())
-}
-
-/// Subject ids of every node whose `rdf:type` is `class_iri`.
-fn subjects_of_type(g: &Graph, class_iri: &str) -> Vec<usize> {
-    let Some(rdf_type) = term_id_with_value(g, RDF_TYPE) else {
-        return Vec::new();
-    };
-    let Some(class) = term_id_with_value(g, class_iri) else {
-        return Vec::new();
-    };
-    g.quads
-        .iter()
-        .filter(|&&(_, p, o, _)| p == rdf_type && o == class)
-        .map(|&(s, _, _, _)| s)
-        .collect()
-}
-
 /// §10.1 signature preservation: the pre-compaction detached-signature set is
 /// bound under the post's `stream:detachedSignatureRoot` MMR commitment.
 fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
-    let pre_leaves = compact::detached_signature_leaves(pre);
-    if pre_leaves.is_empty() {
-        return !has_predicate(post, stream::DETACHED_SIGNATURE_ROOT);
-    }
-    let Some(root_literal) = literal_object(post, None, stream::DETACHED_SIGNATURE_ROOT) else {
+    let (Ok(pre_pairs), Ok(post_pairs), Ok(pre_leaves)) = (
+        compact::detached_signature_pairs(pre),
+        compact::detached_signature_pairs(post),
+        compact::detached_signature_leaves(pre),
+    ) else {
         return false;
     };
-    let Ok(parsed_root) = purrdf_gts::mmr::parse_hex_32(&root_literal) else {
+    if pre_pairs != post_pairs {
+        return false;
+    }
+    let Ok(roots) = compact::compaction_signature_roots(post, &pre.segment_heads) else {
+        return false;
+    };
+    if pre_leaves.is_empty() {
+        return roots.is_empty();
+    }
+    let [root_literal] = roots.as_slice() else {
+        return false;
+    };
+    let Ok(parsed_root) = purrdf_gts::mmr::parse_hex_32(root_literal) else {
         return false;
     };
     let expected_root = purrdf_gts::mmr::root(&pre_leaves);
     if parsed_root != expected_root {
         return false;
     }
-    for sig in pre.signatures.iter().filter(|s| s.cose.is_some()) {
-        let cose_bytes = sig.cose.as_deref().expect("filtered to carry cose bytes");
-        let Some(proof) = compact::detached_signature_proof(pre, &sig.frame_id, cose_bytes) else {
+    for (frame_id, cose_bytes) in &pre_pairs {
+        let Ok(Some(proof)) = compact::detached_signature_proof(pre, frame_id, cose_bytes) else {
             return false;
         };
         if proof.root != expected_root || purrdf_gts::mmr::verify_proof(&proof).is_err() {
@@ -639,35 +488,67 @@ fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
 
 /// Every carried `stream:DetachedSignature` in `post` cryptographically
 /// verifies against `keyring`.
-fn signatures_verify_ok<S: BuildHasher>(
-    post: &Graph,
-    keyring: &HashMap<String, VerifyingKey, S>,
-) -> bool {
-    let nodes = subjects_of_type(post, stream::DETACHED_SIGNATURE);
-    for node in nodes {
-        let Some(cose_b64) = literal_object(post, Some(node), stream::COSE) else {
+fn signatures_verify_ok<K: SignatureKeyring + ?Sized>(post: &Graph, keyring: &K) -> bool {
+    let Ok(pairs) = compact::detached_signature_pairs(post) else {
+        return false;
+    };
+    for (frame_id, cose_bytes) in pairs {
+        let Ok(parsed) = cose::parse_sign1(&cose_bytes) else {
             return false;
         };
-        let Ok(cose_bytes) = compact::base64url_decode(&cose_b64) else {
+        let Some(key) = keyring.resolve(parsed.kid(), parsed.algorithm()) else {
             return false;
         };
-        let Some(source_frame) = literal_object(post, Some(node), stream::SOURCE_FRAME) else {
-            return false;
-        };
-        let Ok(frame_id) = purrdf_gts::mmr::parse_hex_32(&source_frame) else {
-            return false;
-        };
-        let Some((kid, _, _)) = cose::parse(&cose_bytes) else {
-            return false;
-        };
-        let Some(key) = keyring.get(&kid) else {
-            return false;
-        };
-        if cose::verify_sig(&cose_bytes, &frame_id, key) != SigStatus::Valid {
+        if parsed.verify(&frame_id, key) != SigStatus::Valid {
             return false;
         }
     }
     true
+}
+
+/// Authenticate the actual final ordering commitment, not an unrelated signed
+/// content frame. The shared file verifier additionally rejects invalid,
+/// unresolved or structurally damaged observations anywhere in the pack.
+fn packaging_signature_ok<K: SignatureKeyring + ?Sized>(
+    bytes: &[u8],
+    post: &Graph,
+    keyring: &K,
+) -> bool {
+    let inventory = purrdf_gts::replication::inventory(bytes);
+    let [segment] = inventory.segments.as_slice() else {
+        return false;
+    };
+    let Some(index) = segment.frames.last() else {
+        return false;
+    };
+    if inventory.fatal.is_some()
+        || inventory.torn.is_some()
+        || !segment.diagnostics.is_empty()
+        || !post.diagnostics.is_empty()
+        || !segment.layout.claimed
+        || segment.layout.tail != 0
+        || index.frame_type != "index"
+        || !index.valid
+    {
+        return false;
+    }
+    let Some(signature) = post.signatures.iter().find(|sig| sig.frame_id == index.id) else {
+        return false;
+    };
+    let Some(cose_bytes) = &signature.cose else {
+        return false;
+    };
+    let Ok(parsed) = cose::parse_sign1(cose_bytes) else {
+        return false;
+    };
+    let Some(key) = keyring.resolve(parsed.kid(), parsed.algorithm()) else {
+        return false;
+    };
+    let result = verify_file_with_keyring(bytes, keyring);
+    parsed.verify(&index.id, key) == SigStatus::Valid
+        && result.ok
+        && result.invalid == 0
+        && result.unverified == 0
 }
 
 /// A term-id resolved to its own `value` (the RDF identity a compaction
@@ -800,10 +681,10 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
 /// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
 /// graph.
-pub fn verify_compaction<S: BuildHasher>(
+pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     pre_bytes: &[u8],
     post_bytes: &[u8],
-    keyring: &HashMap<String, VerifyingKey, S>,
+    keyring: &K,
 ) -> Result<CompactionReport, CertifyError> {
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
@@ -812,7 +693,7 @@ pub fn verify_compaction<S: BuildHasher>(
     let seam_chain_ok = post.diagnostics.is_empty();
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);
-    let packaging_sig_ok = verify_file_with_keyring(post_bytes, keyring).valid >= 1;
+    let packaging_sig_ok = packaging_signature_ok(post_bytes, &post, keyring);
     let suppressions_ok = suppressions_ok(&pre, &post)?;
 
     Ok(CompactionReport {
@@ -996,12 +877,33 @@ pub fn compose(
 /// `compact_streamable` refuses the input, and [`CertifyError::Invariant`] if
 /// the freshly authored pack's digest ever disagrees with the one it was
 /// authored from (should be unreachable; surfaced rather than swallowed).
-pub fn compact_and_certify(
+///
+/// Both algorithms use this same authoring path. Composite packaging requires
+/// a caller's dedicated key and fresh cryptographic randomness provider. Its
+/// textual packaging id is recorded verbatim in the certificate; carried
+/// authorship ids are resolved as exact opaque bytes by [`SignatureKeyring`].
+///
+/// ```no_run
+/// use purrdf_gts::compact::{CompositePackaging, DictPlan};
+/// use purrdf_gts::cose::composite;
+/// use purrdf_gts::verify::SignatureKeyring;
+/// use purrdf_gts::writer::RandomnessProvider;
+/// use purrdf_rdf::gts_certify::{CertifyError, compact_and_certify, verify_compaction};
+/// fn certify<P: RandomnessProvider>(source: &[u8], key: composite::SigningKey,
+///     provider: P, keys: &impl SignatureKeyring) -> Result<bool, CertifyError> {
+///     let (pack, certificate) = compact_and_certify(source, DictPlan::undicted(),
+///         "2026-01-01T00:00:00Z", false,
+///         CompositePackaging::new(key, "pack-key".into(), provider))?;
+///     assert_eq!(certificate.packaging_kids, ["pack-key"]);
+///     Ok(verify_compaction(source, &pack, keys)?.all_ok())
+/// }
+/// ```
+pub fn compact_and_certify<S: PackagingSigner>(
     pre_bytes: &[u8],
     plan: DictPlan,
     timestamp: &str,
     seal_original: bool,
-    packaging_signer: (SigningKey, String),
+    packaging_signer: S,
 ) -> Result<(Vec<u8>, CompactionCertificate), CertifyError> {
     let pre_fold = read(pre_bytes, true, None);
     if !pre_fold.diagnostics.is_empty() {
@@ -1009,7 +911,7 @@ pub fn compact_and_certify(
     }
     let digest = refold_digest(&pre_fold)?;
 
-    let (key, kid) = packaging_signer;
+    let kid = packaging_signer.kid().to_string();
     let post_bytes = compact::compact_streamable(
         pre_bytes,
         CompactionParams {
@@ -1017,7 +919,7 @@ pub fn compact_and_certify(
             seal_original,
             plan,
             content_digest: Some(&digest),
-            packaging_signer: (key, kid.clone()),
+            packaging_signer,
         },
     )?;
 
@@ -1032,9 +934,8 @@ pub fn compact_and_certify(
         )));
     }
 
-    let detached_sig_roots = literal_object(&post_fold, None, stream::DETACHED_SIGNATURE_ROOT)
-        .into_iter()
-        .collect();
+    let detached_sig_roots =
+        compact::compaction_signature_roots(&post_fold, &pre_fold.segment_heads)?;
 
     Ok((
         post_bytes,

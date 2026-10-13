@@ -13,12 +13,11 @@
 //! difference between a defect a validator must report and an ordinary RDF term this
 //! crate simply cannot decide about.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use purrdf_xsd::XsdValue;
 
 use crate::datatype::CdtDatatype;
-use crate::parse::parse_cdt;
 use crate::value::CdtValue;
 
 /// What a literal's `(lexical form, datatype IRI)` pair denotes.
@@ -100,19 +99,63 @@ pub enum LiteralValue {
 /// ```
 #[must_use]
 pub fn parse_literal(lexical: &str, datatype: &str) -> LiteralValue {
-    let ill_typed = || LiteralValue::IllTyped {
-        datatype: datatype.to_string(),
-        lexical: lexical.to_string(),
-    };
+    let mut storage = crate::memory::Resident;
+    let mut memory = crate::memory::Memory::new(&mut storage);
+    let result = resolve_literal_with_memory(lexical, datatype, &mut memory)
+        .expect("resident literal producer storage");
+    match result {
+        NativeLiteralValue::Xsd(value) => LiteralValue::Xsd(value),
+        NativeLiteralValue::Cdt(value) => LiteralValue::Cdt(value),
+        NativeLiteralValue::IllTyped => LiteralValue::IllTyped {
+            datatype: memory.string(datatype).expect("resident datatype text"),
+            lexical: memory.string(lexical).expect("resident lexical text"),
+        },
+        NativeLiteralValue::Opaque => LiteralValue::Opaque,
+    }
+}
+
+/// Native literal denotation. Type-only refusals need no copied diagnostic pair;
+/// the caller still borrows the literal that was refused.
+pub(crate) enum NativeLiteralValue {
+    Xsd(XsdValue),
+    Cdt(CdtValue),
+    IllTyped,
+    Opaque,
+}
+
+/// The one composite/XSD dispatch law, with native producer ownership.
+pub(crate) fn resolve_literal_with_memory(
+    lexical: &str,
+    datatype: &str,
+    memory: &mut crate::memory::Memory<'_>,
+) -> Result<NativeLiteralValue, crate::memory::StorageError> {
     if let Some(composite) = CdtDatatype::from_iri(datatype) {
-        return match parse_cdt(lexical, composite) {
-            Ok(value) => LiteralValue::Cdt(value),
-            Err(_) => ill_typed(),
-        };
+        return Ok(
+            match crate::memory::parse_cdt_in_memory(lexical, composite, memory)? {
+                Some(value) => NativeLiteralValue::Cdt(value),
+                None => NativeLiteralValue::IllTyped,
+            },
+        );
     }
-    match purrdf_xsd::parse_by_iri(lexical, datatype) {
-        Ok(Some(value)) => LiteralValue::Xsd(value),
-        Ok(None) => LiteralValue::Opaque,
-        Err(_) => ill_typed(),
-    }
+    let Some(datatype) = purrdf_xsd::XsdDatatype::from_iri(datatype) else {
+        return Ok(NativeLiteralValue::Opaque);
+    };
+    Ok(
+        match purrdf_xsd::value::try_parse_with_memory(lexical, datatype, false, memory)? {
+            purrdf_xsd::value::ParsedValue::Value(value) => NativeLiteralValue::Xsd(value),
+            purrdf_xsd::value::ParsedValue::Invalid(_) => NativeLiteralValue::IllTyped,
+        },
+    )
+}
+
+/// Destroy a natively produced XSD payload before releasing its original layouts.
+pub(crate) fn release_xsd_with_memory(
+    value: XsdValue,
+    memory: &mut crate::memory::Memory<'_>,
+) -> Result<(), crate::memory::StorageError> {
+    let bytes = value
+        .owned_heap_bytes()
+        .ok_or(crate::memory::StorageError::SizeOverflow)?;
+    drop(value);
+    memory.release_bytes(bytes)
 }

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 use purrdf_text::{
-    Analyzer, Constraint, Fixed, GraphSelector, PartitionFilter, PartitionKey, Scored, TextError,
-    TextIndex, TextIndexConfig, explain, rank_partition, select,
+    Analyzer, Constraint, Fixed, GraphSelector, PartitionFilter, PartitionKey, ScopedTerm, Scored,
+    TextError, TextIndex, TextIndexConfig, explain, rank_partition, select, select_scoped,
 };
 
 #[path = "support/index.rs"]
@@ -55,6 +55,128 @@ fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
 /// A filter that admits every partition.
 fn everything() -> PartitionFilter {
     PartitionFilter::unconstrained()
+}
+
+#[test]
+fn predicate_scope_precedes_depth_without_changing_score_weights() {
+    let from = "https://example.org/from";
+    let mut builder = RdfDatasetBuilder::new();
+    let note_id = builder.intern_iri(NOTE);
+    let from_id = builder.intern_iri(from);
+    let a = builder.intern_iri("https://example.org/a");
+    let b = builder.intern_iri("https://example.org/b");
+    let a_text = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
+    let b_text = builder.intern_literal(RdfLiteral::simple(
+        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    ));
+    let b_from = builder.intern_literal(RdfLiteral::simple("alpha"));
+    builder.push_quad(a, note_id, a_text, None);
+    builder.push_quad(b, note_id, b_text, None);
+    builder.push_quad(b, from_id, b_from, None);
+    let dataset = builder.freeze().unwrap();
+    let predicate = TermValue::iri(from);
+    let index = TextIndex::from_dataset(
+        &*dataset,
+        &TextIndexConfig::new(
+            vec![TermValue::iri(NOTE), predicate.clone()],
+            GraphSelector::Any,
+            Analyzer::empty_lexicon(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let needle = ["alpha".to_owned()];
+    let all = select(&index, &needle, &everything(), None, None).unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].document, 0);
+    let cut = select(&index, &needle, &everything(), Some(1), None).unwrap();
+    assert_eq!(cut[0].document, 0);
+    let scoped = select_scoped(
+        &index,
+        &needle,
+        &everything(),
+        &[ScopedTerm {
+            term: "alpha",
+            predicate: &predicate,
+        }],
+        Some(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].document, 1);
+    assert_eq!(scoped[0].score, all[1].score);
+    assert_eq!(scoped[0].partition_rank, 1);
+    assert_eq!(
+        index.term_frequency_in_predicate(0, "alpha", &predicate),
+        Ok(0)
+    );
+    assert_eq!(
+        index.term_frequency_in_predicate(1, "alpha", &predicate),
+        Ok(1)
+    );
+    assert!(
+        select_scoped(
+            &index,
+            &needle,
+            &everything(),
+            &[ScopedTerm {
+                term: "alpha",
+                predicate: &TermValue::iri("https://example.org/undeclared")
+            }],
+            Some(1),
+            None
+        )
+        .is_err()
+    );
+    // The actual six-cell producer receives the same scope before its ceiling;
+    // the higher-scoring out-of-field candidate cannot consume that ceiling.
+    use purrdf_core::query_scope::LexicalQuery;
+    use purrdf_sparql_eval::{PfArgs, PropertyFunction};
+    let relation = purrdf_text::TextSearchRelation::new(Arc::new(index));
+    let argument =
+        LexicalQuery::encode(TermValue::simple_literal("alpha"), Some(predicate)).unwrap();
+    let subject = [None];
+    let object = [Some(&argument), None, None, None, None];
+    let mut cursor = relation
+        .open(&PfArgs::new(&subject, &object), Some(1))
+        .unwrap();
+    let row = cursor.next().unwrap().unwrap();
+    assert_eq!(row.len(), 6);
+    assert_eq!(row[0], TermValue::iri("https://example.org/b"));
+    assert_eq!(row[1], argument);
+    assert_eq!(row[3], TermValue::integer(1));
+    assert!(cursor.next().unwrap().is_none());
+    let excluded = TermValue::iri("https://example.org/a");
+    let subject = [Some(&excluded)];
+    assert!(
+        relation
+            .open(&PfArgs::new(&subject, &object), None)
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
+    let admitted = TermValue::iri("https://example.org/b");
+    let subject = [Some(&admitted)];
+    let point = relation
+        .open(&PfArgs::new(&subject, &object), None)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(point, row);
+    let observed = relation.observations();
+    let rankings = observed.rankings();
+    let scorings = observed.point_scorings();
+    let unobserved = [false, false, false, true, false, false];
+    let args = PfArgs::new(&subject, &object).with_unobserved(&unobserved);
+    let point = relation.open(&args, None).unwrap().next().unwrap().unwrap();
+    assert_eq!(point[0], row[0]);
+    assert_eq!(point[2], row[2]);
+    assert_eq!(point[5], row[5]);
+    assert_eq!(observed.rankings(), rankings);
+    assert_eq!(observed.point_scorings(), scorings + 1);
 }
 
 /// The golden fixture: four documents of four tokens each, so `avgdl` is exactly
@@ -834,10 +956,29 @@ fn matched_counts_distinct_needle_terms_present() {
         vec![2, 2],
         "the repeat counts once and the absent term counts not at all"
     );
+    let scored_identity = |rows: &[Scored]| {
+        rows.iter()
+            .map(|row| (row.document, row.score, row.partition_rank, row.matched))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        padded, plain_rows,
+        scored_identity(&padded),
+        scored_identity(&plain_rows),
         "a repeated term and a term nobody holds change neither score nor rank"
     );
+    // The actual needle's reported bound also includes its absent term's IDF.
+    // Independent hand values: ln2=0.693147180559, ln10=2.302585092994;
+    // floor(2.2*ln2) twice, plus floor(2.2*ln10) for df=0 in N=4.
+    for row in &plain_rows {
+        assert_eq!(row.score_bound.maximum().into_raw(), 3_049_847_594_458);
+    }
+    for row in &padded {
+        assert_eq!(row.score_bound.maximum().into_raw(), 8_115_534_799_044);
+        assert_eq!(
+            row.score_bound.profile_fingerprint(),
+            index.ranking_profile().fingerprint()
+        );
+    }
 
     // A needle only one of the two documents holds.
     let single = rank_partition(
@@ -929,7 +1070,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
         .terms("alpha beta gamma")
         .expect("valid text analysis");
     let first = select(&index, &query, &everything(), None, None).expect("scores");
-    let rendered: Vec<(u32, u32, u32, String)> = first
+    let rendered: Vec<(u32, u32, usize, String)> = first
         .iter()
         .map(|row| {
             (
@@ -944,7 +1085,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
     for _ in 0..100 {
         let again = select(&index, &query, &everything(), None, None).expect("scores");
         assert_eq!(again, first);
-        let again_rendered: Vec<(u32, u32, u32, String)> = again
+        let again_rendered: Vec<(u32, u32, usize, String)> = again
             .iter()
             .map(|row| {
                 (
@@ -999,16 +1140,17 @@ fn two_independently_built_indexes_rank_identically() {
 /// fingerprint. Each is recorded by callers, so a moved value is a changed identity.
 /// The explicit empty-lexicon profile now binds scoped accents, projection bounds,
 /// control and emoji laws, and auxiliary retrieval parameters. Versioned
-/// control protection changes the analyzer and index identities even when the
-/// source contains no malformed controls. The RDF source and term-sequence
-/// identities remain frozen.
+/// control protection is part of analyzer identity. Ranking v2 changes the index
+/// identity because its canonical profile binds exact promotion and the actual
+/// query-bound law. The RDF source, analyzer, term-sequence and score lexical
+/// identities remain frozen across that ranking migration.
 #[test]
 fn the_published_text_identities_are_frozen() {
     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "05dd33b590fa769238926e237aadb69554c1522817da053ec497bc03bec44735",
+        "106fef6680a6be9aac5508747e74af3e28699ca24326095fd444d05f8ae8adcd",
         "the index fingerprint"
     );
     assert_eq!(

@@ -1,0 +1,51 @@
+{
+  "contractVersion": 1,
+  "copyright": "2026 Blackcat Informatics Inc.",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "status": "community-proposed",
+  "rootManifest": "manifest.ttl",
+  "suites": [
+    {
+      "inventory": "shacl/inventory.json",
+      "directory": ".",
+      "kind": "shacl",
+      "caseCount": 64,
+      "manifests": [
+        "shacl/manifest.ttl"
+      ]
+    }
+  ],
+  "caseCount": 64,
+  "requiredCoverage": [
+    "empty-left-optional",
+    "nested-optional",
+    "not-exists",
+    "exists-absence",
+    "union-absence",
+    "path-absence",
+    "projected-subquery",
+    "aggregate-subquery",
+    "predicate-position",
+    "ASK-validator",
+    "SELECT-validator",
+    "SPARQL-rule",
+    "profile-admission",
+    "complex-report-path",
+    "RDF1.2",
+    "inverse",
+    "sequence"
+  ],
+  "profiles": {
+    "shacl-20170720": {
+      "specification": "https://www.w3.org/TR/2017/REC-shacl-20170720/",
+      "sparql": "https://www.w3.org/TR/sparql11-query/",
+      "service": "normatively-forbidden"
+    },
+    "shacl12-20260918": {
+      "specification": "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/",
+      "sparql": "https://www.w3.org/TR/sparql12-query/",
+      "service": "PurRDF refusal policy; external implementations may allow local operations"
+    }
+  },
+  "reviewIndex": "reviews/index.json"
+}

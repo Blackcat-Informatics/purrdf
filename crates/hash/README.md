@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-3, CRC-32 and a Fixed-Key Table Hasher
+# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-3, SHAKE, CRC-32 and a Fixed-Key Table Hasher
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-hash.svg)](https://crates.io/crates/purrdf-hash)
 [![docs.rs](https://docs.rs/purrdf-hash/badge.svg)](https://docs.rs/purrdf-hash)
@@ -28,6 +28,7 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 | `md5` | MD5 | RFC 1321 | 16 bytes |
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
+| `sha3` | SHAKE128 / 256 | FIPS 202 | caller-selected byte length |
 | `crc32` | CRC-32/ISO-HDLC | reflected `0xEDB88320`, init and xorout `0xFFFFFFFF` | `u32` |
 
 `frame` is the workspace's length framing: `frame_le` appends a field as its
@@ -36,6 +37,17 @@ streams exactly those bytes into any `Digest`, and `frame_be_labelled` is the
 big-endian label-and-value framing three published identities were minted
 with. Every preimage and wire encoding in the workspace frames through it, and
 `purrdf-hash-conformance` replays its frozen answers on every target.
+
+## Owned secret storage
+
+`wipe_secret` overwrites every supplied slot with its default value, observes
+those stores with `black_box`, and applies a compiler fence. `SecretArray`
+provides allocation-free ownership of a complete array, explicit cleanup at
+last use, and cleanup on drop, including cloned owners and unwinding. SHAKE
+absorbers, readers, buffered input and permutation scratch use this same home;
+Ed25519 re-exports it. Caller-owned copies, historical compiler copies,
+registers, spills and the external SHA-2 implementation remain outside this
+controlled-storage guarantee; it does not promise physical memory erasure.
 
 ## SHA-2 is the `sha2` crate
 
@@ -84,8 +96,30 @@ sha1.update(b"c");
 assert_eq!(sha1.finalize(), Sha1::digest(b"abc"));
 ```
 
-Every hasher also implements the object-safe `Digest` trait, so an algorithm
-chosen at run time can be driven through `&mut dyn Digest`.
+Every fixed-output hasher also implements the object-safe `Digest` trait, so an
+algorithm chosen at run time can be driven through `&mut dyn Digest`.
+
+SHAKE uses a distinct absorber and reader because its output has no fixed
+length. Finalization consumes the absorber; successive `squeeze` calls
+continue the same stream, including across rate boundaries. Empty input and
+output calls are supported, and no call allocates.
+
+```rust
+use purrdf_hash::sha3::Shake256;
+
+let mut shake = Shake256::new();
+shake.update(b"ab");
+shake.update(b"c");
+let mut reader = shake.finalize();
+let mut first = [0; 32];
+let mut next = [0; 200];
+reader.squeeze(&mut first);
+reader.squeeze(&mut next);
+let mut whole = [0; 232];
+Shake256::digest(b"abc", &mut whole);
+assert_eq!(first, whole[..32]);
+assert_eq!(next, whole[32..]);
+```
 
 ## Execution paths
 
@@ -100,12 +134,13 @@ chosen at run time can be driven through `&mut dyn Digest`.
 | | Armv8 `pmull` folding finished by CRC32 | never (available to tests and the bench; not yet measured on Arm hardware) |
 | | slicing-by-16 tables | otherwise |
 | MD5 | portable (a strict serial dependency chain) | always |
-| SHA-3 | portable Keccak-f[1600] | always |
+| SHA-3 / SHAKE | portable Keccak-f[1600] | always |
 
 Paths are chosen by run-time CPU detection, and every path computes the same
-bytes: the test suite replays 14,097 frozen answers per algorithm against
-each path the host can run, natively and on wasm32. Every constant — MD5's
-sine table, SHA-3's round constants, rotation offsets and lane permutation,
+bytes: the fixed-output digest suite replays 14,097 frozen answers per algorithm
+against each path the host can run. SHAKE separately replays four complete
+512-byte NIST examples and 16 independent boundary and long-output answers.
+Every constant — MD5's sine table, SHA-3's round constants, rotation offsets and lane permutation,
 the CRC tables and the carry-less folding and Barrett constants — is computed
 at compile time from its definition rather than typed.
 
@@ -497,8 +532,11 @@ source on every run.
 
 | Domain bytes | Constant | Defined in |
 |---|---|---|
+| `b"COMPSIG-MLDSA65-Ed25519-SHA512"` | `LABEL` | `crates/gts/src/cose/composite.rs` |
+| `b"CompositeAlgorithmSignatures2025"` | `PREFIX` | `crates/gts/src/cose/composite.rs` |
 | `b"assertion"` | `ASSERTION_KIND` | `crates/gts/src/examples/agent_memory.rs` |
 | `b"citation"` | `CITATION_KIND` | `crates/markdown/src/identity.rs` |
+| `b"exact-symbolic-operation-image-points/v1"` | `SYMBOLIC_POINTS_DOMAIN` | `crates/geo-kernel/src/prepared.rs` |
 | `b"five-full-baselines-minimum-collision-cost-v1"` | `BASELINE_LAW` | `crates/text/src/profile.rs` |
 | `b"gts-mmr-leaf-v1"` | `LEAF_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-mmr-parent-v1"` | `PARENT_DOMAIN` | `crates/gts/src/mmr.rs` |
@@ -514,7 +552,13 @@ source on every run.
 | `b"phase:shacl"` | `SHACL_PHASE` | `crates/slice/src/cache.rs` |
 | `b"phase:syntax"` | `SYNTAX_PHASE` | `crates/slice/src/cache.rs` |
 | `b"positional-grams-1-2-3-relative-offsets-emoji-endpoints-rarest-anchor-v1"` | `SUBSTRING_LAW` | `crates/text/src/profile.rs` |
+| `b"purrdf-core/accepted-row/v1"` | `ACCEPTANCE_DOMAIN` | `crates/rdf-core/src/evidence/accepted.rs` |
 | `b"purrdf-core/dataset-state/v1"` | `STATE_DOMAIN` | `crates/rdf-core/src/ir/canon/state.rs` |
+| `b"purrdf-core/evidence-aggregate-column/v1"` | `(inline)` | `crates/rdf-core/src/evidence.rs` |
+| `b"purrdf-core/evidence-annotation/v1"` | `ANNOTATION_DOMAIN` | `crates/rdf-core/src/evidence/ledger/row.rs` |
+| `b"purrdf-core/evidence-frame/v1"` | `FRAME_DOMAIN` | `crates/rdf-core/src/evidence/frame.rs` |
+| `b"purrdf-core/evidence-reason/v1"` | `REASON_DOMAIN` | `crates/rdf-core/src/evidence/reason.rs` |
+| `b"purrdf-core/evidence-record/v1"` | `RECORD_DOMAIN` | `crates/rdf-core/src/evidence/record.rs` |
 | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
@@ -522,13 +566,51 @@ source on every run.
 | `b"purrdf-datalog-plan-identity-v1"` | `PLAN_IDENTITY_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-proof-v1"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog-scheduled-contract-v1"` | `SCHEDULED_CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
+| `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
-| `b"purrdf-geo/index-source/v1"` | `DIGEST_DOMAIN` | `crates/geo/src/relation.rs` |
+| `b"purrdf-dl-service-proof-v3"` | `PREPARATION_SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
+| `b"purrdf-geo-kernel/carrier-bindings/v1"` | `PROFILE_BINDING_DOMAIN` | `crates/geo-kernel/src/binding.rs` |
+| `b"purrdf-geo-kernel/continuous-image-law/v1"` | `IMAGE_LAW_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |
+| `b"purrdf-geo-kernel/continuous-image-source/v1"` | `IMAGE_SOURCE_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |
+| `b"purrdf-geo-kernel/coordinate-operation-law/v1"` | `OPERATION_LAW` | `crates/geo-kernel/src/operation.rs` |
+| `b"purrdf-geo-kernel/coordinate-operation/v1"` | `OPERATION_BINDING` | `crates/geo-kernel/src/operation.rs` |
+| `b"purrdf-geo-kernel/cover-law/v2"` | `COVER_DOMAIN` | `crates/geo-kernel/src/cells/cover.rs` |
+| `b"purrdf-geo-kernel/exact-carrier-source/v1"` | `SOURCE_DOMAIN` | `crates/geo-kernel/src/prepared.rs` |
+| `b"purrdf-geo-kernel/exact-surface-reference-view/v1"` | `SURFACE_VIEW_DOMAIN` | `crates/geo-kernel/src/prepared.rs` |
+| `b"purrdf-geo-kernel/execution-policy/v1"` | `POLICY_DOMAIN` | `crates/geo-kernel/src/profile.rs` |
+| `b"purrdf-geo-kernel/geometry-metric-certificate/v1"` | `GEOMETRY_METRIC_CERTIFICATE` | `crates/geo-kernel/src/ellipsoidal.rs` |
+| `b"purrdf-geo-kernel/geometry-metric-law/v1"` | `GEOMETRY_METRIC_LAW` | `crates/geo-kernel/src/ellipsoidal.rs` |
+| `b"purrdf-geo-kernel/grid-profile/v1"` | `GRID_PROFILE` | `crates/geo-kernel/src/cells/profile.rs` |
+| `b"purrdf-geo-kernel/identified-surface-topology/v3"` | `LAW` | `crates/geo-kernel/src/atlas/relate.rs` |
+| `b"purrdf-geo-kernel/native-arrangement-fragment/v1"` | `FRAGMENT_DOMAIN` | `crates/geo-kernel/src/atlas/arcs/arrangement.rs` |
+| `b"purrdf-geo-kernel/native-arrangement-node/v1"` | `NODE_DOMAIN` | `crates/geo-kernel/src/atlas/arcs/arrangement.rs` |
+| `b"purrdf-geo-kernel/native-datum/v1"` | `DATUM_DOMAIN` | `crates/geo-kernel/src/profile.rs` |
+| `b"purrdf-geo-kernel/offset-materialization-law/v1"` | `LAW` | `crates/geo-kernel/src/buffer/materialize.rs` |
+| `b"purrdf-geo-kernel/operation-chain/v1"` | `OPERATION_CHAIN` | `crates/geo-kernel/src/operation.rs` |
+| `b"purrdf-geo-kernel/operation-image-curve/v1"` | `SOURCE_DOMAIN` | `crates/geo-kernel/src/operation/geometry/curve.rs` |
+| `b"purrdf-geo-kernel/operation-image-point/v1"` | `POINT_DOMAIN` | `crates/geo-kernel/src/operation/geometry/point.rs` |
+| `b"purrdf-geo-kernel/physical-offset/v1"` | `OFFSET` | `crates/geo-kernel/src/buffer.rs` |
+| `b"purrdf-geo-kernel/point-cell-index/v1"` | `INDEX_DOMAIN` | `crates/geo-kernel/src/cells/index.rs` |
+| `b"purrdf-geo-kernel/prepared-geographic-geometry/v1"` | `PREPARED_DOMAIN` | `crates/geo-kernel/src/prepared.rs` |
+| `b"purrdf-geo-kernel/reference-binding/v1"` | `BINDING_DOMAIN` | `crates/geo-kernel/src/profile.rs` |
+| `b"purrdf-geo-kernel/semantic-law/v1"` | `LAW_DOMAIN` | `crates/geo-kernel/src/profile.rs` |
+| `b"purrdf-geo-kernel/transform-certificate/v1"` | `TRANSFORM_CERTIFICATE` | `crates/geo-kernel/src/operation.rs` |
+| `b"purrdf-geo-kernel/transform-output-grid-law/v1"` | `GRID_LAW` | `crates/geo-kernel/src/operation/grid.rs` |
+| `b"purrdf-geo-kernel/transverse-mercator-parameters/v1"` | `TRANSVERSE_PARAMETER` | `crates/geo-kernel/src/operation.rs` |
+| `b"purrdf-geo/geographic-index-law/v1"` | `LAW` | `crates/geo-kernel/src/index/geographic.rs` |
+| `b"purrdf-geo/geographic-index-source/v1"` | `CONTENT` | `crates/geo-kernel/src/index/geographic.rs` |
+| `b"purrdf-geo/geographic-index/v1"` | `INDEX` | `crates/geo-kernel/src/index/geographic.rs` |
+| `b"purrdf-geo/index-source/v1"` | `DIGEST_DOMAIN` | `crates/geo-kernel/src/index.rs` |
 | `b"purrdf-hnsw/space-generation-v1"` | `SPACE_GENERATION_DOMAIN` | `crates/hnsw/src/relation.rs` |
 | `b"purrdf-json-document-v1"` | `DOCUMENT_DOMAIN` | `crates/json/src/profile.rs` |
 | `b"purrdf-json-profile-v1"` | `PROFILE_DOMAIN` | `crates/json/src/profile.rs` |
+| `b"purrdf-mime/document/v1"` | `DOCUMENT_DOMAIN` | `crates/mime/src/profile.rs` |
+| `b"purrdf-mime/profile/v1"` | `PROFILE_DOMAIN` | `crates/mime/src/profile.rs` |
 | `b"purrdf-owl-dl-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v3"` | `PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-owl-dl-proof-v4"` | `SCHEMA_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-retrieval/scoped-fused-row/v1"` | `(inline)` | `crates/retrieval/src/scope.rs` |
 | `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-requests-v1\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
@@ -566,6 +648,9 @@ source on every run.
 | `b"purrdf.purremb.v1.target-identity\0"` | `D_TARGET_IDENTITY` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.target-set\0"` | `D_TARGET_SET` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.vector-space\0"` | `D_SPACE` | `crates/rdf-core/src/ir/embedding/identity.rs` |
+| `b"purrdf/direct-geodesic-certificate/v1"` | `DIRECT_CERTIFICATE` | `crates/geo-kernel/src/geodesic/direct.rs` |
+| `b"purrdf/inverse-geodesic-certificate/v1"` | `INVERSE_CERTIFICATE` | `crates/geo-kernel/src/geodesic/inverse.rs` |
+| `b"purrdf/point-distance-certificate/v1"` | `POINT_CERTIFICATE` | `crates/geo-kernel/src/metric.rs` |
 | `b"purrdf:evidence:v1"` | `EVIDENCE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:fusion-profile:v1"` | `FUSION_PROFILE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:plan:v1"` | `PLAN_ID_DOMAIN` | `crates/retrieval/src/id.rs` |

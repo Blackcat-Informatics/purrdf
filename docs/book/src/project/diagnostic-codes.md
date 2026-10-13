@@ -109,6 +109,7 @@ whose terms do not form a well-formed dataset.
 | `rdf-ir-literal-subject` | A literal occupies subject position. | RDF admits no literal subject; restructure the statement. |
 | `rdf-ir-triple-subject` | A triple term occupies subject position. | RDF 1.2 admits triple terms in object position only; use a reifier. |
 | `rdf-ir-graph-name-invalid` | A graph name is a literal or a triple term. | A graph name must be an IRI or a blank node. |
+| `rdf-ir-graph-already-exists` | Creating a graph finds an existing slot in remembered-empty mode. | Choose a fresh graph name or suppress this semantic error with SILENT. |
 | `rdf-ir-reifier-not-triple` | A reifier binding points at something other than a triple term. | Bind the reifier to a triple term. |
 | `rdf-ir-triple-cycle` | A triple term contains itself, directly or through nesting. | Remove the cycle. |
 | `rdf-ir-triple-nesting-limit` | Triple-term nesting exceeds the builder's depth limit. | Flatten the nesting. |
@@ -146,10 +147,14 @@ whose terms do not form a well-formed dataset.
 
 | Code | Meaning | Remedy |
 | --- | --- | --- |
-| `native-sparql-query-parse` | The query text does not parse under the SPARQL 1.1/1.2 grammar (including the enforced `VERSION` declaration). | Fix the query at the reported position. |
+| `native-sparql-query-parse` | The query text does not parse under the SPARQL 1.1/1.2 grammar (including a malformed `VERSION` declaration; a well-formed but unrecognized version is `native-sparql-unsupported`). | Fix the query at the reported position. |
 | `native-sparql-update-parse` | The update request does not parse. | Fix the update at the reported position. |
 | `native-sparql-query-explain` | Evaluation under `--explain` failed; the evaluator's error is in the message. | Address the underlying evaluation error. |
 | `native-sparql-query-eval` | Query evaluation failed with an error no more specific code classifies; the evaluator's error is in the message. | Address the underlying evaluation error. |
+| `native-sparql-internal` | An evaluator invariant was violated. The execution cannot produce a valid answer. | Report the failure with its query and input; it requires an engine repair. |
+| `native-sparql-composite-bound` | Constructing a composite datatype value exceeded its element or lexical-byte resource bound. | Reduce the value being constructed. |
+| `native-sparql-float-environment` | The calling thread's floating-point environment cannot preserve the distance arithmetic's specified IEEE-754 results. | Evaluate on a thread with the supported floating-point environment. |
+| `native-sparql-function-operational` | A host function or relation failed during execution: an opaque returned error, a caught panic, a resource ceiling, or an invalid protocol response. | Repair the callee or adjust the resource limit; this cannot establish a validation verdict. |
 | `native-sparql-source-read` | Operational storage refused a forward/reverse lookup or complete row drain. The error is fatal, including inside `SERVICE SILENT`; no partial answer is published. | Repair the source or adjust its explicit resource limits before retrying. |
 | `native-sparql-workspace-unpriced` | A bounded operational view was given an execution shape without a certified working-memory bound, or a raw evaluator entry without a held drain reservation. | Use the engine's fallible projected basic-graph-pattern `SELECT` entry with its default dataset and empty extension configuration, or choose a resident view. |
 | `native-sparql-workspace-bound-overflow` | Certified workspace arithmetic exceeds `u64`. | Reduce the query's intermediate cardinality or pattern count. |
@@ -186,10 +191,77 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-governor-ceiling` | Protocol boundary: a deterministic governor ceiling stopped the operation — it was reached, or the planner's estimate already exceeded it. The operation's outcome carries the trip; this is the `code` of the problem a host answers it with (the Cloudflare adapter's `422`). | Raise the ceiling, or narrow the request. |
 | `native-sparql-evaluation` | Protocol boundary: the operation's evaluation failed with no more specific code; the problem's `code` a host answers it with. | Address the underlying evaluation error. |
 | `native-sparql-update-bad-destination` | An `ADD`/`MOVE`/`COPY`/`LOAD` destination is `NAMED` or `ALL`; it must be `DEFAULT` or a single named `GRAPH`. | Name a single destination graph. |
+| `native-sparql-update-graph-missing` | An UPDATE selected `RememberEmpty` and its named input graph does not exist. `CLEAR`, `DROP`, `ADD`, `COPY` and `MOVE` refuse this input before changing the destination; `SILENT` leaves the operation unchanged. Self `COPY` and `MOVE` are unconditional no-ops. | Create or load the input graph, or use `SILENT`. |
 | `native-sparql-subst-iri` | A substitution value is not a valid IRI. | Supply a valid IRI. |
 | `native-sparql-subst-triple-predicate` | A substituted quoted triple has a predicate that is not an IRI. | Use an IRI predicate. |
 | `native-sparql-subst-literal-datatype` | A substituted literal's datatype is not an IRI. | Use an IRI datatype. |
 | `native-sparql-subst-langtag` | A pre-bound literal's language tag is not one the lexing profile accepts. | Supply a well-formed language tag. |
+| `native-sparql-xpath-operational` | A selected dated XPath law failed operationally in a way that names no single `xpath-*` resource. The query is aborted and publishes no answer. | Report the failure with its query and input. |
+
+## `xpath-*` — dated native XPath regular expressions (`purrdf-core`)
+
+These codes arise only when a caller selects a dated XPath law
+(`xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`) for SPARQL `REGEX` and
+`REPLACE`, SHACL `sh:pattern` or ShEx pattern facets. Without a selection, the
+compatibility regular expressions run and none of these codes appears.
+`purrdf_core::xsd_regex::xpath::Resource::code` is their single owner. Each one
+names the `Resource` that a `Limits` bound withheld (`Error::Resource`, with the
+exact requirement and the bound), or whose storage the host refused to allocate
+(`Error::Allocation`). The production bound `Limits::new()` sets is given in
+each row, and zero withholds a resource completely.
+
+Every `xpath-*` code is **operational**. It is never a syntax verdict and never a
+non-match: an invalid pattern or flag (FORX0001), an empty-matching replacement
+pattern (FORX0003) or invalid replacement text (FORX0004) is the host's ordinary
+invalid-pattern outcome instead, which is a SPARQL expression error, a SHACL
+finding or a failed ShEx facet. A refusal fails the whole operation. A query
+publishes no answer, an update changes nothing, and a validation writes no report;
+the refusal never becomes an unbound value, a `false` filter or a conforming
+graph. The C ABI reports it as `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13).
+
+The bounds apply to every pattern. Matching charges the work actually performed:
+character comparisons, choices, state copies, search advances and replacement
+output. A matcher step has no universal nanosecond cost, and neither one step
+per byte nor a one-to-three-step range describes every search.
+
+Under a dated law, a finite maximum that the input cannot reach no longer
+creates distinct count states. Compatibility nullable bodies keep their finite
+bounds and original capture priority. Greedy single-character runs, including
+choices and capture chains, scan once and retain their priority-ordered stops.
+Large nonnullable counts can
+reuse relative states while their bound comparisons stay unchanged, with exact
+counts restored near a bound.
+
+Production-default tests cover four mebibytes of `^[\s\S]{0,10000000}$`,
+`^[^\n]{0,10000000}$`, `^[^<>]{1,5000000}$`, `^[\p{L} ]{1,5000000}$` and
+`^(\w+\s?){1,5000000}$`, and four mebibytes of the exact-count choices
+`^(a|b){4194304}$` and `(a|b){4000000}`. Decision and capture searches have
+integer work bounds of four steps per byte for these classes/grouped words and
+six for these choices. Nonbinding maxima ten times larger spend the same work;
+these fixture bounds are not universal admission or timing guarantees.
+`REPLACE` over two mebibytes of grouped words retains the final iteration's
+capture and also charges template and output work. The `native_xpath_large`
+benchmark group measures these forms and their count/input-size ladders beside
+the original literal, grouped and adversarial neighbours.
+
+Nested counted repetitions whose bodies can repeat empty still distinguish
+count combinations. On `aaab`, `((a?){3000}){3000}b` answers while
+`((a?){5000}){5000}b` reaches an operational bound. There is no universal
+minimum-count threshold: the pattern and input determine which states coexist.
+A backreference keeps the backtracking matcher, whose exponential exploration
+(`^(a|aa)*c\1$` over forty `a`) can reach the step bound. Such refusal is a hard
+operational error, not `false`, an absent capture or a partial replacement.
+
+| Code | Meaning | Remedy |
+| --- | --- | --- |
+| `xpath-pattern-bytes` | `Resource::PatternBytes`: the pattern source has more UTF-8 bytes than the bound (64 KiB). The source is refused before parsing, whether or not its syntax is valid. | Shorten the pattern. |
+| `xpath-compile-steps` | `Resource::CompileSteps`: compiling the pattern needs more compiler operations, scanned characters and set operations included, than the bound (4,000,000). | Simplify the pattern, for example its character-class arithmetic. |
+| `xpath-program-nodes` | `Resource::ProgramNodes`: the compiled program needs more nodes than the bound (262,144). | Simplify the pattern or reduce its counted repetitions. |
+| `xpath-compile-slots` | `Resource::CompileSlots`: building the program needs more construction cells than the bound (2,097,152). | Simplify the pattern or reduce its counted repetitions. |
+| `xpath-match-steps` | `Resource::MatchSteps`: actual matching, capture search or replacement work exceeds 250,000,000 operations. Large nonbinding maxima and eligible single-character counts do not multiply per-byte work; nested count combinations, state closures, backreferences and replacement output can still exhaust it. No answer or partial replacement is published. | Simplify the costly pattern structure, remove a backreference where its semantics are unnecessary, or process shorter input. |
+| `xpath-match-states` | `Resource::MatchStates`: matching needs more simultaneously pending alternative states than the bound (65,536). | Reduce the pattern's alternation and repetition. |
+| `xpath-match-slots` | `Resource::MatchSlots`: the live states, captures and continuations need more cells than the bound (1,048,576). Nested empty-capable repetitions can reach the bound depending on their combination of counts. | Reduce the pattern's captures and repetition, or match shorter input. |
+| `xpath-output-bytes` | `Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB). | Replace over shorter input or with shorter replacement text. |
 
 ## `reasoning-*` — SPARQL under an entailment regime (`purrdf`)
 

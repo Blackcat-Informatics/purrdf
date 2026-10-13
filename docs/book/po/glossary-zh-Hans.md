@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # zh-Hans glossary — a gate input, not a page
 
-This file is read by `scripts/check-i18n-glossary.py` (part of `make check`
+This file is read by `helper-census --glossary-gate` (part of `make check`
 and CI). It settles one rendering per load-bearing term and, per term, the
 renderings that are wrong **for that term**; the gate refuses a `msgstr` that
 uses one of them **when its `msgid` carries the term**. A wrong or
@@ -35,6 +35,12 @@ its PurRDF page):
    once.
 5. Typography: full-width CJK punctuation (。，：；「」), a half-width space
    between a Latin run and a CJK run, code and identifiers in backticks.
+   The English parenthetical gloss of the proper name **Research Object** may
+   use the specific form `研究对象 (Research Object)`: keep the preceding
+   half-width space. `研究对象（Research Object）` and
+   `研究对象（Research Object，RO）` remain accepted. This exception permits
+   that English gloss only; it does not permit bare `研究对象` to replace
+   the name or general half-width punctuation in Chinese prose.
 
 **Basis** legend — **E**: established mainland rendering; **H**: fixed by the
 house page; **C**: no established rendering, PurRDF coins one; **K**: keep
@@ -59,16 +65,18 @@ How the gate reads the table:
   spelling exists"); 蕴含 is refused for *entailment* and untouched as the
   ordinary verb *implies*. A row whose Anchor is `—` is **global**: its
   rejections apply wherever they appear, and its Note must say why (only the
-  zh-Hant-register words qualify). A tracked `zh-Hans` Markdown file has no
-  `msgid`, so it is checked against the global rows only; the pour into the
-  catalogue is where the table is fully enforced.
+  zh-Hant-register words qualify). A tracked translated Markdown file (one whose
+  text is mostly Chinese, such as `README_zh.md`) has no `msgid`, so it is
+  checked against the global rows only; the catalogue is where the table is
+  fully enforced.
 * **Rejected** — entries separated by `、`; a plain entry is a substring; an
-  entry written `/…/` is a Python regular expression, used where a wrong
+  entry written `/…/` is a Python-compatible regular expression evaluated by the native bounded matcher, used where a wrong
   rendering would otherwise match across a word boundary (账本 inside
   台账本身) or inside a right one (知识图 inside 知识图谱). Code spans and
   fenced blocks in a `msgstr` are never matched (a page may write
   「不要写 `蕴含`」).
 * **K rows** — every Anchor token is an invariant: if the `msgid` carries it
+  literally (a slash-delimited regex is invalid on a K row),
   as a whole token (case-sensitively, not inside another word — `RDF` in
   `RDFLib` does not count), the `msgstr` must carry the same whole token
   (`RDF` inside `PurRDF` does not satisfy it).
@@ -83,6 +91,51 @@ every K token, a translation that drops it (refused) and one that keeps it
 (passes). A rejection without an ordinary-prose neighbour in the script is a
 self-test failure, so the table cannot grow a refusal that is proven only one
 way.
+
+The native host-tool entry point is
+`helper-census --glossary-gate [--root DIR] [--po FILE] [--glossary FILE]`;
+`--self-test` runs the rule controls without scanning, and `--inventory FILE`
+records an actual catalogue sweep with Chinese contexts and real-paragraph
+poison controls. Every normal invocation first runs the same rule controls.
+The selected glossary supplies their rules; the root's
+`docs/book/po/zh-Hans.po` always supplies the required real `standardized`
+spelling specimens, including when `--po` selects an external scan input.
+
+Its pattern adapter preserves the glossary's Python-style Unicode word
+(`Letter`, `Number`, underscore), decimal-digit, whitespace, LF-only dot
+and ignorecase semantics through the existing bounded ECMA matcher. Unicode
+properties and simple folds use `purrdf_lex::unicode::UNICODE_VERSION`, rather
+than whichever Unicode tables the installed Python interpreter carries.
+The four additional ignorecase letters İ, ı, ſ and K and Python whitespace
+U+001C–U+001F/U+0085 are explicit; U+FEFF is not whitespace.
+Word membership is not widened by ignorecase (U+0345 is not a word
+character). `\B` excludes empty input, retaining Python 3.13 behavior rather
+than Python 3.14's changed empty-input result. The ordinary
+anchor's left boundary and both K boundaries are explicitly ASCII
+`[A-Za-z0-9]`; K spelling is case-sensitive. Current table expressions use
+literal characters, classes, quantifiers, alternation, noncapturing groups
+and lookarounds. Unsupported escapes/modifier groups, malformed expressions,
+non-fixed-width or grouped lookbehinds, and exhausted matcher budgets fail
+with a rule diagnostic.
+
+Anchors and K survival use one visible Markdown surface: inline link/image
+labels, reference-link labels, autolinks and code identifiers remain visible;
+balanced destinations and titles and reference-definition lines are masked.
+Inline labels, destinations, titles and exact code spans may span soft line
+breaks within a paragraph. Blank paragraphs, fenced blocks and definition lines
+end that span; an unclosed link cannot hide real prose in a later paragraph.
+Already hidden destinations/titles are skipped during inline interpretation.
+Definitions are recognized even when their use is in another catalogue unit.
+Rejection prose additionally masks exact backtick spans and fenced blocks,
+with fence state retained across an entire document. An unmatched inline
+backtick remains prose; a fenced block continues until its matching marker
+and width closes it. Removed spans retain byte offsets/newlines and contain
+separators, so removing a destination cannot invent a new joined token.
+This is a bounded glossary surface, not a full CommonMark renderer: it
+recognizes balanced inline syntax and single-line reference definitions;
+it does not resolve arbitrary HTML or multiline reference definitions. Diagnostics
+identify the rule and source unit/line; the boolean matcher does not claim
+an exact matched substring span.
 
 | # | Term | Anchor | Rendering | Basis | Rejected | Note |
 |---:|---|---|---|---|---|---|
@@ -127,7 +180,7 @@ way.
 | 39 | PurRDF | PurRDF | PurRDF | K | — | the brand is never translated or lower-cased in prose (`docs/BRAND.md`); `check-brand-casing.py` enforces the casing inside CJK text, this row enforces survival |
 | 40 | Research Object (RO-Crate) | Research Object | Research Object（RO） | K | `/研究对象(?!\s*[（(]\s*Research Object)/` | a proper noun; 研究对象 means "the object of study". Keep English, or gloss it as 研究对象（Research Object） / 研究对象（Research Object，RO） / 研究对象 (Research Object) — the bare word is refused where the msgid carries the term |
 | 41 | realization (DL, of an individual) | realization | 实现（realization） on first use / 实例归类 | C | — | bare 实现 collides with 实现 = "implementation", the far commoner sense in this book; gloss it or use 实例归类. Not gated: 实现 in the implementation sense is everywhere |
-| 42 | surface (API surface) | surface | 接口 | E | `/表面(?!上\|看来\|来看)/` | technical, not literary: the English "surface" is the API surface. 表面上 / 表面看来 / 从表面来看 ("ostensibly") are spared; 表面 in other senses (表面张力) is untouched by anchoring |
+| 42 | surface (API surface) | `/(?<!whole )surface/` | 接口 | E | `/表面(?!上\|看来\|来看)/` | technical, not literary: the English "surface" is the API surface. Geometric "whole surface" names the complete physical surface and does not anchor this API term. 表面上 / 表面看来 / 从表面来看 ("ostensibly") are spared; 表面 in other senses (表面张力) is untouched by anchoring |
 | 43 | seam (extension seam) | seam | 扩展点 | E | — | 接缝 is acceptable but 扩展点 reads naturally to the audience |
 | 44 | mint (an IRI, a witness, a blank node) | mint | 生成 | E | 铸造 | technical, not literary: 铸造 ("cast, coin") is the English project idiom carried over; as bronze casting it is untouched |
 | 45 | reach (a host, a surface) | reach | 到达 | E | 抵达 | technical, not literary: 抵达 is the literary "arrive" |
@@ -148,6 +201,13 @@ way.
 | 60 | sink (event / package sink) | sink | 接收器（sink） | E | — | `Sink` (the RDF/JS interface) is invariant in code. Not gated: the obvious wrong form 汇 is inside 词汇 and 汇总器, both correct and both common in this book |
 | 61 | divergence (from a specification, from another engine) | divergen | 分歧 | E | — | a ledgered divergence is 分歧 everywhere, including the SPARQL chapter heading 与其他实现的分歧. Not gated: 差异 is the ordinary "difference" (数据集差异, a dataset diff), which shares paragraphs with divergence |
 | 62 | fails loudly (raises an error) | fails loudly、fail loudly、failing loudly、failed loudly、loud and immediate | 显式报错失败 | E | 大声、`/(?<!丢弃并)显式告知/` | "loudly" is idiom. For a FAILURE it means the caller gets an error (a parse error, a failing assertion), so 显式告知 ("explicitly notified") understates it. A drop that is only reported is row 46 |
+| 63 | warrant (an entailment warrant) | warrant | 蕴涵证据（warrant） | C | 凭证 | the evidence `entails` returns and `verify` re-decides. 凭证 reads as an authentication credential or an accounting voucher, so a heading 「重新判定凭证」 reads as "re-check the credential". `EntailmentWarrant` and `warrant` in code are invariant; 凭证 for a login credential is untouched by anchoring |
+| 64 | context lens (JSON-LD) | context lens | 上下文透镜（context lens） | C | 上下文视角 | "lens" has no JSON-LD community rendering; 上下文视角 reads as "point of view", a figure of speech that does not say a compiled `@context` is applied. Keep the English gloss on first use |
+| 65 | sideband (the exact RDF sideband) | sideband | 边带（sideband） | C, with precedent | — | 边带 is the established signal-processing word; here it is the exact RDF a package carries beside its native view, the authority for an RDF lift. The earlier coinage 旁带 is a calque no reader recognises. Not gated: 边带 and 旁带 have no other sense in this book to protect, but a rejection needs one |
+| 66 | lane (an execution or output path) | lane | 通道 | C | — | a named path through the engine: the offline and asynchronous lanes of the JavaScript package, the writer-native lane, each entailment mechanism's lane, the loss-ledger lane. The English never defines "lane" either, so the sentence must name which lane, as the English does. Not gated: 通道 is also the ordinary "channel" |
+| 67 | glyph (visualization) | glyph | 图元（glyph） | E (graphics) | — | the graphics sense, not the typographic 字形. A "bounded" glyph is drawn inside a frame: 带边框的, not 有边界的 ("limited") |
+| 68 | poison (a fold, an instance), fold (an aggregate) | poison、fold | 毒化 / 折叠 | E (Rust, functional programming) | — | as in a poisoned mutex: a type error poisons an aggregate's fold (折叠, the functional-programming word for the accumulation) to unbound, and a trap poisons a WebAssembly instance. Not gated: 折叠 is also case folding (大小写折叠), which this book uses |
+| 69 | wall clock | wall clock、wall-clock | 挂钟时间 | E | — | the real-time clock, as opposed to fuel or step budgets; the established operating-systems rendering |
 
 Add a row when a translation coins or settles a term; give it an Anchor,
 add a **Rejected** entry only for a rendering that is wrong *for that term*,

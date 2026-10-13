@@ -1064,9 +1064,8 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
     let saved = control::mxcsr();
     for (name, bits, _, probe) in mxcsr_departures() {
         let refused = resolve_under_mxcsr(saved | bits);
-        // On x86_64 the register is read first, so the refusal names it; on 32-bit x86
-        // no register is read and the probe's refusal is the answer.
-        #[cfg(target_arch = "x86_64")]
+        // Both x86 with SSE2 and x86_64 read MXCSR before the probe, so the
+        // refusal identifies the register that held the invalid bits.
         let expected = {
             let evidence = FloatEnvironmentEvidence::Register {
                 name: "MXCSR",
@@ -1079,8 +1078,6 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
                 _ => FloatEnvironmentError::RoundingMode { evidence },
             }
         };
-        #[cfg(target_arch = "x86")]
-        let expected = probe;
         assert_eq!(refused, Err(expected), "{name} must be refused by name");
     }
     // The valid neighbour: the same register with those fields clear resolves, so the
@@ -1281,4 +1278,36 @@ fn every_refusal_renders_a_distinct_sentence() {
         "{}",
         messages[4]
     );
+}
+
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
+#[test]
+fn resolving_distances_uses_the_shared_trap_refusal_before_probing() {
+    let saved = control::mxcsr();
+    let changed = saved & !0x1fbf;
+    let refusal = {
+        // Clear accrued exceptions and unmask traps. A private duplicate probe
+        // would execute in this environment; the shared admission refuses it.
+        let _guard = control::Mxcsr::load(changed);
+        let exact = Exact::resolve().expect_err("unmasked exceptions are unsafe");
+        assert_eq!(
+            Reassociated::resolve().expect_err("the same environment is unsafe"),
+            exact
+        );
+        exact
+    };
+    assert_eq!(control::mxcsr(), saved);
+    assert_eq!(
+        refusal,
+        FloatEnvironmentError::TrapsEnabled {
+            evidence: FloatEnvironmentEvidence::Register {
+                name: "MXCSR",
+                bits: u64::from(changed),
+            },
+        }
+    );
+    assert!(Exact::resolve().is_ok());
 }

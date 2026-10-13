@@ -9,9 +9,9 @@
 use std::cmp::Ordering;
 
 use crate::numeric::{
-    numeric_add, numeric_cmp, numeric_mul, numeric_sub, numeric_total_cmp, numeric_unary_minus,
+    self, numeric_add, numeric_mul, numeric_sub, numeric_total_cmp, numeric_unary_minus,
 };
-use crate::temporal::{self, duration_equal};
+use crate::temporal;
 use crate::value::{XsdError, XsdValue};
 
 /// SPARQL value-space comparison (`<` / `>` / `=` semantics).
@@ -47,23 +47,41 @@ use crate::value::{XsdError, XsdValue};
 /// ```
 #[must_use]
 pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    value_cmp_admitted(a, b, &mut |_| Ok(())).expect("resident value comparison allocation")
+}
+
+/// The same partial value order with admission before native numeric destinations.
+///
+/// # Errors
+/// Returns physical refusal separately from incomparable values.
+pub fn value_cmp_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
     use XsdValue::{Binary, Boolean, Double, Float, Gregorian, Integer, String as Str};
-    match (a, b) {
+    Ok(match (a, b) {
         // Numeric tower (with promotion); covers every numeric/numeric pair,
         // including all integer-family subtypes (they share the Integer variant).
         (
             Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
             Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
-        ) => numeric_cmp(a, b),
+        ) => numeric::numeric_cmp_admitted(a, b, admit)?,
         // `false` < `true`.
         (Boolean(x), Boolean(y)) => Some(x.cmp(y)),
         // Codepoint (Unicode scalar) order — SPARQL string ordering.
         (Str(x), Str(y)) => Some(x.cmp(y)),
         // Temporal families compare within themselves (XSD partial order).
-        (XsdValue::DateTime(x), XsdValue::DateTime(y)) => temporal::cmp_datetime(x, y),
-        (XsdValue::Date(x), XsdValue::Date(y)) => temporal::cmp_date(x, y),
-        (XsdValue::Time(x), XsdValue::Time(y)) => temporal::cmp_time(x, y),
-        (XsdValue::Duration(x), XsdValue::Duration(y)) => temporal::cmp_duration(x, y),
+        (XsdValue::DateTime(x), XsdValue::DateTime(y)) => {
+            temporal::cmp_datetime_admitted(x, y, admit)?
+        }
+        (XsdValue::Date(x), XsdValue::Date(y)) => temporal::cmp_date_admitted(x, y, admit)?,
+        (XsdValue::Time(x), XsdValue::Time(y)) => temporal::cmp_time_admitted(x, y, admit)?,
+        (XsdValue::Duration(x), XsdValue::Duration(y)) => {
+            temporal::cmp_duration_admitted(x, y, admit)?
+        }
         // Gregorian family: same-type comparison, cross-type incomparable.
         (Gregorian(x), Gregorian(y)) => temporal::cmp_gregorian(x, y),
         // Binary value spaces: same datatype → byte-lexicographic order; different datatypes
@@ -95,7 +113,7 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         }
         // Different value-space families are incomparable.
         _ => None,
-    }
+    })
 }
 
 /// The value-space comparison a **sort** must use: [`value_cmp`] everywhere except
@@ -176,9 +194,25 @@ pub fn value_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 /// ```
 #[must_use]
 pub fn value_equal(a: &XsdValue, b: &XsdValue) -> Option<bool> {
+    value_equal_admitted(a, b, &mut |_| Ok(())).expect("resident value equality allocation")
+}
+
+/// Value equality with the original duration law and admitted numeric comparison.
+///
+/// # Errors
+/// Returns physical refusal independently of the equality answer.
+pub fn value_equal_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<bool>, crate::bigint::LimbScratchError> {
     match (a, b) {
-        (XsdValue::Duration(x), XsdValue::Duration(y)) => Some(duration_equal(x, y)),
-        _ => value_cmp(a, b).map(|o| o == Ordering::Equal),
+        (XsdValue::Duration(x), XsdValue::Duration(y)) => {
+            temporal::duration_equal_admitted(x, y, admit).map(Some)
+        }
+        _ => value_cmp_admitted(a, b, admit).map(|order| order.map(|o| o == Ordering::Equal)),
     }
 }
 
@@ -251,7 +285,7 @@ pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
 // `crate::numeric`'s promotion-tower operators unchanged; temporal operands
 // (`dateTime`/`date`/`time`/`duration`/the Gregorian family) delegate to the
 // primitives `crate::temporal` already ships. `temporal.rs` itself stays
-// decoupled from `XsdValue` — it imports only `XsdDatatype`/`exact::Decimal`/`XsdError`
+// decoupled from `XsdValue` — it imports only `XsdDatatype`/`Decimal`/`XsdError`
 // — so all family dispatch lives here, in one place, rather than leaking into
 // the value-space-agnostic temporal module.
 
@@ -261,40 +295,39 @@ pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
 /// gate — because an inexact binary factor cannot scale an exact `xsd:duration`
 /// without silent rounding, which this crate's no-silent-truncation rule
 /// forbids.
-fn exact_factor(v: &XsdValue) -> Result<crate::exact::Decimal, XsdError> {
-    match v {
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) => {
-            Ok(v.to_exact_decimal().expect("an integer or decimal"))
-        }
-        _ => Err(XsdError::TypeMismatch {
-            reason: "duration scale factor must be xsd:integer or xsd:decimal (exact)",
-        }),
-    }
-}
-
 /// Temporal dispatch for `value_add`: instant/Gregorian `+` duration (either
 /// operand order) and duration `+` duration. Not exhaustive — reached only for
 /// operand pairs `value_add` has already classified as temporal; every pair
 /// this table does not list falls through to the final `TypeMismatch` arm.
 fn temporal_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    temporal_add_admitted(a, b, &mut |_| Ok(()))
+}
+
+fn temporal_add_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, XsdError> {
     match (a, b) {
         (XsdValue::DateTime(dt), XsdValue::Duration(d))
         | (XsdValue::Duration(d), XsdValue::DateTime(dt)) => {
-            temporal::add_duration_to_datetime(dt, d).map(XsdValue::DateTime)
+            temporal::add_duration_to_datetime_admitted(dt, d, admit).map(XsdValue::DateTime)
         }
         (XsdValue::Date(dt), XsdValue::Duration(d))
         | (XsdValue::Duration(d), XsdValue::Date(dt)) => {
-            temporal::add_duration_to_date(dt, d).map(XsdValue::Date)
+            temporal::add_duration_to_date_admitted(dt, d, admit).map(XsdValue::Date)
         }
         (XsdValue::Time(t), XsdValue::Duration(d)) | (XsdValue::Duration(d), XsdValue::Time(t)) => {
-            temporal::add_duration_to_time(t, d).map(XsdValue::Time)
+            temporal::add_duration_to_time_admitted(t, d, admit).map(XsdValue::Time)
         }
         (XsdValue::Gregorian(g), XsdValue::Duration(d))
         | (XsdValue::Duration(d), XsdValue::Gregorian(g)) => {
-            temporal::add_duration_to_gregorian(g, d).map(XsdValue::Gregorian)
+            temporal::add_duration_to_gregorian_admitted(g, d, admit).map(XsdValue::Gregorian)
         }
         (XsdValue::Duration(x), XsdValue::Duration(y)) => {
-            temporal::add_durations(x, y).map(XsdValue::Duration)
+            temporal::add_durations_admitted(x, y, admit).map(XsdValue::Duration)
         }
         _ => Err(XsdError::TypeMismatch {
             reason: "add: unsupported temporal operand pair",
@@ -308,30 +341,41 @@ fn temporal_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// falls through to the final `TypeMismatch` arm, same as any other pair this
 /// table does not list.
 fn temporal_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    temporal_sub_admitted(a, b, &mut |_| Ok(()))
+}
+
+fn temporal_sub_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, XsdError> {
     match (a, b) {
         (XsdValue::DateTime(x), XsdValue::DateTime(y)) => {
-            temporal::subtract_datetimes(x, y).map(XsdValue::Duration)
+            temporal::subtract_datetimes_admitted(x, y, admit).map(XsdValue::Duration)
         }
         (XsdValue::Date(x), XsdValue::Date(y)) => {
-            temporal::subtract_dates(x, y).map(XsdValue::Duration)
+            temporal::subtract_dates_admitted(x, y, admit).map(XsdValue::Duration)
         }
         (XsdValue::Time(x), XsdValue::Time(y)) => {
-            temporal::subtract_times(x, y).map(XsdValue::Duration)
+            temporal::subtract_times_admitted(x, y, admit).map(XsdValue::Duration)
         }
         (XsdValue::DateTime(dt), XsdValue::Duration(d)) => {
-            temporal::subtract_duration_from_datetime(dt, d).map(XsdValue::DateTime)
+            temporal::subtract_duration_from_datetime_admitted(dt, d, admit).map(XsdValue::DateTime)
         }
         (XsdValue::Date(dt), XsdValue::Duration(d)) => {
-            temporal::subtract_duration_from_date(dt, d).map(XsdValue::Date)
+            temporal::subtract_duration_from_date_admitted(dt, d, admit).map(XsdValue::Date)
         }
         (XsdValue::Time(t), XsdValue::Duration(d)) => {
-            temporal::subtract_duration_from_time(t, d).map(XsdValue::Time)
+            temporal::subtract_duration_from_time_admitted(t, d, admit).map(XsdValue::Time)
         }
         (XsdValue::Gregorian(g), XsdValue::Duration(d)) => {
-            temporal::subtract_duration_from_gregorian(g, d).map(XsdValue::Gregorian)
+            temporal::subtract_duration_from_gregorian_admitted(g, d, admit)
+                .map(XsdValue::Gregorian)
         }
         (XsdValue::Duration(x), XsdValue::Duration(y)) => {
-            temporal::subtract_durations(x, y).map(XsdValue::Duration)
+            temporal::subtract_durations_admitted(x, y, admit).map(XsdValue::Duration)
         }
         _ => Err(XsdError::TypeMismatch {
             reason: "sub: unsupported temporal operand pair",
@@ -342,15 +386,32 @@ fn temporal_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// Temporal dispatch for `value_mul`, reached whenever at least one operand is
 /// a `Duration` (from either of `value_mul`'s two discriminant checks): `DUR ×
 /// Nx` in either operand order, scaling both duration components through
-/// [`exact_factor`]. `DUR × DUR` and `DUR × Float`/`Double` both fail inside
-/// `exact_factor` (a `Duration` or an inexact factor is never `Integer`/
-/// `Decimal`), so they need no separate arm here.
+/// the borrowed exact coefficient. `DUR × DUR` and `DUR × Float`/`Double`
+/// fail the exact-factor gate.
 fn temporal_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    temporal_mul_admitted(a, b, &mut |_| Ok(()))
+}
+
+fn temporal_mul_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, XsdError> {
     match (a, b) {
-        (XsdValue::Duration(d), other) | (other, XsdValue::Duration(d)) => {
-            let factor = exact_factor(other)?;
-            temporal::multiply_duration(d, &factor).map(XsdValue::Duration)
+        (XsdValue::Duration(d), XsdValue::Integer { value, .. })
+        | (XsdValue::Integer { value, .. }, XsdValue::Duration(d)) => {
+            temporal::multiply_duration_parts_admitted(d, value, 0, admit).map(XsdValue::Duration)
         }
+        (XsdValue::Duration(d), XsdValue::Decimal(factor))
+        | (XsdValue::Decimal(factor), XsdValue::Duration(d)) => {
+            temporal::multiply_duration_parts_admitted(d, factor.unscaled(), factor.scale(), admit)
+                .map(XsdValue::Duration)
+        }
+        (XsdValue::Duration(_), _) | (_, XsdValue::Duration(_)) => Err(XsdError::TypeMismatch {
+            reason: "duration scale factor must be xsd:integer or xsd:decimal (exact)",
+        }),
         _ => Err(XsdError::TypeMismatch {
             reason: "multiply: unsupported temporal operand pair",
         }),
@@ -360,21 +421,38 @@ fn temporal_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// Temporal dispatch for `value_div`, reached only when the left operand `a`
 /// is a `Duration` (division has no commuted row: `Nx ÷ DUR` is a type error,
 /// handled by `numeric_div`'s own catch-all before this function is ever
-/// called). `DUR ÷ Nx` scales through [`exact_factor`]; `DUR ÷ DUR` goes
+/// called). `DUR ÷ Nx` scales through borrowed exact parts; `DUR ÷ DUR` goes
 /// through [`temporal::divide_durations`], which is commensurability- (not
 /// tag-) gated and reports `XsdError::Indeterminate` for an incommensurable
 /// pair.
 fn temporal_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    temporal_div_admitted(a, b, &mut |_| Ok(()))
+}
+
+fn temporal_div_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, XsdError> {
     let XsdValue::Duration(dividend) = a else {
         unreachable!("temporal_div is only reached with a Duration left operand")
     };
     match b {
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) => {
-            let factor = exact_factor(b)?;
-            temporal::divide_duration(dividend, &factor).map(XsdValue::Duration)
+        XsdValue::Integer { value, .. } => {
+            temporal::divide_duration_parts_admitted(dividend, value, 0, admit)
+                .map(XsdValue::Duration)
         }
+        XsdValue::Decimal(factor) => temporal::divide_duration_parts_admitted(
+            dividend,
+            factor.unscaled(),
+            factor.scale(),
+            admit,
+        )
+        .map(XsdValue::Duration),
         XsdValue::Duration(divisor) => {
-            temporal::divide_durations(dividend, divisor).map(XsdValue::Decimal)
+            temporal::divide_durations_admitted(dividend, divisor, admit).map(XsdValue::Decimal)
         }
         _ => Err(XsdError::TypeMismatch {
             reason: "divide: duration divisor must be xsd:integer, xsd:decimal, or another duration",
@@ -575,7 +653,7 @@ pub fn value_div_with_policy(
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_) => crate::numeric::numeric_div_with_policy(a, b, policy),
+        | XsdValue::Double(_) => numeric::numeric_div_with_policy(a, b, policy),
         XsdValue::Duration(_) => temporal_div(a, b),
         XsdValue::DateTime(_) | XsdValue::Date(_) | XsdValue::Time(_) | XsdValue::Gregorian(_) => {
             Err(XsdError::TypeMismatch {
@@ -588,6 +666,85 @@ pub fn value_div_with_policy(
             })
         }
     }
+}
+
+/// The complete existing value-space operator law with admitted numeric kernels.
+/// Nonnumeric/temporal pairs use this module's existing dispatch, including
+/// commuted duration multiplication and datatype-specific division errors.
+/// # Errors
+/// Value-space refusals remain distinct from native storage/admission failures.
+pub fn value_binary_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    op: numeric::NumericBinaryOperator,
+    policy: crate::exact::DivisionPolicy,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, numeric::NumericOperationError> {
+    if a.is_numeric()
+        && !(op == numeric::NumericBinaryOperator::Multiply && matches!(b, XsdValue::Duration(_)))
+    {
+        return numeric::numeric_binary_admitted(a, b, op, policy, admit);
+    }
+    if let (XsdValue::Duration(left), XsdValue::Duration(right)) = (a, b) {
+        let result = match op {
+            numeric::NumericBinaryOperator::Add => {
+                temporal::add_durations_admitted(left, right, admit).map(XsdValue::Duration)
+            }
+            numeric::NumericBinaryOperator::Subtract => {
+                temporal::subtract_durations_admitted(left, right, admit).map(XsdValue::Duration)
+            }
+            numeric::NumericBinaryOperator::Multiply => temporal_mul_admitted(a, b, admit),
+            numeric::NumericBinaryOperator::Divide => temporal_div_admitted(a, b, admit),
+        };
+        return result.map_err(|error| match error {
+            XsdError::Storage(cause) => numeric::NumericOperationError::Storage(cause),
+            other => numeric::NumericOperationError::Value(other),
+        });
+    }
+    if op == numeric::NumericBinaryOperator::Multiply
+        && (matches!(a, XsdValue::Duration(_)) || matches!(b, XsdValue::Duration(_)))
+    {
+        return temporal_mul_admitted(a, b, admit).map_err(|error| match error {
+            XsdError::Storage(cause) => numeric::NumericOperationError::Storage(cause),
+            other => numeric::NumericOperationError::Value(other),
+        });
+    }
+    if op == numeric::NumericBinaryOperator::Divide && matches!(a, XsdValue::Duration(_)) {
+        return temporal_div_admitted(a, b, admit).map_err(|error| match error {
+            XsdError::Storage(cause) => numeric::NumericOperationError::Storage(cause),
+            other => numeric::NumericOperationError::Value(other),
+        });
+    }
+    if matches!(
+        op,
+        numeric::NumericBinaryOperator::Add | numeric::NumericBinaryOperator::Subtract
+    ) && (matches!(
+        a,
+        XsdValue::DateTime(_) | XsdValue::Date(_) | XsdValue::Time(_) | XsdValue::Gregorian(_)
+    ) || (matches!(a, XsdValue::Duration(_)) && op == numeric::NumericBinaryOperator::Add))
+    {
+        let result = match op {
+            numeric::NumericBinaryOperator::Add => temporal_add_admitted(a, b, admit),
+            numeric::NumericBinaryOperator::Subtract => temporal_sub_admitted(a, b, admit),
+            _ => unreachable!(),
+        };
+        return result.map_err(|error| match error {
+            XsdError::Storage(cause) => numeric::NumericOperationError::Storage(cause),
+            other => numeric::NumericOperationError::Value(other),
+        });
+    }
+    match op {
+        numeric::NumericBinaryOperator::Add => value_add(a, b),
+        numeric::NumericBinaryOperator::Subtract => value_sub(a, b),
+        numeric::NumericBinaryOperator::Multiply => value_mul(a, b),
+        numeric::NumericBinaryOperator::Divide => value_div_with_policy(a, b, policy),
+    }
+    .map_err(|error| match error {
+        XsdError::Storage(cause) => numeric::NumericOperationError::Storage(cause),
+        other => numeric::NumericOperationError::Value(other),
+    })
 }
 
 /// SPARQL value-space unary minus (`-x`, `op:numeric-unary-minus` extended to

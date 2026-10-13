@@ -9,9 +9,6 @@ use crate::json_model::Value;
 
 use super::{PydanticError, is_python_identifier, is_python_keyword};
 
-pub(super) const MAX_DEFINITIONS: usize = 65_536;
-const MAX_CLASSES: usize = MAX_DEFINITIONS;
-const MAX_MODULES: usize = 65_536;
 const MAX_DOTTED_PATH_BYTES: usize = 255;
 const MAX_DOTTED_PATH_COMPONENTS: usize = 32;
 const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
@@ -21,9 +18,6 @@ const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 const MAX_METADATA_DEPTH: usize = 128;
 const MAX_METADATA_NODES: usize = 1_000_000;
 const MAX_ARTIFACTS: usize = 131_072;
-pub(super) const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
-pub(super) const MAX_SCHEMA_NODES: usize = 1_000_000;
-pub(super) const MAX_SCHEMA_STRING_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;
 pub(super) const MAX_OUTPUT_BYTES: usize = 512 * 1024 * 1024;
 pub(super) const MAX_OUTPUT_ARTIFACTS: usize = MAX_ARTIFACTS;
@@ -202,11 +196,6 @@ impl PydanticPackageTopology {
         let mut module_map = BTreeMap::new();
         let mut folded_modules = BTreeMap::<String, String>::new();
         for module in modules {
-            if module_map.len() == MAX_MODULES {
-                return Err(PydanticError::new(format!(
-                    "Pydantic topology exceeds the {MAX_MODULES}-module limit"
-                )));
-            }
             let path = module.path.clone();
             if module_map.insert(path.clone(), module).is_some() {
                 return Err(PydanticError::new(format!(
@@ -226,11 +215,6 @@ impl PydanticPackageTopology {
         let mut class_map = BTreeMap::new();
         let mut used_modules = BTreeSet::new();
         for class in classes {
-            if class_map.len() == MAX_CLASSES {
-                return Err(PydanticError::new(format!(
-                    "Pydantic topology exceeds the {MAX_CLASSES}-class limit"
-                )));
-            }
             if !module_map.contains_key(class.module_path()) {
                 return Err(PydanticError::new(format!(
                     "Pydantic class route {:?} names undeclared module {:?}",

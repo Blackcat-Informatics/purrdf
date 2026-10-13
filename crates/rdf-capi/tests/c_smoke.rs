@@ -8,41 +8,11 @@
 
 #![cfg(not(miri))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn cdylib_artifact(messages: &[u8], lib_name: &str) -> Option<PathBuf> {
-    let messages = std::str::from_utf8(messages).ok()?;
-    for line in messages.lines() {
-        let Ok(message) = purrdf_lex::json::read(line) else {
-            continue;
-        };
-        if message
-            .get("reason")
-            .and_then(purrdf_lex::json::Value::as_str)
-            != Some("compiler-artifact")
-            || !message
-                .pointer("/target/kind")
-                .and_then(purrdf_lex::json::Value::as_array)
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "cdylib"))
-        {
-            continue;
-        }
-        let Some(filenames) = message
-            .get("filenames")
-            .and_then(purrdf_lex::json::Value::as_array)
-        else {
-            continue;
-        };
-        for filename in filenames.iter().filter_map(purrdf_lex::json::Value::as_str) {
-            let path = PathBuf::from(filename);
-            if path.file_name().and_then(|name| name.to_str()) == Some(lib_name) {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
+#[path = "support/phases.rs"]
+mod phases;
 
 /// The vendored W3C OWL 2 RL entailment corpus, relative to this crate.
 ///
@@ -52,8 +22,36 @@ fn cdylib_artifact(messages: &[u8], lib_name: &str) -> Option<PathBuf> {
 const CORPUS: &str = "../sparql-conformance/entailment-suite/w3c-owl2-rl";
 
 #[test]
-fn c_abi_smoke() {
+fn c_abi_smoke() -> std::io::Result<()> {
     let manifest = env!("CARGO_MANIFEST_DIR");
+    let root = Path::new(manifest).parent().unwrap().parent().unwrap();
+    // The profiling launcher delegates to this same Cargo with telemetry flags.
+    let cargo = std::env::var("PURRDF_PROFILE_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string());
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let receipt = match std::env::var_os("PURRDF_C_PHASE_RECEIPT") {
+        Some(path) => PathBuf::from(path),
+        None => std::env::current_exe()?.with_extension("phases.json"),
+    };
+    let mut phases = phases::Recorder::new(receipt, purrdf_lex::json::Object::new().into())?;
+    let context = phases.check("host-input-identities", || {
+        phases::context(root, &cargo, &cc)
+    })?;
+    phases.evidence("host", context)?;
+    let package = phases.run(
+        "cargo-package-identity",
+        Command::new(&cargo)
+            .args(["pkgid", "-p", "purrdf-capi", "--locked"])
+            .current_dir(root),
+    )?;
+    let package_id = std::str::from_utf8(&package.stdout)
+        .map_err(std::io::Error::other)?
+        .trim();
+    let header = phases.check("header-identity", || {
+        phases::identity(&Path::new(manifest).join("include/purrdf.h"))
+    })?;
+    phases.evidence("header", header)?;
     let smoke_c = format!("{manifest}/tests/smoke.c");
     let header_dir = format!("{manifest}/include");
 
@@ -69,7 +67,6 @@ fn c_abi_smoke() {
     // nextest` do NOT build as a dependency of this test binary. Always build
     // it before linkage: existence alone is insufficient because a prior test
     // run may have left a stale shared library for older Rust sources.
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     // Which profile to build the cdylib under, read from THIS binary's own
     // compilation rather than from where the binary happens to sit on disk.
     //
@@ -100,27 +97,26 @@ fn c_abi_smoke() {
     let mut cargo_build = Command::new(&cargo);
     cargo_build.args([
         "build",
+        "--locked",
         "-p",
         "purrdf-capi",
         "--profile",
         profile,
         "--message-format=json-render-diagnostics",
     ]);
-    let output = cargo_build
-        .output()
-        .expect("failed to invoke cargo to build the libpurrdf cdylib");
-    assert!(
-        output.status.success(),
-        "cargo build -p purrdf-capi for profile `{profile}` failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let lib = cdylib_artifact(&output.stdout, &lib_name).unwrap_or_else(|| {
-        panic!(
-            "Cargo did not report {lib_name} for profile `{profile}`:\n{}",
-            String::from_utf8_lossy(&output.stdout)
+    cargo_build.current_dir(root);
+    let output = phases.run("cargo-cdylib-preparation", &mut cargo_build)?;
+    let artifact = phases.check("cargo-artifact-validation", || {
+        phases::cdylib(
+            &phases::cargo_messages(&output.stdout, false)?,
+            package_id,
+            &lib_name,
         )
-    });
+    })?;
+    phases.evidence("cargo_artifact", artifact.message)?;
+    let library = phases.check("library-identity", || phases::identity(&artifact.path))?;
+    phases.evidence("library", library)?;
+    let lib = artifact.path;
     let profile_dir = lib.parent().expect("cdylib profile directory");
     assert!(
         lib.exists(),
@@ -128,20 +124,28 @@ fn c_abi_smoke() {
         lib.display()
     );
 
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let bin = profile_dir.join("purrdf_c_smoke");
 
-    let compile = Command::new(&cc)
-        .arg(&smoke_c)
-        .arg("-std=c11")
-        .arg(format!("-I{header_dir}"))
-        .arg(format!("-L{}", profile_dir.display()))
-        .arg("-lpurrdf")
-        .arg("-o")
-        .arg(&bin)
-        .status()
-        .expect("failed to invoke the C compiler");
-    assert!(compile.success(), "C smoke failed to compile/link");
+    let object = profile_dir.join("purrdf_c_smoke.o");
+    phases.run(
+        "c-smoke-object-compile",
+        Command::new(&cc)
+            .arg(&smoke_c)
+            .arg("-std=c11")
+            .arg(format!("-I{header_dir}"))
+            .arg("-c")
+            .arg("-o")
+            .arg(&object),
+    )?;
+    phases.run(
+        "c-smoke-link",
+        Command::new(&cc)
+            .arg(&object)
+            .arg(format!("-L{}", profile_dir.display()))
+            .arg("-lpurrdf")
+            .arg("-o")
+            .arg(&bin),
+    )?;
 
     // The loader's library-search env var is platform-specific: `LD_LIBRARY_PATH`
     // on Linux/BSD, `DYLD_LIBRARY_PATH` on macOS, `PATH` on Windows.
@@ -157,73 +161,93 @@ fn c_abi_smoke() {
     // and compares both outputs byte for byte, so the artifact the Rust test, the
     // WASM module and the Python suite all check reaches the C ABI too — one
     // artifact, four hosts, rather than a fixture per host.
-    let run = Command::new(&bin)
-        .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.trig"))
-        .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.json"))
-        .arg(format!(
-            "{manifest}/../validate/tests/fixtures/regime-boundary.vectors"
-        ))
-        // Arguments four to six are `webont-imports-011` and the support ontology
-        // its premise `owl:imports`, taken from the byte-frozen W3C corpus rather
-        // than copied into a fixture of this crate's own. They are what proves the
-        // caller-supplied import table reaches a REAL C caller: the header would
-        // not even compile against a program passing arrays it does not declare.
-        .arg(format!(
-            "{manifest}/{CORPUS}/cases/webont-imports-011/premise.rdf"
-        ))
-        .arg(format!(
-            "{manifest}/{CORPUS}/cases/webont-imports-011/conclusion.rdf"
-        ))
-        .arg(format!("{manifest}/{CORPUS}/imports/support011-A.rdf"))
-        .env(loader_path_var, profile_dir)
-        .status()
-        .expect("failed to run the C smoke binary");
-    assert!(run.success(), "C smoke binary returned a failure exit code");
+    phases.run(
+        "c-smoke-runtime",
+        Command::new(&bin)
+            .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.trig"))
+            .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.json"))
+            .arg(format!(
+                "{manifest}/../validate/tests/fixtures/regime-boundary.vectors"
+            ))
+            // Arguments four to six are `webont-imports-011` and the support ontology
+            // its premise `owl:imports`, taken from the byte-frozen W3C corpus rather
+            // than copied into a fixture of this crate's own. They are what proves the
+            // caller-supplied import table reaches a REAL C caller: the header would
+            // not even compile against a program passing arrays it does not declare.
+            .arg(format!(
+                "{manifest}/{CORPUS}/cases/webont-imports-011/premise.rdf"
+            ))
+            .arg(format!(
+                "{manifest}/{CORPUS}/cases/webont-imports-011/conclusion.rdf"
+            ))
+            .arg(format!("{manifest}/{CORPUS}/imports/support011-A.rdf"))
+            .env(loader_path_var, profile_dir),
+    )?;
 
     // Compile and run the public projection example too, so its documented
     // ownership/free order and additive project/lift declarations cannot drift.
     let example_c = format!("{manifest}/examples/projection_roundtrip.c");
     let example_bin = profile_dir.join("purrdf_c_projection_example");
     let example_archive = profile_dir.join("purrdf_c_projection_example.tar");
-    let _ = std::fs::remove_file(&example_archive);
-    let compile_example = Command::new(&cc)
-        .arg(&example_c)
-        .arg("-std=c11")
-        .arg(format!("-I{header_dir}"))
-        .arg(format!("-L{}", profile_dir.display()))
-        .arg("-lpurrdf")
-        .arg("-o")
-        .arg(&example_bin)
-        .status()
-        .expect("failed to compile the C projection example");
-    assert!(
-        compile_example.success(),
-        "C projection example failed to compile/link"
-    );
-    let run_example = Command::new(&example_bin)
-        .arg(&example_archive)
-        .env(loader_path_var, profile_dir)
-        .status()
-        .expect("failed to run the C projection example");
-    assert!(
-        run_example.success(),
-        "C projection example returned a failure exit code"
-    );
-    let example_metadata =
-        std::fs::metadata(&example_archive).expect("C projection example archive metadata");
-    assert!(
-        example_metadata.len() > 0,
-        "C projection example did not materialize its archive"
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
+    phases.check(
+        "projection-output-preparation",
+        || match std::fs::remove_file(&example_archive) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    )?;
+    let example_object = profile_dir.join("purrdf_c_projection_example.o");
+    phases.run(
+        "c-projection-object-compile",
+        Command::new(&cc)
+            .arg(&example_c)
+            .arg("-std=c11")
+            .arg(format!("-I{header_dir}"))
+            .arg("-c")
+            .arg("-o")
+            .arg(&example_object),
+    )?;
+    phases.run(
+        "c-projection-link",
+        Command::new(&cc)
+            .arg(&example_object)
+            .arg(format!("-L{}", profile_dir.display()))
+            .arg("-lpurrdf")
+            .arg("-o")
+            .arg(&example_bin),
+    )?;
+    phases.run(
+        "c-projection-runtime",
+        Command::new(&example_bin)
+            .arg(&example_archive)
+            .env(loader_path_var, profile_dir),
+    )?;
+    phases.check("c-projection-output-validation", || {
+        let example_metadata = std::fs::metadata(&example_archive)?;
+        if example_metadata.len() == 0 {
+            return Err(std::io::Error::other(
+                "C projection example did not materialize its archive",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
 
-        assert_eq!(
-            example_metadata.permissions().mode() & 0o777,
-            0o600,
-            "C projection example archive permissions are not owner-only"
-        );
-    }
-    let _ = std::fs::remove_file(example_archive);
+            if example_metadata.permissions().mode() & 0o777 != 0o600 {
+                return Err(std::io::Error::other(
+                    "C projection example archive permissions are not owner-only",
+                ));
+            }
+        }
+        Ok(())
+    })?;
+    let archive = phases.check("projection-output-identity", || {
+        phases::identity(&example_archive)
+    })?;
+    phases.evidence("projection_archive", archive)?;
+    phases.check("projection-output-cleanup", || {
+        std::fs::remove_file(example_archive)
+    })?;
+    Ok(())
 }

@@ -15,12 +15,9 @@
 //!
 //! * `add`, `sub`, `mul` — `op:numeric-add/-subtract/-multiply`, the canonical
 //!   lexical form of the exact result;
-//! * `div` — `op:numeric-divide` at eighteen fractional digits truncated toward
-//!   zero (the policy `18:toward-zero`), or `division-by-zero`;
+//! * `div` — `op:numeric-divide` under the default policy: exact when terminating,
+//!   otherwise eighteen fractional digits rounded half to even, or `division-by-zero`;
 //! * `div-exact` — the exact quotient, or `non-terminating`, or `division-by-zero`;
-//! * `div-default` — the default division (`exact-or-18:half-even`): the exact
-//!   quotient when it terminates, otherwise eighteen fractional digits rounded half
-//!   to even, or `division-by-zero`;
 //! * `cmp` — `<`, `=` or `>`;
 //! * `double`, `float` — the correctly rounded `xs:double`/`xs:float` bit pattern of
 //!   the left operand (the right operand is `-`);
@@ -126,22 +123,20 @@ fn main() {
             None => {
                 record(["div", a, b, "division-by-zero"]);
                 record(["div-exact", a, b, "division-by-zero"]);
-                record(["div-default", a, b, "division-by-zero"]);
             }
             Some(quotient) => {
-                let truncated = quotient.round_to_scale(18, Direction::TowardZero);
-                record(["div", a, b, &truncated.canonical_terminating()]);
-                let terminating = quotient.to_canonical_decimal();
-                let exact = terminating
-                    .clone()
+                let exact = quotient
+                    .to_canonical_decimal()
                     .unwrap_or_else(|| "non-terminating".to_owned());
-                record(["div-exact", a, b, &exact]);
-                let default = terminating.unwrap_or_else(|| {
+                let default = if exact == "non-terminating" {
                     quotient
                         .round_to_scale(18, Direction::HalfEven)
                         .canonical_terminating()
-                });
-                record(["div-default", a, b, &default]);
+                } else {
+                    exact.clone()
+                };
+                record(["div", a, b, &default]);
+                record(["div-exact", a, b, &exact]);
             }
         }
         let order = match x.cmp_value(&y) {

@@ -23,6 +23,16 @@ pub fn fixed_key(byte: u8) -> SigningKey {
     SigningKey::from_bytes(&[byte; 32])
 }
 
+/// Dedicated composite fixture key shared by GTS and RDF integration tests.
+/// These fixed seeds are test inputs, never production entropy claims.
+pub fn fixed_composite_key(seed: u8) -> crate::cose::composite::SigningKey {
+    let mut seeds = [seed; 64];
+    seeds[32..].fill(seed + 1);
+    let key = crate::cose::composite::SigningKey::from_bytes(&seeds).unwrap();
+    purrdf_ed25519::wipe_secret(&mut seeds);
+    key
+}
+
 /// The lexical value of the object of the first quad of `graph` whose predicate
 /// is the IRI `predicate_iri`.
 #[must_use]

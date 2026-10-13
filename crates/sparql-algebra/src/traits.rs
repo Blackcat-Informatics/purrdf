@@ -58,6 +58,7 @@ enum Leaf<'a> {
     Str(&'a str),
     Negated(&'a [NegatedPathElement]),
     Scalarvals(&'a [(String, Literal)]),
+    VarPairs(&'a [(Variable, Variable)]),
 }
 
 /// Apply `$body` to the value inside any [`Leaf`], bound as `$x`.
@@ -66,6 +67,7 @@ macro_rules! each_leaf {
         match $leaf {
             Leaf::Var($x) => $body,
             Leaf::Vars($x) => $body,
+            Leaf::VarPairs($x) => $body,
             Leaf::OptVar($x) => $body,
             Leaf::Named($x) => $body,
             Leaf::OptNamed($x) => $body,
@@ -109,6 +111,7 @@ impl Leaf<'_> {
             Self::Str(_) => 16,
             Self::Negated(_) => 17,
             Self::Scalarvals(_) => 18,
+            Self::VarPairs(_) => 19,
         }
     }
 
@@ -116,6 +119,7 @@ impl Leaf<'_> {
         match (self, other) {
             (Self::Var(a), Self::Var(b)) => a == b,
             (Self::Vars(a), Self::Vars(b)) => a == b,
+            (Self::VarPairs(a), Self::VarPairs(b)) => a == b,
             (Self::OptVar(a), Self::OptVar(b)) => a == b,
             (Self::Named(a), Self::Named(b)) => a == b,
             (Self::OptNamed(a), Self::OptNamed(b)) => a == b,
@@ -172,12 +176,12 @@ fn same_tok(left: Tok<'_>, right: Tok<'_>) -> bool {
 
 /// Builds a node's script, in order, onto a buffer.
 struct Script<'s, 'a> {
-    out: &'s mut Tokens<'a>,
+    out: &'s mut dyn FnMut(Tok<'a>),
 }
 
 impl<'a> Script<'_, 'a> {
     fn push(&mut self, tok: Tok<'a>) -> &mut Self {
-        self.out.push(tok);
+        (self.out)(tok);
         self
     }
 
@@ -356,6 +360,45 @@ impl<'a> Script<'_, 'a> {
                 s.option_node(expression.as_ref().map(NodeRef::Expr));
             }),
             G::Lateral { left, right } => binary(self, "Lateral", left, right),
+            G::Apply {
+                left,
+                right,
+                policy,
+            } => self.strukt("Apply", |s| {
+                s.field("left").node(NodeRef::Pattern(left));
+                s.field("right").node(NodeRef::Pattern(right));
+                s.field("policy");
+                s.strukt("ApplicationPolicy", |s| {
+                    s.field("dataset_required")
+                        .leaf(Leaf::Bool(policy.dataset_required));
+                    s.field("row_pipeline")
+                        .leaf(Leaf::Bool(policy.row_pipeline));
+                    s.field("reduced_adjacent")
+                        .leaf(Leaf::Bool(policy.reduced_adjacent));
+                    s.field("group_domain");
+                    if let Some(domain) = &policy.group_domain {
+                        s.tuple("Some", |s| {
+                            s.leaf(Leaf::Vars(domain));
+                        });
+                    } else {
+                        s.push(Tok::Unit("None"));
+                    }
+                    s.field("inputs").leaf(Leaf::VarPairs(&policy.inputs));
+                    s.field("optional");
+                    if let Some(optional) = &policy.optional {
+                        s.tuple("Some", |s| {
+                            s.strukt("OptionalApplication", |s| {
+                                s.field("retry_inputs")
+                                    .leaf(Leaf::VarPairs(&optional.retry_inputs));
+                                s.field("forget_marker")
+                                    .leaf(Leaf::Var(&optional.forget_marker));
+                            });
+                        });
+                    } else {
+                        s.push(Tok::Unit("None"));
+                    }
+                });
+            }),
             G::Filter { expr, inner } => self.strukt("Filter", |s| {
                 s.field("expr").node(NodeRef::Expr(expr));
                 s.field("inner").node(NodeRef::Pattern(inner));
@@ -535,23 +578,81 @@ impl<'a> Script<'_, 'a> {
 /// the script's first token is popped next.
 fn expand<'a>(node: NodeRef<'a>, stack: &mut Tokens<'a>) {
     let before = stack.len();
-    Script { out: stack }.of(node);
+    Script {
+        out: &mut |token| stack.push(token),
+    }
+    .of(node);
     stack.reverse_top(stack.len() - before);
 }
 
 /// `a == b`, as `#[derive(PartialEq)]` answers it, over two work lists.
 pub(crate) fn nodes_eq(a: NodeRef<'_>, b: NodeRef<'_>) -> bool {
+    let mut resident = purrdf_lex::allocation::Resident;
+    nodes_eq_with_memory(
+        a,
+        b,
+        &mut purrdf_lex::allocation::Memory::new(&mut resident),
+    )
+    .expect("resident structural comparison storage")
+}
+
+/// The same script comparison, with actual before-growth spill admission.
+pub(crate) fn nodes_eq_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    a: NodeRef<'_>,
+    b: NodeRef<'_>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<bool, purrdf_lex::allocation::StorageError> {
+    fn expand_admitted<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+        node: NodeRef<'a>,
+        stack: &mut Tokens<'a>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        let before = stack.len();
+        let mut failure = None;
+        Script {
+            out: &mut |token| {
+                if failure.is_none()
+                    && let Err(error) = stack.try_push_admitted(token, memory)
+                {
+                    failure = Some(error);
+                }
+            },
+        }
+        .of(node);
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        stack.reverse_top(stack.len() - before);
+        Ok(())
+    }
     let (mut left, mut right) = (Tokens::with(Tok::Node(a)), Tokens::with(Tok::Node(b)));
-    loop {
+    let equal = loop {
         match (left.pop(), right.pop()) {
-            (None, None) => return true,
+            (None, None) => break true,
             (Some(Tok::Node(a)), Some(Tok::Node(b))) => {
-                expand(a, &mut left);
-                expand(b, &mut right);
+                expand_admitted(a, &mut left, memory)?;
+                expand_admitted(b, &mut right, memory)?;
             }
             (Some(a), Some(b)) if same_tok(a, b) => {}
-            _ => return false,
+            _ => break false,
         }
+    };
+    left.release_admitted(memory)?;
+    right.release_admitted(memory)?;
+    Ok(equal)
+}
+
+impl GraphPattern {
+    /// Compare structural scripts under the original native memory account.
+    ///
+    /// # Errors
+    /// Returns checked layout, physical allocation or admission refusal.
+    pub fn eq_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        other: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<bool, purrdf_lex::allocation::StorageError> {
+        nodes_eq_with_memory(NodeRef::Pattern(self), NodeRef::Pattern(other), memory)
     }
 }
 
@@ -574,7 +675,10 @@ pub(crate) fn node_hash<H: Hasher>(node: NodeRef<'_>, state: &mut H) {
 /// `{:?}` / `{:#?}` exactly as `#[derive(Debug)]` writes them, over a work list.
 pub(crate) fn node_debug(node: NodeRef<'_>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     purrdf_lex::walk::write_debug(f, node, |node, out: &mut Tokens<'_>| {
-        Script { out }.of(node);
+        Script {
+            out: &mut |token| out.push(token),
+        }
+        .of(node);
     })
 }
 
@@ -587,7 +691,7 @@ macro_rules! iterative_traits {
                 $(if let Some(copy) = ($leaf)(self) {
                     return copy;
                 })?
-                match clone_tree(NodeRef::$kind(self)) {
+                match clone_tree::<false>(NodeRef::$kind(self), GraphPattern::clone) {
                     Owned::$kind(copy) => copy,
                     _ => unreachable!("a copy is of the kind it copies"),
                 }
@@ -626,4 +730,17 @@ iterative_traits! {
     GroundTerm => Ground, leaf: |term: &GroundTerm| {
         (!matches!(term, GroundTerm::Triple(_))).then(|| shallow_ground(term))
     };
+}
+
+impl GroundTerm {
+    /// Compare the original structural scripts with native spill admission.
+    /// # Errors
+    /// Returns concrete layout, admission or allocator refusal.
+    pub fn eq_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        other: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<bool, purrdf_lex::allocation::StorageError> {
+        nodes_eq_with_memory(NodeRef::Ground(self), NodeRef::Ground(other), memory)
+    }
 }

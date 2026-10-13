@@ -39,10 +39,6 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 /// and the `sh:hasValue` constants an array form states under `contains`.
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
-const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
-const MAX_DEFINITIONS: usize = 65_536;
-const MAX_PROPERTIES: usize = 65_536;
-const MAX_SCHEMA_NODES: usize = 1_000_000;
 const MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Caller-owned RDF datatypes used when a scalar schema has no original RDF
@@ -195,7 +191,9 @@ purrdf_lex::message_error! {
 ///
 /// Returns [`SchemaImportError`] for malformed JSON/schema structures, a wrong
 /// dialect, open or dangling references, invalid/ambiguous identities,
-/// inconsistent cardinality wrappers, or fixed resource-limit exhaustion.
+/// inconsistent cardinality wrappers, or nesting deeper than
+/// [`MAX_SCHEMA_DEPTH`] or a string over 16 MiB. The number of definitions
+/// and of properties is bounded only by the input's own size.
 pub fn import_json_schema(
     input: &str,
     config: &SchemaImportConfig,
@@ -222,11 +220,11 @@ pub(crate) fn import_json_schema_from(
     input: &str,
     config: &SchemaImportConfig,
 ) -> Result<ImportedShapes, SchemaImportError> {
-    if input.len() > MAX_SCHEMA_BYTES {
-        return Err(SchemaImportError::new(format!(
-            "schema input exceeds the {MAX_SCHEMA_BYTES}-byte limit"
-        )));
-    }
+    // The input is already in memory, and the parse and the walks below are
+    // linear in it under the depth and string ceilings, so no
+    // fixed byte or node ceiling is set: one would refuse the schema of a
+    // large legitimate ontology (QUDT's is 55 MB) while bounding nothing the
+    // input does not bound already.
     // Numbers keep their lexemes; a repeated member name is refused rather than
     // resolved, since which copy a schema meant is not stated (RFC 7493 §2.3).
     // Members are held in name order, the order every walk below visits them in.
@@ -266,21 +264,19 @@ pub(crate) fn import_schema_value_from(
         .get("$defs")
         .and_then(Value::as_object)
         .ok_or_else(|| SchemaImportError::new("JSON Schema must contain object-valued #/$defs"))?;
-    if definitions.len() > MAX_DEFINITIONS {
-        return Err(SchemaImportError::new(format!(
-            "JSON Schema contains {} definitions; limit is {MAX_DEFINITIONS}",
-            definitions.len()
-        )));
-    }
+    // No fixed definition count is set: each definition is a node of the
+    // in-memory document, walked once and resolved by an index, so the
+    // document's own size bounds them (QUDT's LinkML pivot has 90,765).
 
-    validate_references(document, definitions, "#", 0)?;
+    let index = definition_index(definitions);
+    validate_references(document, &index, "#", 0)?;
     let generated_envelope = is_generated_envelope(root, definitions, &config.namespaces);
-    let mut context = ImportContext::new(source, config, definitions, generated_envelope);
+    let mut context = ImportContext::new(source, config, &index, generated_envelope);
     context.audit_root(root, generated_envelope)?;
     let mut model = SchemaImportModel::default();
     let mut shape_identities = BTreeMap::new();
     for (key, schema) in definitions {
-        if generated_envelope && matches!(key.as_str(), "Annotation" | "Node") {
+        if generated_envelope && matches!(key.as_str(), "Annotation" | "Node" | "Literal") {
             continue;
         }
         let path = definition_path(key);
@@ -313,7 +309,7 @@ struct SchemaImportModel {
 struct ImportContext<'a> {
     source: &'static str,
     config: &'a SchemaImportConfig,
-    definitions: &'a Object,
+    definitions: &'a DefinitionIndex<'a>,
     contract: LossLedger,
     losses: LossLedger,
     nested_shape_counter: usize,
@@ -324,7 +320,7 @@ impl<'a> ImportContext<'a> {
     fn new(
         source: &'static str,
         config: &'a SchemaImportConfig,
-        definitions: &'a Object,
+        definitions: &'a DefinitionIndex<'a>,
         generated_envelope: bool,
     ) -> Self {
         Self {
@@ -456,6 +452,20 @@ impl ImportContext<'_> {
         let object = schema.as_object().ok_or_else(|| {
             SchemaImportError::new(format!("{path} must be an object or boolean schema"))
         })?;
+        // A definition that is the projection of one literal or list (an
+        // inherited restriction's fragment over a single literal, say), which
+        // would otherwise be read as a node with `@value` or `@list`
+        // properties, is read as the value constraints of a shape no class
+        // targets, which references reach by its key.
+        if is_object_schema(object) && (is_value_schema(schema) || list_form(schema).is_some()) {
+            let iri = self
+                .config
+                .namespaces
+                .class_iri_for_def_key(key)
+                .map_err(|error| SchemaImportError::new(format!("{path}: {error}")))?;
+            let id = Term::NamedNode(NamedNode::new_unchecked(iri));
+            return self.import_value_shape(id, schema, path).map(Some);
+        }
         if !is_object_schema(object) {
             self.audit_non_object_definition(object, path)?;
             self.record("non-object-definition-dropped", path);
@@ -517,12 +527,6 @@ impl ImportContext<'_> {
             self.record("value-term-kind-widened", &format!("{path}/type"));
         }
         let properties = optional_object(object, "properties", path)?;
-        if properties.len() > MAX_PROPERTIES {
-            return Err(SchemaImportError::new(format!(
-                "{path}/properties contains {} members; limit is {MAX_PROPERTIES}",
-                properties.len()
-            )));
-        }
         let required = required_names(object, properties, path)?;
         let mut property_shapes = Vec::new();
         let mut closed_ignored = Vec::new();
@@ -734,11 +738,58 @@ impl ImportContext<'_> {
         Ok(())
     }
 
+    /// A shape whose constraints are one value's: the projection of a list
+    /// (`{"@list": [...]}`) is read as a list value (`rdf:nil`, a blank list
+    /// head, or either, the last recorded as widened since it also admits other
+    /// IRIs), and any other value schema (a literal's projection, a scalar, an
+    /// enumeration, a combination of them) as the value constraints it states.
+    fn import_value_shape(
+        &mut self,
+        id: Term,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Shape, SchemaImportError> {
+        let mut constraints = Vec::new();
+        match list_form(schema) {
+            Some(ListForm::Nil) => constraints.push(Constraint::HasValue(Term::NamedNode(
+                NamedNode::new_unchecked(RDF_NIL),
+            ))),
+            Some(ListForm::NonEmpty) => {
+                constraints.push(Constraint::NodeKind(vec![NodeKindValue::BlankNode]));
+            }
+            Some(ListForm::Any) => {
+                self.record("value-term-kind-widened", path);
+                constraints.push(Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri]));
+            }
+            None => self.import_scalar_schema(schema, path, &mut constraints)?,
+        }
+        Ok(Shape {
+            id,
+            targets: Vec::new(),
+            constraints,
+            property_shapes: Vec::new(),
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: Vec::new(),
+            rules: Vec::new(),
+        })
+    }
+
     fn import_nested_shape(
         &mut self,
         schema: &Value,
         path: &str,
     ) -> Result<Option<Shape>, SchemaImportError> {
+        // A value's schema (a list's or a literal's projection, a scalar, an
+        // enumeration), which an ontology range or restriction nests beside node
+        // references, constrains the value itself, not a node with `@list` or
+        // `@value` properties.
+        if is_value_schema(schema) || list_form(schema).is_some() {
+            let id = self.nested_shape_id(path);
+            return self.import_value_shape(id, schema, path).map(Some);
+        }
         let Some(object) = schema.as_object() else {
             self.record("schema-applicator-dropped", path);
             return Ok(None);
@@ -1456,7 +1507,7 @@ impl ImportContext<'_> {
                 "{path} must be a direct local #/$defs reference, got {reference:?}"
             ))
         })?;
-        let target = self.definitions.get(&key).ok_or_else(|| {
+        let target = self.definitions.get(key.as_str()).copied().ok_or_else(|| {
             SchemaImportError::new(format!("{path} targets missing definition {key:?}"))
         })?;
         if target.as_object().is_some_and(is_object_schema) {
@@ -2135,11 +2186,6 @@ fn validate_value_limits(
     *nodes = nodes
         .checked_add(1)
         .ok_or_else(|| SchemaImportError::new("schema node count overflow"))?;
-    if *nodes > MAX_SCHEMA_NODES {
-        return Err(SchemaImportError::new(format!(
-            "schema exceeds the {MAX_SCHEMA_NODES}-node limit"
-        )));
-    }
     match value {
         Value::String(value) if value.len() > MAX_STRING_BYTES => Err(SchemaImportError::new(
             format!("{path} string exceeds the {MAX_STRING_BYTES}-byte limit"),
@@ -2170,9 +2216,22 @@ fn validate_value_limits(
     }
 }
 
+/// `#/$defs` indexed by key, so each `$ref` resolves in logarithmic time
+/// rather than by a scan of every definition. The first member of a repeated
+/// key wins, as [`Object::get`] reads it.
+type DefinitionIndex<'a> = BTreeMap<&'a str, &'a Value>;
+
+fn definition_index(definitions: &Object) -> DefinitionIndex<'_> {
+    let mut index = DefinitionIndex::new();
+    for (key, value) in definitions {
+        index.entry(key.as_str()).or_insert(value);
+    }
+    index
+}
+
 fn validate_references(
     value: &Value,
-    definitions: &Object,
+    definitions: &DefinitionIndex<'_>,
     path: &str,
     depth: usize,
 ) -> Result<(), SchemaImportError> {
@@ -2223,7 +2282,7 @@ fn validate_references(
                 "{path}/$ref is external or not a direct #/$defs reference: {reference:?}"
             ))
         })?;
-        if !definitions.contains_key(&key) {
+        if !definitions.contains_key(key.as_str()) {
             return Err(SchemaImportError::new(format!(
                 "{path}/$ref targets missing definition {key:?}"
             )));
@@ -2343,7 +2402,7 @@ fn is_generated_envelope(root: &Object, definitions: &Object, namespaces: &Names
         });
     root.get("$schema").and_then(Value::as_str) == Some(JSON_SCHEMA_DIALECT)
         && root.get("$id").and_then(Value::as_str)
-            == Some(format!("{}schema/instance.schema.json", namespaces.primary_ns()).as_str())
+            == Some(crate::json_schema::instance_schema_id(namespaces).as_str())
         && root.get("title").and_then(Value::as_str)
             == Some("PURRDF instance schema (SHACL-derived, closed-world)")
         && root.get("type").and_then(Value::as_str) == Some("object")
@@ -2351,6 +2410,48 @@ fn is_generated_envelope(root: &Object, definitions: &Object, namespaces: &Names
         && root.get("properties") == Some(&expected_properties)
         && annotation == &expected_annotation
         && has_node_contract
+}
+
+/// Whether `schema` describes one value rather than a node: a literal's
+/// projection (an object whose properties are only JSON-LD value keywords), a
+/// scalar or array type, a constant or enumeration, or a combination of those.
+fn is_value_schema(schema: &Value) -> bool {
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        return !properties.is_empty()
+            && properties.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "@value" | "@type" | "@language" | "@direction"
+                )
+            })
+            && properties.contains_key("@value");
+    }
+    if object.contains_key("const") || object.contains_key("enum") {
+        return true;
+    }
+    if let Some(kind) = object.get("type") {
+        return match kind {
+            Value::String(kind) => kind != "object",
+            Value::Array(kinds) => kinds.iter().all(|kind| kind.as_str() != Some("object")),
+            _ => false,
+        };
+    }
+    let combinations: Vec<&Value> = ["anyOf", "oneOf", "allOf"]
+        .iter()
+        .filter_map(|keyword| object.get(keyword))
+        .collect();
+    !combinations.is_empty()
+        && combinations.iter().all(|branches| {
+            branches.as_array().is_some_and(|branches| {
+                !branches.is_empty()
+                    && branches
+                        .iter()
+                        .all(|branch| is_value_schema(branch) || list_form(branch).is_some())
+            })
+        })
 }
 
 fn is_object_schema(object: &Object) -> bool {

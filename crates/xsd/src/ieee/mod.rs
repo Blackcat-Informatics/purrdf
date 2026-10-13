@@ -119,6 +119,15 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+#[allow(
+    unsafe_code,
+    reason = "the thread-local floating control registers require inline assembly, with each read and write proving its own memory and register safety"
+)]
+pub mod control;
+pub mod dyadic;
+pub mod environment;
+pub mod ratio;
+
 #[doc(hidden)]
 pub mod reference;
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]

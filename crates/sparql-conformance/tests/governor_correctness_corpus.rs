@@ -76,6 +76,7 @@ fn harness_engine() -> NativeSparqlEngine {
             format!("{EXT_NS}sharpens"),
         ))
         .with_eval_options(EvalOptions {
+            disable_shapes: false,
             exists_memo: true,
             force_structural_bgp_order: false,
             force_sequential: false,

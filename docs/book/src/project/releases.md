@@ -29,7 +29,7 @@ version-coherence check in CI fails the build if the version sources
 
 The one exception is the C ABI. `libpurrdf`'s
 [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
-carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.9**), bumped
+carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.10**), bumped
 on every exported-signature change, pinned by
 `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through
 `purrdf_abi_version`. It is versioned separately from the workspace and stays
@@ -67,7 +67,7 @@ cargo lane:
   publishing;
 - every workspace crate version must match the tag version.
 
-Every functional version of every crate in the 31-crate release set is
+Every functional version of every crate in the 33-crate release set is
 published by that lane. Each existing crate record is locked on crates.io with
 *Require trusted publishing* (`trustpub_only`), so an API token cannot publish
 a new version of any of them: crates.io answers with
@@ -77,7 +77,7 @@ Set up new crate records **before tagging**. A token creates each missing
 record by publishing an isolated, empty, dependency-free **0.0.0** package;
 the real workspace crate keeps its functional release version. Configure its
 Trusted Publisher entry and enable *Require trusted publishing*, then reconcile
-`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 31 records
+`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 33 records
 must exist, all publisher entries must be configured, every record must be
 locked, and the ledger must be empty before the functional release begins.
 `scripts/check-crates-io-records.sh --require-all` verifies the public records
@@ -89,9 +89,11 @@ versions using a token with the separate yank permission, retaining the records
 and publisher settings. The complete setup and historical bootstrap receipts
 are in the release process document linked above.
 
-Eleven workspace members are deliberately never published to crates.io:
+Twelve workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
-`purrdf-sparql-conformance` (the test harness), `purrdf-hash-conformance` (the
+`purrdf-sparql-conformance` (the test harness), `purrdf-conformance-kit` (the
+manifest, report and outcome grading the community corpus runner uses),
+`purrdf-hash-conformance` (the
 frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf`
 binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool),
 `purrdf-bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting
@@ -101,7 +103,7 @@ shared test support: goldens, temporary paths, frozen vectors and the
 `helper-census` (the structural census behind the shared-helpers gate), and
 `purrdf-python` (the extension crate, which ships to PyPI via maturin instead).
 
-`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven that
+`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the twelve that
 published crates depend on, and they reach them solely through
 `[dev-dependencies]`. Their root `[workspace.dependencies]` entries are
 therefore path-only, with no `version` key, which is what makes cargo drop them

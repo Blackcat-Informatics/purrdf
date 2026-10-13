@@ -666,10 +666,13 @@ fn retain_source_owners(
                 retained.push(ledger.retain_dataset(base));
             }
             if let Some(delta) = source.delta() {
-                for owner in [delta.base(), delta.delta()] {
-                    if seen_owners.insert(Arc::as_ptr(owner) as usize) {
-                        retained.push(ledger.retain_dataset(owner));
-                    }
+                let base = delta.base();
+                if seen_owners.insert(std::ptr::from_ref(base.as_ref()).addr()) {
+                    retained.push(ledger.retain_dataset_handle(base));
+                }
+                let added = delta.delta();
+                if seen_owners.insert(Arc::as_ptr(added) as usize) {
+                    retained.push(ledger.retain_dataset(added));
                 }
             }
             if let Some((selected, _)) = source.selection() {
@@ -751,6 +754,12 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
     }
     fn max_owned_term_bytes(&self) -> Option<u64> {
         self.0.max_owned_term_bytes()
+    }
+    fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        self.0.reserve_owned_workspace(bytes)
     }
     fn storage_live_budget(&self) -> Option<u64> {
         self.0.storage_live_budget()
@@ -1380,7 +1389,7 @@ impl<H> PipelineViewBundle<H> {
         )
         .map_err(PipelineBundleError::AdmissionBreach)?;
         let retained = vec![
-            ledger.retain_dataset(delta.base()),
+            ledger.retain_dataset_handle(delta.base()),
             ledger.retain_dataset(delta.delta()),
         ];
         Ok(Self {

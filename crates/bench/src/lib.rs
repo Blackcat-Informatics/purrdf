@@ -2097,3 +2097,6 @@ mod tests {
         );
     }
 }
+
+/// Native university corpus generation, separate from the scale profile.
+pub mod lubm;

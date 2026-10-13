@@ -27,13 +27,27 @@
 # non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
 # specifications themselves define.
 #
-# WHY THIS ARTIFACT MOVED: THE EVALUATION LIMITS ARE THE CALLER'S, AND EVERY CASE
+# WHY THIS ARTIFACT MOVED: THE SHARED CALCULUS IS VERSION 2.
+#
+# Every contract-hash includes the versioned evaluator semantics. All nine cases
+# cover the same seven regimes and retain byte-identical input, program, closure,
+# rule tallies, witness and non-work-budget fields. Only the nine contract hashes
+# and three actual join-work counts moved. Premise-free admissions now charge one
+# credit: D adds 32 datatype identities; OWL-RL adds those 32, nine annotation
+# properties and two class identities. The two OWL cases also avoid respectively
+# seven and twelve initial-prefix candidates whose OldOnly suffix is empty, so
+# their net increases are 36 (1867 -> 1903) and 31 (1778 -> 1809). D changes
+# 36 -> 68. Connectivity priority alone changes none of these nine cases' work.
+# Regeneration uses the deliberate Rust generator in purrdf_validate::regime;
+# host assertions compare these shared bytes and never regenerate them.
+#
+# AN EARLIER MOVE: THE EVALUATION LIMITS ARE THE CALLER'S, AND EVERY CASE
 # RUNS UNDER THE NATIVE DEFAULTS, STATED.
 #
 # No closure changed by one byte, and the report grammar is still 4. The stored-fact
 # and join-step limits are parameters now, with a default per target: 131,072 facts
 # and 1,048,576 join steps on wasm32 — the values every target used while they were
-# fixed — and 4,194,304 and 268,435,456 natively. A report's `contract-hash` folds the
+# fixed — and 4,194,304 and 1,048,576 natively. A report's `contract-hash` folds the
 # EFFECTIVE limits, so an artifact every host checks has to name one set: every case
 # is written and checked under the native defaults, stated
 # (`REGIME_GOLDEN_VECTOR_LIMITS`). A native host calling with no limits runs exactly
@@ -189,7 +203,7 @@ mechanism none
 budget join-steps 0
 budget stored-facts 0
 budget term-arena-bytes 0
-contract-hash 2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade
+contract-hash 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -215,7 +229,7 @@ mechanism none
 budget join-steps 25
 budget stored-facts 6
 budget term-arena-bytes 433
-contract-hash 293e637ed65ae6f23259f17b46b59e1a591ccebd291c33eff97db1adc3c6a9a3
+contract-hash 35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7
 withheld-surrogates 3
 termination weakly-acyclic positions 10 existential-edges 4
 inconsistency none
@@ -394,7 +408,7 @@ mechanism none
 budget join-steps 9455
 budget stored-facts 201
 budget term-arena-bytes 1958
-contract-hash edac936406f51671f34dc305b0e90d1f0c4be08915522a445fcffc692174d0ca
+contract-hash 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
 withheld-surrogates 11
 termination weakly-acyclic positions 27 existential-edges 8
 inconsistency none
@@ -561,10 +575,10 @@ fired dt-type1 32
 fired scm-cls 5
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
 mechanism none
-budget join-steps 1867
+budget join-steps 1903
 budget stored-facts 127
 budget term-arena-bytes 2500
-contract-hash abb12b9af5fa9c022ed2dbf846e0b3e8c4184f5c2bb8c49a3c0dbac20e1f5243
+contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -720,7 +734,7 @@ mechanism none
 budget join-steps 8827
 budget stored-facts 192
 budget term-arena-bytes 1966
-contract-hash edac936406f51671f34dc305b0e90d1f0c4be08915522a445fcffc692174d0ca
+contract-hash 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
 withheld-surrogates 16
 termination weakly-acyclic positions 27 existential-edges 8
 inconsistency none
@@ -774,10 +788,10 @@ fired dt-type1 32
 boundary generalized-rdf a conclusion whose subject position would hold a literal or a triple term, or whose predicate position would hold anything but an IRI, is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; such a conclusion is derived in the evaluator's own term space and then abandoned when the answer is materialized, rather than a term being fabricated for it. It is still a PREMISE, so nothing downstream is lost. Rules that can conclude into subject position (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2, eq-ref, eq-rep-p) are therefore incomplete over literal objects, and every conclusion of dt-type2, dt-eq and dt-diff is unrepresentable by construction, because each of the three puts a literal in subject position
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
 mechanism none
-budget join-steps 36
+budget join-steps 68
 budget stored-facts 98
 budget term-arena-bytes 1759
-contract-hash 8110c4437c3d0158450816bbf6e291f33426d18cbabc641aa7b6fe60b511746c
+contract-hash fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -923,10 +937,10 @@ fired dt-type1 32
 fired scm-cls 5
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
 mechanism none
-budget join-steps 1778
+budget join-steps 1809
 budget stored-facts 115
 budget term-arena-bytes 2466
-contract-hash abb12b9af5fa9c022ed2dbf846e0b3e8c4184f5c2bb8c49a3c0dbac20e1f5243
+contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -960,7 +974,7 @@ mechanism none
 budget join-steps 0
 budget stored-facts 0
 budget term-arena-bytes 0
-contract-hash 2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade
+contract-hash 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
 withheld-surrogates 0
 termination none
 inconsistency none
@@ -983,7 +997,7 @@ mechanism none
 budget join-steps 1
 budget stored-facts 2
 budget term-arena-bytes 128
-contract-hash 2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade
+contract-hash 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
 withheld-surrogates 0
 termination none
 inconsistency none

@@ -46,13 +46,14 @@ use purrdf_sparql_algebra::{
 };
 
 use crate::DetHashSet;
+use crate::WorkspaceCapability;
 use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
-use crate::convert::literal_to_value;
-use crate::engine::ShaclPrebinding;
 use crate::error::EvalError;
-use crate::expr::xsd_of;
 use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
-use crate::registry_id::append_framed_part;
+use crate::registry_id::append_framed_part_with_memory;
+use crate::solution::{SchemaBuilder, VarSchema};
+use crate::workspace::{AdmittedMap, AdmittedVec, AdmittedVecIntoIter, LexicalFrame};
+use purrdf_lex::allocation::{Memory, StorageError};
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
 ///
@@ -100,15 +101,16 @@ impl PlanError {
         }
     }
 
-    /// The diagnostic code this failure must be reported under. The single chokepoint
+    /// Preserve an operational cause's code, falling back to the ordinary admission
+    /// seam only when the cause has no distinct code. The single chokepoint
     /// both `crate::engine::PlanCache::prepare_with_relations` and
     /// `crate::update::delete_insert` read, so the two admission call sites can never
     /// again drift into hard-coding the wrong seam's code.
-    pub(crate) const fn diagnostic_code(&self) -> &'static str {
-        match self.seam {
+    pub(crate) fn diagnostic_code(&self) -> &str {
+        self.error.code().unwrap_or(match self.seam {
             PlanSeam::PropertyFunction => "native-sparql-property-function",
             PlanSeam::Aggregate => "native-sparql-aggregate-function",
-        }
+        })
     }
 }
 
@@ -118,6 +120,113 @@ impl core::fmt::Display for PlanError {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod diagnostic_code_tests {
+    use purrdf_core::RdfDiagnostic;
+    use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+    use super::{EvalError, PlanError};
+
+    #[test]
+    fn admission_keeps_operational_codes_and_ordinary_seam_fallbacks() {
+        for error in [
+            EvalError::function_operational("host metadata panic"),
+            EvalError::source_read("source refused"),
+            EvalError::XPathRegex(Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: 1,
+            }),
+        ] {
+            let property = PlanError::property_function(error.clone());
+            let aggregate = PlanError::aggregate(error.clone());
+            assert_eq!(Some(property.diagnostic_code()), error.code());
+            assert_eq!(Some(aggregate.diagnostic_code()), error.code());
+        }
+        assert_eq!(
+            PlanError::property_function(EvalError::function("wrong arity")).diagnostic_code(),
+            "native-sparql-property-function"
+        );
+        assert_eq!(
+            PlanError::aggregate(EvalError::function("missing registration")).diagnostic_code(),
+            "native-sparql-aggregate-function"
+        );
+    }
+
+    #[test]
+    fn a_borrowed_dataset_code_becomes_an_owned_diagnostic() {
+        let diagnostic = {
+            let error = PlanError::property_function(EvalError::Dataset(RdfDiagnostic::error(
+                String::from("caller-storage-failed"),
+                "source refused",
+            )));
+            RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+        };
+        assert_eq!(diagnostic.code, "caller-storage-failed");
+    }
+}
+
+/// Native preparation preserves the seam, operational cause and physical refusal.
+#[derive(Debug)]
+pub(crate) enum PreparationError {
+    Plan(PlanError),
+    Evaluation(EvalError),
+    Storage(StorageError),
+}
+purrdf_lex::variant_from!(PreparationError { Plan(PlanError) });
+purrdf_lex::variant_from!(PreparationError { Evaluation(EvalError) });
+purrdf_lex::variant_from!(PreparationError { Storage(StorageError) });
+pub(crate) type PrepResult<T> = Result<T, PreparationError>;
+
+impl PreparationError {
+    fn into_failure(
+        self,
+        memory: &mut Memory<'_, LexicalFrame>,
+    ) -> crate::engine::EvaluationFailure {
+        match self {
+            Self::Storage(error) => crate::engine::EvaluationFailure::Evaluation(
+                memory
+                    .admission_mut()
+                    .storage_error(error, "query preparation"),
+            ),
+            Self::Evaluation(error) => crate::engine::EvaluationFailure::Evaluation(error),
+            Self::Plan(error) => {
+                if let Some(cause) = memory.admission_mut().take_failure() {
+                    return crate::engine::EvaluationFailure::Evaluation(cause);
+                }
+                crate::engine::EvaluationFailure::native_diagnostic(
+                    error.diagnostic_code(),
+                    &error,
+                    memory.admission_mut().workspace(),
+                )
+            }
+        }
+    }
+    fn into_plan(self, memory: &mut Memory<'_, LexicalFrame>) -> PlanError {
+        match self {
+            Self::Plan(error) => error,
+            Self::Evaluation(error) => PlanError::property_function(error),
+            Self::Storage(error) => PlanError::property_function(
+                memory
+                    .admission_mut()
+                    .storage_error(error, "query preparation"),
+            ),
+        }
+    }
+}
+
+fn plan_message(
+    seam: PlanSeam,
+    message: impl core::fmt::Display,
+    workspace: &WorkspaceCapability,
+) -> PlanError {
+    let error = crate::error::NativeDiagnostic::error(
+        crate::error::NativeDiagnosticKind::Function,
+        message,
+        workspace,
+    );
+    PlanError { seam, error }
+}
+
 /// The promised-parameter set [`plan_query`] and [`plan_where_pattern`] take, built
 /// from the names a prepare declared.
 ///
@@ -125,6 +234,7 @@ impl core::fmt::Display for PlanError {
 /// the name without its sigil, exactly as
 /// [`NativeSparqlEngine::prepare_execution`](crate::NativeSparqlEngine::prepare_execution)
 /// declares it and `crate::substitute` binds it.
+#[cfg(test)]
 pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
     names.iter().map(|name| Variable::new(*name)).collect()
 }
@@ -158,49 +268,86 @@ pub(crate) fn plan_query(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
 ) -> Result<Option<Query>, PlanError> {
-    plan_query_with(query, relations, agg_registry, parameters, reach, true)
+    legacy_query_plan(query, relations, agg_registry, parameters, true)
 }
 
 /// Immutable prepared plans retain their positive topology. Registry and promised
 /// parameter feasibility still run, without normalizing an already admitted tree.
-pub(crate) fn recheck_query(
+fn legacy_query_plan(
     query: &Query,
     relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
+    aggregates: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
+    normalize: bool,
 ) -> Result<Option<Query>, PlanError> {
-    plan_query_with(query, relations, agg_registry, parameters, reach, false)
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let names = memory
+        .collect(parameters.iter().map(Variable::as_str))
+        .map_err(|error| PreparationError::Storage(error).into_plan(&mut memory))?;
+    plan_query_native(query, relations, aggregates, &names, normalize, &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))
 }
 
-fn plan_query_with(
+/// Prepare through the original allocation admission, retaining only new AST buffers.
+pub(crate) fn plan_query_with_memory(
     query: &Query,
     relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
-    parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
-    normalize_positive: bool,
-) -> Result<Option<Query>, PlanError> {
+    aggregates: &AggregateRegistry,
+    parameters: &[&str],
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<Option<Query>, crate::engine::EvaluationFailure> {
+    plan_query_native(query, relations, aggregates, parameters, true, memory)
+        .map_err(|error| error.into_failure(memory))
+}
+
+/// Recheck feasibility without renormalizing an immutable prepared topology.
+pub(crate) fn recheck_query_with_memory(
+    query: &Query,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    parameters: &[&str],
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<Option<Query>, crate::engine::EvaluationFailure> {
+    plan_query_native(query, relations, aggregates, parameters, false, memory)
+        .map_err(|error| error.into_failure(memory))
+}
+
+fn promised_parameters(
+    parameters: &[&str],
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    let mut builder = SchemaBuilder::new(workspace);
+    for name in parameters {
+        let _ = builder.push(Variable::from_admitted(workspace.authored_text(name)?))?;
+    }
+    builder.finish()
+}
+
+fn plan_query_native(
+    query: &Query,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    parameters: &[&str],
+    normalize: bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<Query>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let promised = promised_parameters(parameters, &workspace)?;
     let pattern = match query {
         Query::Select { pattern, .. }
         | Query::Ask { pattern, .. }
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    let Some(planned) = plan_where_pattern_with(
-        pattern,
-        relations,
-        agg_registry,
-        parameters,
-        reach,
-        normalize_positive,
-    )?
+    let Some(planned) =
+        plan_where_pattern_native(pattern, relations, aggregates, &promised, normalize, memory)?
     else {
         return Ok(None);
     };
-    Ok(Some(crate::blank_scope::query_with_pattern(query, planned)))
+    Ok(Some(query.clone_with_pattern_with_memory(planned, memory)?))
 }
 
 /// [`plan_query`] on a standalone [`GraphPattern`] rather than a full [`Query`] — the
@@ -217,12 +364,9 @@ fn plan_query_with(
 ///
 /// # Where a promised parameter counts as bound
 ///
-/// `parameters` names the variables a prepared execution binds on every run, and each
-/// counts as bound exactly where a run's rewrite really binds it — see [`Promise`] for
-/// the two places that is under the ordinary rewrite, and why a call anywhere else is
-/// admitted as though the parameter were free. `reach` names the rewrite every run
-/// applies: under [`ShaclPrebinding::Applied`] a parameter reaches every
-/// property-function call in the query ([`Promise::Everywhere`]).
+/// `parameters` names the variables a prepared execution binds on every run. The one
+/// pre-binding rewrite every run applies writes them into every property-function
+/// call in the query, so each counts as bound everywhere ([`Promise::Everywhere`]).
 ///
 /// # Errors
 ///
@@ -236,162 +380,138 @@ pub(crate) fn plan_where_pattern(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
 ) -> Result<Option<GraphPattern>, PlanError> {
-    plan_where_pattern_with(pattern, relations, agg_registry, parameters, reach, true)
-}
-
-fn plan_where_pattern_with(
-    pattern: &GraphPattern,
-    relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
-    parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
-    normalize_positive: bool,
-) -> Result<Option<GraphPattern>, PlanError> {
-    // A blank node label written in two pieces of one basic graph pattern — a
-    // triple and a call, a triple and a path, two calls — is one variable across
-    // them. Settled first, and for every pattern whether or not it carries a call,
-    // because a call's arguments are admitted below by what is bound, and a
-    // shared blank a sibling binds IS bound. See `crate::blank_scope`.
-    let joined = crate::blank_scope::join_shared_blanks(pattern);
-    let pattern = joined.as_ref().unwrap_or(pattern);
-    let normalized = normalize_positive
-        .then(|| crate::join_plan::normalize(pattern))
-        .flatten();
-    let pattern = normalized.as_ref().unwrap_or(pattern);
-    // Either hazard alone must still run the walk: a query with a `Custom`
-    // aggregate and no property-function call would otherwise skip this pass
-    // entirely on the property-function-only check, and its admission (below,
-    // as the planner enters the aggregate) would never happen.
-    if !crate::property_fn_eval::pattern_needs_admission(pattern) {
-        return Ok(normalized.or(joined));
-    }
-    // The plan is measured against the evaluator's depth envelope before any of it is
-    // copied or an admitted call chain is traversed; one that does not fit is refused,
-    // typed.
-    crate::governor::soundness::validate_graph_pattern_depth(pattern)
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let promised = VarSchema::from_vars_admitted(parameters.iter().cloned(), &workspace)
         .map_err(PlanError::property_function)?;
-    plan_pattern(
+    plan_where_pattern_native(
         pattern,
         relations,
         agg_registry,
-        &DetHashSet::default(),
-        Promise::descent(parameters, reach),
+        &promised,
+        true,
+        &mut memory,
     )
-    .map(Some)
+    .map_err(|error| error.into_plan(&mut memory))
 }
 
-/// Where a prepared execution's declared parameters count as bound while a call is
-/// admitted, and where they do not.
-///
-/// A run binds its parameters in two ways at once (`crate::substitute::apply_probes`),
-/// and a parameter is honestly "bound" only where one of them reaches:
-///
-/// * **The seed.** A single-row `VALUES` is joined onto the core `WHERE` pattern —
-///   the first node beneath the solution-modifier wrappers `Query::map_core_pattern`
-///   descends. Every row a wrapper ABOVE the core sees therefore carries the
-///   parameters, so an expression there (a correlated `EXISTS`, say) sees them bound.
-///   That is [`Self::Descent`]. The seed is joined, not correlated: nothing at or
-///   below the core is evaluated with its row in hand.
-/// * **The pushdown.** At and below the core, the rewrite writes each parameter's
-///   value INTO the leaves it can reach — triple patterns, paths, and
-///   property-function calls — so a call there is invoked with that argument bound.
-///   That is [`Self::Pushed`], and it follows the pushdown's own reach exactly: into
-///   both operands of a `Join`, a `UNION` and a `LATERAL`, the inner of a `GRAPH`,
-///   `FILTER`, `BIND`, `DISTINCT`, `REDUCED` and `ORDER BY`, the left operand of an
-///   `OPTIONAL` and a `MINUS`, a sub-`SELECT` for the parameters it projects, and a
-///   `GROUP BY` for the parameters that are its keys
-///   (`crate::substitute::group_key_carries`). Everywhere else — an `OPTIONAL`'s or a
-///   `MINUS`'s right arm, the body of an `EXISTS` beneath the core, a sub-`SELECT` that
-///   does not project the parameter, the inner of a slice, a `GROUP BY` the parameter
-///   is not a key of — the pushdown does not write, and a call there is invoked with
-///   the parameter free.
-///   Admitting it as though it were bound would exchange a refusal at prepare for a
-///   refusal on every run.
-///
-/// A run under the SHACL pre-binding rewrite reaches further: it binds a parameter in
-/// every call in the query, and that is [`Self::Everywhere`].
-///
-/// Neither half extends `outer`, which stays the set of variables the pattern ITSELF
-/// certainly binds: a promise is consulted only where a call is admitted, and where a
-/// `BIND` or an aggregate reads a parameter — each only where the rewrite really puts
-/// the value (see [`Written`]): the seed's rows, on the descent, or every expression,
-/// under the SHACL pre-binding rewrite. A `BIND($this AS ?x)` feeding a call binds
-/// `?x` exactly where the run hands the `BIND` the value, and nowhere else.
-#[derive(Clone, Copy, Debug)]
-enum Promise<'a> {
-    /// Nothing is promised here.
+fn plan_where_pattern_native(
+    pattern: &GraphPattern,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    parameters: &VarSchema,
+    normalize_positive: bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<GraphPattern>> {
+    let start = memory.admitted_bytes();
+    let joined = crate::blank_scope::join_shared_blanks_with_memory(pattern, memory)?;
+    let joined_bytes = memory
+        .admitted_bytes()
+        .checked_sub(start)
+        .ok_or(StorageError::SizeOverflow)?;
+    let pattern = joined.as_ref().unwrap_or(pattern);
+    let normalized_start = memory.admitted_bytes();
+    let normalized = if normalize_positive {
+        crate::join_plan::normalize_with_memory(pattern, memory)?
+    } else {
+        None
+    };
+    let normalized_bytes = memory
+        .admitted_bytes()
+        .checked_sub(normalized_start)
+        .ok_or(StorageError::SizeOverflow)?;
+    let effective = normalized.as_ref().unwrap_or(pattern);
+    if !crate::property_fn_eval::pattern_needs_admission_with_memory(effective, memory)? {
+        if normalized.is_some() {
+            drop(joined);
+            memory.release_bytes(joined_bytes)?;
+            return Ok(normalized);
+        }
+        return Ok(joined);
+    }
+    crate::governor::soundness::validate_graph_pattern_depth_with_memory(effective, memory)?;
+    let planned = plan_pattern_native(
+        effective,
+        relations,
+        aggregates,
+        &VarSchema::default(),
+        NativePromise::descent(parameters),
+        memory,
+    )?;
+    drop(normalized);
+    memory.release_bytes(normalized_bytes)?;
+    drop(joined);
+    memory.release_bytes(joined_bytes)?;
+    Ok(Some(planned))
+}
+
+/// The same promise law borrowing an immutable, admitted membership owner.
+#[derive(Clone, Copy)]
+enum NativePromise<'a> {
     None,
-    /// On the solution-modifier descent to the core, which the seed will be joined
-    /// beneath.
-    Descent(&'a DetHashSet<Variable>),
-    /// At or below the core, at a position the pushdown writes these into.
-    Pushed(&'a DetHashSet<Variable>),
-    /// Anywhere in the query, because the run applies the SHACL pre-binding rewrite.
-    ///
-    /// That rewrite (`crate::substitute::apply_shacl_probes`) is the pushdown and the
-    /// seed PLUS a walk with no boundary: it writes an IRI or literal parameter into
-    /// every property-function argument that names it — an `OPTIONAL`'s or a
-    /// `MINUS`'s right arm, a sub-`SELECT` that does not project it, an `EXISTS` body
-    /// below the core — and drives every other value (a blank node, a quoted triple)
-    /// into the same calls through a one-row `VALUES`. So under that rewrite a call
-    /// ANYWHERE receives the parameter bound, and admitting it as free would refuse,
-    /// at prepare, a call every run would have served.
-    ///
-    /// Only sound behind an execution that refuses to run under the ordinary
-    /// rewrite, whose reach is narrower — which
-    /// [`PreparedExecution`](crate::PreparedExecution) does for a plan admitted
-    /// under this promise.
-    Everywhere(&'a DetHashSet<Variable>),
+    Everywhere(&'a VarSchema),
 }
-
-impl<'a> Promise<'a> {
-    /// The promise a plan starts from: `parameters` on the descent, or everywhere
-    /// when the run applies the SHACL pre-binding rewrite, or nothing.
-    fn descent(parameters: &'a DetHashSet<Variable>, reach: ShaclPrebinding) -> Self {
+impl<'a> NativePromise<'a> {
+    fn descent(parameters: &'a VarSchema) -> Self {
         if parameters.is_empty() {
             Self::None
         } else {
-            match reach {
-                ShaclPrebinding::Applied => Self::Everywhere(parameters),
-                ShaclPrebinding::None => Self::Descent(parameters),
-            }
+            Self::Everywhere(parameters)
         }
     }
-
-    /// The parameters a row seen by an expression at this node carries, which is the
-    /// seed's on the descent and nothing anywhere else.
-    const fn in_rows(self) -> Option<&'a DetHashSet<Variable>> {
+    const fn for_calls(self) -> Option<&'a VarSchema> {
         match self {
-            Self::Descent(parameters) => Some(parameters),
-            Self::None | Self::Pushed(_) | Self::Everywhere(_) => None,
+            Self::None => None,
+            Self::Everywhere(values) => Some(values),
         }
     }
+    fn writes(self, variable: &Variable) -> bool {
+        self.for_calls()
+            .is_some_and(|values| values.contains(variable))
+    }
+}
 
+/// Where a prepared execution's declared parameters count as bound while a call is
+/// admitted.
+///
+/// Every run binds its parameters through the one pre-binding rewrite
+/// (`crate::substitute::apply_shacl_probes`): the `VALUES` seed and the pushdown, PLUS
+/// a walk with no boundary that writes an IRI or literal parameter into every
+/// property-function argument and every expression that names it — an `OPTIONAL`'s
+/// or a `MINUS`'s right arm, a sub-`SELECT`, an `EXISTS` body — and drives every other
+/// value (a blank node, a quoted triple) into the same calls through a one-row
+/// `VALUES`. So a call ANYWHERE receives a parameter bound, and admitting it as free
+/// would refuse, at prepare, a call every run serves: that is [`Self::Everywhere`].
+///
+/// A promise never extends `outer`, which stays the set of variables the pattern
+/// ITSELF certainly binds: it is consulted only where a call is admitted, and where a
+/// `BIND` or an aggregate reads a parameter (see [`Written`]).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+enum Promise<'a> {
+    /// Nothing is promised: the execution declares no parameters.
+    None,
+    /// Anywhere in the query, because every run writes these in.
+    Everywhere(&'a DetHashSet<Variable>),
+}
+
+#[cfg(test)]
+impl<'a> Promise<'a> {
     /// What the run writes into the rows and expressions of a pattern evaluated at
     /// this node — see [`Written`].
     const fn written(self) -> Written<'a> {
         Written {
-            seed: self.in_rows(),
-            everywhere: self.everywhere(),
-        }
-    }
-
-    /// What the run writes into every expression beneath this node: every parameter,
-    /// under the SHACL pre-binding rewrite, and nothing otherwise.
-    const fn everywhere(self) -> Option<&'a DetHashSet<Variable>> {
-        match self {
-            Self::Everywhere(parameters) => Some(parameters),
-            Self::None | Self::Descent(_) | Self::Pushed(_) => None,
+            everywhere: self.for_calls(),
         }
     }
 
     /// The parameters a call admitted at this node may count as bound.
     const fn for_calls(self) -> Option<&'a DetHashSet<Variable>> {
         match self {
-            Self::Pushed(parameters) | Self::Everywhere(parameters) => Some(parameters),
-            Self::None | Self::Descent(_) => None,
+            Self::Everywhere(parameters) => Some(parameters),
+            Self::None => None,
         }
     }
 }
@@ -400,6 +520,7 @@ impl<'a> Promise<'a> {
 ///
 /// Borrowed whenever there is nothing to add, so an ordinary prepare — which promises
 /// nothing — builds no set.
+#[cfg(test)]
 fn call_scope<'s>(
     bound: &'s DetHashSet<Variable>,
     promise: Promise<'_>,
@@ -444,35 +565,69 @@ struct Atom<'a> {
 /// order, a custom aggregate's) runs then — and assembled once every part under it
 /// is planned, the parts rebuilt in the order the node's fields are written. The
 /// first admission failure met in that order is the one returned.
+#[cfg(test)]
 fn plan_pattern(
     pattern: &GraphPattern,
     relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
+    aggregates: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
     promise: Promise<'_>,
 ) -> Result<GraphPattern, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let outer = VarSchema::from_vars_admitted(outer.iter().cloned(), &workspace)
+        .map_err(PlanError::property_function)?;
+    let promised = match promise.for_calls() {
+        None => VarSchema::default(),
+        Some(values) => VarSchema::from_vars_admitted(values.iter().cloned(), &workspace)
+            .map_err(PlanError::property_function)?,
+    };
+    plan_pattern_native(
+        pattern,
+        relations,
+        aggregates,
+        &outer,
+        NativePromise::descent(&promised),
+        &mut memory,
+    )
+    .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn plan_pattern_native<'a>(
+    pattern: &'a GraphPattern,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    outer: &'a VarSchema,
+    promise: NativePromise<'a>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    let workspace = memory.admission_mut().workspace().clone();
     let mut planner = Planner {
         relations,
-        agg_registry,
-        steps: vec![Step::Pattern(
-            pattern,
-            SetRef::Given(outer),
-            Prom::of(promise),
-        )],
-        values: Vec::new(),
-        scopes: Vec::new(),
+        agg_registry: aggregates,
+        steps: AdmittedVec::new(&workspace),
+        values: AdmittedVec::new(&workspace),
+        scopes: AdmittedVec::new(&workspace),
+        workspace,
+        memory,
     };
+    planner.steps.push(Step::Pattern(
+        pattern,
+        SetRef::Given(outer),
+        Prom::of(promise),
+    ))?;
     while let Some(step) = planner.steps.pop() {
         match step {
             Step::Pattern(node, scope, promise) => planner.enter_pattern(node, scope, promise)?,
             Step::Expression(expr, scope, promise) => {
-                planner.enter_expression(expr, scope, promise);
+                planner.enter_expression(expr, scope, promise)?;
             }
             Step::Aggregate(aggregate, scope, promise) => {
                 planner.enter_aggregate(aggregate, scope, promise)?;
             }
-            Step::Order(order, scope, promise) => planner.enter_order(order, scope, promise),
-            Step::Assemble(assemble) => planner.assemble(assemble),
+            Step::Order(order, scope, promise) => planner.enter_order(order, scope, promise)?,
+            Step::Assemble(assemble) => planner.assemble(assemble)?,
         }
     }
     Ok(planner.finish())
@@ -529,7 +684,7 @@ fn chain_node(pattern: &GraphPattern) -> Option<ChainNode<'_>> {
 /// # What joins into one chain
 ///
 /// Every member of a chain is joined to every other, and a join is associative and
-/// commutative — which is what licenses [`order_chain`] to reorder them at all. So a
+/// commutative — which is what licenses [`order_chain_native`] to reorder them at all. So a
 /// `Join` whose operand is ITSELF a chain spine is one chain with it, not an opaque
 /// member: `{ VALUES ?q { … } ?q ex:rel ?out }` parses to `Join(VALUES, Lateral(Z,
 /// call))`, and the call is fed by the `VALUES` exactly as it would be by a triple
@@ -539,7 +694,25 @@ fn chain_node(pattern: &GraphPattern) -> Option<ChainNode<'_>> {
 ///
 /// A `LATERAL` whose right operand is NOT a call is the opposite case, and is not a
 /// chain node: see [`chain_node`].
+#[cfg(test)]
 fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bool {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let mut owner = AdmittedVec::from_resident(core::mem::take(atoms));
+    let found = collect_chain_native(pattern, &mut owner, &mut memory)
+        .expect("resident chain traversal allocation failed");
+    *atoms = owner
+        .try_into_resident()
+        .unwrap_or_else(|_| unreachable!("resident owner"));
+    found
+}
+
+fn collect_chain_native<'a>(
+    pattern: &'a GraphPattern,
+    atoms: &mut AdmittedVec<Atom<'a>>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<bool> {
     /// One pending step of the peel.
     enum Step<'a> {
         /// A chain node whose operands are still to be peeled.
@@ -550,27 +723,29 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
         Call(&'a GraphPattern, &'a PropertyFunctionCall),
     }
     let Some(root) = chain_node(pattern) else {
-        return false;
+        return Ok(false);
     };
-    let mut pending = vec![Step::Node(root)];
+    let mut pending: purrdf_lex::walk::WorkList<_, 16> =
+        purrdf_lex::walk::WorkList::with(Step::Node(root));
     while let Some(step) = pending.pop() {
         match step {
             Step::Node(ChainNode::Lateral { left, node, call }) => {
-                pending.push(Step::Call(node, call));
-                pending.push(Step::Operand(left));
+                pending.try_push_admitted(Step::Call(node, call), memory)?;
+                pending.try_push_admitted(Step::Operand(left), memory)?;
             }
             Step::Node(ChainNode::Join { left, right }) => {
-                pending.push(Step::Operand(right));
-                pending.push(Step::Operand(left));
+                pending.try_push_admitted(Step::Operand(right), memory)?;
+                pending.try_push_admitted(Step::Operand(left), memory)?;
             }
             Step::Operand(operand) => match chain_node(operand) {
-                Some(node) => pending.push(Step::Node(node)),
-                None => push_atom(operand, None, atoms),
+                Some(node) => pending.try_push_admitted(Step::Node(node), memory)?,
+                None => push_atom_native(operand, None, atoms)?,
             },
-            Step::Call(node, call) => push_atom(node, Some(call), atoms),
+            Step::Call(node, call) => push_atom_native(node, Some(call), atoms)?,
         }
     }
-    true
+    pending.release_admitted(memory)?;
+    Ok(true)
 }
 
 /// The call a `Lateral`'s right operand becomes once planned, when it becomes one — and
@@ -581,7 +756,7 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
 /// right operand — and it runs on the PLANNED query, not the text. The two differ in
 /// exactly one way this pass controls: a group whose only member is a call parses to
 /// `Lateral(Z, call)`
-/// (the empty `Bgp` the parser opens every block with), and [`order_chain`] rebuilds
+/// (the empty `Bgp` the parser opens every block with), and [`order_chain_native`] rebuilds
 /// that chain as the bare call, because [`push_atom`] drops `Z`. So
 /// `?s ?p ?o LATERAL { ?q <rel> ?out }` is PLANNED as `Lateral(?s ?p ?o, call)` — the
 /// position the pushdown writes into — though its text puts a `Lateral` between the
@@ -608,35 +783,33 @@ fn planned_lateral_call(right: &GraphPattern) -> Option<(&GraphPattern, &Propert
 /// Push one chain member, dropping the EMPTY `Bgp` the parser leaves where a call opens
 /// its block. It is the identity table `Z`, so joining it back in would only widen the
 /// rebuilt tree with a node that binds nothing and matches everything.
+#[cfg(test)]
 fn push_atom<'a>(
     pattern: &'a GraphPattern,
     call: Option<&'a PropertyFunctionCall>,
     atoms: &mut Vec<Atom<'a>>,
 ) {
-    if pattern.is_empty_bgp() {
-        return;
-    }
-    let position = atoms.len();
-    atoms.push(Atom {
-        pattern,
-        call,
-        position,
-    });
+    let mut owner = AdmittedVec::from_resident(core::mem::take(atoms));
+    push_atom_native(pattern, call, &mut owner).expect("resident atom storage failed");
+    *atoms = owner
+        .try_into_resident()
+        .unwrap_or_else(|_| unreachable!("resident owner"));
 }
 
-/// One chain's feasible order: its atoms as they re-attach, each with whether it is a
-/// call and — for the calls — the variables bound when it was chosen.
-struct ChainOrder<'a> {
-    /// The atoms, in the chosen order.
-    ordered: Vec<&'a GraphPattern>,
-    /// Whether each atom of `ordered` is a call.
-    is_call: Vec<bool>,
-    /// The set `bound` held at the moment each atom was CHOSEN — i.e. exactly the
-    /// variables a CALL atom is driven with when it is planned. Captured here (rather
-    /// than read from the fully-accumulated `bound` after the loop) is what keeps a call
-    /// from being admitted as though sibling atoms chosen AFTER it — and everything they
-    /// bind — were already in scope.
-    bound_before: Vec<DetHashSet<Variable>>,
+fn push_atom_native<'a>(
+    pattern: &'a GraphPattern,
+    call: Option<&'a PropertyFunctionCall>,
+    atoms: &mut AdmittedVec<Atom<'a>>,
+) -> Result<(), EvalError> {
+    if !pattern.is_empty_bgp() {
+        let position = atoms.len();
+        atoms.push(Atom {
+            pattern,
+            call,
+            position,
+        })?;
+    }
+    Ok(())
 }
 
 /// The greedy feasibility order over one chain's atoms.
@@ -666,51 +839,63 @@ struct ChainOrder<'a> {
 ///
 /// The atoms are then planned each in turn and the spine rebuilt in this order by the
 /// [`Planner`] ([`Assemble::Chain`]).
-fn order_chain<'a>(
-    atoms: Vec<Atom<'a>>,
-    relations: &PropertyFunctionRegistry,
-    outer: &DetHashSet<Variable>,
-    promise: Promise<'_>,
-) -> Result<ChainOrder<'a>, PlanError> {
-    let mut bound = outer.clone();
-    let mut remaining: Vec<Atom<'a>> = atoms;
-    let mut ordered: Vec<&'a GraphPattern> = Vec::with_capacity(remaining.len());
-    let mut is_call: Vec<bool> = Vec::with_capacity(remaining.len());
-    let mut bound_before: Vec<DetHashSet<Variable>> = Vec::with_capacity(remaining.len());
+struct NativeChainOrder<'a> {
+    ordered: AdmittedVec<&'a GraphPattern>,
+    is_call: AdmittedVec<bool>,
+    bound_before: AdmittedVec<VarSchema>,
+}
 
+fn order_chain_native<'a>(
+    mut remaining: AdmittedVec<Atom<'a>>,
+    relations: &PropertyFunctionRegistry,
+    outer: &VarSchema,
+    promise: NativePromise<'_>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<NativeChainOrder<'a>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut bound = outer.clone();
+    let mut ordered = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    let mut is_call = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    let mut bound_before = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
     while !remaining.is_empty() {
         let mut best: Option<(usize, (u64, &str, usize))> = None;
         for (index, atom) in remaining.iter().enumerate() {
-            let Some(call) = atom.call else {
-                let key = (0_u64, "", atom.position);
-                if best.is_none_or(|(_, current)| key < current) {
-                    best = Some((index, key));
+            let key = match atom.call {
+                None => (0_u64, "", atom.position),
+                Some(call) => {
+                    let Some(rows_bound) = admitted_row_bound_native(
+                        call,
+                        relations,
+                        &|variable| bound.contains(variable) || promise.writes(variable),
+                        memory,
+                    )?
+                    else {
+                        continue;
+                    };
+                    (rows_bound, call.iri.as_str(), atom.position)
                 }
-                continue;
             };
-            let Some(rows_bound) =
-                admitted_row_bound(call, relations, &call_scope(&bound, promise))?
-            else {
-                continue;
-            };
-            let key = (rows_bound, call.iri.as_str(), atom.position);
             if best.is_none_or(|(_, current)| key < current) {
                 best = Some((index, key));
             }
         }
         let Some((index, _)) = best else {
-            return Err(stuck(&remaining, relations, &call_scope(&bound, promise)));
+            return Err(stuck_native(
+                &remaining,
+                relations,
+                &|variable| bound.contains(variable) || promise.writes(variable),
+                memory,
+            )?
+            .into());
         };
         let atom = remaining.remove(index);
-        bound_before.push(bound.clone());
-        // Every atom is evaluated with the enclosing context in hand (the chain as a
-        // whole is), so a `BIND` inside one reading only `outer` binds its target —
-        // but never with an earlier sibling's rows: siblings are joined, not correlated.
-        collect_bound(atom.pattern, outer, promise.written(), &mut bound);
-        ordered.push(atom.pattern);
-        is_call.push(atom.call.is_some());
+        bound_before.push(bound.clone())?;
+        let added = collect_bound_admitted(atom.pattern, outer, promise.for_calls(), &workspace)?;
+        bound = bound.union_admitted(&added, &workspace)?;
+        ordered.push(atom.pattern)?;
+        is_call.push(atom.call.is_some())?;
     }
-    Ok(ChainOrder {
+    Ok(NativeChainOrder {
         ordered,
         is_call,
         bound_before,
@@ -724,99 +909,179 @@ fn order_chain<'a>(
 /// answer to read the relation's declared row bound for the mode a call is actually
 /// invoked in: a relation that is cheap bound and expensive free would otherwise be
 /// admitted, or refused, against a mode the query never uses.
-pub(crate) fn invocation_mode(
+/// The same invocation law under the original physical walk admission.
+/// Membership borrows the caller's certainty owner rather than copying its set.
+pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     call: &PropertyFunctionCall,
-    bound: &DetHashSet<Variable>,
-) -> BindingPattern {
-    BindingPattern::from_bools(
-        call.subject_args
-            .iter()
-            .chain(&call.object_args)
-            .map(|term| term_is_bound(term, bound)),
-    )
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, S>,
+) -> Result<BindingPattern, StorageError> {
+    // The existing BindingPattern contract is a 64-bit pure value. Its positions
+    // need no heap storage while each argument's traversal admits actual spill.
+    let mut bits = [false; BindingPattern::MAX_ARITY];
+    let mut arity = 0usize;
+    for (position, term) in call
+        .subject_args
+        .iter()
+        .chain(&call.object_args)
+        .enumerate()
+    {
+        assert!(
+            position < BindingPattern::MAX_ARITY,
+            "BindingPattern arity exceeds its bitset"
+        );
+        bits[position] = term_is_bound_with_memory(term, bound, memory)?;
+        arity = position + 1;
+    }
+    Ok(BindingPattern::from_bools(bits[..arity].iter().copied()))
 }
 
-/// Whether an argument term denotes a known value under `bound`.
-///
-/// A blank node is a non-distinguished variable and is never bound; a quoted triple is
-/// bound only when every component is, its nested triples walked over a work list.
+/// Resident test entry for the same native term-boundness body.
+#[cfg(test)]
 fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
+    term_is_bound_with_memory(
+        term,
+        &|variable| bound.contains(variable),
+        &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident term-boundness traversal allocation failed")
+}
+
+/// Whether a term denotes a known value under the borrowed membership law.
+///
+/// Blank nodes remain non-distinguished variables. Every quoted-triple component
+/// must be bound; the original walk order uses the shared inline/spill work list.
+fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    term: &TermPattern,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    let mut pending: purrdf_lex::walk::WorkList<_, 8> = purrdf_lex::walk::WorkList::with(term);
+    let mut answer = true;
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
-            TermPattern::BlankNode(_) => return false,
+            TermPattern::BlankNode(_) => {
+                answer = false;
+                break;
+            }
             TermPattern::Variable(variable) => {
-                if !bound.contains(variable) {
-                    return false;
+                if !bound(variable) {
+                    answer = false;
+                    break;
                 }
             }
             TermPattern::Triple(triple) => {
                 if let NamedNodePattern::Variable(variable) = &triple.predicate
-                    && !bound.contains(variable)
+                    && !bound(variable)
                 {
-                    return false;
+                    answer = false;
+                    break;
                 }
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
+                pending.try_push_admitted(&triple.object, memory)?;
+                pending.try_push_admitted(&triple.subject, memory)?;
             }
         }
     }
-    true
+    pending.release_admitted(memory)?;
+    Ok(answer)
 }
 
 /// The admission failure for a chain with no feasible total order, naming the stuck
 /// atoms, the positions they cannot fill, and the modes they declare.
+#[cfg(test)]
 fn stuck(
     remaining: &[Atom<'_>],
     relations: &PropertyFunctionRegistry,
     bound: &DetHashSet<Variable>,
 ) -> PlanError {
-    let mut described: Vec<String> = Vec::new();
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    stuck_native(
+        remaining,
+        relations,
+        &|variable| bound.contains(variable),
+        &mut memory,
+    )
+    .unwrap_or_else(|error| error.into_plan(&mut memory))
+}
+
+fn stuck_native(
+    remaining: &[Atom<'_>],
+    relations: &PropertyFunctionRegistry,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<PlanError> {
+    struct Description<'a> {
+        call: &'a PropertyFunctionCall,
+        mode: BindingPattern,
+        declared: &'a [BindingPattern],
+    }
+    struct Message<'a>(&'a [Description<'a>]);
+    impl core::fmt::Display for Message<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            out.write_str(
+                "no feasible evaluation order exists for this group's property-function call(s): ",
+            )?;
+            for (index, description) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.write_str("; ")?;
+                }
+                write!(
+                    out,
+                    "<{}> reachable only as `{}` (free position(s) ",
+                    description.call.iri, description.mode
+                )?;
+                let mut first = true;
+                for position in 0..description.mode.arity() {
+                    if !description.mode.is_bound(position) {
+                        if !first {
+                            out.write_str(", ")?;
+                        }
+                        write!(out, "{position}")?;
+                        first = false;
+                    }
+                }
+                if first {
+                    out.write_str("none")?;
+                }
+                out.write_str("), declaring [")?;
+                for (index, mode) in description.declared.iter().enumerate() {
+                    if index != 0 {
+                        out.write_str(", ")?;
+                    }
+                    write!(out, "{mode}")?;
+                }
+                out.write_str("]")?;
+            }
+            Ok(())
+        }
+    }
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut described = AdmittedVec::new(&workspace);
     for atom in remaining {
         let Some(call) = atom.call else {
             continue;
         };
-        let mode = invocation_mode(call, bound);
-        let free: Vec<String> = mode
-            .code()
-            .char_indices()
-            .filter(|&(_, code)| code == 'f')
-            .map(|(position, _)| position.to_string())
-            .collect();
-        // Best-effort: this is already an admission failure being reported, so a
-        // relation whose `modes` ALSO panics degrades the diagnostic to an empty
-        // declared-modes list rather than losing the admission failure itself.
-        let declared: Vec<String> = relations
+        let mode = invocation_mode_with_memory(call, bound, memory)?;
+        // Preserve the original best-effort declared-modes suffix on an
+        // already-infeasible chain. No diagnostic is allocated and discarded.
+        let declared = relations
             .resolve(&call.iri)
-            .and_then(|relation| {
-                crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
-                    relation
-                        .modes()
-                        .iter()
-                        .copied()
-                        .map(BindingPattern::code)
-                        .collect::<Vec<_>>()
-                })
-                .ok()
-            })
-            .unwrap_or_default();
-        described.push(format!(
-            "<{}> reachable only as `{}` (free position(s) {}), declaring [{}]",
-            call.iri,
-            mode.code(),
-            if free.is_empty() {
-                "none".to_owned()
-            } else {
-                free.join(", ")
-            },
-            declared.join(", ")
-        ));
+            .and_then(|relation| crate::contain::declaration_best_effort(|| relation.modes()))
+            .unwrap_or(&[]);
+        described.push(Description {
+            call,
+            mode,
+            declared,
+        })?;
     }
-    PlanError::property_function(EvalError::function(format!(
-        "no feasible evaluation order exists for this group's property-function call(s): {}",
-        described.join("; ")
-    )))
+    Ok(plan_message(
+        PlanSeam::PropertyFunction,
+        Message(&described),
+        &workspace,
+    ))
 }
 
 /// Resolve a call's IRI, or report the admission failure that an unregistered IRI is.
@@ -824,58 +1089,103 @@ fn stuck(
 /// An EMPTY registry is the same failure: the parser mints a call node only under a
 /// caller-configured namespace, so a call with nothing to resolve against is a host
 /// configuration that names a relation it never supplied — never a silently empty one.
-fn resolve<'r>(
+fn resolve_native<'r>(
     call: &PropertyFunctionCall,
     relations: &'r PropertyFunctionRegistry,
+    workspace: &WorkspaceCapability,
 ) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
     relations.resolve(&call.iri).ok_or_else(|| {
-        PlanError::property_function(EvalError::function(format!(
-            "no property function is registered for <{}>",
-            call.iri
-        )))
+        plan_message(
+            PlanSeam::PropertyFunction,
+            format_args!("no property function is registered for <{}>", call.iri),
+            workspace,
+        )
     })
 }
 
 /// Resolve and admit a call under its actual lexical binding scope. `None` means
 /// its access mode is infeasible; a chain may first bind more variables.
+#[cfg(test)]
 fn admitted_row_bound(
     call: &PropertyFunctionCall,
     relations: &PropertyFunctionRegistry,
     bound: &DetHashSet<Variable>,
 ) -> Result<Option<u64>, PlanError> {
-    let relation = resolve(call, relations)?;
-    let arity = crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())
-        .map_err(PlanError::property_function)?;
-    check_arity(call, arity)?;
-    let mode = invocation_mode(call, bound);
-    let admitted = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
-        relation
-            .modes()
-            .iter()
-            .any(|declared| declared.subsumes(mode))
-    })
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    admitted_row_bound_native(
+        call,
+        relations,
+        &|variable| bound.contains(variable),
+        &mut memory,
+    )
+    .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn admitted_row_bound_native(
+    call: &PropertyFunctionCall,
+    relations: &PropertyFunctionRegistry,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<u64>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let relation = resolve_native(call, relations, &workspace)?;
+    let arity = crate::contain::declaration_contained_admitted(
+        "property function",
+        call.iri.as_str(),
+        "arity",
+        || relation.arity(),
+        &workspace,
+    )
+    .map_err(PlanError::property_function)?;
+    check_arity_native(call, arity, &workspace)?;
+    let mode = invocation_mode_with_memory(call, bound, memory)?;
+    let admitted = crate::contain::declaration_contained_admitted(
+        "property function",
+        call.iri.as_str(),
+        "declared modes",
+        || {
+            relation
+                .modes()
+                .iter()
+                .any(|declared| declared.subsumes(mode))
+        },
+        &workspace,
+    )
     .map_err(PlanError::property_function)?;
     if !admitted {
         return Ok(None);
     }
-    crate::property_fn::declaration_contained(&call.iri, "row bound", || {
-        relation.rows_per_invocation(mode)
-    })
-    .map(Some)
-    .map_err(PlanError::property_function)
+    let rows = crate::contain::declaration_contained_admitted(
+        "property function",
+        call.iri.as_str(),
+        "row bound",
+        || relation.rows_per_invocation(mode),
+        &workspace,
+    )
+    .map_err(PlanError::property_function)?;
+    Ok(Some(rows))
 }
 
 /// Check a call site's argument counts against the relation's declaration.
-fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), PlanError> {
+fn check_arity_native(
+    call: &PropertyFunctionCall,
+    declared: PfArity,
+    workspace: &WorkspaceCapability,
+) -> Result<(), PlanError> {
     let supplied = PfArity::new(call.subject_args.len(), call.object_args.len());
     if declared == supplied {
         return Ok(());
     }
-    Err(PlanError::property_function(EvalError::function(format!(
-        "property function <{}> is declared with {declared} argument(s); the call site supplies \
-         {supplied}",
-        call.iri
-    ))))
+    Err(plan_message(
+        PlanSeam::PropertyFunction,
+        format_args!(
+            "property function <{}> is declared with {declared} argument(s); the call site supplies {supplied}",
+            call.iri,
+        ),
+        workspace,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -887,14 +1197,14 @@ fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), Pla
 #[derive(Clone, Copy)]
 enum SetRef<'a> {
     /// A set the caller holds.
-    Given(&'a DetHashSet<Variable>),
+    Given(&'a VarSchema),
     /// The set at this index of the planner's arena.
     Owned(usize),
 }
 
 impl<'a> SetRef<'a> {
     /// The set itself, read from `scopes` when the planner owns it.
-    fn get<'s>(self, scopes: &'s [DetHashSet<Variable>]) -> &'s DetHashSet<Variable>
+    fn get<'s>(self, scopes: &'s [VarSchema]) -> &'s VarSchema
     where
         'a: 's,
     {
@@ -910,68 +1220,30 @@ impl<'a> SetRef<'a> {
 /// frame cannot borrow from an arena that grows while the frame waits.
 #[derive(Clone, Copy)]
 enum Prom<'a> {
-    /// [`Promise::None`].
+    /// [`NativePromise::None`].
     None,
-    /// [`Promise::Descent`].
-    Descent(SetRef<'a>),
-    /// [`Promise::Pushed`].
-    Pushed(SetRef<'a>),
-    /// [`Promise::Everywhere`].
+    /// [`NativePromise::Everywhere`].
     Everywhere(SetRef<'a>),
 }
 
 impl<'a> Prom<'a> {
     /// `promise`, its set held as given.
-    const fn of(promise: Promise<'a>) -> Self {
+    const fn of(promise: NativePromise<'a>) -> Self {
         match promise {
-            Promise::None => Self::None,
-            Promise::Descent(parameters) => Self::Descent(SetRef::Given(parameters)),
-            Promise::Pushed(parameters) => Self::Pushed(SetRef::Given(parameters)),
-            Promise::Everywhere(parameters) => Self::Everywhere(SetRef::Given(parameters)),
+            NativePromise::None => Self::None,
+            NativePromise::Everywhere(parameters) => Self::Everywhere(SetRef::Given(parameters)),
         }
     }
 
     /// The [`Promise`] this stands for, its set read from `scopes` when the planner owns
     /// it.
-    fn view<'s>(self, scopes: &'s [DetHashSet<Variable>]) -> Promise<'s>
+    fn view<'s>(self, scopes: &'s [VarSchema]) -> NativePromise<'s>
     where
         'a: 's,
     {
         match self {
-            Self::None => Promise::None,
-            Self::Descent(parameters) => Promise::Descent(parameters.get(scopes)),
-            Self::Pushed(parameters) => Promise::Pushed(parameters.get(scopes)),
-            Self::Everywhere(parameters) => Promise::Everywhere(parameters.get(scopes)),
-        }
-    }
-
-    /// The promise at a node that is not a solution-modifier wrapper — which, if the
-    /// descent is still under way, makes this node the core the seed is joined onto
-    /// and the pushdown starts from.
-    const fn at_node(self) -> Self {
-        match self {
-            Self::Descent(parameters) => Self::Pushed(parameters),
-            other => other,
-        }
-    }
-
-    /// The promise at a position the pushdown does not write into: nothing, unless
-    /// the SHACL pre-binding rewrite reaches it anyway.
-    const fn beyond_pushdown(self) -> Self {
-        match self {
-            Self::Everywhere(_) => self,
-            Self::None | Self::Descent(_) | Self::Pushed(_) => Self::None,
-        }
-    }
-
-    /// What a solution-modifier wrapper passes on to its inner pattern: the descent, or
-    /// everything under the SHACL pre-binding rewrite. Beneath the core, only the
-    /// wrappers the pushdown descends pass on what it writes — and those hand the
-    /// promise on as it is rather than through this. See [`Promise`].
-    const fn through_wrapper(self) -> Self {
-        match self {
-            Self::Descent(_) | Self::Everywhere(_) => self,
-            Self::None | Self::Pushed(_) => Self::None,
+            Self::None => NativePromise::None,
+            Self::Everywhere(parameters) => NativePromise::Everywhere(parameters.get(scopes)),
         }
     }
 }
@@ -1064,7 +1336,10 @@ enum Assemble<'a> {
     /// A chain: its atoms re-attach in the chosen order, a call through a `Lateral` (it
     /// depends on what is to its left), everything else through a `Join`. `is_call`
     /// says which each atom is; the arena is cut back to `mark`.
-    Chain { is_call: Vec<bool>, mark: usize },
+    Chain {
+        is_call: AdmittedVec<bool>,
+        mark: usize,
+    },
     /// An expression, over its planned operands.
     Expression(&'a Expression),
     /// An aggregate, over its planned arguments and sort keys.
@@ -1080,42 +1355,50 @@ enum Assemble<'a> {
 /// entered and cuts the arena back when it is assembled, and every part is assembled
 /// before the node it is under, so a set is released exactly when the last frame
 /// reading it is gone.
-struct Planner<'a, 'r> {
+struct Planner<'a, 'r, 'm, 's> {
     relations: &'r PropertyFunctionRegistry,
     agg_registry: &'r AggregateRegistry,
-    steps: Vec<Step<'a>>,
-    values: Vec<Planned>,
-    scopes: Vec<DetHashSet<Variable>>,
+    steps: AdmittedVec<Step<'a>>,
+    values: AdmittedVec<Planned>,
+    scopes: AdmittedVec<VarSchema>,
+    workspace: WorkspaceCapability,
+    memory: &'m mut Memory<'s, LexicalFrame>,
 }
 
-impl<'a> Planner<'a, '_> {
+impl<'a> Planner<'a, '_, '_, '_> {
     /// Own `set` in the arena, and the reference to read it by.
-    fn own(&mut self, set: DetHashSet<Variable>) -> SetRef<'a> {
-        self.scopes.push(set);
-        SetRef::Owned(self.scopes.len() - 1)
+    fn own(&mut self, set: VarSchema) -> PrepResult<SetRef<'a>> {
+        self.scopes.push(set)?;
+        Ok(SetRef::Owned(self.scopes.len() - 1))
     }
 
     /// Widen `scope` by what `pattern` certainly binds under `promise`: the scope an
     /// expression evaluated over `pattern`'s rows sees.
     fn widen(
         &self,
-        scope: &mut DetHashSet<Variable>,
+        scope: &mut VarSchema,
         outer: SetRef<'a>,
         pattern: &GraphPattern,
         promise: Prom<'a>,
-    ) {
-        collect_bound(
+    ) -> PrepResult<()> {
+        let added = collect_bound_admitted(
             pattern,
             outer.get(&self.scopes),
-            promise.view(&self.scopes).written(),
-            scope,
-        );
+            promise.view(&self.scopes).for_calls(),
+            &self.workspace,
+        )?;
+        *scope = scope.union_admitted(&added, &self.workspace)?;
+        Ok(())
     }
 
     /// The top `count` planned parts, in the order they were planned.
-    fn take(&mut self, count: usize) -> std::vec::IntoIter<Planned> {
+    fn take(&mut self, count: usize) -> PrepResult<AdmittedVecIntoIter<Planned>> {
         let at = self.values.len() - count;
-        self.values.split_off(at).into_iter()
+        let mut parts = AdmittedVec::with_capacity(count, &self.workspace)?;
+        for part in self.values.drain_from(at) {
+            parts.push_reserved(part);
+        }
+        Ok(parts.into_iter())
     }
 
     /// The root's plan: the one value left once every step has run.
@@ -1139,115 +1422,178 @@ impl<'a> Planner<'a, '_> {
         node: &'a GraphPattern,
         scope: SetRef<'a>,
         promise: Prom<'a>,
-    ) -> Result<(), PlanError> {
-        // Compiler-produced algebra may be a bare call, without the parser's Lateral
-        // wrapper. Apply the same admission as a chain member before cloning it.
+    ) -> PrepResult<()> {
         if let GraphPattern::PropertyFunction(call) = node {
-            let bound = call_scope(
-                scope.get(&self.scopes),
-                promise.at_node().view(&self.scopes),
-            );
-            if admitted_row_bound(call, self.relations, &bound)?.is_none() {
-                return Err(stuck(
+            let bound = scope.get(&self.scopes);
+            let promised = promise.view(&self.scopes);
+            let membership =
+                |variable: &Variable| bound.contains(variable) || promised.writes(variable);
+            if admitted_row_bound_native(call, self.relations, &membership, self.memory)?.is_none()
+            {
+                return Err(stuck_native(
                     &[Atom {
                         pattern: node,
                         call: Some(call),
                         position: 0,
                     }],
                     self.relations,
-                    &bound,
-                ));
+                    &membership,
+                    self.memory,
+                )?
+                .into());
             }
-            self.values.push(Planned::Pattern(node.clone()));
+            self.values
+                .push(Planned::Pattern(node.clone_with_memory(self.memory)?))?;
             return Ok(());
         }
-        // A chain is a left-deep spine of `Lateral`s (a call's join) and `Join`s (the
-        // residual data written between two calls), which is exactly the shape the parser
-        // assembles a triples block containing calls into. Anything else is rebuilt
-        // structurally.
-        let mut atoms = Vec::new();
-        if collect_chain(node, &mut atoms) && atoms.iter().any(|atom| atom.call.is_some()) {
-            return self.enter_chain(atoms, scope, promise.at_node());
+        let mut atoms = AdmittedVec::new(&self.workspace);
+        if collect_chain_native(node, &mut atoms, self.memory)?
+            && atoms.iter().any(|atom| atom.call.is_some())
+        {
+            return self.enter_chain(atoms, scope, promise);
         }
-        self.enter_parts(node, scope, promise);
-        Ok(())
+        self.enter_parts(node, scope, promise)
     }
 
     /// Order a chain's atoms and push each to be planned: a call against the variables
     /// bound when it was chosen, anything else against the chain's enclosing context.
     fn enter_chain(
         &mut self,
-        atoms: Vec<Atom<'a>>,
+        atoms: AdmittedVec<Atom<'a>>,
         scope: SetRef<'a>,
         promise: Prom<'a>,
-    ) -> Result<(), PlanError> {
-        let ChainOrder {
+    ) -> PrepResult<()> {
+        let NativeChainOrder {
             ordered,
             is_call,
             bound_before,
-        } = order_chain(
+        } = order_chain_native(
             atoms,
             self.relations,
             scope.get(&self.scopes),
             promise.view(&self.scopes),
+            self.memory,
         )?;
         let mark = self.scopes.len();
-        self.scopes.extend(bound_before);
-        self.steps.push(Step::Assemble(Assemble::Chain {
-            is_call: is_call.clone(),
-            mark,
-        }));
-        // Pushed last to first, so the atoms are planned in the chosen order.
-        for (index, (pattern, call)) in ordered.into_iter().zip(is_call).enumerate().rev() {
-            // A call is re-attached through a `Lateral`, which drives it with the rows of
-            // every atom before it, so it is admitted against the set bound when it was
-            // chosen. Any other atom is re-attached through a `Join`, which evaluates it
-            // on its own — so a call NESTED inside it (a `UNION` arm's own chain, say)
-            // sees only what the chain's enclosing context binds.
-            let atom_scope = if call {
+        for bound in bound_before {
+            self.scopes.push(bound)?;
+        }
+        let operand_start = self.steps.len();
+        self.steps.reserve_additional(
+            ordered
+                .len()
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        // The original reverse source order, without cloning the call flags.
+        for index in (0..ordered.len()).rev() {
+            let atom_scope = if is_call[index] {
                 SetRef::Owned(mark + index)
             } else {
                 scope
             };
-            self.steps.push(Step::Pattern(pattern, atom_scope, promise));
+            self.steps
+                .push_reserved(Step::Pattern(ordered[index], atom_scope, promise));
         }
+        self.steps
+            .push_reserved(Step::Assemble(Assemble::Chain { is_call, mark }));
+        self.steps.as_mut_slice()[operand_start..].rotate_right(1);
         Ok(())
     }
 
     /// Push the parts of a non-chain node, threading to each the variables its left
     /// siblings certainly bind and the promise that reaches it.
-    fn enter_parts(&mut self, node: &'a GraphPattern, scope: SetRef<'a>, promise: Prom<'a>) {
-        // A solution-modifier wrapper passes the descent on to its inner pattern; beneath
-        // the core, only the wrappers the pushdown descends pass on what it writes. See
-        // [`Promise`].
-        let wrapped = promise.through_wrapper();
-        // The node itself, when it is not a wrapper: the core if the descent is still
-        // under way.
-        let here = promise.at_node();
-        let beyond = promise.beyond_pushdown();
+    fn enter_parts(
+        &mut self,
+        node: &'a GraphPattern,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        // The one rewrite writes the parameters everywhere, so every part of the node
+        // inherits the same promise. See [`Promise`].
         let mark = self.scopes.len();
         let assemble = Step::Assemble(Assemble::Pattern { node, mark });
         match node {
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                let mut certain = scope.get(&self.scopes).clone();
+                self.widen(&mut certain, scope, left, promise)?;
+                let promised = promise.view(&self.scopes);
+                let inputs = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()),
+                    &self.workspace,
+                )?;
+                let mut right_scope_builder = SchemaBuilder::new(&self.workspace);
+                let mut supplied = SchemaBuilder::new(&self.workspace);
+                for variable in scope.get(&self.scopes).vars() {
+                    if !inputs.contains(variable) {
+                        let _ = right_scope_builder.push(variable.clone())?;
+                    }
+                }
+                if let Some(parameters) = promised.for_calls() {
+                    for variable in parameters.vars() {
+                        if !inputs.contains(variable) {
+                            let _ = supplied.push(variable.clone())?;
+                        }
+                    }
+                }
+                for (input, driver) in &policy.inputs {
+                    if (certain.contains(driver) || promised.writes(driver))
+                        && policy.optional.as_ref().is_none_or(|optional| {
+                            optional
+                                .retry_inputs
+                                .iter()
+                                .any(|(retry_input, retry_driver)| {
+                                    if retry_input != input {
+                                        return false;
+                                    }
+                                    certain.contains(retry_driver) || promised.writes(retry_driver)
+                                })
+                        })
+                    {
+                        let _ = right_scope_builder.push(input.clone())?;
+                        let _ = supplied.push(input.clone())?;
+                    }
+                }
+                if let Some(optional) = &policy.optional {
+                    let _ = right_scope_builder.push(optional.forget_marker.clone())?;
+                    let _ = supplied.push(optional.forget_marker.clone())?;
+                }
+                let right_scope = right_scope_builder.finish()?;
+                let supplied = supplied.finish()?;
+                let right_scope = self.own(right_scope)?;
+                // Apply substitutes these values into the whole RHS, through
+                // projections too; they are writes, not narrowable outer context.
+                let right_promise = Prom::Everywhere(self.own(supplied)?);
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Pattern(right, right_scope, right_promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
+            }
             // A leaf is planned as written. So is a `SERVICE`: its body is forwarded to a
-            // remote endpoint rather than evaluated here, and `crate::remote` refuses to
+            // remote endpoint rather than evaluated promise, and `crate::remote` refuses to
             // forward a call at all — so its body is left exactly as written.
             GraphPattern::Bgp { .. }
             | GraphPattern::Path { .. }
             | GraphPattern::Values { .. }
             | GraphPattern::PropertyFunction(_)
             | GraphPattern::Service { .. } => {
-                self.values.push(Planned::Pattern(node.clone()));
+                self.values
+                    .push(Planned::Pattern(node.clone_with_memory(self.memory)?))?;
             }
             // An ordinary `Join` evaluates its operands independently and joins the
             // results, so a call inside the right operand is invoked with nothing the
             // left operand binds: it sees what the enclosing context binds and no more.
             // Only a `Lateral` hands its right operand the left rows — which is why a
             // call that depends on an earlier atom is rebuilt through one (see
-            // [`order_chain`]).
+            // [`order_chain_native`]).
             GraphPattern::Join { left, right } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, scope, here));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // The right side of a `Lateral` is evaluated once per left row with that row
             // in hand, so it sees what the left side certainly binds. A `Lateral` whose
@@ -1258,18 +1604,17 @@ impl<'a> Planner<'a, '_> {
             // `crate::substitute`'s `push_probes`).
             GraphPattern::Lateral { left, right } => {
                 let mut inner = scope.get(&self.scopes).clone();
-                self.widen(&mut inner, scope, left, here);
-                let inner = self.own(inner);
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, inner, here));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.widen(&mut inner, scope, left, promise)?;
+                let inner = self.own(inner)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, inner, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated
             // independently of the left and then matched against it, exactly as a
             // `Join`'s right operand is, so a call inside either sees only what the
             // enclosing context binds. Their own bindings do not escape as certain
-            // either, which `certainly_bound` accounts for. Neither right arm is one the
-            // pushdown writes into.
+            // either, which `certainly_bound` accounts for.
             GraphPattern::LeftJoin {
                 left,
                 right,
@@ -1278,223 +1623,161 @@ impl<'a> Planner<'a, '_> {
                 // The inline condition is evaluated only on candidate JOINED rows, so
                 // both sides' bindings are available to it.
                 let mut condition_scope = scope.get(&self.scopes).clone();
-                self.widen(&mut condition_scope, scope, left, here);
-                self.widen(&mut condition_scope, scope, right, here);
-                let condition_scope = self.own(condition_scope);
-                self.steps.push(assemble);
+                self.widen(&mut condition_scope, scope, left, promise)?;
+                self.widen(&mut condition_scope, scope, right, promise)?;
+                let condition_scope = self.own(condition_scope)?;
+                self.steps.push(assemble)?;
                 if let Some(expression) = expression {
                     self.steps
-                        .push(Step::Expression(expression, condition_scope, beyond));
+                        .push(Step::Expression(expression, condition_scope, promise))?;
                 }
-                self.steps.push(Step::Pattern(right, scope, beyond));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             GraphPattern::Minus { left, right } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, scope, beyond));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // A `UNION` branch cannot rely on its sibling.
             GraphPattern::Union { arms } => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for arm in arms.iter().rev() {
-                    self.steps.push(Step::Pattern(arm, scope, here));
+                    self.steps.push(Step::Pattern(arm, scope, promise))?;
                 }
             }
             // A `FILTER`'s expression is evaluated over the rows its inner pattern
             // produced, so an `EXISTS` inside it sees everything that pattern certainly
             // binds — which is exactly what makes a relation inside a correlated `EXISTS`
             // invocable with the outer row's values. The expression is planned first,
-            // then the inner pattern, which the pushdown descends beneath the core as
-            // well as above it.
+            // then the inner pattern.
             GraphPattern::Filter { expr, inner } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, promise));
-                self.steps.push(Step::Expression(expr, rows, beyond));
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+                self.steps.push(Step::Expression(expr, rows, promise))?;
             }
             GraphPattern::Extend {
-                inner,
-                variable,
-                expression,
+                inner, expression, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                // The pushdown descends a `BIND` beneath the core as well as above it,
-                // and does not carry the variable the `BIND` itself binds into its
-                // operand.
-                let into = match promise {
-                    Prom::Pushed(parameters) if parameters.get(&self.scopes).contains(variable) => {
-                        let narrowed: DetHashSet<Variable> = parameters
-                            .get(&self.scopes)
-                            .iter()
-                            .filter(|parameter| *parameter != variable)
-                            .cloned()
-                            .collect();
-                        Prom::Pushed(self.own(narrowed))
-                    }
-                    other => other,
-                };
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(expression, rows, beyond));
-                self.steps.push(Step::Pattern(inner, scope, into));
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Expression(expression, rows, promise))?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Unfold {
                 inner, expression, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(expression, rows, beyond));
-                self.steps.push(Step::Pattern(inner, scope, wrapped));
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Expression(expression, rows, promise))?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Graph { inner, .. } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, here));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
-            // The pushdown enters an `ORDER BY` beneath the core as well as above it.
             GraphPattern::OrderBy { inner, expression } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
                 for key in expression.iter().rev() {
-                    self.steps.push(Step::Order(key, rows, beyond));
+                    self.steps.push(Step::Order(key, rows, promise))?;
                 }
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             // A sub-`SELECT` is its own scope: a variable bound outside it is visible
             // inside only when it projects it — the correlated substitution (a
             // `LATERAL`'s right operand, an `EXISTS` body) writes the outer row into it
             // for exactly the projected variables — so the correlation set is narrowed
-            // to them on the way in. The projection a caller's own `SELECT` produces sits
-            // on the descent to the core, so the promise survives it there; a
-            // sub-`SELECT` anywhere else is a scope nothing binds a parameter in.
-            //
-            // Beneath the core the pushdown enters a sub-`SELECT` too, for exactly the
-            // parameters it projects: a projected variable is the same variable inside,
-            // and restricting the inner rows restricts the output the same way. A
-            // parameter it does not project is a different variable inside, and nothing
-            // is promised for it.
+            // to them on the way in. A prepared execution's parameters are written past
+            // the projection, so the promise passes unchanged.
             GraphPattern::Project { inner, variables } => {
-                let into = match promise {
-                    Prom::Pushed(parameters)
-                        if parameters
-                            .get(&self.scopes)
-                            .iter()
-                            .all(|parameter| variables.contains(parameter)) =>
-                    {
-                        promise
-                    }
-                    Prom::Pushed(parameters) => {
-                        let projected = narrowed_to(parameters.get(&self.scopes), variables);
-                        if projected.is_empty() {
-                            Prom::None
-                        } else {
-                            Prom::Pushed(self.own(projected))
-                        }
-                    }
-                    other => other,
-                };
-                let narrowed = narrowed_to(scope.get(&self.scopes), variables);
-                let narrowed = self.own(narrowed);
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, narrowed, into));
+                let narrowed =
+                    narrowed_to_admitted(scope.get(&self.scopes), variables, &self.workspace)?;
+                let narrowed = self.own(narrowed)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, narrowed, promise))?;
             }
-            // Row-for-row wrappers the pushdown enters beneath the core as well as above
-            // it.
             GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Slice { inner, .. } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, wrapped));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
-            // Beneath the core the pushdown enters a `GROUP BY` for exactly the
-            // parameters that are its keys (`crate::substitute::group_key_carries`, the
-            // one definition both sides read): the rows it removes are whole groups
-            // keyed by some other term, whose output rows the seed join drops anyway. A
-            // parameter only an aggregate or an expression key reads is not promised.
             GraphPattern::Group {
-                inner,
-                variables,
-                aggregates,
+                inner, aggregates, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                let into = match promise {
-                    Prom::Pushed(parameters) => {
-                        let keyed: DetHashSet<Variable> = parameters
-                            .get(&self.scopes)
-                            .iter()
-                            .filter(|parameter| {
-                                crate::substitute::group_key_carries(variables, parameter)
-                            })
-                            .cloned()
-                            .collect();
-                        if keyed.is_empty() {
-                            Prom::None
-                        } else {
-                            Prom::Pushed(self.own(keyed))
-                        }
-                    }
-                    other => other,
-                };
-                self.steps.push(assemble);
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
                 for (_, aggregate) in aggregates.iter().rev() {
-                    self.steps.push(Step::Aggregate(aggregate, rows, beyond));
+                    self.steps.push(Step::Aggregate(aggregate, rows, promise))?;
                 }
-                self.steps.push(Step::Pattern(inner, scope, into));
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
         }
+        Ok(())
     }
 
     /// Enter `expr`: an expression that reaches neither a property-function call nor a
     /// custom aggregate is planned as written; any other has its operands pushed, and an
     /// `EXISTS` its pattern.
-    fn enter_expression(&mut self, expr: &'a Expression, scope: SetRef<'a>, promise: Prom<'a>) {
+    fn enter_expression(
+        &mut self,
+        expr: &'a Expression,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
         // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
         // identical widening for the same reason: an `EXISTS` whose inner `GROUP BY`
         // has a `Custom` aggregate but no property-function call must still reach
         // that aggregate's admission (through the `Expression::Exists` arm).
-        if !crate::property_fn_eval::expression_reaches_property_function(expr)
-            && !crate::property_fn_eval::expression_reaches_custom_aggregate(expr)
-        {
-            self.values.push(Planned::Expression(expr.clone()));
-            return;
+        if !crate::property_fn_eval::expression_reaches_property_function_with_memory(
+            expr,
+            self.memory,
+        )? && !crate::property_fn_eval::expression_reaches_custom_aggregate_with_memory(
+            expr,
+            self.memory,
+        )? {
+            self.values
+                .push(Planned::Expression(expr.clone_with_memory(self.memory)?))?;
+            return Ok(());
         }
         let assemble = Step::Assemble(Assemble::Expression(expr));
         match expr {
             // A correlated `EXISTS` sees its enclosing group's bindings, so the scope
             // carries straight in: that is what lets a relation inside one be invoked
-            // bound. A prepared execution's parameters are in the scope here exactly when
-            // the rows the expression is evaluated over carry them (see
-            // [`Promise::in_rows`]); the pushdown never writes into an `EXISTS` body, so
-            // nothing more is promised — unless the SHACL pre-binding rewrite runs, which
-            // binds them in every call everywhere (see [`Promise::Everywhere`]).
+            // bound. A prepared execution's parameters reach it too: the pre-binding
+            // rewrite binds them in every call everywhere (see [`NativePromise::Everywhere`]).
             Expression::Exists(pattern) => {
-                self.steps.push(assemble);
-                self.steps
-                    .push(Step::Pattern(pattern, scope, promise.beyond_pushdown()));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(pattern, scope, promise))?;
             }
             Expression::Or(operands) | Expression::And(operands) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for operand in operands.iter().rev() {
-                    self.steps.push(Step::Expression(operand, scope, promise));
+                    self.steps.push(Step::Expression(operand, scope, promise))?;
                 }
             }
             Expression::Arithmetic(first, steps) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for (_, operand) in steps.iter().rev() {
-                    self.steps.push(Step::Expression(operand, scope, promise));
+                    self.steps.push(Step::Expression(operand, scope, promise))?;
                 }
-                self.steps.push(Step::Expression(first, scope, promise));
+                self.steps.push(Step::Expression(first, scope, promise))?;
             }
             Expression::Equal(a, b)
             | Expression::SameTerm(a, b)
@@ -1502,40 +1785,44 @@ impl<'a> Planner<'a, '_> {
             | Expression::GreaterOrEqual(a, b)
             | Expression::Less(a, b)
             | Expression::LessOrEqual(a, b) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(b, scope, promise));
-                self.steps.push(Step::Expression(a, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(b, scope, promise))?;
+                self.steps.push(Step::Expression(a, scope, promise))?;
             }
             Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(a, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(a, scope, promise))?;
             }
             Expression::If(condition, then, otherwise) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(otherwise, scope, promise));
-                self.steps.push(Step::Expression(then, scope, promise));
-                self.steps.push(Step::Expression(condition, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Expression(otherwise, scope, promise))?;
+                self.steps.push(Step::Expression(then, scope, promise))?;
+                self.steps
+                    .push(Step::Expression(condition, scope, promise))?;
             }
             Expression::In(needle, haystack) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for item in haystack.iter().rev() {
-                    self.steps.push(Step::Expression(item, scope, promise));
+                    self.steps.push(Step::Expression(item, scope, promise))?;
                 }
-                self.steps.push(Step::Expression(needle, scope, promise));
+                self.steps.push(Step::Expression(needle, scope, promise))?;
             }
             Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for item in items.iter().rev() {
-                    self.steps.push(Step::Expression(item, scope, promise));
+                    self.steps.push(Step::Expression(item, scope, promise))?;
                 }
             }
             Expression::NamedNode(_)
             | Expression::Literal(_)
             | Expression::Variable(_)
             | Expression::Bound(_) => {
-                self.values.push(Planned::Expression(expr.clone()));
+                self.values
+                    .push(Planned::Expression(expr.clone_with_memory(self.memory)?))?;
             }
         }
+        Ok(())
     }
 
     /// Enter `aggregate`: for [`AggregateFunction::Custom`], ADMIT the call at prepare
@@ -1559,80 +1846,105 @@ impl<'a> Planner<'a, '_> {
         aggregate: &'a AggregateExpression,
         scope: SetRef<'a>,
         promise: Prom<'a>,
-    ) -> Result<(), PlanError> {
+    ) -> PrepResult<()> {
         if let AggregateFunction::Custom(iri) = aggregate.function() {
             let iri_str = iri.as_str();
             let Some(custom) = self.agg_registry.resolve(iri_str) else {
-                return Err(PlanError::aggregate(EvalError::function(format!(
-                    "no custom aggregate is registered for <{iri_str}>"
-                ))));
+                return Err(plan_message(
+                    PlanSeam::Aggregate,
+                    format_args!("no custom aggregate is registered for <{iri_str}>"),
+                    &self.workspace,
+                )
+                .into());
             };
-            let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)
-                .map_err(PlanError::aggregate)?;
+            let declared = crate::contain::declaration_contained_admitted(
+                "custom aggregate",
+                iri_str,
+                "arity",
+                || custom.arity(),
+                &self.workspace,
+            )
+            .map_err(PlanError::aggregate)?;
             let supplied = aggregate.args().len();
             if !declared.accepts(supplied) {
-                return Err(PlanError::aggregate(EvalError::function(format!(
-                    "custom aggregate <{iri_str}> is declared with {declared} argument(s); the \
-                     call site supplies {supplied}"
-                ))));
+                return Err(plan_message(PlanSeam::Aggregate, format_args!(
+                    "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call site supplies {supplied}",
+                ), &self.workspace).into());
             }
-            let declared_scalarvals = crate::agg_fn::scalarvals_contained(custom.as_ref(), iri_str)
-                .map_err(PlanError::aggregate)?;
-            validate_scalarvals(iri_str, aggregate.scalarvals(), &declared_scalarvals)
-                .map_err(PlanError::aggregate)?;
+            let declared_scalarvals = crate::contain::declaration_contained_admitted(
+                "custom aggregate",
+                iri_str,
+                "scalarval declaration",
+                || custom.scalarvals(),
+                &self.workspace,
+            )
+            .map_err(PlanError::aggregate)?;
+            validate_scalarvals_native(
+                iri_str,
+                aggregate.scalarvals(),
+                declared_scalarvals,
+                &self.workspace,
+            )
+            .map_err(PlanError::aggregate)?;
         }
         self.steps
-            .push(Step::Assemble(Assemble::Aggregate(aggregate)));
+            .push(Step::Assemble(Assemble::Aggregate(aggregate)))?;
         // A `FOLD`'s own sort keys are per-row expressions read from the same
         // solutions its arguments are, so they are planned too: a property function or
         // custom aggregate reachable from `FOLD(?v ORDER BY f(?w))` would otherwise
         // skip this walk's prepare-time admission entirely. Pushed after the arguments'
         // reverse, so the arguments are planned first.
         for order in aggregate.order_by().iter().rev() {
-            self.steps.push(Step::Order(order, scope, promise));
+            self.steps.push(Step::Order(order, scope, promise))?;
         }
         for arg in aggregate.args().iter().rev() {
-            self.steps.push(Step::Expression(arg, scope, promise));
+            self.steps.push(Step::Expression(arg, scope, promise))?;
         }
         Ok(())
     }
 
     /// Enter a sort key: its expression is planned, and the key rebuilt with its
     /// `ASC`/`DESC` direction.
-    fn enter_order(&mut self, order: &'a OrderExpression, scope: SetRef<'a>, promise: Prom<'a>) {
-        self.steps.push(Step::Assemble(Assemble::Order(order)));
+    fn enter_order(
+        &mut self,
+        order: &'a OrderExpression,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        self.steps.push(Step::Assemble(Assemble::Order(order)))?;
         let (OrderExpression::Asc(expr) | OrderExpression::Desc(expr)) = order;
-        self.steps.push(Step::Expression(expr, scope, promise));
+        self.steps.push(Step::Expression(expr, scope, promise))?;
+        Ok(())
     }
 
     /// Rebuild one node from the planned parts under it, in the order its fields are
     /// written.
-    fn assemble(&mut self, assemble: Assemble<'a>) {
+    fn assemble(&mut self, assemble: Assemble<'a>) -> PrepResult<()> {
         match assemble {
             Assemble::Pattern { node, mark } => {
-                let planned = self.assemble_pattern(node);
+                let planned = self.assemble_pattern(node)?;
                 self.scopes.truncate(mark);
-                self.values.push(Planned::Pattern(planned));
+                self.values.push(Planned::Pattern(planned))?;
             }
             // Rebuild the left-deep spine in the chosen order: a call re-attaches
             // through a `Lateral` (it depends on what is to its left), everything else
             // through a `Join`.
             Assemble::Chain { is_call, mark } => {
                 let mut chain: Option<GraphPattern> = None;
-                for (part, call) in self.take(is_call.len()).zip(is_call) {
+                for (part, call) in self.take(is_call.len())?.zip(is_call) {
                     let planned = part.pattern();
                     chain = Some(match chain {
                         None => planned,
                         Some(left) => {
                             if call {
                                 GraphPattern::Lateral {
-                                    left: Child::new(left),
-                                    right: Child::new(planned),
+                                    left: Child::try_new(left, self.memory)?,
+                                    right: Child::try_new(planned, self.memory)?,
                                 }
                             } else {
                                 GraphPattern::Join {
-                                    left: Child::new(left),
-                                    right: Child::new(planned),
+                                    left: Child::try_new(left, self.memory)?,
+                                    right: Child::try_new(planned, self.memory)?,
                                 }
                             }
                         }
@@ -1641,20 +1953,26 @@ impl<'a> Planner<'a, '_> {
                 self.scopes.truncate(mark);
                 self.values.push(Planned::Pattern(
                     chain.unwrap_or(GraphPattern::Bgp { patterns: vec![] }),
-                ));
+                ))?;
             }
             Assemble::Expression(expr) => {
-                let planned = self.assemble_expression(expr);
-                self.values.push(Planned::Expression(planned));
+                let planned = self.assemble_expression(expr)?;
+                self.values.push(Planned::Expression(planned))?;
             }
             Assemble::Aggregate(aggregate) => {
-                let mut parts = self.take(aggregate.args().len() + aggregate.order_by().len());
-                let args: Vec<Expression> = parts
-                    .by_ref()
-                    .take(aggregate.args().len())
-                    .map(Planned::expression)
-                    .collect();
-                let order_by: Vec<OrderExpression> = parts.map(Planned::order).collect();
+                let count = aggregate
+                    .args()
+                    .len()
+                    .checked_add(aggregate.order_by().len())
+                    .ok_or(StorageError::SizeOverflow)?;
+                let mut parts = self.take(count)?;
+                let args = self.memory.collect(
+                    parts
+                        .by_ref()
+                        .take(aggregate.args().len())
+                        .map(Planned::expression),
+                )?;
+                let order_by = self.memory.collect(parts.map(Planned::order))?;
                 // Planning an argument rewrites it in place and never changes the
                 // argument COUNT, and planning a sort key never removes one, so this can
                 // never turn a valid `aggregate` into an invalid one — the
@@ -1662,85 +1980,100 @@ impl<'a> Planner<'a, '_> {
                 let planned = AggregateExpression::new(
                     aggregate.function().clone(),
                     args,
-                    aggregate.scalarvals().to_vec(),
+                    aggregate.clone_scalarvals_with_memory(self.memory)?,
                     order_by,
                     aggregate.distinct,
                 )
                 .expect("planning preserves argument count, so arity stays valid");
-                self.values.push(Planned::Aggregate(planned));
+                self.values.push(Planned::Aggregate(planned))?;
             }
             Assemble::Order(order) => {
-                let expr = next_expression(&mut self.take(1));
+                let expr = next_expression(&mut self.take(1)?);
                 self.values.push(Planned::Order(match order {
                     OrderExpression::Asc(_) => OrderExpression::Asc(expr),
                     OrderExpression::Desc(_) => OrderExpression::Desc(expr),
-                }));
+                }))?;
             }
         }
+        Ok(())
     }
 
     /// `node` rebuilt over its planned parts, taken in the order they were planned.
-    fn assemble_pattern(&mut self, node: &'a GraphPattern) -> GraphPattern {
-        match node {
+    fn assemble_pattern(&mut self, node: &'a GraphPattern) -> PrepResult<GraphPattern> {
+        Ok(match node {
+            GraphPattern::Apply { policy, .. } => {
+                let mut parts = self.take(2)?;
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                GraphPattern::Apply {
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                    policy: policy.clone_box_with_memory(self.memory)?,
+                }
+            }
             GraphPattern::Join { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 GraphPattern::Join {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                 }
             }
             GraphPattern::Lateral { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 GraphPattern::Lateral {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                 }
             }
             GraphPattern::LeftJoin { expression, .. } => {
-                let mut parts = self.take(2 + usize::from(expression.is_some()));
+                let mut parts = self.take(2 + usize::from(expression.is_some()))?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 let expression = expression.as_ref().map(|_| next_expression(&mut parts));
                 GraphPattern::LeftJoin {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                     expression,
                 }
             }
             GraphPattern::Minus { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 GraphPattern::Minus {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                 }
             }
             GraphPattern::Union { arms } => {
-                let mut parts = self.take(arms.len());
+                let mut parts = self.take(arms.len())?;
                 GraphPattern::Union {
-                    arms: arms.map_ref(|_| next_pattern(&mut parts)),
+                    arms: purrdf_sparql_algebra::Chain::try_from(
+                        self.memory
+                            .collect((0..arms.len()).map(|_| next_pattern(&mut parts)))?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves UNION arity")),
                 }
             }
             GraphPattern::Filter { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let expr = next_expression(&mut parts);
                 let inner = next_pattern(&mut parts);
                 GraphPattern::Filter {
                     expr,
-                    inner: Child::new(inner),
+                    inner: Child::try_new(inner, self.memory)?,
                 }
             }
             GraphPattern::Extend { variable, .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let inner = next_pattern(&mut parts);
                 let expression = next_expression(&mut parts);
                 GraphPattern::Extend {
-                    inner: Child::new(inner),
+                    inner: Child::try_new(inner, self.memory)?,
                     variable: variable.clone(),
                     expression,
                 }
@@ -1748,11 +2081,11 @@ impl<'a> Planner<'a, '_> {
             GraphPattern::Unfold {
                 element, companion, ..
             } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let inner = next_pattern(&mut parts);
                 let expression = next_expression(&mut parts);
                 GraphPattern::Unfold {
-                    inner: Child::new(inner),
+                    inner: Child::try_new(inner, self.memory)?,
                     expression,
                     element: element.clone(),
                     companion: companion.clone(),
@@ -1760,28 +2093,33 @@ impl<'a> Planner<'a, '_> {
             }
             GraphPattern::Graph { name, .. } => GraphPattern::Graph {
                 name: name.clone(),
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
             },
             GraphPattern::OrderBy { expression, .. } => {
-                let mut parts = self.take(1 + expression.len());
+                let mut parts = self.take(
+                    expression
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let inner = next_pattern(&mut parts);
                 GraphPattern::OrderBy {
-                    inner: Child::new(inner),
-                    expression: parts.map(Planned::order).collect(),
+                    inner: Child::try_new(inner, self.memory)?,
+                    expression: self.memory.collect(parts.map(Planned::order))?,
                 }
             }
             GraphPattern::Project { variables, .. } => GraphPattern::Project {
-                inner: Child::new(next_pattern(&mut self.take(1))),
-                variables: variables.clone(),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+                variables: self.memory.collect(variables.iter().cloned())?,
             },
             GraphPattern::Distinct { .. } => GraphPattern::Distinct {
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
             },
             GraphPattern::Reduced { .. } => GraphPattern::Reduced {
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
             },
             GraphPattern::Slice { start, length, .. } => GraphPattern::Slice {
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
                 start: *start,
                 length: *length,
             },
@@ -1790,16 +2128,22 @@ impl<'a> Planner<'a, '_> {
                 aggregates,
                 ..
             } => {
-                let mut parts = self.take(1 + aggregates.len());
+                let mut parts = self.take(
+                    aggregates
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let inner = next_pattern(&mut parts);
                 GraphPattern::Group {
-                    inner: Child::new(inner),
-                    variables: variables.clone(),
-                    aggregates: aggregates
-                        .iter()
-                        .zip(parts)
-                        .map(|((variable, _), part)| (variable.clone(), part.aggregate()))
-                        .collect(),
+                    inner: Child::try_new(inner, self.memory)?,
+                    variables: self.memory.collect(variables.iter().cloned())?,
+                    aggregates: self.memory.collect(
+                        aggregates
+                            .iter()
+                            .zip(parts)
+                            .map(|((variable, _), part)| (variable.clone(), part.aggregate())),
+                    )?,
                 }
             }
             GraphPattern::Bgp { .. }
@@ -1809,100 +2153,145 @@ impl<'a> Planner<'a, '_> {
             | GraphPattern::Service { .. } => {
                 unreachable!("a leaf is planned as it is entered and never assembled")
             }
-        }
+        })
     }
 
     /// `expr` rebuilt over its planned operands, taken in the order they were planned.
-    fn assemble_expression(&mut self, expr: &'a Expression) -> Expression {
-        match expr {
-            Expression::Exists(_) => {
-                Expression::Exists(Child::new(next_pattern(&mut self.take(1))))
-            }
+    fn assemble_expression(&mut self, expr: &'a Expression) -> PrepResult<Expression> {
+        Ok(match expr {
+            Expression::Exists(_) => Expression::Exists(Child::try_new(
+                next_pattern(&mut self.take(1)?),
+                self.memory,
+            )?),
             Expression::Or(operands) => {
-                let mut parts = self.take(operands.len());
-                Expression::Or(operands.map_ref(|_| next_expression(&mut parts)))
+                let mut parts = self.take(operands.len())?;
+                Expression::Or(
+                    purrdf_sparql_algebra::Chain::try_from(
+                        self.memory
+                            .collect((0..operands.len()).map(|_| next_expression(&mut parts)))?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves OR arity")),
+                )
             }
             Expression::And(operands) => {
-                let mut parts = self.take(operands.len());
-                Expression::And(operands.map_ref(|_| next_expression(&mut parts)))
+                let mut parts = self.take(operands.len())?;
+                Expression::And(
+                    purrdf_sparql_algebra::Chain::try_from(
+                        self.memory
+                            .collect((0..operands.len()).map(|_| next_expression(&mut parts)))?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves AND arity")),
+                )
             }
             Expression::Arithmetic(_, steps) => {
-                let mut parts = self.take(1 + steps.len());
+                let mut parts = self.take(
+                    steps
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let first = next_expression(&mut parts);
                 Expression::Arithmetic(
-                    Child::new(first),
-                    steps.map_ref(|(operator, _)| (*operator, next_expression(&mut parts))),
+                    Child::try_new(first, self.memory)?,
+                    purrdf_sparql_algebra::NonEmpty::try_from(
+                        self.memory.collect(
+                            steps
+                                .iter()
+                                .map(|(operator, _)| (*operator, next_expression(&mut parts))),
+                        )?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves arithmetic step arity")),
                 )
             }
             Expression::Equal(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::Equal(a, b)
             }
             Expression::SameTerm(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::SameTerm(a, b)
             }
             Expression::Greater(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::Greater(a, b)
             }
             Expression::GreaterOrEqual(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::GreaterOrEqual(a, b)
             }
             Expression::Less(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::Less(a, b)
             }
             Expression::LessOrEqual(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::LessOrEqual(a, b)
             }
-            Expression::UnaryPlus(_) => {
-                Expression::UnaryPlus(Child::new(next_expression(&mut self.take(1))))
-            }
-            Expression::UnaryMinus(_) => {
-                Expression::UnaryMinus(Child::new(next_expression(&mut self.take(1))))
-            }
-            Expression::Not(_) => Expression::Not(Child::new(next_expression(&mut self.take(1)))),
+            Expression::UnaryPlus(_) => Expression::UnaryPlus(Child::try_new(
+                next_expression(&mut self.take(1)?),
+                self.memory,
+            )?),
+            Expression::UnaryMinus(_) => Expression::UnaryMinus(Child::try_new(
+                next_expression(&mut self.take(1)?),
+                self.memory,
+            )?),
+            Expression::Not(_) => Expression::Not(Child::try_new(
+                next_expression(&mut self.take(1)?),
+                self.memory,
+            )?),
             Expression::If(..) => {
-                let mut parts = self.take(3);
+                let mut parts = self.take(3)?;
                 let condition = next_expression(&mut parts);
                 let then = next_expression(&mut parts);
                 let otherwise = next_expression(&mut parts);
                 Expression::If(
-                    Child::new(condition),
-                    Child::new(then),
-                    Child::new(otherwise),
+                    Child::try_new(condition, self.memory)?,
+                    Child::try_new(then, self.memory)?,
+                    Child::try_new(otherwise, self.memory)?,
                 )
             }
             Expression::In(_, haystack) => {
-                let mut parts = self.take(1 + haystack.len());
+                let mut parts = self.take(
+                    haystack
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let needle = next_expression(&mut parts);
-                Expression::In(Child::new(needle), parts.map(Planned::expression).collect())
+                Expression::In(
+                    Child::try_new(needle, self.memory)?,
+                    self.memory.collect(parts.map(Planned::expression))?.into(),
+                )
             }
             Expression::Coalesce(items) => {
-                Expression::Coalesce(self.take(items.len()).map(Planned::expression).collect())
+                let parts = self.take(items.len())?;
+                Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?.into())
             }
-            Expression::FunctionCall(function, args) => Expression::FunctionCall(
-                function.clone(),
-                self.take(args.len()).map(Planned::expression).collect(),
-            ),
+            Expression::FunctionCall(function, args) => {
+                let parts = self.take(args.len())?;
+                Expression::FunctionCall(
+                    function.clone_with_memory(self.memory)?,
+                    self.memory.collect(parts.map(Planned::expression))?.into(),
+                )
+            }
             Expression::NamedNode(_)
             | Expression::Literal(_)
             | Expression::Variable(_)
             | Expression::Bound(_) => {
                 unreachable!("a constant or a variable is planned as it is entered")
             }
-        }
+        })
     }
 
     /// The two planned operands of a binary operator, in order.
-    fn take_pair(&mut self) -> (Child<Expression>, Child<Expression>) {
-        let mut parts = self.take(2);
+    fn take_pair(&mut self) -> PrepResult<(Child<Expression>, Child<Expression>)> {
+        let mut parts = self.take(2)?;
         let a = next_expression(&mut parts);
         let b = next_expression(&mut parts);
-        (Child::new(a), Child::new(b))
+        Ok((
+            Child::try_new(a, self.memory)?,
+            Child::try_new(b, self.memory)?,
+        ))
     }
 }
 
@@ -1925,39 +2314,62 @@ impl<'a> Planner<'a, '_> {
 ///
 /// [`EvalError::Function`] naming `iri` and the offending scalarval, for any of
 /// the four cases above.
+#[cfg(test)]
 fn validate_scalarvals(
     iri: &str,
     supplied: &[(String, Literal)],
     declared: &[ScalarvalSpec],
 ) -> Result<(), EvalError> {
-    let mut seen: DetHashSet<&str> = DetHashSet::default();
+    validate_scalarvals_native(iri, supplied, declared, &WorkspaceCapability::resident())
+}
+
+fn validate_scalarvals_native(
+    iri: &str,
+    supplied: &[(String, Literal)],
+    declared: &[ScalarvalSpec],
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut seen = AdmittedMap::default();
     for (name, value) in supplied {
-        if !seen.insert(name.as_str()) {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}> was supplied the scalarval `{name}` more than once"
-            )));
+        if seen.get(&name.as_str()).is_some() {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "custom aggregate <{iri}> was supplied the scalarval `{name}` more than once"
+                ),
+                workspace,
+            ));
         }
+        let _ = seen.insert_admitted(name.as_str(), (), workspace)?;
         let Some(spec) = declared.iter().find(|spec| spec.name == name) else {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}> does not accept a scalarval named `{name}`"
-            )));
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!("custom aggregate <{iri}> does not accept a scalarval named `{name}`"),
+                workspace,
+            ));
         };
-        if !scalarval_value_matches_kind(value, spec.kind) {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}>'s scalarval `{name}` must be {}, found datatype \
-                 <{}>",
-                spec.kind.label(),
-                value.datatype().as_str()
-            )));
+        if !scalarval_value_matches_kind_native(value, spec.kind, workspace)? {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "custom aggregate <{iri}>'s scalarval `{name}` must be {}, found datatype <{}>",
+                    spec.kind.label(),
+                    value.datatype().as_str()
+                ),
+                workspace,
+            ));
         }
     }
     for spec in declared {
         if !supplied.iter().any(|(name, _)| name == spec.name) {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}> requires a scalarval named `{}`, which the call site \
-                 did not supply",
-                spec.name
-            )));
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "custom aggregate <{iri}> requires a scalarval named `{}`, which the call site did not supply",
+                    spec.name
+                ),
+                workspace,
+            ));
         }
     }
     Ok(())
@@ -1970,16 +2382,29 @@ fn validate_scalarvals(
 /// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
 /// admission rule can never drift from what the numeric tower actually accepts
 /// elsewhere in this crate.
-fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
-    match kind {
-        ScalarvalKind::Numeric => xsd_of(&literal_to_value(value))
-            .as_ref()
-            .is_some_and(purrdf_xsd::XsdValue::is_numeric),
+fn scalarval_value_matches_kind_native(
+    value: &Literal,
+    kind: ScalarvalKind,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    Ok(match kind {
+        ScalarvalKind::Numeric => {
+            if value.language().is_some() {
+                return Ok(false);
+            }
+            let Some(datatype) = purrdf_xsd::XsdDatatype::from_iri(value.datatype().as_str())
+            else {
+                return Ok(false);
+            };
+            crate::parsed_value::ParsedValue::parse(value.value(), datatype, false, workspace)?
+                .as_deref()
+                .is_some_and(purrdf_xsd::XsdValue::is_numeric)
+        }
         ScalarvalKind::String => {
             value.language().is_none()
                 && value.datatype().as_str() == purrdf_sparql_algebra::ast::XSD_STRING
         }
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2006,7 +2431,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// * a `VALUES` column with a term — no `UNDEF` — in every row;
 /// * the target of a `BIND` whose expression reads only variables its inner pattern
 ///   binds by this same rule, or variables the context it is evaluated in holds bound
-///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound`]
+///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound_admitted`]
 ///   and [`collect_certainly_bound_in`]);
 /// * a variable a `FILTER`'s condition requires bound for it to be true
 ///   ([`Outcome::Truth`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
@@ -2015,7 +2440,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 ///   binds only what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
 /// * the variable naming a `GRAPH`;
 /// * a grouping key every row of the grouped pattern binds;
-/// * an aggregate's output when [`aggregate_certainly_binds`] says every group row
+/// * an aggregate's output when [`aggregate_certainly_binds_admitted`] says every group row
 ///   holds one save a row whose aggregate failed on present values — `COUNT`, `SUM`,
 ///   `AVG`, `GROUP_CONCAT` and `FOLD` always, `SAMPLE`/`MIN`/`MAX` and a custom
 ///   aggregate under an explicit `GROUP BY` of arguments reading only what every row
@@ -2045,7 +2470,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// computed from is certainly present, and a group whose aggregate failed on those
 /// values — a `MAX(STR(?x))` whose every `?x` is a blank node, a `SUM` over a string —
 /// is a row refused (or, for a relation that also serves the free mode, invoked free)
-/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds`] states which
+/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds_admitted`] states which
 /// absences of input the text itself fixes.
 ///
 /// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
@@ -2061,8 +2486,27 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// Erring on the narrow side is otherwise harmless: at worst a feasible order is
 /// missed and the query is refused at prepare time with a message that names exactly
 /// what could not be bound.
+#[cfg(test)]
 pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     collect_certainly_bound_in(pattern, &DetHashSet::default(), out);
+}
+
+/// The same certainty law with every engine-created owner admitted before growth.
+/// The returned immutable schema keeps its original payload admission alive.
+pub(crate) fn collect_certainly_bound_admitted(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_certainly_bound_in_admitted(pattern, &VarSchema::default(), workspace)
+}
+
+/// Contextual certainty, without adding the caller's context to the result.
+pub(crate) fn collect_certainly_bound_in_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_bound_admitted(pattern, context, None, workspace)
 }
 
 /// [`collect_certainly_bound`] for a pattern evaluated with `context` already bound:
@@ -2081,6 +2525,7 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
 /// pattern of a sub-`SELECT` for the variables it projects — a variable it does not
 /// project is a different variable inside it. A nested `LATERAL`'s right operand sees
 /// `context` and its own left operand's certain bindings.
+#[cfg(test)]
 pub(crate) fn collect_certainly_bound_in(
     pattern: &GraphPattern,
     context: &DetHashSet<Variable>,
@@ -2090,38 +2535,22 @@ pub(crate) fn collect_certainly_bound_in(
 }
 
 /// What a prepared execution's run writes into a pattern the planner is judging, beyond
-/// the pattern's own bindings — the two ways a promised parameter reaches an
-/// expression. See [`Promise`] for where each holds.
+/// the pattern's own bindings. See [`Promise`].
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct Written<'a> {
-    /// The parameters the `VALUES` seed binds, when the pattern is on the
-    /// solution-modifier descent the seed is joined beneath: they are bound in every
-    /// row of the core pattern, so every wrapper between the pattern and the core —
-    /// a `BIND` above the core, say — reads them bound. `None` below the core, where
-    /// the seed is a sibling joined afterwards.
-    seed: Option<&'a DetHashSet<Variable>>,
-    /// The parameters the SHACL pre-binding rewrite writes into EVERY expression of
-    /// the query (a constant for an IRI or a literal, a driven value for a blank node
-    /// or a quoted triple — `crate::substitute`'s `drive_expression_reads`), sub-`SELECT`s
-    /// that do not project them included.
+    /// The parameters the one pre-binding rewrite writes into EVERY expression of the
+    /// query (a constant for an IRI or a literal, a driven value for a blank node or a
+    /// quoted triple — `crate::substitute`'s `drive_expression_reads`), sub-`SELECT`s
+    /// included.
     everywhere: Option<&'a DetHashSet<Variable>>,
 }
 
+#[cfg(test)]
 impl Written<'_> {
     /// Nothing is written: the pattern is judged by its own bindings and its context.
-    const NOTHING: Self = Self {
-        seed: None,
-        everywhere: None,
-    };
-
-    /// What reaches a child of a node that is not a solution-modifier wrapper: the
-    /// seed is joined at or above that node, so never beneath it.
-    const fn beneath(self) -> Self {
-        Self {
-            seed: None,
-            everywhere: self.everywhere,
-        }
-    }
+    #[cfg(test)]
+    const NOTHING: Self = Self { everywhere: None };
 
     /// Whether an expression reads `variable` as a value the run wrote in.
     fn writes(self, variable: &Variable) -> bool {
@@ -2137,12 +2566,34 @@ impl Written<'_> {
 /// context and the writes that reach it, and the root's is added to `out`. A `LATERAL`
 /// binds its left operand first, then its right operand under the context the left one
 /// widens.
+#[cfg(test)]
 fn collect_bound(
     pattern: &GraphPattern,
     context: &DetHashSet<Variable>,
-    written: Written<'_>,
+    given_written: Written<'_>,
     out: &mut DetHashSet<Variable>,
 ) {
+    // These sets are caller-owned resident planner inputs and output. Bounded
+    // callers keep the VarSchema returned by collect_bound_admitted instead.
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident certainty context");
+    let written = given_written.everywhere.map(|set| {
+        VarSchema::from_vars_admitted(set.iter().cloned(), &workspace)
+            .expect("resident certainty writes")
+    });
+    let bound = collect_bound_admitted(pattern, &context, written.as_ref(), &workspace)
+        .expect("resident certainly-bound allocation");
+    out.extend(bound.vars().iter().cloned());
+}
+
+/// Contextual certainty with optional promised bindings and retained schema owners.
+pub(crate) fn collect_bound_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    given_written: Option<&VarSchema>,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
     /// The context a node is evaluated under: the caller's, or one a `LATERAL` or a
     /// sub-`SELECT` built for its operand, held in the arena.
     #[derive(Clone, Copy)]
@@ -2150,64 +2601,100 @@ fn collect_bound(
         Given,
         Owned(usize),
     }
+    #[derive(Clone, Copy)]
+    enum Writes {
+        Given,
+        Owned(std::num::NonZeroUsize),
+    }
+    // The original caller writes remain outside the worklist. A one-based arena
+    // index uses its zero niche, preserving the former per-frame pointer width.
+    const _: () = assert!(size_of::<Writes>() == size_of::<Option<&VarSchema>>());
+    impl Writes {
+        fn set<'s>(
+            self,
+            given: Option<&'s VarSchema>,
+            arena: &'s [VarSchema],
+        ) -> Option<&'s VarSchema> {
+            match self {
+                Self::Given => given,
+                Self::Owned(index) => Some(&arena[index.get() - 1]),
+            }
+        }
+        fn writes(
+            self,
+            variable: &Variable,
+            given: Option<&VarSchema>,
+            arena: &[VarSchema],
+        ) -> bool {
+            self.set(given, arena)
+                .is_some_and(|set| set.contains(variable))
+        }
+    }
     /// One step of the walk.
-    enum Step<'p, 'w> {
+    enum Step<'p> {
         /// Enter a node: a leaf's set is computed at once, a node's children are pushed.
-        Enter(&'p GraphPattern, Context, Written<'w>),
+        Enter(&'p GraphPattern, Context, Writes),
         /// Combine a node's set from its children's; the arena is cut back to `mark`.
-        Exit(&'p GraphPattern, Context, Written<'w>, usize),
+        Exit(&'p GraphPattern, Context, Writes, usize),
         /// A `LATERAL` whose left operand is bound: widen the context for its right
         /// operand, which is named.
-        LateralLeft(&'p GraphPattern, &'p GraphPattern, Context, Written<'w>),
+        LateralLeft(&'p GraphPattern, Context, Writes),
+        /// A contextual driver is bound before its renamed inputs reach the RHS.
+        ApplyLeft(
+            &'p GraphPattern,
+            &'p purrdf_sparql_algebra::algebra::ApplicationPolicy,
+            Context,
+            Writes,
+        ),
         /// A `LATERAL` whose right operand is bound too: its set is the union of both,
         /// the left operand's carried here; the arena is cut back to `mark`.
-        LateralRight(&'p GraphPattern, Written<'w>, DetHashSet<Variable>, usize),
+        LateralRight(VarSchema, usize),
     }
     /// The set `context` names, read from `arena` when a node built it.
     fn resolve<'c>(
         context: Context,
-        given: &'c DetHashSet<Variable>,
-        arena: &'c [DetHashSet<Variable>],
-    ) -> &'c DetHashSet<Variable> {
+        given: &'c VarSchema,
+        arena: &'c [VarSchema],
+    ) -> &'c VarSchema {
         match context {
             Context::Given => given,
             Context::Owned(index) => &arena[index],
         }
     }
-    let mut arena: Vec<DetHashSet<Variable>> = Vec::new();
-    let mut values: Vec<DetHashSet<Variable>> = Vec::new();
-    let mut steps = vec![Step::Enter(pattern, Context::Given, written)];
+    let mut arena = AdmittedVec::<VarSchema>::new(workspace);
+    let mut values = AdmittedVec::<VarSchema>::new(workspace);
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(pattern, Context::Given, Writes::Given))?;
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node, ctx, written) => {
-                let beneath = written.beneath();
                 let mark = arena.len();
                 match node {
                     GraphPattern::Bgp { patterns } => {
-                        let mut bound = DetHashSet::default();
+                        let mut bound = SchemaBuilder::new(workspace);
                         for triple in patterns {
-                            collect_triple_vars(triple, &mut bound);
+                            collect_triple_vars_admitted(triple, &mut bound, workspace)?;
                         }
-                        values.push(seeded(node, bound, written));
+                        values.push(bound.finish()?)?;
                     }
                     GraphPattern::Path {
                         subject,
                         path: _,
                         object,
                     } => {
-                        let mut bound = DetHashSet::default();
-                        collect_term_vars(subject, &mut bound);
-                        collect_term_vars(object, &mut bound);
-                        values.push(seeded(node, bound, written));
+                        let mut bound = SchemaBuilder::new(workspace);
+                        collect_term_vars_admitted(subject, &mut bound, workspace)?;
+                        collect_term_vars_admitted(object, &mut bound, workspace)?;
+                        values.push(bound.finish()?)?;
                     }
                     // Every flattened argument position of a call receives a value on
                     // every row it emits, so its variables are certainly bound by it.
                     GraphPattern::PropertyFunction(call) => {
-                        let mut bound = DetHashSet::default();
+                        let mut bound = SchemaBuilder::new(workspace);
                         for term in call.subject_args.iter().chain(&call.object_args) {
-                            collect_term_vars(term, &mut bound);
+                            collect_term_vars_admitted(term, &mut bound, workspace)?;
                         }
-                        values.push(seeded(node, bound, written));
+                        values.push(bound.finish()?)?;
                     }
                     // A `VALUES` column binds its variable in every row exactly when no
                     // row holds `UNDEF` there. An empty table produces no row at all, so
@@ -2217,43 +2704,57 @@ fn collect_bound(
                         variables,
                         bindings,
                     } => {
-                        let bound = variables
-                            .iter()
-                            .enumerate()
-                            .filter(|(column, _)| {
-                                bindings
-                                    .iter()
-                                    .all(|row| row.get(*column).is_some_and(Option::is_some))
-                            })
-                            .map(|(_, variable)| variable.clone())
-                            .collect();
-                        values.push(seeded(node, bound, written));
+                        let bound = VarSchema::from_vars_admitted(
+                            variables
+                                .iter()
+                                .enumerate()
+                                .filter(|(column, _)| {
+                                    bindings
+                                        .iter()
+                                        .all(|row| row.get(*column).is_some_and(Option::is_some))
+                                })
+                                .map(|(_, variable)| variable.clone()),
+                            workspace,
+                        )?;
+                        values.push(bound)?;
                     }
                     // A remote endpoint may omit a column, so it promises nothing.
                     GraphPattern::Service { .. } => {
-                        values.push(seeded(node, DetHashSet::default(), written));
+                        values.push(VarSchema::default())?;
                     }
                     GraphPattern::Join { left, right } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(right, ctx, beneath));
-                        steps.push(Step::Enter(left, ctx, beneath));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        if policy.optional.is_some() {
+                            steps.push(Step::Exit(node, ctx, written, mark))?;
+                        } else {
+                            steps.push(Step::ApplyLeft(right, policy, ctx, written))?;
+                        }
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     // The right operand is evaluated once per left row with that row in
                     // hand, so it sees the left operand's certain bindings as well as the
                     // enclosing context's: the left operand is bound first.
                     GraphPattern::Lateral { left, right } => {
-                        steps.push(Step::LateralLeft(node, right, ctx, written));
-                        steps.push(Step::Enter(left, ctx, beneath));
+                        steps.push(Step::LateralLeft(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     // The right side may contribute nothing to a row.
                     GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(left, ctx, beneath));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     GraphPattern::Union { arms } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
                         for arm in arms.iter().rev() {
-                            steps.push(Step::Enter(arm, ctx, beneath));
+                            steps.push(Step::Enter(arm, ctx, written))?;
                         }
                     }
                     // The solution-modifier wrappers the seed descends through keep
@@ -2266,45 +2767,108 @@ fn collect_bound(
                     | GraphPattern::Unfold { inner, .. }
                     | GraphPattern::Extend { inner, .. }
                     | GraphPattern::Group { inner, .. } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, ctx, written));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
                     }
                     GraphPattern::Graph { inner, .. } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, ctx, beneath));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
                     }
                     // The context reaches a sub-`SELECT`'s inner pattern only through the
                     // variables the projection names; what the SHACL pre-binding rewrite
                     // writes is written past the projection too.
                     GraphPattern::Project { inner, variables } => {
-                        let narrowed = narrowed_to(resolve(ctx, context, &arena), variables);
-                        arena.push(narrowed);
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, Context::Owned(mark), written));
+                        let narrowed = narrowed_to_admitted(
+                            resolve(ctx, context, &arena),
+                            variables,
+                            workspace,
+                        )?;
+                        arena.push(narrowed)?;
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, Context::Owned(mark), written))?;
                     }
                 }
             }
-            Step::LateralLeft(node, right, ctx, written) => {
-                let left_bound = values.pop().expect("the left operand is bound first");
-                let mut right_context = resolve(ctx, context, &arena).clone();
-                right_context.extend(left_bound.iter().cloned());
+            Step::ApplyLeft(right, policy, ctx, written) => {
+                let left_bound = values.pop().expect("the driver is bound first");
+                let outer = resolve(ctx, context, &arena);
+                let shadowed = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()),
+                    workspace,
+                )?;
+                let mut right_context = SchemaBuilder::new(workspace);
+                for variable in outer
+                    .vars()
+                    .iter()
+                    .filter(|variable| !shadowed.contains(variable))
+                {
+                    right_context.push(variable.clone())?;
+                }
+                let written_set = written.set(given_written, &arena);
+                let mut supplied = SchemaBuilder::new(workspace);
+                for variable in written_set
+                    .into_iter()
+                    .flat_map(|set| set.vars().iter())
+                    .filter(|variable| !shadowed.contains(variable))
+                {
+                    supplied.push(variable.clone())?;
+                }
+                for (input, driver) in &policy.inputs {
+                    if left_bound.contains(driver)
+                        || outer.contains(driver)
+                        || written.writes(driver, given_written, &arena)
+                    {
+                        right_context.push(input.clone())?;
+                        supplied.push(input.clone())?;
+                    }
+                }
                 let mark = arena.len();
-                arena.push(right_context);
-                steps.push(Step::LateralRight(node, written, left_bound, mark));
-                steps.push(Step::Enter(right, Context::Owned(mark), written.beneath()));
+                arena.push(right_context.finish()?)?;
+                arena.push(supplied.finish()?)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(
+                    right,
+                    Context::Owned(mark),
+                    Writes::Owned(
+                        std::num::NonZeroUsize::new(
+                            mark.checked_add(2)
+                                .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                        )
+                        .expect("one-based arena index"),
+                    ),
+                ))?;
             }
-            Step::LateralRight(node, written, left_bound, mark) => {
+            Step::LateralLeft(right, ctx, written) => {
+                let left_bound = values.pop().expect("the left operand is bound first");
+                let right_context =
+                    resolve(ctx, context, &arena).union_admitted(&left_bound, workspace)?;
+                let mark = arena.len();
+                arena.push(right_context)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(right, Context::Owned(mark), written))?;
+            }
+            Step::LateralRight(left_bound, mark) => {
                 let mut bound = values.pop().expect("the right operand is bound second");
-                bound.extend(left_bound);
+                bound = bound.union_admitted(&left_bound, workspace)?;
                 arena.truncate(mark);
-                values.push(seeded(node, bound, written));
+                values.push(bound)?;
             }
             Step::Exit(node, ctx, written, mark) => {
                 let bound = match node {
+                    GraphPattern::Apply { policy, .. } => {
+                        if policy.optional.is_some() {
+                            values.pop().expect("the driver is bound")
+                        } else {
+                            let right = values.pop().expect("the operand is bound");
+                            let mut left = values.pop().expect("the driver is bound");
+                            left = left.union_admitted(&right, workspace)?;
+                            left
+                        }
+                    }
                     GraphPattern::Join { .. } => {
                         let right = values.pop().expect("the right operand is bound");
                         let mut bound = values.pop().expect("the left operand is bound");
-                        bound.extend(right);
+                        bound = bound.union_admitted(&right, workspace)?;
                         bound
                     }
                     GraphPattern::LeftJoin { .. } | GraphPattern::Minus { .. } => {
@@ -2312,12 +2876,16 @@ fn collect_bound(
                     }
                     // Only what EVERY arm binds is bound in every row.
                     GraphPattern::Union { arms } => {
-                        let at = values.len() - arms.len();
-                        let mut arms_bound = values.drain(at..);
-                        let first = arms_bound.next().unwrap_or_default();
-                        arms_bound.fold(first, |common, bound| {
-                            common.intersection(&bound).cloned().collect()
-                        })
+                        let at = values
+                            .len()
+                            .checked_sub(arms.len())
+                            .expect("each UNION arm produced its certainty value");
+                        let mut arms_bound = values.drain_from(at);
+                        let mut common = arms_bound.next().unwrap_or_default();
+                        for bound in arms_bound {
+                            common = intersection_admitted(&common, &bound, workspace)?;
+                        }
+                        common
                     }
                     // A `FILTER` passes only rows its condition is true on, and every
                     // variable the condition requires bound for that is therefore bound
@@ -2329,12 +2897,17 @@ fn collect_bound(
                     // nothing, the narrow answer.
                     GraphPattern::Filter { expr, .. } => {
                         let mut bound = values.pop().expect("the inner pattern is bound");
-                        bound.extend(
-                            requires(expr, Outcome::Truth)
-                                .unwrap_or_default()
-                                .into_iter()
-                                .filter(|variable| !written.writes(variable)),
-                        );
+                        let required =
+                            requires_admitted(expr, Outcome::Truth, workspace)?.unwrap_or_default();
+                        let constrained = VarSchema::from_vars_admitted(
+                            required
+                                .vars()
+                                .iter()
+                                .filter(|variable| !written.writes(variable, given_written, &arena))
+                                .cloned(),
+                            workspace,
+                        )?;
+                        bound = bound.union_admitted(&constrained, workspace)?;
                         bound
                     }
                     // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null`
@@ -2360,17 +2933,23 @@ fn collect_bound(
                     } => {
                         let mut bound = values.pop().expect("the inner pattern is bound");
                         let context = resolve(ctx, context, &arena);
-                        if expression_reads_only_bound(expression, &|read| {
-                            bound.contains(read) || context.contains(read) || written.writes(read)
-                        }) {
-                            bound.insert(variable.clone());
+                        if expression_reads_only_bound_admitted(
+                            expression,
+                            &|read| {
+                                bound.contains(read)
+                                    || context.contains(read)
+                                    || written.writes(read, given_written, &arena)
+                            },
+                            workspace,
+                        )? {
+                            bound.push_admitted(variable.clone(), workspace)?;
                         }
                         bound
                     }
                     GraphPattern::Graph { name, .. } => {
                         let mut bound = values.pop().expect("the inner pattern is bound");
                         if let NamedNodePattern::Variable(variable) = name {
-                            bound.insert(variable.clone());
+                            bound.push_admitted(variable.clone(), workspace)?;
                         }
                         bound
                     }
@@ -2378,15 +2957,17 @@ fn collect_bound(
                     // pattern bound it certainly.
                     GraphPattern::Project { variables, .. } => {
                         let inner_bound = values.pop().expect("the inner pattern is bound");
-                        variables
-                            .iter()
-                            .filter(|variable| inner_bound.contains(*variable))
-                            .cloned()
-                            .collect()
+                        VarSchema::from_vars_admitted(
+                            variables
+                                .iter()
+                                .filter(|variable| inner_bound.contains(variable))
+                                .cloned(),
+                            workspace,
+                        )?
                     }
                     // A grouping key is bound in a group's row when every row of the
                     // group binds it; an aggregate's output by
-                    // [`aggregate_certainly_binds`].
+                    // [`aggregate_certainly_binds_admitted`].
                     GraphPattern::Group {
                         variables,
                         aggregates,
@@ -2396,20 +2977,24 @@ fn collect_bound(
                         let context = resolve(ctx, context, &arena);
                         let row_binds =
                             |read: &Variable| inner_bound.contains(read) || context.contains(read);
-                        let mut bound: DetHashSet<Variable> = variables
-                            .iter()
-                            .filter(|key| row_binds(key))
-                            .cloned()
-                            .collect();
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for variable in variables.iter().filter(|key| row_binds(key)) {
+                            bound.push(variable.clone())?;
+                        }
                         let grouped = !variables.is_empty();
                         for (variable, aggregate) in aggregates {
-                            if aggregate_certainly_binds(aggregate, grouped, &|read| {
-                                row_binds(read) || written.writes(read)
-                            }) {
-                                bound.insert(variable.clone());
+                            if aggregate_certainly_binds_admitted(
+                                aggregate,
+                                grouped,
+                                &|read| {
+                                    row_binds(read) || written.writes(read, given_written, &arena)
+                                },
+                                workspace,
+                            )? {
+                                bound.push(variable.clone())?;
                             }
                         }
-                        bound
+                        bound.finish()?
                     }
                     GraphPattern::Bgp { .. }
                     | GraphPattern::Path { .. }
@@ -2424,44 +3009,11 @@ fn collect_bound(
                     }
                 };
                 arena.truncate(mark);
-                values.push(seeded(node, bound, written));
+                values.push(bound)?;
             }
         }
     }
-    out.extend(values.pop().expect("the root's set is computed last"));
-}
-
-/// `bound`, plus the seed's parameters when `node` is the core the seed is joined onto —
-/// the first node that is not a wrapper — which binds them in every row it produces.
-fn seeded(
-    node: &GraphPattern,
-    mut bound: DetHashSet<Variable>,
-    written: Written<'_>,
-) -> DetHashSet<Variable> {
-    if let Some(seed) = written.seed
-        && !is_descent_wrapper(node)
-    {
-        bound.extend(seed.iter().cloned());
-    }
-    bound
-}
-
-/// Whether `pattern` is a solution-modifier wrapper the `VALUES` seed is joined
-/// BENEATH — the same wrappers `Query::map_core_pattern` descends, and
-/// [`Planner::enter_parts`] hands the descent on through.
-const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
-    matches!(
-        pattern,
-        GraphPattern::Project { .. }
-            | GraphPattern::Distinct { .. }
-            | GraphPattern::Reduced { .. }
-            | GraphPattern::Slice { .. }
-            | GraphPattern::OrderBy { .. }
-            | GraphPattern::Group { .. }
-            | GraphPattern::Extend { .. }
-            | GraphPattern::Filter { .. }
-            | GraphPattern::Unfold { .. }
-    )
+    Ok(values.pop().expect("the root's set is computed last"))
 }
 
 /// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
@@ -2503,7 +3055,7 @@ const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
 ///   the first three always do, and a host's aggregate may. They count only under an
 ///   explicit `GROUP BY`, whose every group holds at least one row, and only over
 ///   arguments that read nothing but what every row binds (or constants —
-///   [`expression_reads_only_bound`], the test a `BIND` expression passes). Every row
+///   [`expression_reads_only_bound_admitted`], the test a `BIND` expression passes). Every row
 ///   of a group then hands the aggregate a value unless its argument errored on
 ///   present values — `STR(?x)` on a blank node, `IRI(STR(?x))` on a string that is
 ///   not an IRI — and the aggregate is unbound only if every row's argument errored,
@@ -2513,26 +3065,31 @@ const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
 ///   an `OPTIONAL`'s `?w` does not, as `BIND(?w AS ?y)` does not. WITHOUT a
 ///   `GROUP BY` the implicit group may hold no row, where these answer unbound for
 ///   want of any input: the same structural absence, so none of them counts there.
-fn aggregate_certainly_binds(
+fn aggregate_certainly_binds_admitted(
     aggregate: &AggregateExpression,
     grouped: bool,
     row_binds: &dyn Fn(&Variable) -> bool,
-) -> bool {
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
     match aggregate.function() {
         AggregateFunction::Count
         | AggregateFunction::Sum
         | AggregateFunction::Avg
         | AggregateFunction::GroupConcat
-        | AggregateFunction::Fold => true,
+        | AggregateFunction::Fold => Ok(true),
         AggregateFunction::Sample
         | AggregateFunction::Min
         | AggregateFunction::Max
         | AggregateFunction::Custom(_) => {
-            grouped
-                && aggregate
-                    .args()
-                    .iter()
-                    .all(|arg| expression_reads_only_bound(arg, row_binds))
+            if !grouped {
+                return Ok(false);
+            }
+            for arg in aggregate.args() {
+                if !expression_reads_only_bound_admitted(arg, row_binds, workspace)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         }
     }
 }
@@ -2540,12 +3097,40 @@ fn aggregate_certainly_binds(
 /// The part of `context` a sub-`SELECT` projecting `variables` lets into its inner
 /// pattern: an enclosing binding is substituted into it only for a variable it
 /// projects.
+#[cfg(test)]
 fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
-    context
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident projected certainty context");
+    narrowed_to_admitted(&context, variables, &workspace)
+        .expect("resident projected certainty allocation")
+        .vars()
         .iter()
-        .filter(|variable| variables.contains(*variable))
         .cloned()
         .collect()
+}
+
+fn narrowed_to_admitted(
+    context: &VarSchema,
+    variables: &[Variable],
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        context
+            .vars()
+            .iter()
+            .filter(|variable| variables.contains(variable))
+            .cloned(),
+        workspace,
+    )
+}
+
+fn intersection_admitted(
+    left: &VarSchema,
+    right: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    narrowed_to_admitted(left, right.vars(), workspace)
 }
 
 /// Whether `expr` can be left without a value only by the data it reads — never
@@ -2567,7 +3152,17 @@ fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHas
 ///
 /// A post-order walk over a work list, so an expression of any depth needs no more
 /// machine stack: every operand answers before the operator over it does.
+#[cfg(test)]
 fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
+    expression_reads_only_bound_admitted(expr, is_bound, &WorkspaceCapability::default())
+        .expect("resident expression certainty allocation")
+}
+
+fn expression_reads_only_bound_admitted(
+    expr: &Expression,
+    is_bound: &dyn Fn(&Variable) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
     /// One step of the walk.
     enum Step<'e> {
         /// Enter an expression: a leaf answers at once, an operator pushes its operands.
@@ -2575,28 +3170,34 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
         /// Combine an operator's answer from its operands', `count` of them.
         Exit(&'e Expression, usize),
     }
-    let mut steps = vec![Step::Enter(expr)];
-    let mut values: Vec<bool> = Vec::new();
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(expr))?;
+    let mut values = AdmittedVec::<bool>::new(workspace);
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(expr) => match expr {
                 Expression::NamedNode(_)
                 | Expression::Literal(_)
                 | Expression::Bound(_)
-                | Expression::Exists(_) => values.push(true),
-                Expression::Variable(variable) => values.push(is_bound(variable)),
+                | Expression::Exists(_) => values.push(true)?,
+                Expression::Variable(variable) => values.push(is_bound(variable))?,
                 Expression::Or(operands) | Expression::And(operands) => {
-                    steps.push(Step::Exit(expr, operands.len()));
+                    steps.push(Step::Exit(expr, operands.len()))?;
                     for operand in operands.iter().rev() {
-                        steps.push(Step::Enter(operand));
+                        steps.push(Step::Enter(operand))?;
                     }
                 }
                 Expression::Arithmetic(first, rest) => {
-                    steps.push(Step::Exit(expr, 1 + rest.len()));
+                    steps.push(Step::Exit(
+                        expr,
+                        rest.len()
+                            .checked_add(1)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ))?;
                     for (_, operand) in rest.iter().rev() {
-                        steps.push(Step::Enter(operand));
+                        steps.push(Step::Enter(operand))?;
                     }
-                    steps.push(Step::Enter(first));
+                    steps.push(Step::Enter(first))?;
                 }
                 Expression::Equal(a, b)
                 | Expression::SameTerm(a, b)
@@ -2604,38 +3205,47 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
                 | Expression::GreaterOrEqual(a, b)
                 | Expression::Less(a, b)
                 | Expression::LessOrEqual(a, b) => {
-                    steps.push(Step::Exit(expr, 2));
-                    steps.push(Step::Enter(b));
-                    steps.push(Step::Enter(a));
+                    steps.push(Step::Exit(expr, 2))?;
+                    steps.push(Step::Enter(b))?;
+                    steps.push(Step::Enter(a))?;
                 }
                 Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                    steps.push(Step::Exit(expr, 1));
-                    steps.push(Step::Enter(a));
+                    steps.push(Step::Exit(expr, 1))?;
+                    steps.push(Step::Enter(a))?;
                 }
                 Expression::If(condition, then, otherwise) => {
-                    steps.push(Step::Exit(expr, 3));
-                    steps.push(Step::Enter(otherwise));
-                    steps.push(Step::Enter(then));
-                    steps.push(Step::Enter(condition));
+                    steps.push(Step::Exit(expr, 3))?;
+                    steps.push(Step::Enter(otherwise))?;
+                    steps.push(Step::Enter(then))?;
+                    steps.push(Step::Enter(condition))?;
                 }
                 Expression::In(needle, haystack) => {
-                    steps.push(Step::Exit(expr, 1 + haystack.len()));
+                    steps.push(Step::Exit(
+                        expr,
+                        haystack
+                            .len()
+                            .checked_add(1)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ))?;
                     for item in haystack.iter().rev() {
-                        steps.push(Step::Enter(item));
+                        steps.push(Step::Enter(item))?;
                     }
-                    steps.push(Step::Enter(needle));
+                    steps.push(Step::Enter(needle))?;
                 }
                 Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
-                    steps.push(Step::Exit(expr, items.len()));
+                    steps.push(Step::Exit(expr, items.len()))?;
                     for item in items.iter().rev() {
-                        steps.push(Step::Enter(item));
+                        steps.push(Step::Enter(item))?;
                     }
                 }
             },
             Step::Exit(expr, count) => {
-                let at = values.len() - count;
+                let at = values
+                    .len()
+                    .checked_sub(count)
+                    .expect("every operand answered");
                 let answer = {
-                    let mut operands = values.drain(at..);
+                    let mut operands = values.drain_from(at);
                     // `COALESCE` qualifies when any argument does; every other operator
                     // when every operand does.
                     if matches!(expr, Expression::Coalesce(_)) {
@@ -2644,13 +3254,13 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
                         operands.all(|reads| reads)
                     }
                 };
-                values.push(answer);
+                values.push(answer)?;
             }
         }
     }
-    values
+    Ok(values
         .pop()
-        .expect("the root's answer is the last one computed")
+        .expect("the root's answer is the last one computed"))
 }
 
 /// Whether `function` is a type test: total over terms, answering a boolean.
@@ -2790,22 +3400,26 @@ pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> 
 /// `None` is what a constant that is never true (`false`, `0`, an IRI, which has no
 /// effective boolean value) answers for truth, and anything that reaches the outcome
 /// only through it inherits it: it absorbs a conjunction of requirements
-/// ([`all_of`]) and is the identity of an alternative between them ([`one_of`]). So
+/// ([`all_of_admitted`]) and is the identity of an alternative between them ([`one_of_admitted`]). So
 /// `IF(BOUND(?v), ?v = ?v, false)` is true only through its first branch, and needs
 /// `?v`.
+#[cfg(test)]
 type Requires = Option<DetHashSet<Variable>>;
 
 /// Needs nothing.
+#[cfg(test)]
 fn needs_nothing() -> Requires {
     Some(DetHashSet::default())
 }
 
 /// Needs `variable`.
+#[cfg(test)]
 fn needs(variable: &Variable) -> Requires {
     Some(std::iter::once(variable.clone()).collect())
 }
 
 /// Both requirements hold: the union, and never if either is never.
+#[cfg(test)]
 fn all_of(left: Requires, right: Requires) -> Requires {
     let (mut left, right) = (left?, right?);
     left.extend(right);
@@ -2814,6 +3428,7 @@ fn all_of(left: Requires, right: Requires) -> Requires {
 
 /// One of the requirements holds, and which is not known: the intersection, over the
 /// ones that can hold at all.
+#[cfg(test)]
 fn one_of(left: Requires, right: Requires) -> Requires {
     match (left, right) {
         (None, other) | (other, None) => other,
@@ -2824,7 +3439,42 @@ fn one_of(left: Requires, right: Requires) -> Requires {
     }
 }
 
-/// The outcome an expression is asked what it must have bound for — see [`Requires`].
+/// A reachable requirement owns its original schema; None means impossible.
+type AdmittedRequires = Option<VarSchema>;
+
+fn needs_admitted(
+    variable: &Variable,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    Ok(Some(VarSchema::from_vars_admitted(
+        std::iter::once(variable.clone()),
+        workspace,
+    )?))
+}
+
+fn all_of_admitted(
+    left: AdmittedRequires,
+    right: AdmittedRequires,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(None);
+    };
+    Ok(Some(left.union_admitted(&right, workspace)?))
+}
+
+fn one_of_admitted(
+    left: AdmittedRequires,
+    right: AdmittedRequires,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    match (left, right) {
+        (None, other) | (other, None) => Ok(other),
+        (Some(left), Some(right)) => Ok(Some(intersection_admitted(&left, &right, workspace)?)),
+    }
+}
+
+/// The outcome an expression is asked what it must have bound for — see [`AdmittedRequires`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
     /// TRUE — which a `FILTER` over the expression therefore binds in every row it
@@ -2886,9 +3536,9 @@ enum Outcome {
 /// How an operator's requirement is combined from its operands'.
 #[derive(Clone, Copy)]
 enum Combine {
-    /// Every operand's requirement holds: [`all_of`], folded from nothing needed.
+    /// Every operand's requirement holds: [`all_of_admitted`], folded from nothing needed.
     All,
-    /// One operand's requirement holds, and which is not known: [`one_of`], folded from
+    /// One operand's requirement holds, and which is not known: [`one_of_admitted`], folded from
     /// never.
     One,
     /// [`Self::One`] over the operands there are, or nothing needed when there are none —
@@ -2900,7 +3550,7 @@ enum Combine {
     Conditional,
 }
 
-/// One step of [`requires`]'s walk.
+/// One step of [`requires_admitted`]'s walk.
 enum RequirementStep<'e> {
     /// Ask `expr` what it needs to reach the outcome.
     Enter(&'e Expression, Outcome),
@@ -2909,28 +3559,74 @@ enum RequirementStep<'e> {
 }
 
 /// The variables `expr` must have bound to reach `outcome`, or `None` when it never does
-/// — see [`Requires`], and the rules on each [`Outcome`].
+/// — see [`AdmittedRequires`], and the rules on each [`Outcome`].
 ///
 /// A post-order walk over a work list, so an expression of any depth needs no more
 /// machine stack: an operator asks each operand what it needs in the mode that operand
 /// is read in, and combines the answers as its rule says.
+#[cfg(test)]
 fn requires(expr: &Expression, outcome: Outcome) -> Requires {
-    let mut steps = vec![RequirementStep::Enter(expr, outcome)];
-    let mut values: Vec<Requires> = Vec::new();
+    requires_admitted(expr, outcome, &WorkspaceCapability::default())
+        .expect("resident expression requirement allocation")
+        .map(|bound| bound.vars().iter().cloned().collect())
+}
+
+fn requires_admitted(
+    expr: &Expression,
+    outcome: Outcome,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(RequirementStep::Enter(expr, outcome))?;
+    let mut values = AdmittedVec::<AdmittedRequires>::new(workspace);
     while let Some(step) = steps.pop() {
         match step {
             RequirementStep::Enter(expr, outcome) => {
-                enter_requirement(expr, outcome, &mut steps, &mut values);
+                enter_requirement(expr, outcome, &mut steps, &mut values, workspace)?;
             }
             RequirementStep::Exit(combine, count) => {
-                let at = values.len() - count;
+                let at = values
+                    .len()
+                    .checked_sub(count)
+                    .expect("each requested outcome produced one requirement");
                 let combined = {
-                    let mut operands = values.drain(at..);
+                    let mut operands = values.drain_from(at);
                     match combine {
-                        Combine::All => operands.fold(needs_nothing(), all_of),
-                        Combine::One => operands.fold(None, one_of),
+                        Combine::All => {
+                            let mut required = SchemaBuilder::new(workspace);
+                            let mut possible = true;
+                            for operand in operands {
+                                match operand {
+                                    Some(bound) if possible => {
+                                        for variable in bound.vars() {
+                                            required.push(variable.clone())?;
+                                        }
+                                    }
+                                    None => possible = false,
+                                    Some(_) => {}
+                                }
+                            }
+                            if possible {
+                                Some(required.finish()?)
+                            } else {
+                                None
+                            }
+                        }
+                        Combine::One => {
+                            let mut combined = None;
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
+                        }
                         Combine::OneOrNothing => {
-                            operands.reduce(one_of).unwrap_or_else(needs_nothing)
+                            let mut combined = operands
+                                .next()
+                                .unwrap_or_else(|| Some(VarSchema::default()));
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
                         }
                         Combine::Conditional => {
                             let mut next = || {
@@ -2943,23 +3639,20 @@ fn requires(expr: &Expression, outcome: Outcome) -> Requires {
                             let then = next();
                             let condition_false = next();
                             let otherwise = next();
-                            all_of(
-                                condition_value,
-                                one_of(
-                                    all_of(condition_true, then),
-                                    all_of(condition_false, otherwise),
-                                ),
-                            )
+                            let then = all_of_admitted(condition_true, then, workspace)?;
+                            let otherwise = all_of_admitted(condition_false, otherwise, workspace)?;
+                            let branch = one_of_admitted(then, otherwise, workspace)?;
+                            all_of_admitted(condition_value, branch, workspace)?
                         }
                     }
                 };
-                values.push(combined);
+                values.push(combined)?;
             }
         }
     }
-    values
+    Ok(values
         .pop()
-        .expect("the root's requirement is the last one combined")
+        .expect("the root's requirement is the last one combined"))
 }
 
 /// Ask `expr` what it needs to reach `outcome`: a leaf's requirement is pushed onto
@@ -2968,19 +3661,22 @@ fn requires(expr: &Expression, outcome: Outcome) -> Requires {
 fn enter_requirement<'e>(
     expr: &'e Expression,
     outcome: Outcome,
-    steps: &mut Vec<RequirementStep<'e>>,
-    values: &mut Vec<Requires>,
-) {
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    values: &mut AdmittedVec<AdmittedRequires>,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
     let mut outcome = outcome;
     loop {
         match (outcome, expr) {
             (Outcome::Truth, Expression::Variable(variable) | Expression::Bound(variable)) => {
-                values.push(needs(variable));
+                values.push(needs_admitted(variable, workspace)?)?;
             }
-            (Outcome::Truth, Expression::Exists(_)) => values.push(needs_nothing()),
-            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None),
-            (Outcome::Truth, Expression::Literal(literal)) => values
-                .push((crate::expr::constant_ebv(literal) == Some(true)).then(DetHashSet::default)),
+            (Outcome::Truth, Expression::Exists(_)) => values.push(Some(VarSchema::default()))?,
+            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None)?,
+            (Outcome::Truth, Expression::Literal(literal)) => values.push(
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(true))
+                    .then(VarSchema::default),
+            )?,
             // A chain is its binary operator folded from the operator's identity, whose
             // requirement is the fold's: `true` (`&&`) needs nothing, `false` (`||`) is
             // never true.
@@ -2988,14 +3684,14 @@ fn enter_requirement<'e>(
                 steps,
                 Combine::All,
                 operands.iter().map(|operand| (operand, Outcome::Truth)),
-            ),
+            )?,
             (Outcome::Truth, Expression::Or(operands)) => push_operands(
                 steps,
                 Combine::One,
                 operands.iter().map(|operand| (operand, Outcome::Truth)),
-            ),
+            )?,
             (Outcome::Truth, Expression::Not(operand)) => {
-                steps.push(RequirementStep::Enter(operand, Outcome::Falsity));
+                steps.push(RequirementStep::Enter(operand, Outcome::Falsity))?;
             }
             (Outcome::Truth, Expression::FunctionCall(function, args))
                 if is_type_test(function) =>
@@ -3004,47 +3700,50 @@ fn enter_requirement<'e>(
                     steps,
                     Combine::All,
                     args.iter().map(|arg| (arg, Outcome::Value)),
-                );
+                )?;
             }
             (Outcome::Truth, Expression::Coalesce(items)) => push_operands(
                 steps,
                 Combine::One,
                 items.iter().map(|item| (item, Outcome::Truth)),
-            ),
-            (Outcome::Falsity, Expression::Variable(variable)) => values.push(needs(variable)),
-            (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
-                values.push(needs_nothing());
+            )?,
+            (Outcome::Falsity, Expression::Variable(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?;
             }
-            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None),
+            (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
+                values.push(Some(VarSchema::default()))?;
+            }
+            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None)?,
             (Outcome::Falsity, Expression::Literal(literal)) => values.push(
-                (crate::expr::constant_ebv(literal) == Some(false)).then(DetHashSet::default),
-            ),
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(false))
+                    .then(VarSchema::default),
+            )?,
             (Outcome::Falsity, Expression::FunctionCall(function, _)) if is_type_test(function) => {
-                values.push(needs_nothing());
+                values.push(Some(VarSchema::default()))?;
             }
             (Outcome::Falsity, Expression::Not(operand)) => {
-                steps.push(RequirementStep::Enter(operand, Outcome::Truth));
+                steps.push(RequirementStep::Enter(operand, Outcome::Truth))?;
             }
             (Outcome::Falsity, Expression::And(operands)) => push_operands(
                 steps,
                 Combine::One,
                 operands.iter().map(|operand| (operand, Outcome::Falsity)),
-            ),
+            )?,
             (Outcome::Falsity, Expression::Or(operands)) => push_operands(
                 steps,
                 Combine::All,
                 operands.iter().map(|operand| (operand, Outcome::Falsity)),
-            ),
+            )?,
             (Outcome::Falsity, Expression::Coalesce(items)) => push_operands(
                 steps,
                 Combine::One,
                 items.iter().map(|item| (item, Outcome::Falsity)),
-            ),
+            )?,
             (Outcome::Truth | Outcome::Falsity, Expression::If(condition, then, otherwise)) => {
-                push_conditional(steps, condition, then, otherwise, outcome);
+                push_conditional(steps, condition, then, otherwise, outcome)?;
             }
             (Outcome::Truth | Outcome::Falsity, Expression::In(needle, _)) => {
-                steps.push(RequirementStep::Enter(needle, Outcome::Value));
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
             }
             // Every other operator, comparison and function call reaches the outcome
             // only through a value, so it needs what it needs for one.
@@ -3064,14 +3763,16 @@ fn enter_requirement<'e>(
                 outcome = Outcome::Value;
                 continue;
             }
-            (Outcome::Value, Expression::Variable(variable)) => values.push(needs(variable)),
+            (Outcome::Value, Expression::Variable(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?;
+            }
             (
                 Outcome::Value,
                 Expression::NamedNode(_)
                 | Expression::Literal(_)
                 | Expression::Bound(_)
                 | Expression::Exists(_),
-            ) => values.push(needs_nothing()),
+            ) => values.push(Some(VarSchema::default()))?,
             (Outcome::Value, Expression::FunctionCall(function, args)) => push_operands(
                 steps,
                 Combine::All,
@@ -3079,7 +3780,7 @@ fn enter_requirement<'e>(
                     .enumerate()
                     .filter(|(position, _)| strict_in_argument(function, *position))
                     .map(|(_, arg)| (arg, Outcome::Value)),
-            ),
+            )?,
             // The pairwise `one_of`, folded; an empty chain is its identity constant,
             // which has a value for any row.
             (Outcome::Value, Expression::And(operands) | Expression::Or(operands)) => {
@@ -3087,7 +3788,7 @@ fn enter_requirement<'e>(
                     steps,
                     Combine::OneOrNothing,
                     operands.iter().map(|operand| (operand, Outcome::Value)),
-                );
+                )?;
             }
             (Outcome::Value, Expression::Arithmetic(first, rest)) => push_operands(
                 steps,
@@ -3095,7 +3796,7 @@ fn enter_requirement<'e>(
                 std::iter::once(&**first)
                     .chain(rest.iter().map(|(_, operand)| operand))
                     .map(|operand| (operand, Outcome::Value)),
-            ),
+            )?,
             (
                 Outcome::Value,
                 Expression::Equal(a, b)
@@ -3108,57 +3809,58 @@ fn enter_requirement<'e>(
                 steps,
                 Combine::All,
                 [(&**a, Outcome::Value), (&**b, Outcome::Value)].into_iter(),
-            ),
+            )?,
             (
                 Outcome::Value,
                 Expression::UnaryPlus(operand)
                 | Expression::UnaryMinus(operand)
                 | Expression::Not(operand),
-            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value)),
+            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value))?,
             (Outcome::Value, Expression::If(condition, then, otherwise)) => {
-                push_conditional(steps, condition, then, otherwise, Outcome::Value);
+                push_conditional(steps, condition, then, otherwise, Outcome::Value)?;
             }
             (Outcome::Value, Expression::Coalesce(items)) => push_operands(
                 steps,
                 Combine::One,
                 items.iter().map(|item| (item, Outcome::Value)),
-            ),
+            )?,
             (Outcome::Value, Expression::In(needle, _)) => {
-                steps.push(RequirementStep::Enter(needle, Outcome::Value));
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
             }
         }
-        return;
+        return Ok(());
     }
 }
 
 /// Push `operands` to be asked, in reading order, behind the step combining their
 /// requirements as `combine` says.
 fn push_operands<'e>(
-    steps: &mut Vec<RequirementStep<'e>>,
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
     combine: Combine,
     operands: impl Iterator<Item = (&'e Expression, Outcome)>,
-) {
+) -> Result<(), EvalError> {
     let exit = steps.len();
-    steps.push(RequirementStep::Exit(combine, 0));
+    steps.push(RequirementStep::Exit(combine, 0))?;
     for (operand, outcome) in operands {
-        steps.push(RequirementStep::Enter(operand, outcome));
+        steps.push(RequirementStep::Enter(operand, outcome))?;
     }
     let count = steps.len() - exit - 1;
-    steps[exit] = RequirementStep::Exit(combine, count);
+    steps.as_mut_slice()[exit] = RequirementStep::Exit(combine, count);
     // Pushed in reading order, so reversed to pop in it.
-    steps[exit + 1..].reverse();
+    steps.as_mut_slice()[exit + 1..].reverse();
+    Ok(())
 }
 
 /// Push an `IF`'s five operand requirements ([`Combine::Conditional`]): the condition's
 /// value, its truth, the first branch's `outcome`, the condition's falsity, and the
 /// second branch's `outcome`.
 fn push_conditional<'e>(
-    steps: &mut Vec<RequirementStep<'e>>,
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
     condition: &'e Expression,
     then: &'e Expression,
     otherwise: &'e Expression,
     outcome: Outcome,
-) {
+) -> Result<(), EvalError> {
     push_operands(
         steps,
         Combine::Conditional,
@@ -3170,38 +3872,64 @@ fn push_conditional<'e>(
             (otherwise, outcome),
         ]
         .into_iter(),
-    );
+    )
 }
 
 /// Add a triple pattern's variables, its nested quoted triples walked over a work list.
-fn collect_triple_vars(triple: &TriplePattern, out: &mut DetHashSet<Variable>) {
-    let mut pending = vec![triple];
+fn collect_triple_vars_admitted(
+    triple: &TriplePattern,
+    out: &mut SchemaBuilder,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(triple)?;
     while let Some(triple) = pending.pop() {
         for term in [&triple.subject, &triple.object] {
             match term {
                 TermPattern::Variable(variable) => {
-                    out.insert(variable.clone());
+                    out.push(variable.clone())?;
                 }
-                TermPattern::Triple(nested) => pending.push(nested),
+                TermPattern::Triple(nested) => pending.push(nested)?,
                 TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
                 }
             }
         }
         if let NamedNodePattern::Variable(variable) = &triple.predicate {
-            out.insert(variable.clone());
+            out.push(variable.clone())?;
         }
     }
+    Ok(())
 }
 
-/// Add a term position's variables, a quoted triple's through [`collect_triple_vars`].
-fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+/// Add a term position's variables through the same admitted nested-triple walk.
+fn collect_term_vars_admitted(
+    term: &TermPattern,
+    out: &mut SchemaBuilder,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
     match term {
         TermPattern::Variable(variable) => {
-            out.insert(variable.clone());
+            out.push(variable.clone())?;
         }
-        TermPattern::Triple(triple) => collect_triple_vars(triple, out),
+        TermPattern::Triple(triple) => collect_triple_vars_admitted(triple, out, workspace)?,
         TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
     }
+    Ok(())
+}
+
+#[cfg(test)]
+fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+    let workspace = WorkspaceCapability::default();
+    let mut bound = SchemaBuilder::new(&workspace);
+    collect_term_vars_admitted(term, &mut bound, &workspace).expect("resident term variable walk");
+    out.extend(
+        bound
+            .finish()
+            .expect("resident term variable schema")
+            .vars()
+            .iter()
+            .cloned(),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3259,7 +3987,7 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`EvalError::FunctionOperational`] if a registered relation's declaration methods panic —
 /// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged. Never
 /// raised when `relations` is empty (which [`PropertyFunctionRegistry::EMPTY`] — the
 /// canonical "no registry" value — always is): that case returns before any
@@ -3267,14 +3995,30 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 pub(crate) fn registry_fingerprint(
     relations: &PropertyFunctionRegistry,
 ) -> Result<String, EvalError> {
+    let capability = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    registry_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
+}
+
+/// Recompute the live declaration identity through its original physical account.
+pub(crate) fn registry_fingerprint_with_memory(
+    relations: &PropertyFunctionRegistry,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<String, EvalError> {
     if relations.is_empty() {
         return Ok(String::new());
     }
-    let mut out = String::new();
-    out.push_str(&relations.instance_id().stable_encoding().to_string());
-    out.push('\u{5}');
-    out.push_str(&content_fingerprint(relations)?.to_hex());
-    Ok(out)
+    let digest = content_fingerprint_with_memory(relations, memory)?;
+    memory
+        .format(&format_args!(
+            "{}\u{5}{digest}",
+            relations.instance_id().stable_encoding()
+        ))
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "relation fingerprint")
+        })
 }
 
 /// The domain separator every property-function content fingerprint opens with, so
@@ -3364,64 +4108,100 @@ const CONTENT_VERSION: u16 = 2;
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`EvalError::FunctionOperational`] if a registered relation's declaration methods panic —
 /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)'s
 /// own failure, propagated unchanged.
 pub fn content_fingerprint(
     relations: &PropertyFunctionRegistry,
 ) -> Result<ContentDigest, EvalError> {
-    let mut bytes = Vec::new();
-    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
-    append_framed_part(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes());
-    for descriptor in relations.describe()? {
-        append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
-        append_framed_part(
+    let capability = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
+}
+
+fn content_fingerprint_with_memory(
+    relations: &PropertyFunctionRegistry,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = relations.describe_admitted(&capability)?;
+    let result = (|| -> Result<ContentDigest, StorageError> {
+        let mut bytes = Vec::new();
+        append_framed_part_with_memory(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes(), memory)?;
+        append_framed_part_with_memory(
             &mut bytes,
-            "subject-arity",
-            &(descriptor.subject_arity as u64).to_be_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "object-arity",
-            &(descriptor.object_arity as u64).to_be_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "volatility",
-            descriptor.volatility.label().as_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "mode-count",
-            &(descriptor.modes.len() as u64).to_be_bytes(),
-        );
-        for mode in &descriptor.modes {
-            append_framed_part(&mut bytes, "mode-code", mode.code.as_bytes());
-            append_framed_part(
+            "version",
+            &CONTENT_VERSION.to_be_bytes(),
+            memory,
+        )?;
+        for descriptor in descriptors.iter() {
+            append_framed_part_with_memory(&mut bytes, "iri", descriptor.iri.as_bytes(), memory)?;
+            append_framed_part_with_memory(
                 &mut bytes,
-                "mode-rows",
-                &mode.rows_per_invocation.to_be_bytes(),
-            );
-        }
-        // The ranked-retrieval declaration the host supplied at registration. A
-        // producer's participation in fusion is a declaration exactly as arity,
-        // volatility and modes are: it decides whether a request can draw ranked
-        // candidates from this IRI at all, and under which stratum, ordering and
-        // duplicate guarantee they arrive. A relation registered without one
-        // contributes the fixed `NOT_RANKED_CANONICAL` description rather than
-        // nothing, so a producer that does not fuse still occupies the field and
-        // cannot be confused with one whose declaration was simply not read.
-        append_framed_part(
-            &mut bytes,
-            "ranked",
-            match descriptor.ranked.as_ref() {
-                None => NOT_RANKED_CANONICAL.to_owned(),
-                Some(declaration) => declaration.canonical_description(),
+                "subject-arity",
+                &(descriptor.subject_arity as u64).to_be_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "object-arity",
+                &(descriptor.object_arity as u64).to_be_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "volatility",
+                descriptor.volatility.label().as_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "mode-count",
+                &(descriptor.modes.len() as u64).to_be_bytes(),
+                memory,
+            )?;
+            for mode in &descriptor.modes {
+                append_framed_part_with_memory(
+                    &mut bytes,
+                    "mode-code",
+                    mode.code.as_bytes(),
+                    memory,
+                )?;
+                append_framed_part_with_memory(
+                    &mut bytes,
+                    "mode-rows",
+                    &mode.rows_per_invocation.to_be_bytes(),
+                    memory,
+                )?;
             }
-            .as_bytes(),
-        );
-    }
-    Ok(ContentDigest::of(&bytes))
+            match descriptor.ranked.as_ref() {
+                None => append_framed_part_with_memory(
+                    &mut bytes,
+                    "ranked",
+                    NOT_RANKED_CANONICAL.as_bytes(),
+                    memory,
+                )?,
+                Some(declaration) => {
+                    let spelling = memory.format(&declaration.canonical_display())?;
+                    append_framed_part_with_memory(
+                        &mut bytes,
+                        "ranked",
+                        spelling.as_bytes(),
+                        memory,
+                    )?;
+                    memory.release_string(spelling)?;
+                }
+            }
+        }
+        let digest = ContentDigest::of(&bytes);
+        memory.release_vec(bytes)?;
+        Ok(digest)
+    })();
+    result.map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "relation fingerprint")
+    })
 }
 
 #[cfg(test)]
@@ -3912,7 +4692,7 @@ mod content_fingerprint_tests {
     }
 }
 
-/// **The pushdown's promise is the pushdown's reach.** Under the ordinary rewrite a
+/// **The pushdown's promise is the pushdown's reach.** On every lane a
 /// declared parameter counts as bound at a call exactly where the run writes it into
 /// that call — so for every shape, a relation serving only the bound mode is admitted
 /// with the parameter declared if and only if the rewrite of the plan a free-capable
@@ -3939,7 +4719,6 @@ mod pushdown_reach_tests {
 
     use super::{parameter_set, plan_query};
     use crate::agg_fn::AggregateRegistry;
-    use crate::engine::ShaclPrebinding;
     use crate::error::EvalError;
     use crate::property_fn::{
         PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
@@ -4016,6 +4795,7 @@ mod pushdown_reach_tests {
             GraphPattern::PropertyFunction(call) => out.push(call),
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Minus { left, right } => {
                 calls(left, out);
@@ -4073,6 +4853,7 @@ mod pushdown_reach_tests {
             match pattern {
                 GraphPattern::Join { left, right }
                 | GraphPattern::Lateral { left, right }
+                | GraphPattern::Apply { left, right, .. }
                 | GraphPattern::LeftJoin { left, right, .. }
                 | GraphPattern::Minus { left, right } => strip(left) + strip(right),
                 GraphPattern::Union { arms } => arms.iter_mut().map(strip).sum(),
@@ -4101,7 +4882,7 @@ mod pushdown_reach_tests {
         (query, removed)
     }
 
-    /// Whether the ordinary rewrite of `body`'s plan writes `?q` into every call.
+    /// Whether the pre-binding rewrite of `body`'s plan writes `?q` into every call.
     fn rewrite_writes(body: &str) -> bool {
         rewrite_writes_in(parse(body), body)
     }
@@ -4114,11 +4895,10 @@ mod pushdown_reach_tests {
             &registry(&["bf", "ff"]),
             &AggregateRegistry::EMPTY,
             &parameters,
-            ShaclPrebinding::None,
         )
         .unwrap_or_else(|error| panic!("{body}: a free-capable relation is admitted: {error}"))
         .unwrap_or(query);
-        let rewritten = crate::substitute::apply_probes(
+        let rewritten = crate::substitute::apply_shacl_probes(
             planned,
             vec![(
                 Variable::new("q"),
@@ -4156,13 +4936,12 @@ mod pushdown_reach_tests {
             &registry(&["bf"]),
             &AggregateRegistry::EMPTY,
             &parameter_set(&["q"]),
-            ShaclPrebinding::None,
         )
         .is_ok()
     }
 
     #[test]
-    fn the_ordinary_promise_holds_exactly_where_the_rewrite_writes() {
+    fn the_promise_holds_exactly_where_the_rewrite_writes() {
         let call = format!("?q <{REL}> ?out");
         let atom = "?s <http://example.org/p> ?o";
         let other = "?s2 <http://example.org/p> ?o2";
@@ -4214,34 +4993,35 @@ mod pushdown_reach_tests {
                 ),
                 true,
             ),
-            // ... and where it is not: a sub-`SELECT` that does not project the
-            // variable, a slice beneath the projection, an `OPTIONAL` or a `MINUS` right
-            // arm inside the right side.
+            // ... and where the ordinary pushdown alone would not reach: a sub-`SELECT`
+            // that does not project the variable, a slice beneath the projection, an
+            // `OPTIONAL` or a `MINUS` right arm inside the right side. The one rewrite
+            // writes the parameter there too.
             (
                 format!("{atom} LATERAL {{ SELECT ?out WHERE {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!("{atom} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 }}"),
-                false,
+                true,
             ),
-            (format!("{atom} LATERAL {{ OPTIONAL {{ {call} }} }}"), false),
+            (format!("{atom} LATERAL {{ OPTIONAL {{ {call} }} }}"), true),
             (
                 format!("{atom} LATERAL {{ {other} OPTIONAL {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!("{atom} LATERAL {{ {other} MINUS {{ {call} }} }}"),
-                false,
+                true,
             ),
             (format!("{{ {atom} }} {{ {call} }}"), true),
             (format!("{{ {{ {call} }} }}"), true),
             (format!("{call} FILTER(?out != 1)"), true),
             (format!("BIND(1 AS ?one) {call}"), true),
             (format!("{call} OPTIONAL {{ {atom} }}"), true),
-            (format!("{atom} OPTIONAL {{ {call} }}"), false),
+            (format!("{atom} OPTIONAL {{ {call} }}"), true),
             (format!("{call} MINUS {{ {atom} }}"), true),
-            (format!("{atom} MINUS {{ {call} }}"), false),
+            (format!("{atom} MINUS {{ {call} }}"), true),
             (format!("{{ {call} }} UNION {{ {atom} }}"), true),
             (format!("GRAPH ?g {{ {call} }}"), true),
             (
@@ -4252,10 +5032,7 @@ mod pushdown_reach_tests {
                 format!("{atom} {{ SELECT ?q ?out WHERE {{ {call} }} }}"),
                 true,
             ),
-            (
-                format!("{atom} {{ SELECT ?out WHERE {{ {call} }} }}"),
-                false,
-            ),
+            (format!("{atom} {{ SELECT ?out WHERE {{ {call} }} }}"), true),
             (format!("VALUES ?w {{ 1 2 }} {call}"), true),
             (format!("{{ {call} }} LATERAL {{ BIND(1 AS ?one) }}"), true),
             // A `GROUP BY` beneath the core: entered for a key, whether the groups are
@@ -4281,30 +5058,30 @@ mod pushdown_reach_tests {
                 ),
                 true,
             ),
-            // ... and not for a variable only an expression key or an aggregate reads,
-            // or that no key names.
+            // ... and for a variable only an expression key or an aggregate reads, or that
+            // no key names: the rewrite writes it there too.
             (
                 format!(
                     "{atom} {{ SELECT ?k (COUNT(?out) AS ?n) WHERE {{ {call} }} \
                      GROUP BY (STR(?q) AS ?k) }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?out (COUNT(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!("{atom} {{ SELECT (COUNT(?q) AS ?n) WHERE {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?out (SAMPLE(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
         ];
         for (body, reaches) in &corpus {
@@ -4326,8 +5103,8 @@ mod pushdown_reach_tests {
     /// it — which from text already stops every variable that is not a key, so the
     /// corpus above alone could not tell "a key" from "any variable". Each shape's
     /// projection is removed, leaving the `GROUP BY` the first node between the core
-    /// and the call that can stop the rewrite; the rewrite and the promise must still
-    /// agree, and must still enter for a key and only for one.
+    /// and the call that could stop the rewrite; the rewrite and the promise must still
+    /// agree, and both reach the call whatever the keys are.
     #[test]
     fn the_group_by_rule_holds_without_a_projection_over_it() {
         let call = format!("?q <{REL}> ?out");
@@ -4351,24 +5128,24 @@ mod pushdown_reach_tests {
                 format!(
                     "{atom} {{ SELECT ?out (COUNT(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?out (SAMPLE(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!("{atom} {{ SELECT (COUNT(?q) AS ?n) WHERE {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?k (COUNT(?out) AS ?n) WHERE {{ {call} }} \
                      GROUP BY (STR(?q) AS ?k) }}"
                 ),
-                false,
+                true,
             ),
         ];
         for (body, reaches) in &corpus {
@@ -4380,7 +5157,7 @@ mod pushdown_reach_tests {
             assert_eq!(
                 rewrite_writes_in(query.clone(), body),
                 *reaches,
-                "{body}: the rewrite enters a GROUP BY for a key and only for one"
+                "{body}: the rewrite writes into a GROUP BY's input whatever its keys"
             );
             assert_eq!(
                 admitted_in(&query),
@@ -4418,31 +5195,6 @@ mod iterative_walk_tests {
 
     // ── The recursive references ───────────────────────────────────────────────────
 
-    /// The two promise transitions the references take on the borrowed form: the same
-    /// answers [`Prom::at_node`] and [`Prom::beyond_pushdown`] give on the stored one.
-    trait PromiseTransitions {
-        /// The promise at a node that is not a solution-modifier wrapper.
-        fn at_node(self) -> Self;
-        /// The promise at a position the pushdown does not write into.
-        fn beyond_pushdown(self) -> Self;
-    }
-
-    impl PromiseTransitions for Promise<'_> {
-        fn at_node(self) -> Self {
-            match self {
-                Self::Descent(parameters) => Self::Pushed(parameters),
-                other => other,
-            }
-        }
-
-        fn beyond_pushdown(self) -> Self {
-            match self {
-                Self::Everywhere(_) => self,
-                Self::None | Self::Descent(_) | Self::Pushed(_) => Self::None,
-            }
-        }
-    }
-
     /// Test-only recursive reference for `super::plan_pattern`.
     fn reference_plan_pattern(
         pattern: &GraphPattern,
@@ -4454,7 +5206,7 @@ mod iterative_walk_tests {
         // Compiler-produced algebra may be a bare call, without the parser's Lateral
         // wrapper. Apply the same admission as a chain member before cloning it.
         if let GraphPattern::PropertyFunction(call) = pattern {
-            let scope = call_scope(outer, promise.at_node());
+            let scope = call_scope(outer, promise);
             if admitted_row_bound(call, relations, &scope)?.is_none() {
                 return Err(stuck(
                     &[Atom {
@@ -4476,7 +5228,7 @@ mod iterative_walk_tests {
         if reference_collect_chain(pattern, &mut atoms)
             && atoms.iter().any(|atom| atom.call.is_some())
         {
-            return reference_order_chain(atoms, relations, agg_registry, outer, promise.at_node());
+            return reference_order_chain(atoms, relations, agg_registry, outer, promise);
         }
         reference_map_children(pattern, relations, agg_registry, outer, promise)
     }
@@ -4494,6 +5246,7 @@ mod iterative_walk_tests {
                 push_atom(node, Some(call), atoms);
                 true
             }
+            GraphPattern::Apply { .. } => false,
             GraphPattern::Join { left, right } => {
                 // A call under a `Join` rather than a `Lateral` would lose the dependency
                 // the `Lateral` encodes, so it is not treated as a chain member; the
@@ -4525,7 +5278,7 @@ mod iterative_walk_tests {
         }
     }
 
-    /// Test-only recursive reference for `super::order_chain`.
+    /// Test-only recursive reference for `super::order_chain_native`.
     fn reference_order_chain(
         atoms: Vec<Atom<'_>>,
         relations: &PropertyFunctionRegistry,
@@ -4641,16 +5394,8 @@ mod iterative_walk_tests {
         let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>, promise: Promise<'_>| {
             reference_plan_pattern(child, relations, agg_registry, outer, promise).map(Child::new)
         };
-        // A solution-modifier wrapper passes the descent on to its inner pattern; beneath
-        // the core, only the wrappers the pushdown descends pass on what it writes. See
-        // [`Promise`].
-        let wrapped = match promise {
-            Promise::Descent(_) | Promise::Everywhere(_) => promise,
-            Promise::None | Promise::Pushed(_) => Promise::None,
-        };
-        // The node itself, when it is not a wrapper: the core if the descent is still
-        // under way.
-        let here = promise.at_node();
+        // The one rewrite writes the parameters everywhere, so every part of the node
+        // inherits the same promise. See [`Promise`].
         Ok(match pattern {
             GraphPattern::Bgp { .. }
             | GraphPattern::Path { .. }
@@ -4661,9 +5406,57 @@ mod iterative_walk_tests {
             // binds: it sees what the enclosing context binds and no more. Only a `Lateral`
             // hands its right operand the left rows — which is why a call that depends on
             // an earlier atom is rebuilt through one (see [`reference_order_chain`]).
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                let mut certain = outer.clone();
+                reference_collect_bound(left, outer, promise.written(), &mut certain);
+                let mut right_scope = outer.clone();
+                let mut supplied = promise.for_calls().cloned().unwrap_or_default();
+                for (input, _) in &policy.inputs {
+                    right_scope.remove(input);
+                    supplied.remove(input);
+                }
+                for (input, driver) in &policy.inputs {
+                    if (certain.contains(driver) || promise.written().writes(driver))
+                        && policy.optional.as_ref().is_none_or(|optional| {
+                            optional
+                                .retry_inputs
+                                .iter()
+                                .any(|(retry_input, retry_driver)| {
+                                    retry_input == input
+                                        && (certain.contains(retry_driver)
+                                            || promise.written().writes(retry_driver))
+                                })
+                        })
+                    {
+                        right_scope.insert(input.clone());
+                        supplied.insert(input.clone());
+                    }
+                }
+                if let Some(optional) = &policy.optional {
+                    right_scope.insert(optional.forget_marker.clone());
+                    supplied.insert(optional.forget_marker.clone());
+                }
+                let optional = policy.optional.clone();
+                GraphPattern::Apply {
+                    left: recurse(left, outer, promise)?,
+                    right: recurse(right, &right_scope, Promise::Everywhere(&supplied))?,
+                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: policy.dataset_required,
+                        row_pipeline: policy.row_pipeline,
+                        reduced_adjacent: policy.reduced_adjacent,
+                        group_domain: policy.group_domain.clone(),
+                        inputs: policy.inputs.clone(),
+                        optional,
+                    }),
+                }
+            }
             GraphPattern::Join { left, right } => GraphPattern::Join {
-                left: recurse(left, outer, here)?,
-                right: recurse(right, outer, here)?,
+                left: recurse(left, outer, promise)?,
+                right: recurse(right, outer, promise)?,
             },
             // The right side of a `Lateral` is evaluated once per left row with that row in
             // hand, so it sees what the left side certainly binds. A `Lateral` whose right
@@ -4671,20 +5464,20 @@ mod iterative_walk_tests {
             // reaches this arm; any other right operand is one the pushdown recurses into.
             GraphPattern::Lateral { left, right } => {
                 let mut inner = outer.clone();
-                reference_collect_bound(left, outer, here.written(), &mut inner);
+                reference_collect_bound(left, outer, promise.written(), &mut inner);
                 GraphPattern::Lateral {
-                    left: recurse(left, outer, here)?,
+                    left: recurse(left, outer, promise)?,
                     // The pushdown enters every right operand too: it is re-evaluated per
                     // left row and inner-joined with it, so restricting a leaf inside it
                     // restricts the node (see `crate::substitute`'s `push_probes`).
-                    right: recurse(right, &inner, here)?,
+                    right: recurse(right, &inner, promise)?,
                 }
             }
             // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated independently
             // of the left and then matched against it, exactly as a `Join`'s right operand
             // is, so a call inside either sees only what the enclosing context binds. Their
             // own bindings do not escape as certain either, which `certainly_bound`
-            // accounts for. Neither right arm is one the pushdown writes into.
+            // accounts for.
             GraphPattern::LeftJoin {
                 left,
                 right,
@@ -4693,11 +5486,11 @@ mod iterative_walk_tests {
                 // The inline condition is evaluated only on candidate JOINED rows, so
                 // both sides' bindings are available to it.
                 let mut condition_scope = outer.clone();
-                reference_collect_bound(left, outer, here.written(), &mut condition_scope);
-                reference_collect_bound(right, outer, here.written(), &mut condition_scope);
+                reference_collect_bound(left, outer, promise.written(), &mut condition_scope);
+                reference_collect_bound(right, outer, promise.written(), &mut condition_scope);
                 GraphPattern::LeftJoin {
-                    left: recurse(left, outer, here)?,
-                    right: recurse(right, outer, promise.beyond_pushdown())?,
+                    left: recurse(left, outer, promise)?,
+                    right: recurse(right, outer, promise)?,
                     expression: expression
                         .as_ref()
                         .map(|expr| {
@@ -4706,19 +5499,20 @@ mod iterative_walk_tests {
                                 relations,
                                 agg_registry,
                                 &condition_scope,
-                                promise.beyond_pushdown(),
+                                promise,
                             )
                         })
                         .transpose()?,
                 }
             }
             GraphPattern::Minus { left, right } => GraphPattern::Minus {
-                left: recurse(left, outer, here)?,
-                right: recurse(right, outer, promise.beyond_pushdown())?,
+                left: recurse(left, outer, promise)?,
+                right: recurse(right, outer, promise)?,
             },
             // A `UNION` branch cannot rely on its sibling.
             GraphPattern::Union { arms } => GraphPattern::Union {
-                arms: arms.try_map_ref(|arm| recurse(arm, outer, here).map(Child::into_inner))?,
+                arms: arms
+                    .try_map_ref(|arm| recurse(arm, outer, promise).map(Child::into_inner))?,
             },
             // A `FILTER`'s expression is evaluated over the rows its inner pattern
             // produced, so an `EXISTS` inside it sees everything that pattern certainly
@@ -4733,7 +5527,7 @@ mod iterative_walk_tests {
                         relations,
                         agg_registry,
                         &scope,
-                        promise.beyond_pushdown(),
+                        promise,
                     )?,
                     // The pushdown descends a `FILTER` beneath the core as well as above it.
                     inner: recurse(inner, outer, promise)?,
@@ -4746,29 +5540,15 @@ mod iterative_walk_tests {
             } => {
                 let mut scope = outer.clone();
                 reference_collect_bound(inner, outer, promise.written(), &mut scope);
-                // The pushdown descends a `BIND` beneath the core as well as above it, and
-                // does not carry the variable the `BIND` itself binds into its operand.
-                let narrowed: DetHashSet<Variable>;
-                let into = match promise {
-                    Promise::Pushed(parameters) if parameters.contains(variable) => {
-                        narrowed = parameters
-                            .iter()
-                            .filter(|parameter| *parameter != variable)
-                            .cloned()
-                            .collect();
-                        Promise::Pushed(&narrowed)
-                    }
-                    other => other,
-                };
                 GraphPattern::Extend {
-                    inner: recurse(inner, outer, into)?,
+                    inner: recurse(inner, outer, promise)?,
                     variable: variable.clone(),
                     expression: reference_plan_expression(
                         expression,
                         relations,
                         agg_registry,
                         &scope,
-                        promise.beyond_pushdown(),
+                        promise,
                     )?,
                 }
             }
@@ -4781,13 +5561,13 @@ mod iterative_walk_tests {
                 let mut scope = outer.clone();
                 reference_collect_bound(inner, outer, promise.written(), &mut scope);
                 GraphPattern::Unfold {
-                    inner: recurse(inner, outer, wrapped)?,
+                    inner: recurse(inner, outer, promise)?,
                     expression: reference_plan_expression(
                         expression,
                         relations,
                         agg_registry,
                         &scope,
-                        promise.beyond_pushdown(),
+                        promise,
                     )?,
                     element: element.clone(),
                     companion: companion.clone(),
@@ -4795,7 +5575,7 @@ mod iterative_walk_tests {
             }
             GraphPattern::Graph { name, inner } => GraphPattern::Graph {
                 name: name.clone(),
-                inner: recurse(inner, outer, here)?,
+                inner: recurse(inner, outer, promise)?,
             },
             GraphPattern::OrderBy { inner, expression } => {
                 let mut scope = outer.clone();
@@ -4813,7 +5593,7 @@ mod iterative_walk_tests {
                                         relations,
                                         agg_registry,
                                         &scope,
-                                        promise.beyond_pushdown(),
+                                        promise,
                                     )?)
                                 }
                                 OrderExpression::Desc(expr) => {
@@ -4822,7 +5602,7 @@ mod iterative_walk_tests {
                                         relations,
                                         agg_registry,
                                         &scope,
-                                        promise.beyond_pushdown(),
+                                        promise,
                                     )?)
                                 }
                             })
@@ -4842,31 +5622,10 @@ mod iterative_walk_tests {
             // parameters it projects: a projected variable is the same variable inside, and
             // restricting the inner rows restricts the output the same way. A parameter it
             // does not project is a different variable inside, and nothing is promised for it.
-            GraphPattern::Project { inner, variables } => {
-                let projected: DetHashSet<Variable>;
-                let into = match promise {
-                    Promise::Pushed(parameters)
-                        if parameters
-                            .iter()
-                            .all(|parameter| variables.contains(parameter)) =>
-                    {
-                        promise
-                    }
-                    Promise::Pushed(parameters) => {
-                        projected = narrowed_to(parameters, variables);
-                        if projected.is_empty() {
-                            Promise::None
-                        } else {
-                            Promise::Pushed(&projected)
-                        }
-                    }
-                    other => other,
-                };
-                GraphPattern::Project {
-                    inner: recurse(inner, &narrowed_to(outer, variables), into)?,
-                    variables: variables.clone(),
-                }
-            }
+            GraphPattern::Project { inner, variables } => GraphPattern::Project {
+                inner: recurse(inner, &narrowed_to(outer, variables), promise)?,
+                variables: variables.clone(),
+            },
             // Row-for-row wrappers the pushdown enters beneath the core as well as above it.
             GraphPattern::Distinct { inner } => GraphPattern::Distinct {
                 inner: recurse(inner, outer, promise)?,
@@ -4879,7 +5638,7 @@ mod iterative_walk_tests {
                 start,
                 length,
             } => GraphPattern::Slice {
-                inner: recurse(inner, outer, wrapped)?,
+                inner: recurse(inner, outer, promise)?,
                 start: *start,
                 length: *length,
             },
@@ -4890,31 +5649,8 @@ mod iterative_walk_tests {
             } => {
                 let mut scope = outer.clone();
                 reference_collect_bound(inner, outer, promise.written(), &mut scope);
-                // Beneath the core the pushdown enters a `GROUP BY` for exactly the
-                // parameters that are its keys (`crate::substitute::group_key_carries`, the
-                // one definition both sides read): the rows it removes are whole groups
-                // keyed by some other term, whose output rows the seed join drops anyway. A
-                // parameter only an aggregate or an expression key reads is not promised.
-                let keyed: DetHashSet<Variable>;
-                let into = match promise {
-                    Promise::Pushed(parameters) => {
-                        keyed = parameters
-                            .iter()
-                            .filter(|parameter| {
-                                crate::substitute::group_key_carries(variables, parameter)
-                            })
-                            .cloned()
-                            .collect();
-                        if keyed.is_empty() {
-                            Promise::None
-                        } else {
-                            Promise::Pushed(&keyed)
-                        }
-                    }
-                    other => other,
-                };
                 GraphPattern::Group {
-                    inner: recurse(inner, outer, into)?,
+                    inner: recurse(inner, outer, promise)?,
                     variables: variables.clone(),
                     aggregates: aggregates
                         .iter()
@@ -4926,7 +5662,7 @@ mod iterative_walk_tests {
                                     relations,
                                     agg_registry,
                                     &scope,
-                                    promise.beyond_pushdown(),
+                                    promise,
                                 )?,
                             ))
                         })
@@ -4934,7 +5670,7 @@ mod iterative_walk_tests {
                 }
             }
             // A `SERVICE` body is forwarded to a remote endpoint rather than evaluated
-            // here, and `crate::remote` refuses to forward a call at all — so its body is
+            // promise, and `crate::remote` refuses to forward a call at all — so its body is
             // left exactly as written.
             GraphPattern::Service {
                 name,
@@ -4971,17 +5707,14 @@ mod iterative_walk_tests {
         Ok(match expr {
             // A correlated `EXISTS` sees its enclosing group's bindings, so `outer` carries
             // straight in: that is what lets a relation inside one be invoked bound. A
-            // prepared execution's parameters are in `outer` here exactly when the rows the
-            // expression is evaluated over carry them (see [`Promise::in_rows`]); the
-            // pushdown never writes into an `EXISTS` body, so nothing more is promised —
-            // unless the SHACL pre-binding rewrite runs, which binds them in every call
-            // everywhere (see [`Promise::Everywhere`]).
+            // prepared execution's parameters reach it too: the rewrite binds them in every
+            // call everywhere (see [`Promise::Everywhere`]).
             Expression::Exists(pattern) => Expression::Exists(Child::new(reference_plan_pattern(
                 pattern,
                 relations,
                 agg_registry,
                 outer,
-                promise.beyond_pushdown(),
+                promise,
             )?)),
             Expression::Or(operands) => Expression::Or(operands.try_map_ref(|operand| {
                 reference_plan_expression(operand, relations, agg_registry, outer, promise)
@@ -5139,7 +5872,7 @@ mod iterative_walk_tests {
         written: Written<'_>,
         out: &mut DetHashSet<Variable>,
     ) {
-        let beneath = written.beneath();
+        let beneath = written;
         match pattern {
             GraphPattern::Bgp { patterns } => {
                 for triple in patterns {
@@ -5160,6 +5893,26 @@ mod iterative_walk_tests {
                 for term in call.subject_args.iter().chain(&call.object_args) {
                     reference_collect_term_vars(term, out);
                 }
+            }
+            GraphPattern::Apply { left, right, policy } => {
+                let mut left_bound = DetHashSet::default();
+                reference_collect_bound(left, context, beneath, &mut left_bound);
+                if policy.optional.is_none() {
+                    let mut right_context = context.clone();
+                    let mut supplied = beneath.everywhere.cloned().unwrap_or_default();
+                    for (input, _) in &policy.inputs {
+                        right_context.remove(input);
+                        supplied.remove(input);
+                    }
+                    for (input, driver) in &policy.inputs {
+                        if left_bound.contains(driver) || context.contains(driver) || beneath.writes(driver) {
+                            right_context.insert(input.clone());
+                            supplied.insert(input.clone());
+                        }
+                    }
+                    reference_collect_bound(right, &right_context, Written { everywhere: Some(&supplied) }, out);
+                }
+                out.extend(left_bound);
             }
             GraphPattern::Join { left, right } => {
                 reference_collect_bound(left, context, beneath, out);
@@ -5300,13 +6053,6 @@ mod iterative_walk_tests {
             }
             // A remote endpoint may omit a column, so it promises nothing.
             GraphPattern::Service { .. } => {}
-        }
-        // The core the seed is joined onto — the first node that is not a wrapper — binds
-        // the seed's parameters in every row it produces.
-        if let Some(seed) = written.seed
-            && !is_descent_wrapper(pattern)
-        {
-            out.extend(seed.iter().cloned());
         }
     }
 
@@ -5841,7 +6587,15 @@ mod iterative_walk_tests {
                 return self.leaf();
             }
             *budget -= 1;
-            match self.below(19) {
+            match self.below(20) {
+                19 => GraphPattern::Apply {
+                    left: self.child(budget),
+                    right: self.child(budget),
+                    policy: crate::rdflib::test_application_policy(
+                        vec![(self.variable(), self.variable())],
+                        self.one_in(2),
+                    ),
+                },
                 0 => GraphPattern::Join {
                     left: self.child(budget),
                     right: self.child(budget),
@@ -6167,8 +6921,6 @@ mod iterative_walk_tests {
             let outer = choices.set(2);
             let parameters = choices.set(3);
             assert_plans_agree(&pattern, &outer, Promise::None, seed);
-            assert_plans_agree(&pattern, &outer, Promise::Descent(&parameters), seed);
-            assert_plans_agree(&pattern, &outer, Promise::Pushed(&parameters), seed);
             assert_plans_agree(&pattern, &outer, Promise::Everywhere(&parameters), seed);
         }
     }
@@ -6184,15 +6936,6 @@ mod iterative_walk_tests {
             let writes = [
                 Written::NOTHING,
                 Written {
-                    seed: Some(&parameters),
-                    everywhere: None,
-                },
-                Written {
-                    seed: None,
-                    everywhere: Some(&parameters),
-                },
-                Written {
-                    seed: Some(&parameters),
                     everywhere: Some(&parameters),
                 },
             ];
@@ -6206,6 +6949,168 @@ mod iterative_walk_tests {
                     "seed {seed}, writes {which}: the same variables are certainly bound"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn contextual_input_shadowing_survives_nested_projection_and_retry() {
+        let input = Variable::new("input");
+        let driver = Variable::new("driver");
+        let parent_driver = Variable::new("parent_driver");
+        let output = Variable::new("output");
+        let iri = GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/value"));
+        let inherited = DetHashSet::from_iter([input.clone()]);
+        for (first, retry, optional, expected) in [
+            (false, false, false, false),
+            (true, true, false, true),
+            (true, false, true, false),
+            (true, true, true, true),
+        ] {
+            let retry_driver = Variable::new("retry_driver");
+            let mut policy = crate::rdflib::test_application_policy(
+                vec![(input.clone(), driver.clone())],
+                optional,
+            );
+            if let Some(optional) = &mut policy.optional {
+                optional.retry_inputs = vec![(input.clone(), retry_driver.clone())];
+            }
+            let projected = GraphPattern::Project {
+                inner: Child::new(GraphPattern::Lateral {
+                    left: Child::new(GraphPattern::Extend {
+                        inner: Child::new(GraphPattern::empty_bgp()),
+                        variable: output.clone(),
+                        expression: Expression::Variable(input.clone()),
+                    }),
+                    right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                        iri: REL_BOUND.to_owned(),
+                        subject_args: vec![TermPattern::Variable(output.clone())],
+                        object_args: vec![TermPattern::Variable(Variable::new("answer"))],
+                    })),
+                }),
+                variables: vec![output.clone()],
+            };
+            let nested = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![driver.clone(), retry_driver],
+                    bindings: vec![vec![first.then(|| iri.clone()), retry.then(|| iri.clone())]],
+                }),
+                right: Child::new(projected),
+                policy,
+            };
+            // An outer mapped value and a prepared parameter both supply `input`,
+            // but the inner declared input shadows them even when its driver is UNDEF.
+            let pattern = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![parent_driver.clone()],
+                    bindings: vec![vec![Some(iri.clone())]],
+                }),
+                right: Child::new(nested),
+                policy: crate::rdflib::test_application_policy(
+                    vec![(input.clone(), parent_driver.clone())],
+                    false,
+                ),
+            };
+            assert_eq!(
+                plan_pattern(
+                    &pattern,
+                    &relations(),
+                    &aggregates(),
+                    &inherited,
+                    Promise::Everywhere(&inherited)
+                )
+                .is_ok(),
+                expected
+            );
+            assert_plans_agree(&pattern, &inherited, Promise::Everywhere(&inherited), 0);
+            let mut certainty = pattern;
+            let GraphPattern::Apply { right: nested, .. } = &mut certainty else {
+                unreachable!()
+            };
+            let GraphPattern::Apply {
+                right: projected, ..
+            } = &mut **nested
+            else {
+                unreachable!()
+            };
+            let GraphPattern::Project { inner, .. } = &mut **projected else {
+                unreachable!()
+            };
+            let GraphPattern::Lateral { left, .. } = &**inner else {
+                unreachable!()
+            };
+            *inner = left.clone();
+            let written = Written {
+                everywhere: Some(&inherited),
+            };
+            let mut iterative = DetHashSet::default();
+            collect_bound(&certainty, &inherited, written, &mut iterative);
+            let mut recursive = DetHashSet::default();
+            reference_collect_bound(&certainty, &inherited, written, &mut recursive);
+            assert_eq!(iterative, recursive);
+            assert_eq!(iterative.contains(&output), first && !optional);
+        }
+    }
+
+    #[test]
+    fn contextual_inputs_drive_certain_bindings_and_downstream_call_admission() {
+        let driver = Variable::new("driver");
+        let input = Variable::new("renamed_input");
+        let output = Variable::new("output");
+        for (left_bound, outer_bound, optional, expected) in [
+            (true, false, false, true),
+            (false, true, false, true),
+            (false, false, false, false),
+            (true, false, true, false),
+        ] {
+            let application = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![driver.clone()],
+                    bindings: vec![vec![left_bound.then(|| {
+                        GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/value"))
+                    })]],
+                }),
+                right: Child::new(GraphPattern::Project {
+                    inner: Child::new(GraphPattern::Extend {
+                        inner: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                        variable: output.clone(),
+                        expression: Expression::Variable(input.clone()),
+                    }),
+                    variables: vec![output.clone()],
+                }),
+                policy: crate::rdflib::test_application_policy(
+                    vec![(input.clone(), driver.clone())],
+                    optional,
+                ),
+            };
+            let mut context = DetHashSet::default();
+            if outer_bound {
+                context.insert(driver.clone());
+            }
+            let mut bound = DetHashSet::default();
+            collect_bound(&application, &context, Written::NOTHING, &mut bound);
+            assert_eq!(bound.contains(&output), expected);
+            let consumer = GraphPattern::Lateral {
+                left: Child::new(application),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: REL_BOUND.to_owned(),
+                    subject_args: vec![TermPattern::Variable(output.clone())],
+                    object_args: vec![TermPattern::Variable(Variable::new("answer"))],
+                })),
+            };
+            assert_eq!(
+                plan_pattern(
+                    &consumer,
+                    &relations(),
+                    &aggregates(),
+                    &context,
+                    Promise::None
+                )
+                .is_ok(),
+                expected,
+                "{left_bound}/{outer_bound}/{optional}"
+            );
         }
     }
 
@@ -6293,7 +7198,7 @@ mod iterative_walk_tests {
     // ── Depth ──────────────────────────────────────────────────────────────────────
 
     /// A hundred thousand `DISTINCT` wrappers over one admitted call: planned, on a
-    /// 128 KiB stack, to the same plan under no promise and under a descent, and bound
+    /// 128 KiB stack, to the same plan under no promise and under every parameter, and bound
     /// to the call's arguments.
     #[test]
     fn a_hundred_thousand_wrappers_are_planned_and_bound_on_a_128_kib_thread() {
@@ -6308,7 +7213,7 @@ mod iterative_walk_tests {
             let aggregates = aggregates();
             let outer = DetHashSet::default();
             let parameters = set(&["a"]);
-            for promise in [Promise::None, Promise::Descent(&parameters)] {
+            for promise in [Promise::None, Promise::Everywhere(&parameters)] {
                 let planned = plan_pattern(&pattern, &relations, &aggregates, &outer, promise)
                     .unwrap_or_else(|error| panic!("{promise:?}: the call is admitted: {error}"));
                 let mut depth = 0;
@@ -6353,22 +7258,6 @@ mod iterative_walk_tests {
             let mut bound = DetHashSet::default();
             collect_certainly_bound(&pattern, &mut bound);
             assert_eq!(bound, set(&["a", "b"]));
-            let mut seeded = DetHashSet::default();
-            let parameters = set(&["q"]);
-            collect_bound(
-                &pattern,
-                &DetHashSet::default(),
-                Written {
-                    seed: Some(&parameters),
-                    everywhere: None,
-                },
-                &mut seeded,
-            );
-            assert_eq!(
-                seeded,
-                set(&["a", "b", "q"]),
-                "the seed reaches the core beneath every wrapper"
-            );
         })
         .expect("spawn");
     }

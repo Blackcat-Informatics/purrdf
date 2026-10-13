@@ -32,11 +32,10 @@
 //! Folding the pull into the core would force one of those two shapes onto the other.
 //! The core is the **admission** step; the producers keep their own loops.
 
-use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
+use purrdf_core::{DatasetView, TrippedGovernor};
 
 use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
-use crate::solution::Solution;
 
 /// The verdict of [`GovernedRowIngest::admit`] for one candidate row.
 #[derive(Debug)]
@@ -149,23 +148,22 @@ impl GovernedRowIngest {
     pub(crate) fn intern_row<D: DatasetView + Sync>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        cells: impl IntoIterator<Item = Option<TermValue>>,
-    ) -> Result<Solution<D::Id>, crate::EvalError> {
-        let mut row: Solution<D::Id> = purrdf_core::smallvec![None; self.width];
-        for (i, cell) in cells.into_iter().enumerate().take(self.width) {
-            if let Some(value) = cell {
-                // THE producer seam — a third-party `ServiceResolver`'s rows
-                // reach the arena here, so it is the CHECKED door, not the plain
-                // `intern`. It returns `None` for a value carrying a language
-                // tag the grammar refuses, and this
-                // function's contract already is that "missing cells stay
-                // unbound": a cell no writer could spell is exactly such a cell.
-                row[i] = ctx
-                    .scratch
-                    .try_intern_checked(ctx.dataset, value)
-                    .map_err(crate::EvalError::source_read)?;
+        cells: impl IntoIterator<Item = Option<crate::WorkspaceTerm>>,
+    ) -> Result<crate::solution::RetainedRow<D::Id>, crate::EvalError> {
+        let growth = ctx.growth.clone();
+        crate::solution::RetainedRow::try_build(self.width, &growth, |row| {
+            for (i, cell) in cells.into_iter().enumerate().take(self.width) {
+                if let Some(value) = cell {
+                    // THE producer seam — a third-party `ServiceResolver`'s rows
+                    // reach the arena here, so it is the CHECKED door, not the plain
+                    // `intern`. It returns `None` for a value carrying a language
+                    // tag the grammar refuses, and this
+                    // function's contract already is that "missing cells stay
+                    // unbound": a cell no writer could spell is exactly such a cell.
+                    row[i] = ctx.intern_workspace_term(value)?;
+                }
             }
-        }
-        Ok(row)
+            Ok(())
+        })
     }
 }

@@ -52,7 +52,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 PURRDF_RATCHET_BASE ?= origin/main
 
 .PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri geo-determinism geodtest
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
 # byte-reproducible across machines. GitHub uses a separately reviewed summary.
@@ -139,7 +139,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
 	python3 scripts/check-doc-claims.py
-	python3 scripts/check-i18n-glossary.py
+	cargo run -q --locked -p helper-census -- --glossary-gate
 	python3 scripts/check-versions.py
 	python3 scripts/check-release-notes.py --self-test
 	python3 scripts/check-release-notes.py
@@ -169,7 +169,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
-	cargo test --workspace --locked
+	cargo test --workspace --locked --no-fail-fast
 	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
@@ -184,7 +184,7 @@ check-spec-attribution: ## Reject attributing a first-party extension (the quad 
 	python3 scripts/check-spec-attribution.py --self-test
 
 check-i18n: ## Gate the zh-Hans translation: the glossary, then render it and run the prose gates + the SPARQL fence parser over the rendering (needs mdbook + the pinned mdbook-i18n-helpers).
-	python3 scripts/check-i18n-glossary.py
+	cargo run -q --locked -p helper-census -- --glossary-gate
 	python3 scripts/check-i18n-render.py --self-test
 
 changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.
@@ -272,17 +272,18 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 test: node-prerequisite binaryen-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..4).
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..5).
 	@case "$(SHARD)" in \
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
 			&& cargo build --workspace --locked --examples --profile test \
 			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
-		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
+		integration-2) set -x; cargo test --workspace --locked --test '[e-j]*' ;; \
 		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
 		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
-		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..4" >&2; exit 1 ;; \
+		integration-5) set -x; cargo test --workspace --locked --test '[k-o]*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..5" >&2; exit 1 ;; \
 	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
@@ -300,7 +301,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 31 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 33 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -324,8 +325,20 @@ book-samples: ## Regenerate deterministic SVG visualization samples embedded in 
 book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book
 
-book-zh: ## Build the zh-Hans book into docs/book/book/zh-Hans/ (after `book`; search off — see book.toml).
-	MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false mdbook build -d docs/book/book/zh-Hans docs/book
+# Where `book-zh` writes and the URL path it is served under. The defaults are the
+# GitHub Pages fold (/purrdf/zh-Hans/). Pages link each other relatively, so the
+# output works under any path; mdBook needs the served path only for its 404 page,
+# which links assets absolutely from it. A mirror that serves the book elsewhere
+# passes both: `make book-zh BOOK_ZH_DIR=/srv/book/zh BOOK_ZH_SITE_URL=/book/zh/`
+# (an absolute BOOK_ZH_DIR, or a path relative to the repository root).
+BOOK_ZH_DIR ?= docs/book/book/zh-Hans
+BOOK_ZH_SITE_URL ?= /purrdf/zh-Hans/
+
+book-zh: ## Build the zh-Hans book into $(BOOK_ZH_DIR), served at $(BOOK_ZH_SITE_URL) (after `book`; search off — see book.toml).
+	@case "$(BOOK_ZH_SITE_URL)" in /|/*/) ;; *) echo "book-zh: BOOK_ZH_SITE_URL must start and end with '/' (got '$(BOOK_ZH_SITE_URL)')" >&2; exit 2;; esac
+	MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false \
+		MDBOOK_OUTPUT__HTML__SITE_URL='$(BOOK_ZH_SITE_URL)' \
+		mdbook build -d "$(abspath $(BOOK_ZH_DIR))" docs/book
 
 book-pot: ## Extract the translation template docs/book/po/messages.pot (ignored) from the English book.
 	MDBOOK_OUTPUT='{"xgettext": {"pot-file": "messages.pot"}}' mdbook build -d docs/book/po docs/book
@@ -340,7 +353,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run the purrdf_testkit::bench suites (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-geo-kernel -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -440,6 +453,7 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	cargo run -q --locked -p helper-census -- --python-binding-tests
 	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+	cd bindings/python && PURRDF_TEST_REQUIRE_EXACT=1 uv run --locked cargo test --manifest-path ../../Cargo.toml --locked -p purrdf-cli --test python_empty_graphs -- --ignored --exact installed_empty_graph_modes
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised
@@ -514,19 +528,16 @@ cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetche
 	python3 scripts/cnschema-probe.py --self-test
 	python3 scripts/cnschema-probe.py
 
-# The LUBM and WatDiv artifacts are NEVER vendored: the LUBM generator is
-# GPL-2.0-or-later, its ontology and query file publish no licence grant at all,
-# and WatDiv grants use-with-citation rather than redistribution. They are
-# fetched by digest into target/bench-artifacts/ at the moment of use. Run
-# `python3 scripts/benchmark-acquire.py --list` to read each artifact's terms.
+# External LUBM ontology/queries and WatDiv artifacts are acquired by digest into
+# an ignored cache; the university corpus generator is original first-party Rust.
+# Read each external artifact use term with benchmark-acquire.py --list.
 benchmark-acquire: ## Fetch the pinned LUBM and WatDiv comparison-workload artifacts by digest into target/ (network; nothing is vendored; not a CI gate).
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/benchmark-acquire.py
 
 # The LUBM comparison lane's knobs. Overridable exactly like SCALE_* above:
-# `make lubm LUBM_UNIVERSITIES=5`. The default is ONE university (~103k triples),
-# which is small enough to run in seconds and is the size whose per-query answers
-# the LUBM literature publishes, so a first run can be checked against it.
+# `make lubm LUBM_UNIVERSITIES=5`. Native answers are verified from actual RDF
+# graph sets; historical generator counts are not this profile oracle.
 #
 # LUBM_DOC_BASE is the base each generated document's own two header triples
 # resolve against. It has a default because leaving it unset would silently embed
@@ -539,6 +550,7 @@ LUBM_INDEX ?= 0
 LUBM_ONTO ?= http://swat.cse.lehigh.edu/onto/univ-bench.owl
 LUBM_DOC_BASE ?= http://example.org/lubm/
 LUBM_ENTAIL_SLICE ?= 3000
+LUBM_MAX_JOIN_STEPS ?= 100000000
 LUBM_OUT ?= target/lubm
 LUBM_BIN ?=
 
@@ -546,7 +558,7 @@ LUBM_BIN ?=
 # backtick in `LUBM_OUT` used to run and the lane then worked in a directory
 # nobody named. None of these knobs is a command, so none of them reaches a
 # shell at all.
-$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
+$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_MAX_JOIN_STEPS LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
 
 lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
 	@bash scripts/lubm-lane.sh
@@ -586,8 +598,8 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-events -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-stack -p purrdf-ed25519 -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
-			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
-			-p purrdf-geo -p purrdf-text -p purrdf-retrieval \
+			-p purrdf-rdf -p purrdf-markdown -p purrdf-mime -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
+			-p purrdf-geo -p purrdf-geo-kernel -p purrdf-text -p purrdf-retrieval \
 			-p purrdf-validate -p purrdf -p purrdf-wasm \
 			-p purrdf-bench; \
 	elif [ -n "$${CI:-}" ]; then \
@@ -667,6 +679,22 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 # `--config NAME --report FILE` per configuration, then one
 # `--merge-reports DIR` that requires seven matching successful reports and
 # checks the document against them. Empty measures the complete matrix.
+geo-determinism: node-prerequisite ## Compare frozen numerical, geometry and cell transcripts on native and both actual WASM builds.
+	cargo run --locked --profile release -p purrdf-geo-kernel --example qualify_determinism
+
+GEODTEST_INPUT ?=
+GEODTEST_WORK ?= standard
+GEODTEST_BACKEND ?= portable
+export GEODTEST_INPUT := $(value GEODTEST_INPUT)
+export GEODTEST_WORK := $(value GEODTEST_WORK)
+export GEODTEST_BACKEND := $(value GEODTEST_BACKEND)
+geodtest: ## Qualify every distance/inverse/direct record in the pinned 500,000-row public corpus (GEODTEST_INPUT is the uncompressed input).
+	@: "$${GEODTEST_INPUT:?geodtest requires GEODTEST_INPUT}"; \
+		cargo run --locked --profile release -p purrdf-geo-kernel --example geodesic_corpus -- \
+			500000 "$${GEODTEST_WORK}" all "$${GEODTEST_BACKEND}" \
+			c1cabdddbcd7d5cfc6e6111db4608fa55be292b15ba2c5bcd6372a178848c692 \
+			< "$${GEODTEST_INPUT}"
+
 SIMD_ASM_ARGS ?=
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
 	python3 scripts/check-simd-asm.py --doc $(SIMD_ASM_ARGS)
@@ -700,11 +728,38 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-rdf --test turtle_chains -- --exact \
+				blank_chains_at_one_hundred_thousand blank_chains_at_one_million \
+				exact_guard_neighbors_and_permuted_interning cycles_shared_and_quoted_blanks_preserve_statements \
+				a_long_collection_keeps_every_member tied_guarded_branches_keep_order_under_permutation \
+				continuation_objects_saturate_at_the_same_indent_guard \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
+				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
+				universal_obligations_clash_after_recursive_paths_and_blocking \
+				cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure \
+				printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass \
+				literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name \
+				recorded_chain_consequence_replays_against_the_original_rbox \
+				chain_derived_types_reach_all_query_services_and_materialization \
+				fixed_top_is_universal_and_bottom_chain_clashes \
+				fixed_top_aliases_without_a_chain_reach_query_only_individuals \
+				non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
+				role_language_work_exhaustion_is_unknown_never_a_consistency_proof \
+				cancelling_an_existing_regular_role_owner_cannot_publish_a_decision \
+				nominal_merges_and_simple_functionality_preserve_role_obligations \
+				top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling \
+				stopping_during_regular_role_reads_never_publishes_a_completed_answer \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test stack_refusal -- --exact \
 				prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test model_traits -- --exact \
+				owned_term_walks_stay_inside_the_wasm_shadow_stack_floor \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test wasm_reassociated -- --exact \
 				an_image_recorded_on_another_wasm_path_is_refused_by_name \
@@ -734,6 +789,74 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+				scoped_text_bound_candidates_retain_unknown_membership \
+				scoped_text_depth_preserves_original_unknown_rows_and_scores \
+				scoped_text_preserves_original_constraint_failure \
+				the_sentence_boundaries_are_reproduced_on_this_target \
+				declared_large_corpora_are_exact \
+				five_thousand_term_index \
+				promoted_field_arithmetic_is_exact \
+				thirty_two_index_fields_are_exact \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test physical_shapes -- --exact \
+				dictionary_property expanded_dictionary_and_union dictionary_cache_and_size \
+				dictionary_projection_and_aliases longest_first_reference window_property \
+				typed_series_property registered_host_and_decline prepared_and_query_forms \
+				window_barrier_property dictionary_analyzer_identity bucket_custom_and_parallel_order \
+				host_refusal_and_governor_boundary dictionary_long_phrase_and_determinism \
+				bounded_shapes_keep_original_owners original_evidence_and_empty_barriers \
+				scoped_streams_and_update_where cache_refusal_keeps_previous_owner \
+				false_expression_gaps_keep_original_traversal \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-retrieval --test real_producers -- --exact \
+				scoped_fused_acceptance_retains_original_two_stratum_scores_and_order \
+				native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows \
+				scoped_native_owner_refusal_precedes_original_producer_open \
+				scoped_native_admission_refusal_invalidates_before_any_ranked_row \
+				scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion \
+				independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion \
+				field_membership_precedes_each_real_stratum_depth_in_both_schedules \
+				two_real_producers_fuse_into_one_ranking_over_real_data \
+				each_real_producer_is_compiled_with_the_facet_it_declared \
+				the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it \
+				search_equals_the_hand_composed_pipeline_over_the_real_producers \
+				both_real_producers_attest_the_generation_of_the_index_that_answered \
+				two_runs_over_the_same_index_state_carry_one_evidence_id \
+				the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat \
+				the_text_producer_declares_unique_only_where_one_subject_can_appear_once \
+				the_knn_producer_names_each_target_once_when_two_rows_share_one_vector \
+				the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness \
+				the_sole_text_producer_over_one_document_still_returns_that_document \
+				a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness \
+				a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores \
+				fusion_trailer_names_reassociated_kernel \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test evidence_ingress -- --exact \
+				verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities \
+				actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims \
+				service_rows_keep_signed_and_undecided_declarations_through_original_operators \
+				empty_service_keeps_search_reason_without_inventing_an_answer_row \
+				sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence \
+				distinct_coalesces_both_polarities_without_changing_binding_identity \
+				source_refusal_never_publishes_partial_or_undetermined_rows \
+				unmatched_optional_preserves_information_and_declared_missing_scope \
+				group_bounds_follow_whole_scope_and_declared_sum_domain \
+				nested_projection_retains_only_visible_aggregate_aliases \
+				registered_lossy_search_keeps_original_candidates_and_caller_reason \
+				declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness \
+				all_query_forms_publish_original_unknown_status_at_requested_count_tiers \
+				minus_absence_requires_closure_but_disjoint_domains_are_decidable \
+				minus_negates_all_original_witnesses_under_declared_closure \
+				exists_transports_original_witnesses_through_vm_memos_and_deferred_sites \
+				actual_unknown_answer_exposes_queryable_original_rdf_ledger \
+				acceptance_merges_original_order_without_replaying_cells_or_losing_scores \
+				native_paths_keep_derivation_polarity_and_complete_found_witnesses \
+				native_property_rows_retain_original_declarations_through_normal_ingestion \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-mime --test lossless -- --exact \
+				production_rdf_round_trip_is_deterministic_for_original_and_broken_messages \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

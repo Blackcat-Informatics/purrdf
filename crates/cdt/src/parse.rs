@@ -56,15 +56,16 @@
 //! nests, and the byte bound on the canonical form is answered at the root from the
 //! root's own measure.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use purrdf_iri::{langtag, terminals};
 
 use crate::datatype::{CdtDatatype, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 use crate::error::CdtError;
-use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, list_extent, map_extent};
-use crate::render::canonical_key_lexical;
+use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, try_list_extent, try_map_extent};
+use crate::memory::{CdtMemory, Memory, ReadError, Resident, Storage};
+use crate::render::try_canonical_key_lexical;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
 use crate::value::CdtValue;
 
@@ -147,19 +148,40 @@ pub fn parse_map(lexical: &str) -> Result<CdtValue, CdtError> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn parse_cdt(lexical: &str, datatype: CdtDatatype) -> Result<CdtValue, CdtError> {
+    match try_parse_cdt(lexical, datatype, &mut Resident) {
+        Ok((value, _)) => Ok(value),
+        Err(ReadError::Lexical(error)) => Err(error),
+        Err(ReadError::Storage(error)) => panic!("resident composite allocation failed: {error}"),
+    }
+}
+
+/// Run the same scanner with a caller's physical admission and fallible boxes.
+/// Returns the parsed value and the exact surviving requested heap bytes. The
+/// caller must retain its original storage admission with the returned value;
+/// lexical diagnostics likewise die before that admission is released.
+///
+/// # Errors
+/// The existing lexical diagnostic or a distinct native physical failure.
+pub fn try_parse_cdt(
+    lexical: &str,
+    datatype: CdtDatatype,
+    storage: &mut impl Storage,
+) -> Result<(CdtValue, usize), ReadError> {
     if lexical.len() > MAX_LEXICAL_BYTES {
         return Err(CdtError::InputTooLarge {
             offset: MAX_LEXICAL_BYTES,
             length: lexical.len(),
-        });
+        }
+        .into());
     }
-    let mut scanner = Scanner::new(lexical);
+    let mut scanner = Scanner::new(lexical, storage);
     let value = scanner.parse_root(datatype)?;
     scanner.skip_whitespace();
     if scanner.position < scanner.bytes.len() {
         return Err(CdtError::TrailingText {
             offset: scanner.position,
-        });
+        }
+        .into());
     }
     // The canonical form spells every shorthand out, so it can be far longer than the
     // input that was accepted: `[1]` is three bytes in and forty-eight out. The
@@ -173,9 +195,10 @@ pub fn parse_cdt(lexical: &str, datatype: CdtDatatype) -> Result<CdtValue, CdtEr
         return Err(CdtError::InputTooLarge {
             offset: MAX_LEXICAL_BYTES,
             length: bytes,
-        });
+        }
+        .into());
     }
-    Ok(value)
+    Ok((value, scanner.memory.admitted_bytes()))
 }
 
 /// Parse a lexical form by datatype IRI, preserving the same tri-state
@@ -262,15 +285,17 @@ enum Step {
     Delim,
 }
 
-struct Scanner<'a> {
+struct Scanner<'a, 'm> {
+    memory: Memory<'m>,
     input: &'a str,
     bytes: &'a [u8],
     position: usize,
 }
 
-impl<'a> Scanner<'a> {
-    fn new(input: &'a str) -> Self {
+impl<'a, 'm> Scanner<'a, 'm> {
+    fn new(input: &'a str, storage: &'m mut dyn Storage) -> Self {
         Self {
+            memory: Memory::new(storage),
             input,
             bytes: input.as_bytes(),
             position: 0,
@@ -296,7 +321,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Consume one byte, or report what the grammar admitted here.
-    fn expect(&mut self, byte: u8, expected: &'static str) -> Result<(), CdtError> {
+    fn expect(&mut self, byte: u8, expected: &'static str) -> Result<(), ReadError> {
         match self.peek() {
             Some(found) if found == byte => {
                 self.bump();
@@ -305,15 +330,17 @@ impl<'a> Scanner<'a> {
             Some(_) => Err(CdtError::Unexpected {
                 offset: self.position,
                 expected,
-            }),
+            }
+            .into()),
             None => Err(CdtError::UnexpectedEnd {
                 offset: self.position,
                 expected,
-            }),
+            }
+            .into()),
         }
     }
 
-    fn expect_str(&mut self, text: &'static str, expected: &'static str) -> Result<(), CdtError> {
+    fn expect_str(&mut self, text: &'static str, expected: &'static str) -> Result<(), ReadError> {
         if self.starts_with(text) {
             self.position += text.len();
             Ok(())
@@ -321,12 +348,14 @@ impl<'a> Scanner<'a> {
             Err(CdtError::Unexpected {
                 offset: self.position,
                 expected,
-            })
+            }
+            .into())
         } else {
             Err(CdtError::UnexpectedEnd {
                 offset: self.position,
                 expected,
-            })
+            }
+            .into())
         }
     }
 
@@ -338,7 +367,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// The whole two-state machine. Returns the root composite.
-    fn parse_root(&mut self, datatype: CdtDatatype) -> Result<CdtValue, CdtError> {
+    fn parse_root(&mut self, datatype: CdtDatatype) -> Result<CdtValue, ReadError> {
         self.skip_whitespace();
         self.expect(
             datatype.open(),
@@ -349,7 +378,7 @@ impl<'a> Scanner<'a> {
         )?;
 
         let mut stack: Vec<Frame> = Vec::new();
-        stack.push(Frame::new(datatype));
+        self.memory.push(&mut stack, Frame::new(datatype))?;
         let mut elements: usize = 0;
         let mut step = Step::Item;
 
@@ -367,6 +396,7 @@ impl<'a> Scanner<'a> {
                     {
                         self.bump();
                         if let Some(value) = self.close_frame(&mut stack)? {
+                            self.memory.release_vec(stack)?;
                             return Ok(value);
                         }
                         step = Step::Delim;
@@ -393,7 +423,8 @@ impl<'a> Scanner<'a> {
                         return Err(CdtError::TooManyElements {
                             offset: self.position,
                             limit: MAX_ELEMENTS,
-                        });
+                        }
+                        .into());
                     }
                     let opening = match self.peek() {
                         Some(b'[') => Some(Frame::List(Vec::new())),
@@ -410,11 +441,11 @@ impl<'a> Scanner<'a> {
                         } else {
                             1
                         };
-                        stack.push(frame);
+                        self.memory.push(&mut stack, frame)?;
                         continue;
                     }
                     let term = self.parse_element()?;
-                    push_item(&mut stack, term);
+                    push_item(&mut stack, term, &mut self.memory)?;
                     step = Step::Delim;
                 }
                 Step::Delim => {
@@ -427,6 +458,7 @@ impl<'a> Scanner<'a> {
                         }
                         self.expect_str(")>>", "`)>>` closing a triple term")?;
                         if let Some(value) = self.close_frame(&mut stack)? {
+                            self.memory.release_vec(stack)?;
                             return Ok(value);
                         }
                         continue;
@@ -440,6 +472,7 @@ impl<'a> Scanner<'a> {
                         Some(found) if found == close => {
                             self.bump();
                             if let Some(value) = self.close_frame(&mut stack)? {
+                                self.memory.release_vec(stack)?;
                                 return Ok(value);
                             }
                         }
@@ -447,13 +480,15 @@ impl<'a> Scanner<'a> {
                             return Err(CdtError::Unexpected {
                                 offset: self.position,
                                 expected: "`,` or the closing delimiter",
-                            });
+                            }
+                            .into());
                         }
                         None => {
                             return Err(CdtError::UnexpectedEnd {
                                 offset: self.position,
                                 expected: "`,` or the closing delimiter",
-                            });
+                            }
+                            .into());
                         }
                     }
                 }
@@ -463,40 +498,38 @@ impl<'a> Scanner<'a> {
 
     /// Pop the top frame. Returns `Some` when the root composite just closed, and
     /// otherwise appends the finished element to its parent.
-    fn close_frame(&self, stack: &mut Vec<Frame>) -> Result<Option<CdtValue>, CdtError> {
+    fn close_frame(&mut self, stack: &mut Vec<Frame>) -> Result<Option<CdtValue>, ReadError> {
         let frame = stack.pop().expect("the frame stack is never empty here");
-        // The scanner has enforced the element bound as it went, before the offending
-        // element was allocated, and the byte bound is checked at the root. Measuring
-        // the closed frame here reads each nested composite's carried extent, so the
-        // whole scan stays linear in the input however deep it nests.
         let term = match frame {
             Frame::List(items) => {
-                let extent = list_extent(items.iter());
-                CdtTerm::Composite(alloc::boxed::Box::new(CdtValue::from_checked_items(
-                    items, extent,
-                )))
+                let extent = try_list_extent(items.iter(), &mut self.memory)?;
+                let value = CdtValue::from_checked_items(items, extent);
+                if stack.is_empty() {
+                    return Ok(Some(value));
+                }
+                CdtTerm::Composite(self.memory.boxed_value(value)?)
             }
             Frame::Map { entries, .. } => {
-                CdtTerm::Composite(alloc::boxed::Box::new(finish_map(entries)?))
+                let value = finish_map(entries, &mut self.memory)?;
+                if stack.is_empty() {
+                    return Ok(Some(value));
+                }
+                CdtTerm::Composite(self.memory.boxed_value(value)?)
             }
             Frame::Triple(mut parts) => {
                 let object = parts.pop().expect("a triple frame closes with three parts");
                 let predicate = parts.pop().expect("a triple frame closes with three parts");
                 let subject = parts.pop().expect("a triple frame closes with three parts");
-                CdtTerm::TripleTerm(alloc::boxed::Box::new(CdtTripleTerm {
+                let triple = self.memory.boxed_triple(CdtTripleTerm {
                     subject,
                     predicate,
                     object,
-                }))
+                })?;
+                self.memory.release_vec(parts)?;
+                CdtTerm::TripleTerm(triple)
             }
         };
-        if stack.is_empty() {
-            return match term {
-                CdtTerm::Composite(value) => Ok(Some(*value)),
-                _ => unreachable!("the root frame is always a list or a map"),
-            };
-        }
-        push_item(stack, term);
+        push_item(stack, term, &mut self.memory)?;
         Ok(None)
     }
 
@@ -504,7 +537,7 @@ impl<'a> Scanner<'a> {
 
     /// `[3]` / `[8]`, minus the composite and triple-term alternatives (which the
     /// frame machine opens itself).
-    fn parse_element(&mut self) -> Result<CdtTerm, CdtError> {
+    fn parse_element(&mut self) -> Result<CdtTerm, ReadError> {
         match self.peek() {
             Some(b'<') => Ok(CdtTerm::Iri(self.parse_iriref()?)),
             Some(b'_') => Ok(CdtTerm::Blank(self.parse_blank_node_label()?)),
@@ -518,11 +551,11 @@ impl<'a> Scanner<'a> {
             Some(_) => Err(CdtError::Unexpected {
                 offset: self.position,
                 expected: "an element: an IRI, a blank node, a literal, `null`, a list, a map or a triple term",
-            }),
+            }.into()),
             None => Err(CdtError::UnexpectedEnd {
                 offset: self.position,
                 expected: "an element",
-            }),
+            }.into()),
         }
     }
 
@@ -531,7 +564,7 @@ impl<'a> Scanner<'a> {
     /// Narrower than [`Self::parse_element`] by construction: a blank node, `null`,
     /// a nested composite and a triple term are all refused here, so the restriction
     /// is enforced at the one place the grammar states it.
-    fn parse_key(&mut self) -> Result<CdtKey, CdtError> {
+    fn parse_key(&mut self) -> Result<CdtKey, ReadError> {
         const EXPECTED: &str = "a map key: an IRI, an RDF literal, a number or a boolean";
         match self.peek() {
             Some(b'<') if !self.starts_with("<<(") => Ok(CdtKey::Iri(self.parse_iriref()?)),
@@ -541,17 +574,19 @@ impl<'a> Scanner<'a> {
             Some(_) => Err(CdtError::Unexpected {
                 offset: self.position,
                 expected: EXPECTED,
-            }),
+            }
+            .into()),
             None => Err(CdtError::UnexpectedEnd {
                 offset: self.position,
                 expected: EXPECTED,
-            }),
+            }
+            .into()),
         }
     }
 
     /// `IRIREF ::= '<' ([^<>"{}|^\`\\] - [#x00-#x20])* '>'`, with `UCHAR` escapes,
     /// followed by the absolute-IRI constraint.
-    fn parse_iriref(&mut self) -> Result<String, CdtError> {
+    fn parse_iriref(&mut self) -> Result<String, ReadError> {
         let start = self.position;
         self.expect(b'<', "`<` opening an IRI")?;
         let mut out = String::new();
@@ -561,38 +596,44 @@ impl<'a> Scanner<'a> {
                     return Err(CdtError::UnexpectedEnd {
                         offset: self.position,
                         expected: "`>` closing an IRI",
-                    });
+                    }
+                    .into());
                 }
                 Some(b'>') => {
                     self.bump();
                     break;
                 }
-                Some(b'\\') => out.push(self.parse_uchar()?),
+                Some(b'\\') => {
+                    let ch = self.parse_uchar()?;
+                    self.memory.push_char(&mut out, ch)?;
+                }
                 Some(b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' | 0x00..=0x20) => {
                     return Err(CdtError::Unexpected {
                         offset: self.position,
                         expected: "an IRI character (delimiters and controls must ride as \\u escapes)",
-                    });
+                    }.into());
                 }
                 Some(_) => {
                     let ch = self.next_char().expect("peek reported a byte");
-                    out.push(ch);
+                    self.memory.push_char(&mut out, ch)?;
                 }
             }
         }
         // CDT lexical forms carry no base, so only an absolute IRI is usable.
-        match purrdf_iri::parse(&out) {
-            Ok(iri) if iri.has_scheme() => Ok(out),
-            Ok(_) => Err(CdtError::NotAbsoluteIri {
+        match purrdf_iri::absolute_verdict(&out) {
+            Some(true) => Ok(out),
+            Some(false) => Err(CdtError::NotAbsoluteIri {
                 offset: start,
                 iri: out,
                 reason: "a relative IRI reference has no base to resolve against here",
-            }),
-            Err(_) => Err(CdtError::NotAbsoluteIri {
+            }
+            .into()),
+            None => Err(CdtError::NotAbsoluteIri {
                 offset: start,
                 iri: out,
                 reason: "not a syntactically valid IRI",
-            }),
+            }
+            .into()),
         }
     }
 
@@ -630,7 +671,7 @@ impl<'a> Scanner<'a> {
     /// The lawful neighbours this must not touch: `_:0a` and `_:_a` (a digit and
     /// an underscore ARE the head class), `_:a-b` and `_:a.b` (hyphen and
     /// internal dot in the tail), and `_:café` in either normalization.
-    fn parse_blank_node_label(&mut self) -> Result<String, CdtError> {
+    fn parse_blank_node_label(&mut self) -> Result<String, ReadError> {
         let start = self.position;
         self.expect(b'_', "`_:` opening a blank node label")?;
         self.expect(b':', "`_:` opening a blank node label")?;
@@ -643,7 +684,8 @@ impl<'a> Scanner<'a> {
                 return Err(CdtError::BadBlankNodeLabel {
                     offset: start,
                     reason: "the label must begin with PN_CHARS_U or [0-9]",
-                });
+                }
+                .into());
             }
         }
         while let Some(ch) = self.input[self.position..].chars().next() {
@@ -658,20 +700,21 @@ impl<'a> Scanner<'a> {
             return Err(CdtError::BadBlankNodeLabel {
                 offset: start,
                 reason: "the label must not end with `.`",
-            });
+            }
+            .into());
         }
-        Ok(label.to_string())
+        Ok(self.memory.string(label)?)
     }
 
     /// `[128s] RDFLiteral ::= String (LANGTAG | '^^' IRIREF)?`
-    fn parse_rdf_literal(&mut self) -> Result<CdtLiteral, CdtError> {
+    fn parse_rdf_literal(&mut self) -> Result<CdtLiteral, ReadError> {
         let lexical = self.parse_string()?;
         if self.peek() == Some(b'@') {
             let (language, direction) = self.parse_langtag()?;
             let datatype = purrdf_iri::vocab::language_datatype_iri(direction.is_some());
             return Ok(CdtLiteral {
                 lexical,
-                datatype: datatype.to_string(),
+                datatype: self.memory.string(datatype)?,
                 language: Some(language),
                 direction,
             });
@@ -679,13 +722,23 @@ impl<'a> Scanner<'a> {
         if self.starts_with("^^") {
             self.position += 2;
             let datatype = self.parse_iriref()?;
-            return Ok(CdtLiteral::typed(lexical, datatype));
+            return Ok(CdtLiteral {
+                lexical,
+                datatype,
+                language: None,
+                direction: None,
+            });
         }
-        Ok(CdtLiteral::plain(lexical))
+        Ok(CdtLiteral {
+            lexical,
+            datatype: self.memory.string(crate::datatype::XSD_STRING)?,
+            language: None,
+            direction: None,
+        })
     }
 
     /// `String ::= STRING_LITERAL1 | STRING_LITERAL2 | STRING_LITERAL_LONG1 | STRING_LITERAL_LONG2`
-    fn parse_string(&mut self) -> Result<String, CdtError> {
+    fn parse_string(&mut self) -> Result<String, ReadError> {
         let (quote, long) = match self.peek() {
             Some(b'"') if self.starts_with("\"\"\"") => (b'"', true),
             Some(b'\'') if self.starts_with("'''") => (b'\'', true),
@@ -695,13 +748,15 @@ impl<'a> Scanner<'a> {
                 return Err(CdtError::Unexpected {
                     offset: self.position,
                     expected: "a quoted string",
-                });
+                }
+                .into());
             }
             None => {
                 return Err(CdtError::UnexpectedEnd {
                     offset: self.position,
                     expected: "a quoted string",
-                });
+                }
+                .into());
             }
         };
         self.position += if long { 3 } else { 1 };
@@ -712,9 +767,13 @@ impl<'a> Scanner<'a> {
                     return Err(CdtError::UnexpectedEnd {
                         offset: self.position,
                         expected: "the closing quote of a string",
-                    });
+                    }
+                    .into());
                 }
-                Some(b'\\') => out.push(self.parse_escape()?),
+                Some(b'\\') => {
+                    let ch = self.parse_escape()?;
+                    self.memory.push_char(&mut out, ch)?;
+                }
                 Some(found) if found == quote => {
                     if long {
                         if self.starts_with(if quote == b'"' { "\"\"\"" } else { "'''" }) {
@@ -722,7 +781,7 @@ impl<'a> Scanner<'a> {
                             break;
                         }
                         self.bump();
-                        out.push(quote as char);
+                        self.memory.push_char(&mut out, quote as char)?;
                     } else {
                         self.bump();
                         break;
@@ -732,11 +791,12 @@ impl<'a> Scanner<'a> {
                     return Err(CdtError::Unexpected {
                         offset: self.position,
                         expected: "a raw newline is not allowed in a short string",
-                    });
+                    }
+                    .into());
                 }
                 Some(_) => {
                     let ch = self.next_char().expect("peek reported a byte");
-                    out.push(ch);
+                    self.memory.push_char(&mut out, ch)?;
                 }
             }
         }
@@ -744,7 +804,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// `ECHAR ::= '\\' [tbnrf"'\\]`, or a `UCHAR`.
-    fn parse_escape(&mut self) -> Result<char, CdtError> {
+    fn parse_escape(&mut self) -> Result<char, ReadError> {
         let start = self.position;
         match self.bytes.get(self.position + 1) {
             Some(b'u' | b'U') => self.parse_uchar(),
@@ -759,12 +819,13 @@ impl<'a> Scanner<'a> {
             None => Err(CdtError::BadEscape {
                 offset: start,
                 reason: "the lexical form ends inside an escape sequence",
-            }),
+            }
+            .into()),
         }
     }
 
     /// `UCHAR ::= '\\u' HEX HEX HEX HEX | '\\U' HEX HEX HEX HEX HEX HEX HEX HEX`
-    fn parse_uchar(&mut self) -> Result<char, CdtError> {
+    fn parse_uchar(&mut self) -> Result<char, ReadError> {
         let start = self.position;
         let (decoded, consumed) =
             terminals::decode_uchar(&self.bytes[start..]).map_err(|defect| {
@@ -817,7 +878,7 @@ impl<'a> Scanner<'a> {
     /// `reason` now carries [`langtag::LanguageTagError::message`], which is a
     /// `&'static str` and so fits the field exactly, naming the production that
     /// refused instead of restating the terminal.
-    fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), CdtError> {
+    fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), ReadError> {
         let start = self.position;
         self.expect(b'@', "`@` opening a language tag")?;
         // The language tag ends where the `--` direction suffix begins; the suffix
@@ -837,9 +898,10 @@ impl<'a> Scanner<'a> {
             return Err(CdtError::BadLanguageTag {
                 offset: start,
                 reason: error.message(),
-            });
+            }
+            .into());
         }
-        Ok((language.to_string(), direction))
+        Ok((self.memory.string(language)?, direction))
     }
 
     /// RDF 1.2's `'--' ('ltr' | 'rtl')` base-direction suffix, when one follows
@@ -852,7 +914,7 @@ impl<'a> Scanner<'a> {
     /// wrongly-cased suffix is an error here rather than a silently dropped
     /// direction. `offset` is the whole tag's, matching every other refusal this
     /// production makes.
-    fn parse_direction_suffix(&mut self, start: usize) -> Result<Option<TextDirection>, CdtError> {
+    fn parse_direction_suffix(&mut self, start: usize) -> Result<Option<TextDirection>, ReadError> {
         if !self.starts_with("--") {
             return Ok(None);
         }
@@ -868,10 +930,11 @@ impl<'a> Scanner<'a> {
                 offset: start,
                 reason: "a base direction must be `ltr` or `rtl`",
             })
+            .map_err(Into::into)
     }
 
     /// `NumericLiteral`, in all three of its SPARQL shapes and all three signs.
-    fn parse_numeric(&mut self) -> Result<CdtLiteral, CdtError> {
+    fn parse_numeric(&mut self) -> Result<CdtLiteral, ReadError> {
         let start = self.position;
         if matches!(self.peek(), Some(b'+' | b'-')) {
             self.bump();
@@ -895,7 +958,8 @@ impl<'a> Scanner<'a> {
                 return Err(CdtError::BadNumericLiteral {
                     offset: start,
                     reason: "an exponent needs at least one digit",
-                });
+                }
+                .into());
             }
         }
         let datatype = if has_exponent {
@@ -909,7 +973,8 @@ impl<'a> Scanner<'a> {
                 return Err(CdtError::BadNumericLiteral {
                     offset: start,
                     reason: "a double needs at least one digit before the exponent",
-                });
+                }
+                .into());
             }
             XSD_DOUBLE
         } else if has_point {
@@ -918,7 +983,8 @@ impl<'a> Scanner<'a> {
                 return Err(CdtError::BadNumericLiteral {
                     offset: start,
                     reason: "a decimal needs at least one digit after the `.`",
-                });
+                }
+                .into());
             }
             XSD_DECIMAL
         } else {
@@ -927,14 +993,17 @@ impl<'a> Scanner<'a> {
                 return Err(CdtError::BadNumericLiteral {
                     offset: start,
                     reason: "an integer needs at least one digit",
-                });
+                }
+                .into());
             }
             XSD_INTEGER
         };
-        Ok(CdtLiteral::typed(
-            &self.input[start..self.position],
-            datatype,
-        ))
+        Ok(CdtLiteral {
+            lexical: self.memory.string(&self.input[start..self.position])?,
+            datatype: self.memory.string(datatype)?,
+            language: None,
+            direction: None,
+        })
     }
 
     fn digit_run(&mut self) -> usize {
@@ -946,54 +1015,89 @@ impl<'a> Scanner<'a> {
     }
 
     /// `BooleanLiteral ::= 'true' | 'false'`
-    fn parse_boolean(&mut self) -> Result<CdtLiteral, CdtError> {
+    fn parse_boolean(&mut self) -> Result<CdtLiteral, ReadError> {
         if self.starts_with("true") {
             self.position += 4;
-            return Ok(CdtLiteral::typed("true", XSD_BOOLEAN));
+            return self.boolean_literal("true");
         }
         if self.starts_with("false") {
             self.position += 5;
-            return Ok(CdtLiteral::typed("false", XSD_BOOLEAN));
+            return self.boolean_literal("false");
         }
         Err(CdtError::Unexpected {
             offset: self.position,
             expected: "the boolean literal `true` or `false`",
+        }
+        .into())
+    }
+
+    fn boolean_literal(&mut self, lexical: &str) -> Result<CdtLiteral, ReadError> {
+        Ok(CdtLiteral {
+            lexical: self.memory.string(lexical)?,
+            datatype: self.memory.string(XSD_BOOLEAN)?,
+            language: None,
+            direction: None,
         })
     }
 }
 
 /// Append a finished element to the top frame.
-fn push_item(stack: &mut [Frame], term: CdtTerm) {
+fn push_item(stack: &mut [Frame], term: CdtTerm, memory: &mut Memory<'_>) -> Result<(), ReadError> {
     match stack
         .last_mut()
         .expect("the frame stack is never empty here")
     {
-        Frame::List(items) | Frame::Triple(items) => items.push(term),
+        Frame::List(items) | Frame::Triple(items) => memory.push(items, term)?,
         Frame::Map { entries, pending } => {
             let (offset, key) = pending
                 .take()
                 .expect("a map value is only read after its key");
-            entries.push((offset, CdtEntry { key, value: term }));
+            memory.push(entries, (offset, CdtEntry { key, value: term }))?;
         }
     }
+    Ok(())
 }
 
 /// Sort a map's entries into key order and reject duplicate keys.
-fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError> {
-    entries.sort_by(|(_, left), (_, right)| crate::ops::total_key_cmp(&left.key, &right.key));
+fn finish_map(
+    mut entries: Vec<(usize, CdtEntry)>,
+    memory: &mut Memory<'_>,
+) -> Result<CdtValue, ReadError> {
+    // Offsets strictly follow authoring order. This total tie-break reproduces
+    // stable key sorting (including the exact first duplicate diagnostic) with
+    // the native allocation-free unstable sorter and no hidden merge scratch.
+    entries.sort_unstable_by(|(lo, left), (ro, right)| {
+        crate::ops::total_key_cmp(&left.key, &right.key).then_with(|| lo.cmp(ro))
+    });
     for window in entries.windows(2) {
         let (left_offset, left) = &window[0];
         let (right_offset, right) = &window[1];
         if left.key == right.key {
+            let key = try_canonical_key_lexical(&left.key, memory)?;
             return Err(CdtError::DuplicateMapKey {
                 offset: *left_offset.max(right_offset),
-                key: canonical_key_lexical(&left.key),
-            });
+                key,
+            }
+            .into());
         }
     }
-    let entries: Vec<CdtEntry> = entries.into_iter().map(|(_, entry)| entry).collect();
-    let extent = map_extent(entries.iter().map(|entry| (&entry.key, &entry.value)));
-    Ok(CdtValue::from_checked_entries(entries, extent))
+    let old_bytes = core::alloc::Layout::array::<(usize, CdtEntry)>(entries.capacity())
+        .map_err(|_| crate::memory::StorageError::SizeOverflow)?
+        .size();
+    let mut output = Vec::new();
+    memory.reserve(&mut output, entries.len())?;
+    // Move entries while the old and destination arrays are both admitted.
+    let mut source = entries.into_iter();
+    for (_, entry) in source.by_ref() {
+        output.push(entry);
+    }
+    drop(source);
+    memory.release_bytes(old_bytes)?;
+    let extent = try_map_extent(
+        output.iter().map(|entry| (&entry.key, &entry.value)),
+        memory,
+    )?;
+    Ok(CdtValue::from_checked_entries(output, extent))
 }
 
 // `PN_CHARS`, `PN_CHARS_U` and `PN_CHARS_BASE` were transcribed here once, as a

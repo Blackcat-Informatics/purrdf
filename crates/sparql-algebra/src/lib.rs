@@ -105,10 +105,17 @@ pub use parser::{
     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
     builtin_function_keyword,
 };
-pub use scope::{ObserverRole, ScopeError, ScopeHazard, ScopeRegion, ScopeSite};
+pub use scope::{
+    ObserverRole, ScopeError, ScopeHazard, ScopeRegion, ScopeSite, ScopeValidationError,
+};
 pub use serialize::{
-    pattern_to_select_query, pattern_to_select_query_with_options, try_pattern_to_select_query,
+    CarrierError, pattern_to_select_query, pattern_to_select_query_with_options,
+    try_pattern_to_select_query, try_pattern_to_select_query_with_memory,
     try_pattern_to_select_query_with_options,
 };
 pub use tree::{Args, Chain, Child, NonEmpty, Subtree};
-pub use walk::{Flow, NodeRef, Visit, fold_post_order, walk_pre_post};
+pub use validate::ValidationError;
+pub use walk::{
+    Flow, NodeRef, Visit, WalkError, fold_post_order, fold_post_order_with_memory,
+    try_walk_pre_post, walk_pre_post, walk_pre_post_with_memory,
+};

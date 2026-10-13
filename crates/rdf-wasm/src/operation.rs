@@ -31,6 +31,7 @@ use purrdf::{
     ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
     QueryEntailmentPlan, RdfDataset, ReasoningError, query_with_entailment_closure_governed,
 };
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_core::{DiagnosticPresentation, RdfDiagnostic, SparqlResult};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
 use purrdf_sparql_eval::{
@@ -314,6 +315,10 @@ pub(crate) fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
 // ---------------------------------------------------------------------------
 
 /// What a finished operation left for its caller to take.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The stopped-update payload moves inline so outcome transfer does not allocate after workspace refusal."
+)]
 pub(crate) enum JobOutcome {
     Query(SparqlResult),
     Raw(String),
@@ -435,6 +440,18 @@ impl JobRun<'_> {
         self.options(env).with_division(division)
     }
 
+    /// [`Self::options_under`] evaluating `REGEX`/`REPLACE` under `xpath_regex`, when a
+    /// dated law was selected.
+    fn selected_options<'o>(
+        &'o self,
+        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        division: DivisionPolicy,
+        xpath_regex: Option<Profile>,
+        geo: &'o purrdf_validate::geo::GeoProfile,
+    ) -> QueryOptions<'o> {
+        crate::xpath_regex::select(self.options_under(env, division).with_geo(geo), xpath_regex)
+    }
+
     /// The run's sources, for an ambient execution scope.
     pub(crate) fn sources(&self) -> purrdf_shapes::sparql::QuerySources {
         purrdf_shapes::sparql::QuerySources {
@@ -504,8 +521,13 @@ pub(crate) struct OperationInput<'a> {
     pub(crate) program: Option<String>,
     pub(crate) closure: ClosureInputs,
     pub(crate) accept: Option<String>,
+    /// The dated native XPath law `REGEX`/`REPLACE` evaluate under (`xpathRegex`);
+    /// `None` keeps the compatibility regex.
+    pub(crate) xpath_regex: Option<Profile>,
     /// The precision of every `xsd:integer`/`xsd:decimal` quotient the operation forms.
     pub(crate) division: DivisionPolicy,
+    /// The immutable profile captured when this operation starts.
+    pub(crate) geo: purrdf_validate::geo::GeoProfileSnapshot,
 }
 
 impl<'a> OperationInput<'a> {
@@ -532,13 +554,19 @@ impl<'a> OperationInput<'a> {
             program: None,
             closure: ClosureInputs::default(),
             accept: None,
+            xpath_regex: None,
             division: DivisionPolicy::xsd_default(),
+            geo: purrdf_validate::geo::GeoSession::default().profile_snapshot(),
         }
     }
 }
 
 /// Run an ungoverned query: on the engine's ungoverned entry when nothing polls the run,
 /// and under the metered base and the run's signal when something does.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The run keeps explicit dataset, source, arithmetic, regex and geographic policies as independently borrowed query inputs"
+)]
 fn ungoverned_query(
     run: &JobRun<'_>,
     engine: &NativeSparqlEngine,
@@ -546,8 +574,10 @@ fn ungoverned_query(
     sparql: &str,
     base: Option<&str>,
     division: DivisionPolicy,
+    xpath_regex: Option<Profile>,
+    geo: &purrdf_validate::geo::GeoProfile,
 ) -> Result<SparqlResult, JobError> {
-    let options = run.options_under(QueryOptions::EMPTY.env, division);
+    let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex, geo);
     let Some(governors) = run.ungoverned_watch() else {
         // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
         // the plan, then its evaluation with no governor state.
@@ -603,16 +633,34 @@ impl OperationInput<'_> {
             program,
             closure,
             accept,
+            xpath_regex,
             division,
+            geo,
         } = self;
         let base = base.as_deref();
         let request = sparql_request(&sparql, base);
         match kind {
             AsyncOperationKind::Query => Ok(JobOutcome::Query(ungoverned_query(
-                run, &engine, &frozen, &sparql, base, division,
+                run,
+                &engine,
+                &frozen,
+                &sparql,
+                base,
+                division,
+                xpath_regex,
+                &geo,
             )?)),
             AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result = ungoverned_query(run, &engine, &frozen, &sparql, base, division)?;
+                let result = ungoverned_query(
+                    run,
+                    &engine,
+                    &frozen,
+                    &sparql,
+                    base,
+                    division,
+                    xpath_regex,
+                    &geo,
+                )?;
                 let text = run.serialize(|| match (&jsonld, format.as_deref()) {
                     (Some(options), Some(format)) => {
                         serialize_configured_graph(result, format, options)
@@ -640,7 +688,7 @@ impl OperationInput<'_> {
                         engine.query_governed(
                             &frozen,
                             request,
-                            run.options_under(&env, division),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             &governors,
                         )
                     })
@@ -660,7 +708,7 @@ impl OperationInput<'_> {
                         engine.query_governed(
                             &frozen,
                             request,
-                            run.options_under(&env, division),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             &governors,
                         )
                     })
@@ -720,7 +768,7 @@ impl OperationInput<'_> {
                             request,
                             &EntailmentClosure::new(plan.entailment(), &imports)
                                 .with_limits(limits.eval_options()),
-                            run.options_under(&env, division),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             // This surface registers no relation, so there is none to
                             // re-derive over the closure.
                             &ClosureRelations::NONE,
@@ -750,7 +798,8 @@ impl OperationInput<'_> {
             AsyncOperationKind::Explain => {
                 // The measuring run — metered, never bounded — with the run's sources
                 // installed and its signal, when it has one, polled at every charge point.
-                let options = run.options_under(QueryOptions::EMPTY.env, division);
+                let options =
+                    run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex, &geo);
                 let explanation = run
                     .evaluate(|| match &run.stop {
                         Some(stop) => engine.explain_query_with_stop_signal(
@@ -782,7 +831,12 @@ impl OperationInput<'_> {
                         engine.update_with_options(
                             &mut target,
                             request,
-                            run.options_under(QueryOptions::EMPTY.env, division),
+                            run.selected_options(
+                                QueryOptions::EMPTY.env,
+                                division,
+                                xpath_regex,
+                                &geo,
+                            ),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -793,7 +847,12 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.options_under(QueryOptions::EMPTY.env, division),
+                            run.selected_options(
+                                QueryOptions::EMPTY.env,
+                                division,
+                                xpath_regex,
+                                &geo,
+                            ),
                             &governors,
                         )
                     })
@@ -823,7 +882,7 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.options_under(&env, division),
+                            run.selected_options(&env, division, xpath_regex, &geo),
                             &governors,
                         )
                     })
@@ -1023,10 +1082,63 @@ mod tests {
         input
     }
 
+    /// The rounded third, `1/3` at the default eighteen digits.
+    const THIRD: &str = "0.333333333333333333";
+
+    /// Whether a finished job's answer carries [`THIRD`]: a bound row, a serialized
+    /// body, or — for an UPDATE — a dataset holding it.
+    fn carries_third(engine: &NativeSparqlEngine, outcome: &JobOutcome) -> bool {
+        let in_result = |result: &SparqlResult| {
+            match result {
+            SparqlResult::Solutions { rows, .. } => rows.iter().flatten().flatten().any(|term| {
+                matches!(term, purrdf_core::TermValue::Literal { lexical_form, .. } if lexical_form == THIRD)
+            }),
+            _ => false,
+        }
+        };
+        let in_outcome = |outcome: &GovernedOutcome| matches!(outcome, GovernedOutcome::Complete { result, .. } if in_result(result));
+        let in_dataset = |dataset: &Arc<RdfDataset>| {
+            let ask = format!("ASK {{ ?s ?p {THIRD} }}");
+            matches!(
+                engine.query_with_options_view(
+                    &**dataset,
+                    purrdf_core::SparqlRequest {
+                        query: &ask,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                ),
+                Ok(SparqlResult::Boolean(true))
+            )
+        };
+        match outcome {
+            JobOutcome::Query(result) => in_result(result),
+            JobOutcome::Raw(text) => text.contains(THIRD),
+            JobOutcome::Governed(governed) => in_outcome(governed),
+            JobOutcome::Entailment(entailment) => matches!(
+                entailment.as_ref(),
+                GovernedEntailment::Answered { outcome, .. } if in_outcome(outcome)
+            ),
+            JobOutcome::Negotiated(value) => matches!(
+                value.as_ref(),
+                NegotiatedValue::Complete { bytes, .. } if String::from_utf8_lossy(bytes).contains(THIRD)
+            ),
+            JobOutcome::Updated(dataset)
+            | JobOutcome::UpdateGoverned {
+                frozen: Some(dataset),
+                ..
+            } => in_dataset(dataset),
+            _ => false,
+        }
+    }
+
     /// The division policy reaches every SPARQL operation kind. Under `exact` the
-    /// non-terminating `1/3` refuses each one with the numeric diagnostic naming
-    /// `err:FOAR0002`, while the terminating neighbour `1/8` succeeds on each; under the
-    /// default both succeed, so the refusal is the policy's and not the operation's.
+    /// non-terminating `1/3` is an expression error on each one — the job succeeds, and
+    /// its answer leaves `?x` unbound (an UPDATE inserts nothing for it) — while the
+    /// terminating neighbour `1/8` answers on each; under the default the same `1/3`
+    /// answers its rounded eighteen digits on each, so the difference is the policy's
+    /// and not the operation's.
     #[test]
     fn the_division_policy_reaches_every_operation_kind() {
         let engine = Rc::new(NativeSparqlEngine::new());
@@ -1062,16 +1174,15 @@ mod tests {
         };
         let run = JobRun::offline(None);
         for kind in queries.into_iter().chain(updates) {
-            let refused = text(kind, "1/3");
-            let error = dividing(kind, &engine, &frozen, &refused, DivisionPolicy::Exact)
+            let third = text(kind, "1/3");
+            let unbound = dividing(kind, &engine, &frozen, &third, DivisionPolicy::Exact)
                 .execute(&run)
-                .err()
-                .unwrap_or_else(|| panic!("{kind:?}: exact refuses 1/3"));
-            assert_eq!(error.code(), "native-sparql-numeric", "{kind:?}");
+                .unwrap_or_else(|error| {
+                    panic!("{kind:?}: exact leaves 1/3 unbound: {}", error.rendered())
+                });
             assert!(
-                error.rendered().contains("FOAR0002"),
-                "{kind:?}: {}",
-                error.rendered()
+                !carries_third(&engine, &unbound),
+                "{kind:?}: exact binds no 1/3"
             );
             let terminating = text(kind, "1/8");
             assert!(
@@ -1080,17 +1191,18 @@ mod tests {
                     .is_ok(),
                 "{kind:?}: exact answers 1/8"
             );
+            let rounded = dividing(
+                kind,
+                &engine,
+                &frozen,
+                &third,
+                DivisionPolicy::xsd_default(),
+            )
+            .execute(&run)
+            .unwrap_or_else(|error| panic!("{kind:?}: {}", error.rendered()));
             assert!(
-                dividing(
-                    kind,
-                    &engine,
-                    &frozen,
-                    &refused,
-                    DivisionPolicy::xsd_default()
-                )
-                .execute(&run)
-                .is_ok(),
-                "{kind:?}: the default rounds 1/3"
+                carries_third(&engine, &rounded),
+                "{kind:?}: the default rounds 1/3 to {THIRD}"
             );
         }
     }

@@ -117,6 +117,20 @@ fn bound_x(document: &str) -> String {
         .to_owned()
 }
 
+/// Whether `?x` is unbound in a `purrdf_query_json` SELECT document's first row.
+fn x_is_unbound(document: &str) -> bool {
+    let value = purrdf_lex::json::read(document).expect("results JSON");
+    value.pointer("/results/bindings/0").is_some()
+        && value.pointer("/results/bindings/0/x").is_none()
+}
+
+/// The expression-error counts with `code` counted `count` times and every other zero.
+fn only(code: PurrdfExpressionErrorCode, count: u64) -> [u64; PURRDF_EXPRESSION_ERROR_CODE_COUNT] {
+    let mut expected = [0; PURRDF_EXPRESSION_ERROR_CODE_COUNT];
+    expected[code as usize] = count;
+    expected
+}
+
 /// What a governed SELECT of one `?x` answered: the lexical form of `?x` (or `None`
 /// when unbound) and the evidence's expression-error counts — or the call's error.
 type GovernedAnswer = Result<(Option<String>, [u64; PURRDF_EXPRESSION_ERROR_CODE_COUNT]), String>;
@@ -213,38 +227,37 @@ fn governed_update(dataset: *mut PurrdfDataset, request: &str) -> Result<(), Str
 }
 
 #[test]
-fn a_dataset_starts_at_eighteen_digits_toward_zero() {
+fn a_dataset_starts_exact_for_terminating_and_rounded_for_repeating_quotients() {
     let dataset = dataset();
-    assert_eq!(policy_of(dataset), "18:toward-zero");
+    assert_eq!(policy_of(dataset), "exact-or-18:half-even");
     let third = bound_x(&query_json(dataset, "SELECT (1/3 AS ?x) {}").expect("1/3 answers"));
     assert_eq!(third, "0.333333333333333333");
+    let deep = bound_x(&query_json(dataset, "SELECT (1/1048576 AS ?x) {}").expect("1/1048576"));
+    assert_eq!(deep, "0.00000095367431640625");
     unsafe { purrdf_dataset_free(dataset) };
 }
 
+/// Under `exact` a terminating quotient answers exactly; one with no finite expansion
+/// is a SPARQL expression error — `?x` unbound, err:FOAR0002 counted in the governed
+/// evidence — not a failed query.
 #[test]
-fn an_exact_policy_answers_a_terminating_quotient_and_refuses_the_rest() {
+fn an_exact_policy_answers_a_terminating_quotient_and_leaves_the_rest_unbound() {
     let dataset = dataset();
     set_policy(dataset, "exact").expect("exact parses");
     assert_eq!(policy_of(dataset), "exact");
     let eighth = query_json(dataset, "SELECT (1/8 AS ?x) {}").expect("1/8 terminates");
     assert_eq!(bound_x(&eighth), "0.125");
-    let (code, message) =
-        query_json(dataset, "SELECT (1/3 AS ?x) {}").expect_err("1/3 does not terminate");
-    assert_eq!(code, PurrdfStatus::QueryError as i32);
-    assert!(
-        message.contains("FOAR0002"),
-        "names err:FOAR0002: {message}"
-    );
+    let third =
+        query_json(dataset, "SELECT (1/3 AS ?x) {}").expect("1/3 is unbound, not a failure");
+    assert!(x_is_unbound(&third), "{third}");
 
-    // The governed entry runs under the same policy.
+    // The governed entry runs under the same policy, and counts the code.
     let (x, errors) = governed_x(dataset, "SELECT (1/8 AS ?x) {}").expect("governed 1/8");
     assert_eq!(x.as_deref(), Some("0.125"));
     assert_eq!(errors, [0; PURRDF_EXPRESSION_ERROR_CODE_COUNT]);
-    let message = governed_x(dataset, "SELECT (1/3 AS ?x) {}").expect_err("governed 1/3");
-    assert!(
-        message.contains("FOAR0002"),
-        "names err:FOAR0002: {message}"
-    );
+    let (x, errors) = governed_x(dataset, "SELECT (1/3 AS ?x) {}").expect("governed 1/3");
+    assert_eq!(x, None);
+    assert_eq!(errors, only(PurrdfExpressionErrorCode::Foar0002, 1));
     unsafe { purrdf_dataset_free(dataset) };
 }
 
@@ -276,8 +289,9 @@ fn an_unparseable_policy_is_refused_and_leaves_the_previous_one_in_force() {
         );
         assert_eq!(policy_of(dataset), "exact", "{refused:?} changed nothing");
     }
-    // Still exact: 1/3 is still refused and 1/8 still answers.
-    assert!(query_json(dataset, "SELECT (1/3 AS ?x) {}").is_err());
+    // Still exact: 1/3 is still unbound and 1/8 still answers.
+    let (_, errors) = governed_x(dataset, "SELECT (1/3 AS ?x) {}").expect("governed 1/3");
+    assert_eq!(errors, only(PurrdfExpressionErrorCode::Foar0002, 1));
     let eighth = query_json(dataset, "SELECT (1/8 AS ?x) {}").expect("1/8 terminates");
     assert_eq!(bound_x(&eighth), "0.125");
     // The valid neighbours of the refused texts are accepted.
@@ -295,7 +309,7 @@ fn a_null_policy_is_a_null_pointer() {
         unsafe { purrdf_dataset_set_division_policy(dataset, std::ptr::null(), &raw mut error) };
     assert_eq!(status, PurrdfStatus::NullPointer as i32);
     assert_eq!(take_error(error).0, PurrdfStatus::NullPointer as i32);
-    assert_eq!(policy_of(dataset), "18:toward-zero");
+    assert_eq!(policy_of(dataset), "exact-or-18:half-even");
     unsafe { purrdf_dataset_free(dataset) };
 }
 
@@ -303,16 +317,13 @@ fn a_null_policy_is_a_null_pointer() {
 fn a_governed_update_runs_under_the_policy() {
     let dataset = dataset();
     set_policy(dataset, "exact").expect("exact parses");
-    let message = governed_update(
+    // 1/3 does not terminate: ?x is unbound, so the template inserts nothing.
+    governed_update(
         dataset,
         "INSERT { <http://example.org/s> <http://example.org/third> ?x } \
          WHERE { BIND(1/3 AS ?x) }",
     )
-    .expect_err("1/3 does not terminate");
-    assert!(
-        message.contains("FOAR0002"),
-        "names err:FOAR0002: {message}"
-    );
+    .expect("an unbound ?x inserts nothing");
     governed_update(
         dataset,
         "INSERT { <http://example.org/s> <http://example.org/eighth> ?x } \
@@ -392,11 +403,10 @@ fn an_entailment_query_runs_under_the_policy() {
         run("SELECT (1/8 AS ?x) {}"),
         Ok(PurrdfEntailmentQueryOutcomeKind::Complete as i32)
     );
-    let (code, message) = run("SELECT (1/3 AS ?x) {}").expect_err("1/3 does not terminate");
-    assert_eq!(code, PurrdfStatus::QueryError as i32);
-    assert!(
-        message.contains("FOAR0002"),
-        "names err:FOAR0002: {message}"
+    // 1/3 does not terminate: an expression error, so the query still completes.
+    assert_eq!(
+        run("SELECT (1/3 AS ?x) {}"),
+        Ok(PurrdfEntailmentQueryOutcomeKind::Complete as i32)
     );
     unsafe { purrdf_dataset_free(dataset) };
 }
@@ -406,9 +416,11 @@ fn evidence_counts_an_absorbed_division_by_zero_per_code() {
     let dataset = dataset();
     let (x, errors) = governed_x(dataset, "SELECT (1/0 AS ?x) {}").expect("1/0 is unbound");
     assert_eq!(x, None, "an expression error leaves ?x unbound");
-    let mut expected = [0; PURRDF_EXPRESSION_ERROR_CODE_COUNT];
-    expected[PurrdfExpressionErrorCode::Foar0001 as usize] = 1;
-    assert_eq!(errors, expected, "1/0 is one err:FOAR0001");
+    assert_eq!(
+        errors,
+        only(PurrdfExpressionErrorCode::Foar0001, 1),
+        "1/0 is one err:FOAR0001"
+    );
     // The valid neighbour raises nothing.
     let (x, errors) = governed_x(dataset, "SELECT (1/2 AS ?x) {}").expect("1/2 answers");
     assert_eq!(x.as_deref(), Some("0.5"));

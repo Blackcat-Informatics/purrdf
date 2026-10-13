@@ -307,7 +307,7 @@ pub(super) fn translate_with(
                 out.push_str(if negated { NOT_WORD_CLASS } else { WORD_CLASS });
             }
             Token::UnicodeProperty { negated, name } => {
-                emit_unicode_property(&mut out, negated, &name)?;
+                emit_unicode_property(&mut out, negated, name)?;
             }
             Token::Dot => {
                 out.push_str(if dot_all { "." } else { "[^\\u{a}\\u{d}]" });
@@ -472,7 +472,7 @@ impl Default for ShapeObserver {
 
 impl ShapeObserver {
     /// Fold one token in; `class_depth` is the depth before the token.
-    fn observe(&mut self, token: &Token, class_depth: usize) {
+    fn observe(&mut self, token: &Token<'_>, class_depth: usize) {
         let (text, kind) = match *token {
             Token::Literal(c) if class_depth == 0 => match c {
                 '^' => (None, Kind::Caret),
@@ -630,7 +630,7 @@ impl TopLevel {
 /// [`VariantFrame::normal`]): a character or `-` exactly as the class itself
 /// receives it, a single-character escape as its character, and every
 /// multi-character escape as [`EMPTY_NESTED_CLASS`].
-fn mirror_normal_member(normal: &mut String, token: &Token) {
+fn mirror_normal_member(normal: &mut String, token: &Token<'_>) {
     match token {
         Token::Literal(c) => normal.push(*c),
         Token::ClassMember(c) => {

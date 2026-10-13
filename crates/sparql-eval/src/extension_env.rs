@@ -130,6 +130,7 @@ pub struct ExtensionEnv {
     /// plan's identity cares about.
     relations: PropertyFunctionRegistry,
     aggregates: AggregateRegistry,
+    shapes: crate::shapes::ShapeRegistry,
     /// [`Self::base`] with `relations`' registered IRIs unioned into
     /// [`ParserOptions::property_fn_iris`]. Derived once; see
     /// [`Self::parser_options`].
@@ -173,6 +174,7 @@ static EMPTY: ExtensionEnv = ExtensionEnv {
     base: EMPTY_PARSER_OPTIONS,
     relations: PropertyFunctionRegistry::EMPTY,
     aggregates: AggregateRegistry::EMPTY,
+    shapes: crate::shapes::ShapeRegistry::EMPTY,
     effective: EMPTY_PARSER_OPTIONS,
     relations_fingerprint: String::new(),
     aggregates_fingerprint: String::new(),
@@ -229,6 +231,7 @@ impl ExtensionEnv {
             base,
             relations,
             aggregates,
+            shapes: crate::shapes::ShapeRegistry::EMPTY,
             effective,
             relations_fingerprint,
             aggregates_fingerprint,
@@ -286,7 +289,22 @@ impl ExtensionEnv {
     ///
     /// [`EvalError`] if a registered relation's declaration methods panic.
     pub fn with_relations(&self, relations: PropertyFunctionRegistry) -> Result<Self, EvalError> {
-        Self::new(self.base.clone(), relations, self.aggregates.clone())
+        Ok(
+            Self::new(self.base.clone(), relations, self.aggregates.clone())?
+                .with_shapes(self.shapes.clone()),
+        )
+    }
+
+    /// Replace physical strategies without changing logical parser meaning.
+    #[must_use]
+    pub fn with_shapes(mut self, shapes: crate::shapes::ShapeRegistry) -> Self {
+        self.shapes = shapes;
+        self
+    }
+
+    /// Caller-owned physical registrations, shared by every execution entry.
+    pub const fn shapes(&self) -> &crate::shapes::ShapeRegistry {
+        &self.shapes
     }
 
     /// An environment over declared parser options and nothing else: no relations,

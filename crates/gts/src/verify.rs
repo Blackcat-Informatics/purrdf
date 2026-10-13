@@ -15,7 +15,7 @@ use purrdf_ed25519::VerifyingKey;
 use purrdf_lex::cbor::Value;
 
 use crate::FastMap;
-use crate::cose::verify_signatures;
+use crate::cose::{Algorithm, VerifyingKeyRef, verify_signatures_with_resolver};
 use crate::emojihash::{emojihash, emojihash_labels, randomart};
 use crate::model::{Diagnostic, Graph};
 use crate::openpgp::parse_transport_key;
@@ -23,6 +23,86 @@ use crate::policy::{
     ProfileFinding, Severity, TrustPolicy, evaluate_profile_policy, signature_trust,
 };
 use crate::reader::read;
+
+/// Explicit algorithm-tagged public key, independent of discovery and trust.
+#[derive(Clone, Debug)]
+pub enum VerificationKey {
+    /// Existing Ed25519 public key.
+    Ed25519(VerifyingKey),
+    /// Dedicated composite public key.
+    Composite(Box<crate::cose::composite::VerifyingKey>),
+}
+
+impl VerificationKey {
+    /// Borrow the key through the sole typed COSE verifier.
+    #[must_use]
+    pub fn as_ref(&self) -> VerifyingKeyRef<'_> {
+        match self {
+            Self::Ed25519(key) => VerifyingKeyRef::Ed25519(key),
+            Self::Composite(key) => VerifyingKeyRef::Composite(key),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(VerificationKey {
+    Ed25519(VerifyingKey),
+    Composite(Box<crate::cose::composite::VerifyingKey>),
+});
+
+/// Caller-supplied resolution of an exact optional COSE identifier. The
+/// declared algorithm is authenticated only after verification succeeds.
+pub trait SignatureKeyring {
+    /// Return an explicitly configured key; wrong algorithm/key type fails
+    /// verification. `None` identifier is distinct from `Some(b"")`.
+    fn resolve(&self, kid: Option<&[u8]>, algorithm: Algorithm) -> Option<VerifyingKeyRef<'_>>;
+}
+
+/// Fixed-hasher opaque-id keyring. An absent-id key is configured separately,
+/// never fabricated from an empty identifier or used as a fallback.
+#[derive(Clone, Debug, Default)]
+pub struct Keyring {
+    keys: FastMap<Vec<u8>, VerificationKey>,
+    without_id: Option<VerificationKey>,
+}
+
+impl Keyring {
+    /// Insert or replace the public key associated with exact opaque id bytes.
+    /// Composite keys are supplied in a `Box`, keeping each keyring entry small.
+    pub fn insert(
+        &mut self,
+        kid: impl AsRef<[u8]>,
+        key: impl Into<VerificationKey>,
+    ) -> Option<VerificationKey> {
+        self.keys.insert(kid.as_ref().to_vec(), key.into())
+    }
+
+    /// Explicitly configure signatures that have no kid header. This does not
+    /// resolve any present identifier, including an empty one.
+    pub fn insert_without_id(
+        &mut self,
+        key: impl Into<VerificationKey>,
+    ) -> Option<VerificationKey> {
+        self.without_id.replace(key.into())
+    }
+}
+
+impl SignatureKeyring for Keyring {
+    fn resolve(&self, kid: Option<&[u8]>, _: Algorithm) -> Option<VerifyingKeyRef<'_>> {
+        match kid {
+            Some(kid) => self.keys.get(kid),
+            None => self.without_id.as_ref(),
+        }
+        .map(VerificationKey::as_ref)
+    }
+}
+
+// The existing text/Ed25519 keyring remains a convenience over the same core.
+impl<S: BuildHasher> SignatureKeyring for HashMap<String, VerifyingKey, S> {
+    fn resolve(&self, kid: Option<&[u8]>, _: Algorithm) -> Option<VerifyingKeyRef<'_>> {
+        let kid = core::str::from_utf8(kid?).ok()?;
+        self.get(kid).map(VerifyingKeyRef::Ed25519)
+    }
+}
 
 /// The embedded `gts:transportKey` metadata value.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,12 +274,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
         let first = read(data, true, None);
         let Some(transport) = extract_transport_key(&first) else {
             if !options.require_signatures && first.signatures.is_empty() {
-                return VerificationResult {
-                    ok: true,
-                    frames: first.signatures.len(),
-                    diagnostics: first.diagnostics,
-                    ..VerificationResult::default()
-                };
+                return verify_graph_with_keyring(first, &Keyring::default(), options);
             }
             errors.push("no gts:transportKey found in file metadata".to_string());
             return VerificationResult {
@@ -230,7 +305,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
         }
     };
 
-    let mut graph = graph.unwrap_or_else(|| read(data, true, None));
+    let graph = graph.unwrap_or_else(|| read(data, true, None));
     // Fold the resolved single key into a one-entry keyring so single-key and
     // rotation-capable verification share the same core (no parallel resolver
     // mechanism).
@@ -240,25 +315,13 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
     );
     let mut keyring = FastMap::with_capacity_and_hasher(1, purrdf_hash::fixed::FixedState::new());
     keyring.insert(kid.clone(), public);
-    let result = verify_against_keyring(&mut graph, &keyring, options);
-
-    VerificationResult {
-        ok: result.ok,
-        kid: Some(kid),
-        fingerprint: Some(fingerprint),
-        emojihash: Some(emojihash(&raw_public, 11)),
-        emojihash_labels: Some(emojihash_labels(&raw_public, 11)),
-        randomart: Some(randomart(&raw_public, "GTS transport")),
-        frames: result.signed,
-        signed: result.signed,
-        valid: result.valid,
-        trusted: result.trusted,
-        invalid: result.invalid,
-        unverified: result.unverified,
-        errors: result.errors,
-        diagnostics: graph.diagnostics,
-        profile_findings: result.profile_findings,
-    }
+    let mut result = verify_graph_with_keyring(graph, &keyring, options);
+    result.kid = Some(kid);
+    result.fingerprint = Some(fingerprint);
+    result.emojihash = Some(emojihash(&raw_public, 11));
+    result.emojihash_labels = Some(emojihash_labels(&raw_public, 11));
+    result.randomart = Some(randomart(&raw_public, "GTS transport"));
+    result
 }
 
 /// Verify a GTS file's embedded signatures against a rotation-capable keyring.
@@ -268,13 +331,20 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
 /// over time (key rotation) verifies as long as each `kid` used is present.
 /// This is the core [`verify_file_with_options`] also uses internally, folded
 /// down to its single resolved key.
-pub fn verify_file_with_keyring<S: BuildHasher>(
+pub fn verify_file_with_keyring<K: SignatureKeyring + ?Sized>(
     data: &[u8],
-    keyring: &HashMap<String, VerifyingKey, S>,
+    keyring: &K,
 ) -> VerificationResult {
-    let mut graph = read(data, true, None);
     let options = VerifyOptions::default();
-    let result = verify_against_keyring(&mut graph, keyring, &options);
+    verify_graph_with_keyring(read(data, true, None), keyring, &options)
+}
+
+fn verify_graph_with_keyring<K: SignatureKeyring + ?Sized>(
+    mut graph: Graph,
+    keyring: &K,
+    options: &VerifyOptions,
+) -> VerificationResult {
+    let result = verify_against_keyring(&mut graph, keyring, options);
     VerificationResult {
         ok: result.ok,
         kid: None,
@@ -309,13 +379,13 @@ struct KeyringVerification {
     ok: bool,
 }
 
-fn verify_against_keyring<S: BuildHasher>(
+fn verify_against_keyring<K: SignatureKeyring + ?Sized>(
     graph: &mut Graph,
-    keyring: &HashMap<String, VerifyingKey, S>,
+    keyring: &K,
     options: &VerifyOptions,
 ) -> KeyringVerification {
-    verify_signatures(&mut graph.signatures, |candidate| {
-        keyring.get(candidate).copied()
+    verify_signatures_with_resolver(&mut graph.signatures, |candidate, algorithm| {
+        keyring.resolve(candidate, algorithm)
     });
 
     let signed = graph.signatures.len();
@@ -338,7 +408,7 @@ fn verify_against_keyring<S: BuildHasher>(
     let trusted = trusts.iter().filter(|item| item.trusted).count();
     let profile_findings = evaluate_profile_policy(graph, Some(&options.trust_policy), None);
 
-    let mut errors = Vec::new();
+    let mut errors = integrity_errors(&graph.diagnostics);
     if invalid > 0 {
         errors.push(format!("{invalid} signature(s) invalid"));
     }
@@ -366,6 +436,27 @@ fn verify_against_keyring<S: BuildHasher>(
         profile_findings,
         ok,
     }
+}
+
+fn integrity_errors(diagnostics: &[Diagnostic]) -> Vec<String> {
+    // Damaged frames can be withheld from the folded signature list. Valid
+    // signatures on survivors cannot establish file integrity. MissingKey and
+    // UnknownCodec still permit authentication of opaque ciphertext/payloads.
+    diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.code.as_str(),
+                "DamagedFrame"
+                    | "EmptyFile"
+                    | "BrokenChain"
+                    | "TruncatedLog"
+                    | "TornAppendError"
+                    | "ResourceLimit"
+            )
+        })
+        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.detail))
+        .collect()
 }
 
 fn provider_from_armor(

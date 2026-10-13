@@ -10,13 +10,95 @@
 //! encoding is self-delimiting and map entries can be sorted without ambiguity.
 //! All integers are little-endian, so the bytes are identical on every target.
 
-use purrdf_hash::frame::frame_le;
+use purrdf_hash::frame::{frame_le, frame_le_into};
 
 use crate::error::PlanError;
 
 /// Append-only canonical byte writer.
-pub(crate) struct Writer {
-    buf: Vec<u8>,
+pub(crate) struct Writer<B = Vec<u8>> {
+    buf: B,
+}
+
+/// Destination of the one canonical encoder: retained bytes or their digest.
+pub(crate) trait CanonicalSink {
+    fn append(&mut self, bytes: &[u8]);
+    fn frame(&mut self, bytes: &[u8]);
+}
+impl CanonicalSink for Vec<u8> {
+    fn append(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+    fn frame(&mut self, bytes: &[u8]) {
+        frame_le(self, bytes);
+    }
+}
+impl CanonicalSink for &mut purrdf_hash::blake3::RecordHasher {
+    fn append(&mut self, bytes: &[u8]) {
+        self.update(bytes);
+    }
+    fn frame(&mut self, bytes: &[u8]) {
+        frame_le_into(*self, bytes);
+    }
+}
+
+/// Native export storage latches its first refusal before further writes.
+pub(crate) struct AdmittedBytes {
+    bytes: purrdf_sparql_eval::AdmittedVec<u8>,
+    workspace: purrdf_sparql_eval::WorkspaceCapability,
+    failure: Option<purrdf_sparql_eval::EvalError>,
+}
+impl AdmittedBytes {
+    fn append_checked(&mut self, bytes: &[u8]) -> Result<(), purrdf_sparql_eval::EvalError> {
+        for byte in bytes {
+            self.bytes.push(*byte)?;
+        }
+        Ok(())
+    }
+}
+impl CanonicalSink for AdmittedBytes {
+    fn append(&mut self, bytes: &[u8]) {
+        if self.failure.is_none() {
+            self.failure = self.append_checked(bytes).err();
+        }
+    }
+    fn frame(&mut self, bytes: &[u8]) {
+        if self.failure.is_none() {
+            self.failure =
+                purrdf_hash::frame::try_frame_le_with(bytes, |part| self.append_checked(part))
+                    .err();
+        }
+    }
+}
+
+impl Writer<AdmittedBytes> {
+    /// Preserve a prior write refusal before a caller admits nested output.
+    pub(crate) fn ensure_live(&self) -> Result<(), purrdf_sparql_eval::EvalError> {
+        match &self.buf.failure {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn admitted(workspace: &purrdf_sparql_eval::WorkspaceCapability) -> Self {
+        Self {
+            buf: AdmittedBytes {
+                bytes: purrdf_sparql_eval::AdmittedVec::new(workspace),
+                workspace: workspace.clone(),
+                failure: None,
+            },
+        }
+    }
+    pub(crate) fn into_admitted(
+        self,
+    ) -> Result<
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<u8>>,
+        purrdf_sparql_eval::EvalError,
+    > {
+        if let Some(error) = self.buf.failure {
+            return Err(error);
+        }
+        purrdf_sparql_eval::SharedWorkspace::new_admitted(self.buf.bytes, &self.buf.workspace)
+    }
 }
 
 impl Writer {
@@ -29,30 +111,39 @@ impl Writer {
     pub(crate) fn into_bytes(self) -> Vec<u8> {
         self.buf
     }
+}
 
+impl<'a> Writer<&'a mut purrdf_hash::blake3::RecordHasher> {
+    /// Write the original canonical spelling straight into the original digest.
+    pub(crate) fn digest(hasher: &'a mut purrdf_hash::blake3::RecordHasher) -> Self {
+        Self { buf: hasher }
+    }
+}
+
+impl<B: CanonicalSink> Writer<B> {
     /// Write one byte.
     pub(crate) fn u8(&mut self, value: u8) {
-        self.buf.push(value);
+        self.buf.append(&[value]);
     }
 
     /// Write a little-endian `u16`.
     pub(crate) fn u16(&mut self, value: u16) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
+        self.buf.append(&value.to_le_bytes());
     }
 
     /// Write a little-endian `u32`.
     pub(crate) fn u32(&mut self, value: u32) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
+        self.buf.append(&value.to_le_bytes());
     }
 
     /// Write a little-endian `u64`.
     pub(crate) fn u64(&mut self, value: u64) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
+        self.buf.append(&value.to_le_bytes());
     }
 
     /// Write a little-endian `i128`.
     pub(crate) fn i128(&mut self, value: i128) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
+        self.buf.append(&value.to_le_bytes());
     }
 
     /// Write an `f32` as its exact bit pattern.
@@ -62,7 +153,7 @@ impl Writer {
 
     /// Write a length-framed byte string.
     pub(crate) fn bytes(&mut self, value: &[u8]) {
-        frame_le(&mut self.buf, value);
+        self.buf.frame(value);
     }
 
     /// Write a length-framed UTF-8 string.

@@ -104,8 +104,8 @@ pub const W3C_PROPOSED_UNINCLUDED: &[(&str, &str)] = &[(
      parameter); sparql/component/manifest.ttl does not include it",
 )];
 
-const MF_STATUS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#status";
-const SHT_PROPOSED: &str = "http://www.w3.org/ns/shacl-test#proposed";
+const MF_STATUS: &str = mf::STATUS;
+const SHT_PROPOSED: &str = sht::PROPOSED;
 
 /// The `sht:Validate` entries of [`W3C_PROPOSED_UNINCLUDED`], in table order.
 ///
@@ -152,23 +152,7 @@ pub const FIRST_PARTY_TOTAL_CASES: usize = 73;
 
 // ── Vocabulary ────────────────────────────────────────────────────────────────
 
-mod mf {
-    pub(crate) const INCLUDE: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#include";
-    pub(crate) const ENTRIES: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#entries";
-    pub(crate) const ACTION: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
-    pub(crate) const RESULT: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#result";
-}
-
-mod sht {
-    pub(crate) const VALIDATE: &str = "http://www.w3.org/ns/shacl-test#Validate";
-    pub(crate) const DATA_GRAPH: &str = "http://www.w3.org/ns/shacl-test#dataGraph";
-    pub(crate) const SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl-test#shapesGraph";
-    pub(crate) const FAILURE: &str = "http://www.w3.org/ns/shacl-test#Failure";
-}
+use purrdf_iri::vocab::{mf, sht};
 
 use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 

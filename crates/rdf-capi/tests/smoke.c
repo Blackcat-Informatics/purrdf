@@ -520,6 +520,136 @@ static int check_shapes_graph_iri(void) {
     return 0;
 }
 
+/* Count the rows `purrdf_query_xpath_regex` answers for `query` over `dataset` under
+ * `profile` (NULL for the compatibility regular expressions); -1 when the call fails
+ * with `*status` and hands back an error and no rows, -2 on a broken contract. */
+static int count_regex_rows(const PurrdfDataset *dataset, const char *query,
+                            const char *profile, int32_t *status) {
+    int32_t kind = -1;
+    PurrdfRowCursor *rows = NULL;
+    PurrdfError *error = NULL;
+    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, &kind, &rows, NULL, NULL,
+                                       &error);
+    if (*status != PURRDF_STATUS_OK) {
+        if (error == NULL || rows != NULL || purrdf_error_code(error) != *status) {
+            return -2;
+        }
+        purrdf_error_free(error);
+        return -1;
+    }
+    if (kind != PURRDF_RESULT_KIND_SOLUTIONS || rows == NULL) {
+        return -2;
+    }
+    int count = 0;
+    while (purrdf_rowcursor_next(rows) == PURRDF_STATUS_OK) {
+        count++;
+    }
+    purrdf_rowcursor_free(rows);
+    return count;
+}
+
+/* Whether SHACL validation of `data` under a single `sh:pattern` conforms under
+ * `profile`: 1 conforms, 0 does not, -1 the call failed with `*status`, -2 on a broken
+ * contract. */
+static int regex_shape_conforms(const char *pattern_literal, const char *target,
+                                const char *data, const char *profile, int32_t *status) {
+    char shapes[512];
+    snprintf(shapes, sizeof shapes,
+             "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+             "@prefix ex: <http://example.org/> .\n"
+             "ex:S a sh:NodeShape ; sh:targetNode ex:%s ;\n"
+             "  sh:property [ sh:path ex:p ; sh:pattern \"%s\" ] .\n",
+             target, pattern_literal);
+    PurrdfBuffer *sarif = NULL;
+    PurrdfError *error = NULL;
+    *status = purrdf_shacl_validate_to_sarif_xpath_regex(shapes, NULL, NULL, data, NULL, 0, NULL,
+                                                         NULL, 0, false, profile, &sarif, &error);
+    if (*status != PURRDF_STATUS_OK) {
+        if (error == NULL || sarif != NULL) {
+            return -2;
+        }
+        purrdf_error_free(error);
+        return -1;
+    }
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    purrdf_buffer_data(sarif, &bytes, &len);
+    int conforms = contains_bytes(bytes, len, "\"shaclConforms\": true");
+    purrdf_buffer_free(sarif);
+    return conforms;
+}
+
+/* The dated regular-expression laws through the real header and linkage. `(?:a)b` is a
+ * non-capturing group only XPath 3.1 defines, so under XPath 2.0 the FILTER keeps no row;
+ * `^(a)\1$` is a back-reference both dated laws match against "aa" and the compatibility
+ * expressions (NULL) refuse. An inexact name is an invalid argument beside its accepted
+ * exact neighbour. */
+static int check_xpath_regex(void) {
+    const char *nt = "<http://example.org/s1> <http://example.org/p> \"ab\" .\n"
+                     "<http://example.org/s2> <http://example.org/p> \"aa\" .\n";
+    const char *media = "application/n-triples";
+    PurrdfDataset *dataset = NULL;
+    PurrdfError *error = NULL;
+    CHECK(purrdf_parse((const uint8_t *)nt, strlen(nt), media, NULL, NULL, &dataset, &error) ==
+              PURRDF_STATUS_OK,
+          "parse the regex fixture");
+    const char *non_capturing =
+        "SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, \"^(?:a)b$\")) }";
+    const char *back_reference =
+        "SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, \"^(a)\\\\1$\")) }";
+    const char *v20 = "xpath-2.0-2010-12-14";
+    const char *v31 = "xpath-3.1-2017-03-21";
+    int32_t status = 0;
+    CHECK(count_regex_rows(dataset, non_capturing, v31, &status) == 1,
+          "XPath 3.1 reads the non-capturing group");
+    CHECK(count_regex_rows(dataset, non_capturing, v20, &status) == 0 &&
+              status == PURRDF_STATUS_OK,
+          "under XPath 2.0 the non-capturing group is a pattern error: no row, no failure");
+    CHECK(count_regex_rows(dataset, back_reference, v20, &status) == 1,
+          "XPath 2.0 matches the back-reference");
+    CHECK(count_regex_rows(dataset, back_reference, v31, &status) == 1,
+          "XPath 3.1 matches the back-reference");
+    CHECK(count_regex_rows(dataset, back_reference, NULL, &status) == 0,
+          "NULL keeps the compatibility expressions, which refuse back-references");
+    const char *inexact[3] = {"xpath-3.1", "XPATH-3.1-2017-03-21", ""};
+    for (int i = 0; i < 3; i++) {
+        CHECK(count_regex_rows(dataset, non_capturing, inexact[i], &status) == -1 &&
+                  status == PURRDF_STATUS_INVALID_ARGUMENT,
+              "an inexact law name is an invalid argument");
+    }
+
+    /* A 64 KiB + 1 pattern source is withheld under the production limits: an error
+     * status, never an empty answer. */
+    size_t over = 64 * 1024 + 1;
+    const char *prefix = "SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, \"";
+    const char *suffix = "\")) }";
+    char *huge = (char *)malloc(strlen(prefix) + over + strlen(suffix) + 1);
+    CHECK(huge != NULL, "allocate the oversized query");
+    strcpy(huge, prefix);
+    memset(huge + strlen(prefix), 'a', over);
+    strcpy(huge + strlen(prefix) + over, suffix);
+    CHECK(count_regex_rows(dataset, huge, v31, &status) == -1 &&
+              status == PURRDF_STATUS_REGEX_RESOURCE_ERROR,
+          "a withheld pattern resource is PURRDF_STATUS_REGEX_RESOURCE_ERROR");
+    free(huge);
+    purrdf_dataset_free(dataset);
+
+    CHECK(regex_shape_conforms("^(?:a)b$", "s1", nt, v31, &status) == 1,
+          "sh:pattern under XPath 3.1 reads the non-capturing group");
+    CHECK(regex_shape_conforms("^(?:a)b$", "s1", nt, v20, &status) == 0,
+          "sh:pattern under XPath 2.0 does not");
+    CHECK(regex_shape_conforms("^(a)\\\\1$", "s2", nt, v20, &status) == 1 &&
+              regex_shape_conforms("^(a)\\\\1$", "s2", nt, v31, &status) == 1,
+          "both dated laws match the back-reference in sh:pattern");
+    CHECK(regex_shape_conforms("^(a)\\\\1$", "s2", nt, NULL, &status) == 0,
+          "NULL keeps the compatibility sh:pattern");
+    CHECK(regex_shape_conforms("^a", "s1", nt, "xpath-3.1", &status) == -1 &&
+              status == PURRDF_STATUS_INVALID_ARGUMENT,
+          "an inexact law name is refused by SHACL validation too");
+    printf("xpath_regex: each dated law decides REGEX and sh:pattern; NULL is compatibility\n");
+    return 0;
+}
+
 /* The check-only SPARQL 1.2 RL entry point through the real header and linkage: a
  * self-negating rule is syntactically valid (level SYNTAX answers with its summary) but
  * not stratifiable (level STRATIFIED refuses it, naming the stage, and writes no
@@ -641,8 +771,8 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
 }
 
 /* The dataset handle's division policy and the evidence's expression-error counts
- * through the real header and linkage: an `exact` policy answers 1/8 and refuses 1/3
- * naming err:FOAR0002, an unparseable policy is refused beside an accepted one and
+ * through the real header and linkage: an `exact` policy answers 1/8 and leaves 1/3
+ * unbound (an expression error), an unparseable policy is refused beside an accepted one and
  * changes nothing, and a governed 1/0 is counted at PURRDF_EXPRESSION_ERROR_CODE_FOAR0001
  * while its valid neighbour counts nothing. The policy is restored before returning. */
 static int check_division_policy(PurrdfDataset *dataset) {
@@ -654,8 +784,37 @@ static int check_division_policy(PurrdfDataset *dataset) {
     int32_t rc = purrdf_dataset_division_policy(dataset, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "read the default division policy");
     purrdf_buffer_data(buffer, &bytes, &len);
-    CHECK(len == strlen("18:toward-zero") && memcmp(bytes, "18:toward-zero", len) == 0,
-          "the default division policy is 18:toward-zero");
+    CHECK(len == strlen("exact-or-18:half-even") && memcmp(bytes, "exact-or-18:half-even", len) == 0,
+          "the default division policy is exact-or-18:half-even");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (1/1048576 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default terminating quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.00000095367431640625\""),
+          "default terminating quotient keeps more than eighteen places");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default repeating quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.666666666666666667\""),
+          "default repeating quotient rounds half to even at eighteen places");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset,
+                           "SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^"
+                           "<http://www.w3.org/2001/XMLSchema#dateTime>) AS ?x) {}",
+                           NULL, NULL, NULL, &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"5.123456789012345678901\""),
+          "exact temporal seconds keep twenty-one fractional places");
     purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "exact", &error);
@@ -677,12 +836,11 @@ static int check_division_policy(PurrdfDataset *dataset) {
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
                            &error);
-    CHECK(rc == PURRDF_STATUS_QUERY_ERROR && error != NULL && buffer == NULL,
-          "the refused policy left exact in force: 1/3 is refused");
-    CHECK(strstr(purrdf_error_message(error), "FOAR0002") != NULL,
-          "the refusal names err:FOAR0002");
-    purrdf_error_free(error);
-    error = NULL;
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL,
+          "the refused policy left exact in force: 1/3 answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(!contains_bytes(bytes, len, "\"x\":"), "exact leaves 1/3 unbound");
+    purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "5:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 5:half-even");
@@ -692,6 +850,26 @@ static int check_division_policy(PurrdfDataset *dataset) {
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "5:half-even 2/3 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.66667\""), "5:half-even 2/3 is 0.66667");
+    purrdf_buffer_free(buffer);
+
+    rc = purrdf_dataset_set_division_policy(dataset, "2:half-even", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "set 2:half-even for an exact tie");
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
+                           &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "half-even tie answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.38\""), "3/8 ties upward to an even cent");
+    purrdf_buffer_free(buffer);
+
+    rc = purrdf_dataset_set_division_policy(dataset, "2", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "set bare scale policy");
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "bare scale quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.66\""), "bare scale truncates toward zero");
     purrdf_buffer_free(buffer);
 
     PurrdfQueryGovernors governors;
@@ -718,9 +896,113 @@ static int check_division_policy(PurrdfDataset *dataset) {
         purrdf_rowcursor_free(rows);
     }
 
-    rc = purrdf_dataset_set_division_policy(dataset, "18", &error);
+    rc = purrdf_dataset_set_division_policy(dataset, "exact-or-18:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "restore the default division policy");
     printf("division: policy set, refused, applied and counted\n");
+    return 0;
+}
+
+/* Opaque geographic handles must work from the installed C declaration, including
+ * the distinct semantic/operational error channels and a retained child index. */
+static int check_geo_handles(const PurrdfDataset *dataset) {
+    const char *distance =
+        "{\"version\":1,\"operation\":\"distance\","
+        "\"a\":{\"longitude\":\"0\",\"latitude\":\"0\"},"
+        "\"b\":{\"longitude\":\"0\",\"latitude\":\"0\"}}";
+    PurrdfGeoSession *session = NULL;
+    PurrdfGeoPointIndex *index = NULL;
+    PurrdfBuffer *response = NULL;
+    PurrdfError *error = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    CHECK(purrdf_geo_session_create(NULL, &session, &error) == PURRDF_STATUS_OK &&
+              session != NULL && error == NULL, "geo session creation");
+    CHECK(purrdf_geo_session_call(session, distance, &response, &error) ==
+              PURRDF_STATUS_OK && response != NULL && error == NULL,
+          "geo distance completes through C");
+    CHECK(purrdf_buffer_data(response, &bytes, &len) == PURRDF_STATUS_OK &&
+              contains_bytes(bytes, len, "\"micrometres\":\"0\""),
+          "geo distance has the native exact zero result");
+    purrdf_buffer_free(response);
+    response = NULL;
+    CHECK(purrdf_geo_session_call(session,
+              "{\"version\":1,\"operation\":\"not-an-operation\"}",
+              &response, &error) == PURRDF_STATUS_GEO_ERROR &&
+              response != NULL && error != NULL,
+          "geo semantic refusal retains its complete response and error");
+    CHECK(purrdf_buffer_data(response, &bytes, &len) == PURRDF_STATUS_OK &&
+              contains_bytes(bytes, len, "\"code\":\"invalid-record\"") &&
+              purrdf_error_code(error) == PURRDF_STATUS_GEO_ERROR,
+          "geo semantic refusal preserves the typed code");
+    purrdf_buffer_free(response);
+    response = NULL;
+    purrdf_error_free(error);
+    error = NULL;
+    CHECK(purrdf_geo_point_index_create(session,
+              "{\"version\":1,\"operation\":\"point-index\",\"grid\":\"wgs84\","
+              "\"level\":2,\"points\":[{\"key\":\"7\",\"point\":{\"longitude\":\"0\","
+              "\"latitude\":\"0\"}},{\"key\":\"11\",\"point\":{\"longitude\":\"1\","
+              "\"latitude\":\"0\"}}]}", &index, &error) == PURRDF_STATUS_OK &&
+              index != NULL && error == NULL, "geo index creation");
+    purrdf_geo_session_free(session);
+    session = NULL;
+    CHECK(purrdf_geo_point_index_call(index,
+              "{\"version\":1,\"operation\":\"search-physical\","
+              "\"center\":{\"longitude\":\"0\",\"latitude\":\"0\"},"
+              "\"radius_metres\":\"0\"}", &response, &error) == PURRDF_STATUS_OK &&
+              response != NULL && error == NULL,
+          "geo index outlives the creating session");
+    CHECK(purrdf_buffer_data(response, &bytes, &len) == PURRDF_STATUS_OK &&
+              contains_bytes(bytes, len, "\"keys\":[\"7\"]"),
+          "retained geo index refines its original points");
+    purrdf_buffer_free(response);
+    response = NULL;
+    purrdf_geo_point_index_free(index);
+    CHECK(purrdf_geo_session_create(
+              "{\"version\":1,\"limits\":{\"max_work_items\":1}}",
+              &session, &error) == PURRDF_STATUS_OK && error == NULL,
+          "bounded geo session creation");
+    CHECK(purrdf_geo_session_call(session, distance, &response, &error) ==
+              PURRDF_STATUS_GEO_ERROR && response == NULL && error != NULL,
+          "geo operational refusal emits no partial response");
+    CHECK(purrdf_error_code(error) == PURRDF_STATUS_GEO_ERROR &&
+              strstr(purrdf_error_message(error), "geometry work exhausted at 1 items") != NULL,
+          "geo operational refusal preserves the original work cause");
+    purrdf_error_free(error);
+    error = NULL;
+    purrdf_geo_session_free(session);
+    session = NULL;
+
+    const char *axes_query =
+        "ASK { FILTER(<http://www.opengis.net/def/function/geosparql/distance>("
+        "\"<http://www.opengis.net/def/crs/EPSG/0/4326> POINT(0 1)\""
+        "^^<http://www.opengis.net/ont/geosparql#wktLiteral>,"
+        "\"POINT(1 0)\"^^<http://www.opengis.net/ont/geosparql#wktLiteral>,"
+        "<http://www.opengis.net/def/uom/OGC/1.0/metre>) = 0) }";
+    PurrdfRowCursor *rows = NULL;
+    PurrdfDataset *graph = NULL;
+    uint8_t boolean = 0;
+    int32_t kind = -1;
+    CHECK(purrdf_query_with_geo(NULL, dataset, axes_query, NULL, NULL,
+              &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
+              error != NULL && rows == NULL && graph == NULL &&
+              strstr(purrdf_error_message(error), "unregistered") != NULL,
+          "C query refuses undeclared geographic axes");
+    purrdf_error_free(error);
+    error = NULL;
+    CHECK(purrdf_geo_session_create(
+              "{\"version\":1,\"references\":[{"
+              "\"crs\":\"http://www.opengis.net/def/crs/EPSG/0/4326\","
+              "\"ellipsoid\":\"wgs84\",\"axes\":\"lat-lon\"}]}",
+              &session, &error) == PURRDF_STATUS_OK && error == NULL,
+          "C query geographic profile creation");
+    CHECK(purrdf_query_with_geo(session, dataset, axes_query, NULL, NULL,
+              &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
+              error == NULL && rows == NULL && graph == NULL &&
+              kind == PURRDF_RESULT_KIND_BOOLEAN && boolean == 1,
+          "C query forwards the declared geographic axes");
+    purrdf_geo_session_free(session);
+    printf("geo: session, typed refusals, retained index and query profile passed\n");
     return 0;
 }
 
@@ -750,6 +1032,7 @@ int main(int argc, char **argv) {
     int rc = purrdf_parse((const uint8_t *)doc, strlen(doc), "text/turtle", NULL,
                           NULL, &dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && dataset != NULL, "parse");
+    CHECK(check_geo_handles(dataset) == 0, "geographic C handles");
 
     size_t quad_count = 0;
     CHECK(purrdf_dataset_quad_count(dataset, &quad_count) == PURRDF_STATUS_OK,
@@ -1696,6 +1979,7 @@ int main(int argc, char **argv) {
 
     CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
+    CHECK(check_xpath_regex() == 0, "the dated regular-expression laws");
     CHECK(check_xsd_exact_numerics(dataset) == 0, "the exact XSD value space");
     CHECK(check_division_policy(dataset) == 0, "the division policy and expression errors");
 

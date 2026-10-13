@@ -8,7 +8,7 @@ use purrdf_core::dataset_view::TermGuard as _;
 use crate::projections::util::validate_portable_bound;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
+use purrdf_core::{DatasetHandle, DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
 use purrdf_lex::json::Value;
 use purrdf_sparql_algebra::{
     AggregateFunction, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
@@ -217,7 +217,7 @@ pub(super) fn format_to_json(format: NativeRdfFormat) -> Value {
 #[derive(Debug, Clone)]
 pub struct ConstructViewProjection {
     /// Frozen CONSTRUCT result graph.
-    pub dataset: Arc<RdfDataset>,
+    pub dataset: DatasetHandle,
     /// Combined source record count charged to the input limit.
     pub input_records: usize,
     /// Combined result record count charged to the output limit.
@@ -466,6 +466,7 @@ fn pattern_cause<'a>(
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
+        | GraphPattern::Apply { left, right, .. }
         | GraphPattern::Minus { left, right } => {
             pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
         }
@@ -730,7 +731,7 @@ fn term_contains_blank<D: DatasetView>(
 #[derive(Debug, Clone)]
 pub struct RdfDescriptionProjection {
     /// Frozen caller-vocabulary RDF 1.2 description graph.
-    pub dataset: Arc<RdfDataset>,
+    pub dataset: DatasetHandle,
     /// Canonical package member path derived from the selected syntax registry row.
     pub artifact_path: String,
     /// One-member deterministic projection package.
@@ -781,13 +782,14 @@ pub fn serialize_rdf_description(
 /// syntax can write a base directive). This projection lane deliberately does not
 /// re-decide either half.
 pub(crate) fn serialize_description(
-    dataset: Arc<RdfDataset>,
+    dataset: impl Into<DatasetHandle>,
     loss_ledger: LossLedger,
     format: NativeRdfFormat,
     artifact_stem: &str,
     document_base_iri: Option<&str>,
     limits: ProjectionLimits,
 ) -> Result<RdfDescriptionProjection, ProjectionError> {
+    let dataset = dataset.into();
     validate_artifact_stem(artifact_stem)?;
     ensure_blank_free(dataset.as_ref(), limits)?;
     if dataset.named_graphs().next().is_some() {
@@ -847,6 +849,79 @@ mod tests {
     use purrdf_lex::json::record::ToJson;
 
     use super::*;
+
+    #[test]
+    fn contextual_application_visits_both_operands_and_nested_expression_causes() {
+        use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+        use purrdf_sparql_algebra::tree::Child;
+
+        let application = |left, right| GraphPattern::Apply {
+            left: Child::new(left),
+            right: Child::new(right),
+            policy: Box::new(ApplicationPolicy {
+                dataset_required: false,
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: None,
+                inputs: Vec::new(),
+                optional: None,
+            }),
+        };
+        let volatile = GraphPattern::Filter {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            expr: Expression::FunctionCall(Function::Rand, Vec::new().into()),
+        };
+        let service = GraphPattern::Service {
+            name: purrdf_sparql_algebra::NamedNodePattern::NamedNode(
+                purrdf_sparql_algebra::NamedNode::new_unchecked("http://example.org/service"),
+            ),
+            inner: Child::new(GraphPattern::empty_bgp()),
+            silent: false,
+        };
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                GraphPattern::empty_bgp(),
+                GraphPattern::empty_bgp()
+            ))),
+            None,
+        );
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                volatile.clone(),
+                service.clone()
+            ))),
+            Some(NonReproducibleCause::Rand),
+        );
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                GraphPattern::empty_bgp(),
+                service
+            ))),
+            Some(NonReproducibleCause::Service),
+        );
+        let nested =
+            Expression::Exists(Child::new(application(GraphPattern::empty_bgp(), volatile)));
+        assert_eq!(
+            first_cause(Reach::Expr(&nested)),
+            Some(NonReproducibleCause::Rand)
+        );
+        let custom = GraphPattern::Filter {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            expr: Expression::FunctionCall(
+                Function::Custom(purrdf_sparql_algebra::NamedNode::new_unchecked(
+                    "http://example.org/function",
+                )),
+                Vec::new().into(),
+            ),
+        };
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                GraphPattern::empty_bgp(),
+                custom
+            ))),
+            Some(NonReproducibleCause::CustomFunction),
+        );
+    }
 
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(1, 1_000_000, 1_000_000, 1_002_000, 16).expect("limits")
@@ -1137,12 +1212,18 @@ mod tests {
         let reversed = project_construct_view(reordered.as_ref(), &config).expect("reordered");
         assert_eq!(resident.input_records, 3);
         assert_eq!(resident.output_records, 2);
-        assert!(datasets_isomorphic(&resident.dataset, &reversed.dataset));
+        assert!(datasets_isomorphic(
+            resident.dataset.as_ref(),
+            reversed.dataset.as_ref()
+        ));
 
         let bytes = PackBuilder::build_bytes(&source).expect("pack");
         let view = PackView::from_bytes(&bytes).expect("pack view");
         let packed = project_construct_view(&view, &config).expect("packed");
-        assert!(datasets_isomorphic(&resident.dataset, &packed.dataset));
+        assert!(datasets_isomorphic(
+            resident.dataset.as_ref(),
+            packed.dataset.as_ref()
+        ));
         assert_eq!(resident.input_records, packed.input_records);
         assert_eq!(resident.output_records, packed.output_records);
     }

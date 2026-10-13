@@ -74,6 +74,25 @@ engines behind one seam; `NativeSparqlEngine` is the shipped implementation.
 Anything outside this surface — and every malformed query — is a typed
 `ParseError`, never a silently degraded parse.
 
+## Named graph lifetime
+
+The 3.x default preserves the implicit graph-operation model: `CREATE` registers
+no slot, and `CLEAR` and `DROP` both remove the named graph. Select
+`GraphExistenceMode::RememberEmpty` with `MutableDataset::new_with_graph_existence`
+or `QueryOptions::with_graph_existence` to retain empty slots. In this mode,
+`CREATE` registers a slot and refuses duplicates unless `SILENT`; `CLEAR` retains
+the slot, and `DROP` removes it. Both constant and variable `GRAPH` queries see
+declared empty graphs. The default graph always exists. Remembered empty graphs
+are expected to become the default in v4.0; they remain opt-in in 3.x.
+
+Python selects the same policy with `Store(remember_empty_graphs=True)` or
+`MutableDataset(remember_empty_graphs=True)`. Their shared `add_graph` and
+`named_graphs` methods use native named or blank graph terms. UPDATE, governed
+UPDATE, `Store.checkpoint` and `MutableDataset.compact` preserve the selection.
+Loading and dumping declared empty graphs through TriG, JSON-LD and TriX works in
+both modes; mode is mutation policy rather than serialized data. A stopped UPDATE
+publishes nothing, including declarations made by earlier operations.
+
 ## How the evaluator works
 
 - **Multiset (bag) semantics** — solutions are a bag, preserved until
@@ -117,7 +136,7 @@ Anything outside this surface — and every malformed query — is a typed
   with certified rows rather than a wrong answer, and `explain_query` returns
   a `QueryExplanation` whose ledger decomposes the fuel spent per algebra node
   and per charge point, beside the cost planner's estimate for each basic
-  graph pattern. The normative charge schedule and the frozen 50-case governor
+  graph pattern. The normative charge schedule and the frozen 54-case governor
   corpus are documented in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
@@ -145,16 +164,17 @@ Three results are rounded, as XPath and XQuery Functions and Operators 3.1
 allows:
 
 - **Division.** F&O leaves the precision of a decimal quotient to the
-  implementation. By default PurRDF keeps 18 digits after the point and truncates
-  toward zero: `7 / 3` is `2.333333333333333333`. A quotient that ends within 18
-  digits is exact, at any size: `"170141183460469231731687303715884105727"^^xsd:integer / 2`
-  is `85070591730234615865843651857942052863.5`. The caller chooses another
+  implementation. By default PurRDF keeps every digit of a terminating quotient,
+  even beyond 18 places: `1 / 1048576` is `0.00000095367431640625`. A repeating
+  quotient is rounded to 18 fractional digits, half to even: `2 / 3` is
+  `0.666666666666666667`. The caller chooses another
   precision with `QueryOptions::with_division` in Rust, `--division` in the
   command line, or the division setting of the C, WebAssembly and Python
-  bindings. The setting is written `exact`, `N` (N digits, truncated toward zero)
-  or `N:ROUNDING` (for example `5:half-even`). Under `exact` every quotient that
-  ends is exact, and one that does not end, such as `1 / 3`, refuses the query
-  with `err:FOAR0002`. `AVG` divides under the same setting.
+  bindings. The setting is written `exact`, `N` (N digits, truncated toward zero),
+  `N:ROUNDING` (for example `5:half-even`) or `exact-or-N[:ROUNDING]`. Under `exact` every quotient that
+  ends is exact, and one that does not end, such as `1 / 3`, is an error like
+  `1 / 0`: the expression is unbound, with `err:FOAR0002`. `AVG` divides under
+  the same setting.
 - **To `xsd:float` or `xsd:double`.** The value is rounded once, to the nearest
   value, ties to even, from its exact value at any size.
 - **From `xsd:float` or `xsd:double` to `xsd:decimal`.** Every binary value is a
@@ -167,7 +187,8 @@ Everything else is an error, and the expression is unbound: `1 / 0` is
 lexical form is `err:FORG0001`, `NaN` or an infinity cast to `xsd:decimal` or an
 integer type is `err:FOCA0002`, and a non-numeric operand is `err:XPTY0004`. A
 governed query counts each code it absorbed in its evidence
-(`GovernorEvidence::expression_errors`), and every error message `purrdf_xsd`
+(`GovernorEvidence::expression_errors`; a governed `purrdf query` writes the
+counts to stderr), and every error message `purrdf_xsd`
 reports ends with its code, for example `(err:FORG0001)`. The negation and the
 absolute value of a derived integer type are `xsd:integer`, so
 `-("5"^^xsd:unsignedByte)` is `-5` typed `xsd:integer`. A decimal with more than
@@ -219,6 +240,67 @@ its working memory against the scratch-byte ceiling. The rendering of a result i
 charged too, so the million-digit square is paid for when it is written. A query
 whose numbers all fit the machine-word representations charges nothing extra. See
 [`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
+
+## Pre-bound variables
+
+A prepared execution's parameters and a request's substitutions bind variables
+before evaluation. A pre-bound variable is one value for the whole evaluation, at
+every depth: an `OPTIONAL` or `MINUS` right arm, a sub-`SELECT` and an `EXISTS`
+body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
+(COUNT(*) AS ?c)` answers the bound node. Two rules follow.
+
+- **An assignment joins with the bound value.** Where `?p` is already in scope,
+  a `BIND(… AS ?p)` is no SPARQL query (§18.2.1) and fails to parse, bound or
+  not. Every other assignment joins with the bound value where it is made
+  (§18.5), by one rule at every depth, a sub-`SELECT` that does not project `?p`
+  and an `EXISTS` body included: no scope has a `?p` of its own. With `?p` bound
+  to `:a`, an assigned `:z` leaves the assigning pattern no row, so `?x :p ?o
+  BIND(:z AS ?p)` and `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?p) } }` answer
+  nothing, alone or beside any other pattern, and `OPTIONAL { BIND(:z AS ?p) }`
+  keeps each left row unextended. Assigning `:a` itself keeps the rows, and an
+  assignment whose expression errors leaves `?p` the bound value.
+- **`MINUS` sees the bound value on both sides**, whether or not a side mentions
+  `?p`, so every right row shares `?p` with every left row and subtracts it:
+  `?x :p ?o MINUS { ?s :q ?w }` answers no row once `:q` has a triple, as
+  `?x :p ?o MINUS { ?p :q ?w }` does, and a right side with no row subtracts
+  nothing.
+
+rdflib 7.6's `initBindings` is not the reference for this behaviour: it rebinds
+a pre-bound name wherever the query assigns it, so an assignment there overrides
+the bound value instead of joining with it. The native query APIs follow the
+single join rule above at every depth.
+
+A `VALUES ?p { … }` joins with the bound value where it is written, by the same
+rule at every depth: it keeps the rows that agree with the bound value, so
+`VALUES $this { ex:b }`, with `$this` bound to `ex:a`, has no row. In the query's
+`WHERE` group that answers no row; in an `OPTIONAL` arm it keeps each left row
+unextended; in a `MINUS` operand it subtracts nothing; and in a sub-`SELECT` that
+does not project the name it leaves the sub-`SELECT` no row, alone or beside any
+other pattern. Every row a sub-`SELECT` makes carries the bound value before it is deduplicated or grouped, so `SELECT DISTINCT`
+and `GROUP BY ?p` there answer alike beside another pattern and alone.
+
+SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
+`VALUES` that mentions a pre-bound name and an `AS` over one in a query executed
+with pre-bound variables, and the SHACL lanes refuse them when a shapes graph
+loads. The `VALUES` rule differs by lane:
+
+- **A node expression and `sh:expression`**, like a `sh:SPARQLFunction` body and a
+  `sh:SPARQLTargetType` query, refuse only a `VALUES` that mentions a pre-bound
+  name, as Appendix A words it: `VALUES ?v { true }` loads.
+- **A `sh:sparql` constraint**, like a SPARQL-based component's validators, a
+  `sh:SPARQLTarget`'s `sh:ask` and a SPARQL rule, refuses every `VALUES`. The
+  vendored W3C SHACL case `unsupported-sparql-002` requires the refusal of
+  `VALUES ?any { true }`, where `?any` is not pre-bound.
+
+See [SHACL validation](../validation/shacl.md).
+
+The rdflib compatibility shim compiles contextual mappings in Rust through the
+shared native evaluator. `purrdf.compat.rdflib.Graph.query(..., initBindings=...)`
+keeps initial bindings separate from returned mappings and permits RDFLib's
+variable reassignment, including nested groups, `OPTIONAL`, `MINUS`, `EXISTS`
+and grouping. Public results retain the original variable names and suppress
+empty projected mappings. `Store.query`, `Store.prepare` and SHACL retain their
+native pre-binding and assignment rules.
 
 ## Numeric casts
 
@@ -289,6 +371,14 @@ defines no arithmetic beyond the numeric tower; the one documented table is
 [SEP-0002](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0002/sep-0002.md)'s,
 which this section follows for coverage. `ADJUST` (below) is SEP-0002's
 remaining, non-arithmetic addition.
+
+Temporal seconds retain every decimal place. For example, adding
+`"PT0.000000000000000000009S"^^xsd:dayTimeDuration` to
+`"2024-01-02T03:04:05.123456789012345678901Z"^^xsd:dateTime` yields
+`"2024-01-02T03:04:05.12345678901234567891Z"^^xsd:dateTime`, and `SECONDS`
+returns `5.12345678901234567891`. The result does not stop at eighteen
+fractional places. A `time` shifted by whole days wraps to the same time of
+day, even when the duration's day count exceeds a machine integer.
 
 ### The operator table
 
@@ -2088,6 +2178,52 @@ SPARQL UPDATE's grammar admits an aggregate only inside a nested
   basic graph pattern has no `GROUP BY` of its own) — every host's `update`
   entry reaches the statistical set through exactly that nested-subquery
   shape.
+
+## Dated XPath regex laws
+
+`REGEX` and `REPLACE` run on the compatibility regular expressions unless the
+caller selects a dated native XPath law by its stable name:
+
+| Name | Law |
+|---|---|
+| `xpath-2.0-2010-12-14` | XPath and XQuery Functions and Operators 2.0 (Second Edition), 14 December 2010 |
+| `xpath-3.1-2017-03-21` | XPath and XQuery Functions and Operators 3.1, 21 March 2017 |
+
+Both laws admit backreferences, which the compatibility expressions refuse.
+Only 3.1 admits non-capturing groups such as `(?:a)` and the `q` flag. Under
+either law, this query keeps every code whose first two characters are the same:
+
+```sparql
+SELECT ?code WHERE {
+  ?item <http://example.org/code> ?code
+  FILTER(REGEX(?code, "^(.)\\1"))
+}
+```
+
+Every host selects the law in its own spelling:
+
+| Host | Spelling |
+|---|---|
+| Rust | `NativeSparqlEngine::with_xpath_regex(profile, limits)` for every request the engine runs, or `QueryOptions::with_xpath_regex(profile, limits)` for one request, with `Profile` and `Limits` from `purrdf_core::xsd_regex::xpath`; `purrdf_validate::xpath_regex::{parse_profile, sparql_engine, query_options}` select by name with the production limits |
+| CLI | `--xpath-regex <NAME>` on `query` and `update` |
+| Python | `xpath_regex=` on `query`, `query_governed`, `query_entailment_governed`, `update`, `update_governed` and `Store.prepare`, and on the rdflib layer's `Graph.query` and `Graph.update`; `purrdf.XPATH_REGEX_PROFILES` lists the names |
+| WebAssembly | an `xpathRegex` option on every evaluating `QueryEngine` method and its asynchronous twin, and a trailing `xpathRegex` on `Dataset.query`, `queryRawConfigured` and `queryRawWithContext` |
+| C | `regex_profile` on `purrdf_query_xpath_regex`, `purrdf_query_json_xpath_regex`, `purrdf_query_governed_xpath_regex`, `purrdf_query_entailment_governed_xpath_regex` and `purrdf_update_governed_xpath_regex` |
+
+Names match exactly, with no case folding or undated alias, so a name such as
+`xpath-3.1` is refused with a list of the accepted names. With no selection
+(no option, no flag, or a NULL `regex_profile`), the compatibility regular
+expressions behave exactly as before. A prepared query keeps its law for every
+run, and an unset request inherits the engine's selection.
+
+A pattern or flag the selected law does not define is an ordinary expression
+error, so a `FILTER` drops the row and a `BIND` leaves its variable unbound. A
+selected law also runs under finite resource bounds, 64 KiB of pattern source
+among them. Exceeding one is an operational failure carrying the resource's
+[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core),
+whose page lists the measured classes of work that reach each bound.
+It is never a partial answer or a `false` filter, and a refused update changes
+nothing.
 
 ## Entailment regimes
 

@@ -99,5 +99,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The native SSSOM codec surface (parse + validate + RDF serialize) that
     // replaces the external `sssom` package on the mapping-compile path.
     crate::py_sssom::register(m)?;
+    // The stable names the `xpath_regex` keyword accepts.
+    crate::xpath_regex::register(m)?;
     Ok(())
 }

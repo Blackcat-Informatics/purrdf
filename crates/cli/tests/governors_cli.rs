@@ -63,6 +63,72 @@ const REIFIER_QUERY: &str = concat!(
     "?r <http://example.org/certainty> ?c }",
 );
 
+/// CLI --fuel uses the metered base, including deterministic cell admission on an
+/// OPTIONAL filter. Exact answers and the observed three-column join bag survive its
+/// inclusive cell boundary; the lower neighbor is a typed refusal.
+#[test]
+fn optional_filter_keeps_answers_and_metered_cell_boundary() {
+    const ROWS: usize = 2_048;
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let mut data = "@prefix ex: <http://example.org/> .\n".to_owned();
+    for index in 0..ROWS {
+        writeln!(data, "ex:s{index} ex:v {index} ; ex:w {index} .").expect("string write");
+    }
+    let ttl = write_file(dir.path(), "optional.ttl", &data);
+    let query = "PREFIX ex: <http://example.org/> SELECT ?s ?v WHERE { ?s ex:v ?v \
+                 OPTIONAL { { SELECT ?s ?w WHERE { ?s ex:w ?w } } FILTER(?v >= ?w) } }";
+    let plain = run(&["query", "--data", &ttl, query]);
+    let fuel = run(&["query", "--data", &ttl, "--fuel", "1000000000", query]);
+    assert_eq!(code(&plain), 0, "{}", stderr(&plain));
+    assert_eq!(code(&fuel), 0, "{}", stderr(&fuel));
+    assert_eq!(plain.stdout, fuel.stdout, "all actual CLI answer bytes");
+    let explained = run(&["query", "--data", &ttl, "--explain", query]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    let body = stdout(&explained);
+    let consumed = body.split("\nconsumed\n").nth(1).expect("actual receipt");
+    let cells = ROWS * 3;
+    assert!(
+        consumed
+            .lines()
+            .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                == ["intermediate-cells", cells.to_string().as_str()]),
+        "{body}"
+    );
+    let fits = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--fuel",
+        "1000000000",
+        "--max-intermediate-cells",
+        &cells.to_string(),
+        query,
+    ]);
+    assert_eq!(code(&fits), 0, "{}", stderr(&fits));
+    assert_eq!(fits.stdout, plain.stdout);
+    let refused = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--fuel",
+        "1000000000",
+        "--max-intermediate-cells",
+        &(cells - 1).to_string(),
+        query,
+    ]);
+    assert_eq!(code(&refused), 3, "{}", stderr(&refused));
+    let report = stderr(&refused);
+    assert!(
+        report.contains("tripped cardinality-admission-refused")
+            || report.contains("tripped cardinality-exhausted"),
+        "{report}"
+    );
+    assert!(
+        report.contains(&format!("limit intermediate-cells {}", cells - 1)),
+        "{report}"
+    );
+}
+
 /// EVERY CEILING REACHES THE ENGINE'S LIMIT VECTOR, including the one nothing can charge.
 ///
 /// The five numeric flags are passed together with distinct values and the run is tripped

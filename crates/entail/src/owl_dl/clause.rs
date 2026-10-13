@@ -110,7 +110,7 @@
 //! ordering is deliberately not the interner's: `Kb::order_disjuncts` states why the identity
 //! order and the search order must stay two orders.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_datalog::clause::HeadForm;
 
@@ -278,6 +278,17 @@ impl DlClause {
     ///
     /// A complete applicability filter, not a heuristic: matching always binds variable `0`
     /// first, so a clause whose first body atom is `C(x₀)` cannot match a node without `C`.
+    /// The role a node must realize through an incident edge for this clause to match there,
+    /// when the body opens with a role or successor atom on variable 0.
+    pub(crate) fn first_role(&self) -> Option<Role> {
+        match self.body.first() {
+            Some(&BodyAtom::Role { from: 0, role, .. } | &BodyAtom::Successors { role, .. }) => {
+                Some(role)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn trigger(&self) -> Option<u32> {
         match self.body.first() {
             Some(&BodyAtom::Concept { var: 0, concept }) => Some(concept),
@@ -408,8 +419,10 @@ pub(crate) struct ClauseSet {
     clauses: Vec<DlClause>,
     /// Trigger concept id → the indices of the clauses it can make applicable, ascending.
     by_trigger: BTreeMap<u32, Vec<usize>>,
-    /// The clauses no CONCEPT triggers — a body that opens with a role atom, a `denotes` atom
-    /// or nothing at all — so they are tried at every node of every round.
+    /// The clauses neither a CONCEPT nor an EDGE triggers — a body that opens with a `denotes`
+    /// atom or nothing at all — so they are tried at every node of every round. A body that
+    /// opens with a role atom is indexed by the edges that can satisfy it instead: see
+    /// [`Self::by_edge`].
     ///
     /// # What lands here, and the bound that makes it affordable
     ///
@@ -431,17 +444,33 @@ pub(crate) struct ClauseSet {
     /// [`Graph::achiever_cache`](crate::owl_dl::graph::Graph); a role queried for the first
     /// time still walks the role hierarchy to build it) and then walks the edges indexed
     /// under the read node's root, in ascending order — an empty list for a node with no
-    /// incident edge. The work meter still charges the whole graph's edge count per read, so
-    /// a node with no such edge is still billed that much before `neighbors` reports it has
+    /// incident edge. The work meter bills each step the edges it reads plus one, so a node
+    /// with no such edge still pays one unit per attempt before `neighbors` reports it has
     /// nothing. What the bound above
     /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
     /// cost of zero.
     ///
-    /// An edge-driven index over these would need a role's ACHIEVERS — its sub-roles and its
-    /// inverse partners — resolved to find the clauses an edge could trigger, which is what
-    /// `neighbors` already does (and now caches). The bound above is what makes building a
-    /// second, edge-keyed index unnecessary rather than merely unmeasured.
+    /// The axiom-count bound did not make that per-node cost affordable at scale: a schema
+    /// with thousands of `rdfs:domain` and `rdfs:range` axioms over a large ABox paid every one
+    /// of them at every node, nearly all at nodes with no edge the clause could match — the
+    /// step ledger's schema-heavy row, twenty-three domain/range pairs over a three-node ABox,
+    /// spent 1,048 units of one round on it. So role-first clauses are indexed by edge
+    /// ([`Self::by_edge`]) and only the rest remain here.
     untriggered: Vec<usize>,
+    /// Edge pattern `(property, forward?)` → the role-first clauses an incident edge with that
+    /// pattern can satisfy, ascending.
+    ///
+    /// A clause body's first atom is matched from variable 0, the node being visited: a
+    /// `Role { from: 0, .. }` atom reads that node's neighbourhood over its role, and a
+    /// `Successors` atom counts that node's successors over its role. Both are empty unless
+    /// the node has an incident edge realizing the role — `(p, true)` with the node as source,
+    /// `(p, false)` as target, for `(p, ·)` in the role's closure under sub-roles and inverses —
+    /// and the transitive closure of a role is seeded from that same first step. So such a
+    /// clause is tried at a node exactly when one of the node's incident edge patterns indexes
+    /// it, and skipping the other nodes skips only attempts that match nothing.
+    by_edge: BTreeMap<(u32, bool), Vec<usize>>,
+    /// Role-first clauses awaiting [`Self::by_edge`] until the role axioms resolve them.
+    role_first: Vec<(Role, usize)>,
     /// Whether each clause is TBox-DERIVED, by clause index.
     ///
     /// A TBox clause is scoped to the OBJECT domain: a general concept inclusion quantifies
@@ -450,29 +479,138 @@ pub(crate) struct ClauseSet {
     /// carry no such flag — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
     /// actually carries are statements about that concept, valid over either domain.
     tbox: Vec<bool>,
+    /// Number of original admitted schema guards appended logically to this
+    /// compilation. Their bodies and sorted trigger directory remain in the Kb.
+    schema_count: usize,
+    /// Per clause, the transitive patterns its body atoms read — see [`Self::reads`].
+    reads: Vec<u64>,
+    /// See [`Self::transitive_readers`].
+    transitive_readers: Vec<usize>,
 }
 
 impl ClauseSet {
     /// The clause at `index`.
-    pub(crate) fn clause(&self, index: usize) -> &DlClause {
-        &self.clauses[index]
+    pub(crate) fn schema_class(
+        &self,
+        index: usize,
+        schema: &super::bounds::Preparation,
+    ) -> Option<u32> {
+        let ordinal = index.checked_sub(self.clauses.len())?;
+        schema.guards.get(ordinal).map(|(class, _)| *class)
+    }
+
+    pub(crate) fn schema_clauses<'a>(
+        &'a self,
+        schema: &'a super::bounds::Preparation,
+    ) -> impl Iterator<Item = (usize, u32)> + 'a {
+        schema
+            .guards
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (class, _))| (self.clauses.len() + ordinal, *class))
+    }
+
+    pub(crate) fn clause<'a>(
+        &'a self,
+        index: usize,
+        schema: &'a super::bounds::Preparation,
+    ) -> &'a DlClause {
+        if let Some(clause) = self.clauses.get(index) {
+            clause
+        } else {
+            &schema.guards[index - self.clauses.len()].1
+        }
     }
 
     /// How many clauses the knowledge base produced.
     pub(crate) fn count(&self) -> usize {
-        self.clauses.len()
+        self.clauses.len() + self.schema_count
     }
 
     /// The clauses `concept` can make applicable, in derivation order.
-    pub(crate) fn triggered_by(&self, concept: u32) -> &[usize] {
+    pub(crate) fn triggered_by<'a>(
+        &'a self,
+        concept: u32,
+        schema: &'a super::bounds::Preparation,
+    ) -> impl Iterator<Item = usize> + 'a {
         self.by_trigger
             .get(&concept)
+            .into_iter()
+            .flatten()
+            .copied()
+            .chain(
+                schema
+                    .guards
+                    .binary_search_by_key(&concept, |(class, _)| *class)
+                    .ok()
+                    .map(|ordinal| self.clauses.len() + ordinal),
+            )
+    }
+
+    /// How many neighbourhood READS a clause match rooted at one node can chain: an upper
+    /// bound on every body's variable-tree depth, each `Role` or `Successors` atom being one
+    /// read whatever length of transitive path it follows — and never less than one. A node
+    /// more reads than this from every change since its last match cannot match anything new,
+    /// which is what delta saturation relies on.
+    ///
+    /// A head adds no read. What a head reads — whether a concept is in a label, whether `n`
+    /// distinct witnesses are already there — only becomes MORE true as labels and edges
+    /// grow, so a head the last match found satisfied stays so and one it found unsatisfied
+    /// it asserted. The one way back is a merge of two counted witnesses, which writes both:
+    /// the floor of one read is what keeps the node counting them in reach of that write when
+    /// no body reads at all.
+    pub(crate) fn match_radius(&self) -> usize {
+        self.clauses
+            .iter()
+            .map(|clause| {
+                clause
+                    .body
+                    .iter()
+                    .filter(|atom| {
+                        matches!(atom, BodyAtom::Role { .. } | BodyAtom::Successors { .. })
+                    })
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+            .max(1)
+    }
+
+    /// The role-first clauses an incident edge with `pattern` can satisfy, ascending.
+    pub(crate) fn edge_triggered(&self, pattern: (u32, bool)) -> &[usize] {
+        self.by_edge
+            .get(&pattern)
             .map_or(&[] as &[usize], Vec::as_slice)
     }
 
-    /// The clauses no concept triggers — tried at every node.
+    /// Every role-first clause, under whichever edge pattern triggers it.
+    pub(crate) fn all_edge_triggered(&self) -> impl Iterator<Item = usize> + '_ {
+        self.by_edge.values().flatten().copied()
+    }
+
+    /// The clauses neither a concept nor an edge triggers — tried at every node.
     pub(crate) fn untriggered(&self) -> &[usize] {
         &self.untriggered
+    }
+
+    /// The transitive patterns ([`TransitivePatterns::bit`]) the clause at `index` can read
+    /// through some body atom, as a mask: zero for a clause no transitive closure reaches.
+    pub(crate) fn reads(&self, index: usize) -> u64 {
+        if index < self.clauses.len() {
+            self.reads[index]
+        } else {
+            assert!(
+                index < self.count(),
+                "clause index is outside this compilation"
+            );
+            0 // A schema guard reads only its current class membership.
+        }
+    }
+
+    /// The clauses whose body reads some transitive closure, ascending — the only ones a
+    /// change reached through nothing but such a closure can give a new match.
+    pub(crate) fn transitive_readers(&self) -> &[usize] {
+        &self.transitive_readers
     }
 
     /// Every clause with the given head form, by index — the inventory a test reads to see
@@ -486,7 +624,15 @@ impl ClauseSet {
 
     /// Whether the clause at `index` is TBox-derived, and so scoped to the object domain.
     pub(crate) fn is_tbox(&self, index: usize) -> bool {
-        self.tbox[index]
+        if index < self.clauses.len() {
+            self.tbox[index]
+        } else {
+            assert!(
+                index < self.count(),
+                "clause index is outside this compilation"
+            );
+            true // A schema guard quantifies over the object domain.
+        }
     }
 
     /// Record one clause, indexing it by its trigger.
@@ -502,9 +648,10 @@ impl ClauseSet {
     /// Record one clause, indexing it by its trigger and noting its provenance.
     fn record(&mut self, clause: DlClause, tbox: bool) {
         let index = self.clauses.len();
-        match clause.trigger() {
-            Some(concept) => self.by_trigger.entry(concept).or_default().push(index),
-            None => self.untriggered.push(index),
+        match (clause.trigger(), clause.first_role()) {
+            (Some(concept), _) => self.by_trigger.entry(concept).or_default().push(index),
+            (None, Some(role)) => self.role_first.push((role, index)),
+            (None, None) => self.untriggered.push(index),
         }
         self.clauses.push(clause);
         self.tbox.push(tbox);
@@ -533,7 +680,12 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         clauses: Vec::new(),
         by_trigger: BTreeMap::new(),
         untriggered: Vec::new(),
+        by_edge: BTreeMap::new(),
+        role_first: Vec::new(),
         tbox: Vec::new(),
+        schema_count: kb.schema.guards.len(),
+        reads: Vec::new(),
+        transitive_readers: Vec::new(),
     };
     for id in 0..kb.table.len() {
         let id = u32::try_from(id).expect("concept count fits u32");
@@ -552,6 +704,51 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
                 }],
                 Vec::new(),
             );
+        }
+    }
+    // Universal restrictions over regular role languages use a finite closure
+    // of internal state labels. These labels travel with blocking signatures;
+    // no completion edge or RDF name stands in for an automaton continuation.
+    if let Some(program) = &kb.role_program {
+        for obligation in &program.obligations {
+            let machine = &program.machines[obligation.machine];
+            out.push_triggered(
+                obligation.source,
+                Vec::new(),
+                vec![vec![HeadAtom::Concept {
+                    var: 0,
+                    concept: obligation.states[machine.initial],
+                }]],
+            );
+            out.push_triggered(
+                obligation.states[machine.accepting],
+                Vec::new(),
+                vec![vec![HeadAtom::Concept {
+                    var: 0,
+                    concept: obligation.filler,
+                }]],
+            );
+            for edge in &machine.transitions {
+                let (body, target) = match edge.letter {
+                    Some(role) => (
+                        vec![BodyAtom::Role {
+                            from: 0,
+                            to: 1,
+                            role,
+                        }],
+                        1,
+                    ),
+                    None => (Vec::new(), 0),
+                };
+                out.push_triggered(
+                    obligation.states[edge.from],
+                    body,
+                    vec![vec![HeadAtom::Concept {
+                        var: target,
+                        concept: obligation.states[edge.to],
+                    }]],
+                );
+            }
         }
     }
     // The absorbed TBox, verbatim: [`crate::owl_dl::absorb`] has already decided each
@@ -626,6 +823,43 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             head: Vec::new(),
         });
     }
+    // Resolve each role-first clause to the edge patterns that can satisfy its first atom.
+    // Clauses are recorded in ascending index order, so every list stays ascending.
+    for (role, index) in std::mem::take(&mut out.role_first) {
+        for pattern in role_patterns(kb, role) {
+            let clauses = out.by_edge.entry(pattern).or_default();
+            if clauses.last() != Some(&index) {
+                clauses.push(index);
+            }
+        }
+    }
+    // Which transitive closures each body can read: every role atom reads its role from the
+    // variable it starts at, in the role's own direction, and a match rooted at variable 0
+    // makes its first read through one of the atoms starting there. Every atom counts, not
+    // only those, which over-approximates and can only widen what a round re-matches.
+    // Schema guards are appended logically, preserving every unrelated legacy
+    // clause index and proof encoding. The original admitted preparation owns
+    // their bodies and trigger directory, so this compilation copies neither.
+    let patterns = TransitivePatterns::of(kb);
+    out.reads = out
+        .clauses
+        .iter()
+        .map(|clause| {
+            clause
+                .body
+                .iter()
+                .map(|atom| match *atom {
+                    BodyAtom::Role { role, .. } | BodyAtom::Successors { role, .. } => {
+                        patterns.mask(kb, role)
+                    }
+                    BodyAtom::Concept { .. } | BodyAtom::Denotes { .. } => 0,
+                })
+                .fold(0, |mask, atom| mask | atom)
+        })
+        .collect();
+    out.transitive_readers = (0..out.clauses.len())
+        .filter(|&index| out.reads[index] != 0)
+        .collect();
     out
 }
 
@@ -782,6 +1016,137 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
     );
 }
 
+/// A role's achiever patterns `(property, forward?)`, sorted.
+pub(crate) type Patterns = [(u32, bool)];
+
+/// The edge patterns of the knowledge base's TRANSITIVE roles, numbered.
+///
+/// A neighbourhood read over a role follows each transitive achiever `(t, forward?)` of it to
+/// any length in ONE read ([`Graph::neighbors`](crate::owl_dl::graph::Graph)), so a change
+/// at the far end of a long `t`-path is one read from the path's start — but only along the
+/// path's own direction, and only for a clause that reads `t` at all. Numbering the patterns
+/// lets delta saturation say WHICH closures carried a change to a node, and lets the clause
+/// set say which closures each clause reads, so the two can be intersected.
+pub(crate) struct TransitivePatterns {
+    /// Pattern index → `(t, forward?)`: both directions of every transitive role, ascending,
+    /// so a pattern is found by binary search.
+    patterns: Vec<(u32, bool)>,
+    /// Pattern index → the achievers of the pattern's own role, sorted: the edges a read over
+    /// the pattern steps along.
+    forwards: Vec<Vec<(u32, bool)>>,
+    /// Pattern index → the achievers of the pattern's MIRROR role, sorted: the edges a read
+    /// over the pattern is walked back along, from the node it reached to the node it started
+    /// at.
+    mirrors: Vec<Vec<(u32, bool)>>,
+}
+
+impl TransitivePatterns {
+    /// The patterns of `kb`'s transitive roles.
+    pub(crate) fn of(kb: &Kb) -> Self {
+        let patterns: Vec<(u32, bool)> = kb
+            .transitive
+            .iter()
+            .flat_map(|&t| [(t, false), (t, true)])
+            .collect();
+        let closed =
+            |role: Role| -> Vec<(u32, bool)> { role_patterns(kb, role).into_iter().collect() };
+        let role = |t: u32, forward: bool| {
+            if forward {
+                Role::Named(t)
+            } else {
+                Role::Inv(t)
+            }
+        };
+        let forwards = patterns
+            .iter()
+            .map(|&(t, forward)| closed(role(t, forward)))
+            .collect();
+        let mirrors = patterns
+            .iter()
+            .map(|&(t, forward)| closed(role(t, !forward)))
+            .collect();
+        Self {
+            patterns,
+            forwards,
+            mirrors,
+        }
+    }
+
+    /// The index of `pattern`, if it is a transitive role's.
+    pub(crate) fn index(&self, pattern: (u32, bool)) -> Option<usize> {
+        self.patterns.binary_search(&pattern).ok()
+    }
+
+    /// How many patterns there are.
+    pub(crate) fn len(&self) -> usize {
+        self.patterns.len()
+    }
+
+    /// The achievers pattern `index` steps along.
+    pub(crate) fn forward(&self, index: usize) -> &[(u32, bool)] {
+        &self.forwards[index]
+    }
+
+    /// The mask bit of pattern `index`. Past sixty-three patterns the rest share the last
+    /// bit, which merges them and can only widen a re-match, never narrow one.
+    pub(crate) fn bit(index: usize) -> u64 {
+        1 << index.min(63)
+    }
+
+    /// The patterns a read over `role` follows to any length, as a mask: its achievers whose
+    /// property is transitive.
+    pub(crate) fn mask(&self, kb: &Kb, role: Role) -> u64 {
+        role_patterns(kb, role)
+            .into_iter()
+            .filter_map(|pattern| self.patterns.binary_search(&pattern).ok())
+            .fold(0, |mask, index| mask | Self::bit(index))
+    }
+
+    /// The indices of the patterns a read over `role` follows to any length.
+    pub(crate) fn indices(&self, kb: &Kb, role: Role) -> Vec<usize> {
+        role_patterns(kb, role)
+            .into_iter()
+            .filter_map(|pattern| self.index(pattern))
+            .collect()
+    }
+
+    /// Every pattern's mask bit, beside the achievers it steps along and the achievers it is
+    /// walked back along.
+    pub(crate) fn steps(&self) -> impl Iterator<Item = (u64, &Patterns, &Patterns)> {
+        self.forwards
+            .iter()
+            .zip(&self.mirrors)
+            .enumerate()
+            .map(|(index, (forward, mirror))| {
+                (Self::bit(index), forward.as_slice(), mirror.as_slice())
+            })
+    }
+}
+
+/// The `(property, forward?)` edge patterns that realize `role` under `kb`'s role hierarchy and
+/// inverse declarations — the closure [`Graph::achievers`](crate::owl_dl::graph::Graph) walks,
+/// computed here once per clause-set rather than charged per read.
+fn role_patterns(kb: &Kb, role: Role) -> BTreeSet<(u32, bool)> {
+    let start = match role {
+        Role::Named(p) => (p, true),
+        Role::Inv(p) => (p, false),
+    };
+    let mut patterns = BTreeSet::new();
+    let mut stack = vec![start];
+    while let Some((q, dir)) = stack.pop() {
+        if !patterns.insert((q, dir)) {
+            continue;
+        }
+        if let Some(subs) = kb.role_sub.get(&q) {
+            stack.extend(subs.iter().map(|&s| (s, dir)));
+        }
+        if let Some(inverses) = kb.inverses.get(&q) {
+            stack.extend(inverses.iter().map(|&s| (s, !dir)));
+        }
+    }
+    patterns
+}
+
 #[cfg(test)]
 mod tests {
     use purrdf_datalog::clause::HeadForm;
@@ -796,7 +1161,7 @@ mod tests {
         let id = kb.table.intern(concept);
         kb.abox_types.push((1, id));
         kb.individuals.insert(1);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -824,7 +1189,7 @@ mod tests {
             kb.disjoint_roles.insert((21, 20));
             let clauses = derive(&kb);
             for index in 0..clauses.count() {
-                let clause = clauses.clause(index);
+                let clause = clauses.clause(index, &kb.schema);
                 assert!(
                     clause.is_matchable(),
                     "{concept:?} derived an unmatchable clause: {clause:?}"
@@ -845,7 +1210,7 @@ mod tests {
             1,
             "one disjunction, one disjunctive clause"
         );
-        let clause = clauses.clause(disjunctive[0]);
+        let clause = clauses.clause(disjunctive[0], &kb.schema);
         assert_eq!(clause.head.len(), 2, "two disjuncts");
         assert!(
             clause
@@ -868,7 +1233,7 @@ mod tests {
         ));
         let clauses = derive(&kb);
         let counting = (0..clauses.count())
-            .map(|index| clauses.clause(index))
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| {
                 clause
                     .head
@@ -896,7 +1261,7 @@ mod tests {
         ));
 
         let choose = (0..clauses.count())
-            .map(|index| clauses.clause(index))
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| {
                 clause.head.len() == 2
                     && clause
@@ -919,7 +1284,7 @@ mod tests {
         let existential = clauses.with_head_form(HeadForm::Existential);
         assert_eq!(existential.len(), 1);
         assert!(matches!(
-            clauses.clause(existential[0]).head[0][0],
+            clauses.clause(existential[0], &kb.schema).head[0][0],
             HeadAtom::AtLeast { n: 2, .. }
         ));
 
@@ -947,7 +1312,7 @@ mod tests {
         ));
         let clauses = derive(&kb);
         let counting = (0..clauses.count())
-            .map(|index| clauses.clause(index))
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| {
                 clause
                     .head
@@ -971,7 +1336,7 @@ mod tests {
         let clauses = derive(&kb);
         let conjunctive = clauses.with_head_form(HeadForm::Conjunctive);
         assert_eq!(conjunctive.len(), 1);
-        assert_eq!(clauses.clause(conjunctive[0]).head[0].len(), 2);
+        assert_eq!(clauses.clause(conjunctive[0], &kb.schema).head[0].len(), 2);
     }
 
     /// A complementary pair, `⊥`, a negated self restriction, a negated nominal and the two
@@ -991,11 +1356,13 @@ mod tests {
         assert!(
             inconsistency
                 .iter()
-                .all(|&index| clauses.clause(index).head.is_empty())
+                .all(|&index| clauses.clause(index, &kb.schema).head.is_empty())
         );
-        // The asymmetry clause is the untriggered one: it opens with a role atom.
-        assert_eq!(clauses.untriggered().len(), 1);
-        let asymmetry = clauses.clause(clauses.untriggered()[0]);
+        // The asymmetry clause opens with a role atom, so an incident edge over that role
+        // triggers it rather than every node.
+        assert_eq!(clauses.untriggered(), &[] as &[usize]);
+        assert_eq!(clauses.edge_triggered((21, true)).len(), 1);
+        let asymmetry = clauses.clause(clauses.edge_triggered((21, true))[0], &kb.schema);
         assert_eq!(asymmetry.trigger(), None);
         assert_eq!(asymmetry.arity(), 2);
         assert_eq!(asymmetry.head, [] as [Vec<HeadAtom>; 0]);
@@ -1013,7 +1380,7 @@ mod tests {
             .into_iter()
             .filter(|&index| {
                 matches!(
-                    clauses.clause(index).head[0][0],
+                    clauses.clause(index, &one.schema).head[0][0],
                     HeadAtom::EqualIndividual { .. }
                 )
             })
@@ -1027,7 +1394,7 @@ mod tests {
             .into_iter()
             .filter(|&index| {
                 clauses
-                    .clause(index)
+                    .clause(index, &two.schema)
                     .head
                     .iter()
                     .flatten()
@@ -1035,7 +1402,7 @@ mod tests {
             })
             .collect();
         assert_eq!(disjunctive.len(), 1, "two members, one branch of two");
-        assert_eq!(clauses.clause(disjunctive[0]).head.len(), 2);
+        assert_eq!(clauses.clause(disjunctive[0], &two.schema).head.len(), 2);
     }
 
     /// The absorbed TBox becomes an atomic-head clause triggered by the named class, which is
@@ -1044,13 +1411,13 @@ mod tests {
     fn the_absorbed_tbox_becomes_triggered_atomic_clauses() {
         let mut kb = Kb::empty();
         kb.push_gci(Concept::Named(10), Concept::Named(11));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let named = kb.table.intern(Concept::Named(10));
         let clauses = derive(&kb);
-        let triggered = clauses.triggered_by(named);
+        let triggered: Vec<usize> = clauses.triggered_by(named, &kb.schema).collect();
         assert!(
             triggered.iter().any(|&index| {
-                let clause = clauses.clause(index);
+                let clause = clauses.clause(index, &kb.schema);
                 clause.head_form() == HeadForm::Atomic
                     && matches!(clause.head[0][0], HeadAtom::Concept { var: 0, .. })
             }),
@@ -1068,7 +1435,7 @@ mod tests {
             Concept::Some(Role::Named(20), Box::new(Concept::Named(10))),
             Concept::Named(11),
         );
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let filler = kb.table.intern(Concept::Named(10));
         let clauses = derive(&kb);
         assert!(
@@ -1077,9 +1444,9 @@ mod tests {
             clauses.untriggered()
         );
         assert!(
-            clauses.triggered_by(filler).iter().any(|&index| {
+            clauses.triggered_by(filler, &kb.schema).any(|index| {
                 matches!(
-                    clauses.clause(index).body.as_slice(),
+                    clauses.clause(index, &kb.schema).body.as_slice(),
                     [
                         BodyAtom::Concept { var: 0, .. },
                         BodyAtom::Role {
@@ -1103,7 +1470,7 @@ mod tests {
     /// been re-rooted onto a trigger is here, and in particular the concept table's own
     /// clauses — one per interned concept, the population that scales — are all triggered.
     #[test]
-    fn only_the_role_axioms_and_the_class_free_guards_are_untriggered() {
+    fn only_the_class_free_guards_are_untriggered_and_role_first_clauses_are_edge_indexed() {
         let mut kb = Kb::empty();
         // `⊤ ⊑ A` — an empty body.
         kb.push_gci(Concept::Top, Concept::Named(10));
@@ -1128,18 +1495,36 @@ mod tests {
         kb.asymmetric.insert(21);
         kb.disjoint_roles.insert((20, 21));
         kb.disjoint_roles.insert((21, 20));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         let clauses = derive(&kb);
+        // Only what nothing can trigger is tried everywhere: `⊤ ⊑ A` and the nominal guard.
         assert_eq!(
             clauses.untriggered().len(),
-            6,
-            "four class-free guards and the two role axioms: {:?}",
+            2,
+            "the empty body and the nominal guard: {:?}",
             clauses
                 .untriggered()
                 .iter()
-                .map(|&index| clauses.clause(index))
+                .map(|&index| clauses.clause(index, &kb.schema))
                 .collect::<Vec<&DlClause>>()
         );
+        // The range, the domain and the two role axioms open with a role atom, so each is
+        // reached through an edge over its role, and only through one.
+        let edge_indexed: std::collections::BTreeSet<usize> = [20, 21]
+            .into_iter()
+            .flat_map(|property| [(property, true), (property, false)])
+            .flat_map(|pattern| clauses.edge_triggered(pattern).iter().copied())
+            .collect();
+        assert_eq!(
+            edge_indexed.len(),
+            4,
+            "range, domain, asymmetry, disjointness"
+        );
+        for &index in &edge_indexed {
+            let clause = clauses.clause(index, &kb.schema);
+            assert_eq!(clause.trigger(), None);
+            assert!(clause.first_role().is_some(), "{clause:?}");
+        }
         assert!(
             clauses.untriggered().len() < clauses.count(),
             "the population that scales with the concept table is the TRIGGERED one"

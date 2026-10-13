@@ -11,7 +11,7 @@
 //! frozen dataset's quad/reifier/annotation tables and resolves each row to the
 //! owned model at the boundary, then interns into the GTS term table. Out-of-band material
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
-//! (C0.6: it lives in the bundle envelope, not the hot graph).
+//! (it lives in the bundle envelope, not the hot graph).
 
 use purrdf_gts::codec::CodecError;
 use purrdf_gts::model::{Graph, Suppression, Term, TermKind};

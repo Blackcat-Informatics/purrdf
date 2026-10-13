@@ -28,7 +28,7 @@
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! Every generated knowledge base of [`crate::owl_dl::oracle`] (9,800 per run) and every
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (10,400 per run) and every
 //! hand-written knowledge base in this module is decided by both.
 //!
 //! # Shape of the search
@@ -134,8 +134,12 @@ struct Tableau<'a> {
 pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> Decision {
     let mut t = Tableau::new(kb, budget);
     let st = t.g.init_state(assumptions);
-    match t.solve(st) {
+    match t.solve(st).and_then(|answer| {
+        t.check_work()?;
+        Ok(answer)
+    }) {
         Ok(consistent) => Decision {
+            storage_refusal: t.g.storage_refusal(),
             consistent,
             steps: t.steps,
             work: t.g.work().spent(),
@@ -146,10 +150,11 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> 
             peak_depth: t.peak_depth,
         },
         Err(Exhausted) => Decision {
+            storage_refusal: t.g.storage_refusal(),
             consistent: false,
             steps: t.steps,
             work: t.g.work().spent(),
-            exhausted: !t.stopped,
+            exhausted: !t.stopped && t.g.storage_refusal().is_none(),
             stopped: t.stopped,
             peak_nodes: t.peak_nodes,
             disjunctions: t.disjunctions,
@@ -166,6 +171,14 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> 
 /// cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
     let decision = decide(kb, assumptions, Budget::for_kb(kb));
+    decision_result(decision)
+}
+
+/// Preserve physical and cancellation refusals before interpreting a semantic verdict.
+fn decision_result(decision: Decision) -> Result<bool, EntailError> {
+    if let Some(original) = decision.storage_refusal {
+        return Err(super::roles::RoleHierarchyError::Storage(original).into());
+    }
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
@@ -288,8 +301,8 @@ impl<'a> Tableau<'a> {
     /// The meter is [`Graph`]'s, so this reference procedure is bounded by the SAME counted
     /// work the hypertableau is, charged at the same shared graph operations — which is what
     /// keeps the differential a difference of calculus rather than of budget.
-    fn check_work(&self) -> Result<(), Exhausted> {
-        if self.g.work().exhausted() {
+    fn check_work(&mut self) -> Result<(), Exhausted> {
+        if self.g.refused(&mut self.stopped) {
             return Err(Exhausted);
         }
         Ok(())
@@ -326,7 +339,7 @@ impl<'a> Tableau<'a> {
     fn role_axiom_clashes(&self, st: &State, x: usize) -> bool {
         for &property in &self.g.kb().asymmetric {
             let role = Role::Named(property);
-            for y in self.g.neighbors(st, x, role) {
+            for &y in self.g.neighbors(st, x, role).iter() {
                 if self.g.neighbors(st, y, role).contains(&x) {
                     return true;
                 }
@@ -393,7 +406,8 @@ impl<'a> Tableau<'a> {
                 let filler = c;
                 let neigh = self.g.neighbors(st, x, role);
                 let with_c: Vec<usize> = neigh
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .filter(|&y| self.g.has_concept(st, y, filler))
                     .collect();
                 // Budget exhaustion is recorded on the state; the driver's saturate
@@ -506,7 +520,7 @@ impl<'a> Tableau<'a> {
                         self.match_guard(st, clause, at + 1, frame, out);
                     }
                 } else {
-                    for y in self.g.neighbors(st, source, role) {
+                    for &y in self.g.neighbors(st, source, role).iter() {
                         frame.push(y);
                         self.match_guard(st, clause, at + 1, frame, out);
                         frame.pop();
@@ -548,7 +562,7 @@ impl<'a> Tableau<'a> {
             .collect();
         let mut changed = false;
         for (role, c) in alls {
-            for y in self.g.neighbors(st, x, role) {
+            for &y in self.g.neighbors(st, x, role).iter() {
                 changed |= self.g.add_concept(st, y, c);
             }
         }
@@ -577,7 +591,8 @@ impl<'a> Tableau<'a> {
             let has = self
                 .g
                 .neighbors(st, x, role)
-                .into_iter()
+                .iter()
+                .copied()
                 .any(|y| self.g.has_concept(st, y, c));
             if !has {
                 self.g.new_successor(st, x, role, &[c]);
@@ -611,7 +626,8 @@ impl<'a> Tableau<'a> {
             let with_c: Vec<usize> = self
                 .g
                 .neighbors(st, x, role)
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|&y| self.g.has_concept(st, y, c))
                 .collect();
             let Some(mut clique) =
@@ -782,7 +798,8 @@ impl<'a> Tableau<'a> {
         let has_blockable_c_predecessor = self
             .g
             .blockable_predecessor_neighbours(st, x, role)
-            .into_iter()
+            .iter()
+            .copied()
             .any(|y| self.g.has_concept(st, y, filler));
         if !has_blockable_c_predecessor {
             return None;
@@ -833,7 +850,8 @@ impl<'a> Tableau<'a> {
         let nominal_c: Vec<usize> = self
             .g
             .neighbors(st, x, role)
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|&y| self.g.nominal_id(st, y).is_some() && self.g.has_concept(st, y, filler))
             .collect();
         let filler_concept = self.g.kb().table.concept(filler).clone();
@@ -887,7 +905,8 @@ impl<'a> Tableau<'a> {
                                 self.g
                                     .kb()
                                     .order_disjuncts(cs)
-                                    .into_iter()
+                                    .iter()
+                                    .copied()
                                     .map(|c| Branch::AddConcept(i, c))
                                     .collect(),
                             );
@@ -918,7 +937,7 @@ impl<'a> Tableau<'a> {
                         }
                         let neigh = self.g.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
-                        for &y in &neigh {
+                        for &y in neigh.iter() {
                             let negated = self.g.kb().table.negate(filler);
                             if !self.g.has_concept(st, y, filler)
                                 && !self.g.has_concept(st, y, negated)
@@ -927,7 +946,8 @@ impl<'a> Tableau<'a> {
                                     self.g
                                         .kb()
                                         .order_disjuncts(&[filler, negated])
-                                        .into_iter()
+                                        .iter()
+                                        .copied()
                                         .map(|c| Branch::AddConcept(y, c))
                                         .collect(),
                                 );
@@ -935,7 +955,8 @@ impl<'a> Tableau<'a> {
                         }
                         // `≤`-merge rule: too many C-neighbours, some pair mergeable.
                         let with_c: Vec<usize> = neigh
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .filter(|&y| self.g.has_concept(st, y, filler))
                             .collect();
                         if with_c.len() > nmax as usize {
@@ -1033,7 +1054,7 @@ impl<'a> Tableau<'a> {
                     );
                     self.g.add_concept(st, g, filler);
                     // The edge that makes `g` a `role`-neighbour of `x`, in the direction the
-                    // role's spelling requires — see [`Graph::step`].
+                    // role's spelling requires — see [`Graph::neighbors`].
                     match role {
                         Role::Named(q) => st.push_edge(x, g, q),
                         Role::Inv(p) => st.push_edge(g, x, p),
@@ -1057,6 +1078,23 @@ mod tests {
 
     use super::*;
     use crate::owl_dl::concept::{Concept, Role};
+
+    #[test]
+    fn original_storage_refusal_is_not_semantic_inconsistency() {
+        let kb = Kb::empty();
+        let mut decision = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        assert!(decision_result(decision).unwrap());
+        decision.storage_refusal = Some(purrdf_lex::allocation::StorageError::AdmissionFailed);
+        decision.consistent = false;
+        assert!(matches!(
+            decision_result(decision),
+            Err(EntailError::RoleHierarchy(
+                super::super::roles::RoleHierarchyError::Storage(
+                    purrdf_lex::allocation::StorageError::AdmissionFailed
+                )
+            ))
+        ));
+    }
 
     /// A minimal KB builder for tableau primitives (no RDF parsing).
     struct Builder {
@@ -1096,7 +1134,7 @@ mod tests {
         }
 
         fn finish(mut self) -> Kb {
-            self.kb.finalize();
+            self.kb.finalize().expect("fixture preparation");
             self.kb
         }
     }

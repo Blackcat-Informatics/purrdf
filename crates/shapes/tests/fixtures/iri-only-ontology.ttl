@@ -1,0 +1,24 @@
+@prefix ex: <https://example.org/schema/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:Agent a owl:Class .
+ex:Person a owl:Class ; rdfs:subClassOf ex:Agent .
+ex:Org a owl:Class ; rdfs:subClassOf ex:Agent ; owl:disjointWith ex:Person .
+ex:Team a owl:Class ; owl:equivalentClass ex:Group .
+ex:Group a owl:Class .
+ex:name a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain ex:Agent ; rdfs:range xsd:string .
+ex:nick rdfs:subPropertyOf ex:name .
+ex:age a owl:DatatypeProperty ; rdfs:domain ex:Person ; rdfs:range xsd:integer .
+ex:knows a owl:ObjectProperty , owl:SymmetricProperty ;
+    rdfs:domain ex:Person ; rdfs:range ex:Person .
+ex:memberOf a owl:ObjectProperty ; owl:inverseOf ex:member ;
+    rdfs:domain ex:Person ; rdfs:range ex:Org .
+ex:member a owl:ObjectProperty .
+ex:Code a rdfs:Datatype .
+ex:code a owl:DatatypeProperty ; rdfs:domain ex:Org ; rdfs:range ex:Code .
+ex:payload a owl:ObjectProperty ; rdfs:domain ex:Org ; rdfs:range rdf:JSON .
+ex:label a owl:AnnotationProperty .

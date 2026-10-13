@@ -69,7 +69,10 @@
 use alloc::vec::Vec;
 
 use crate::error::CdtError;
-use crate::render::{key_lexical_len, term_lexical_len};
+#[cfg(test)]
+use crate::memory::Resident;
+use crate::memory::{Memory, StorageError};
+use crate::render::{key_lexical_len, try_term_lexical_len};
 use crate::term::{CdtKey, CdtTerm};
 
 /// Maximum number of elements (list items plus map entries, at every level) in one
@@ -136,66 +139,87 @@ impl Extent {
 /// The elements one element contributes to its container: none for a leaf, the
 /// value's whole element count for a nested composite, and the sum over its
 /// components for a triple term. Iterative, with an explicit worklist.
-pub(crate) fn term_elements(term: &CdtTerm) -> usize {
+pub(crate) fn try_term_elements(
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<usize, StorageError> {
     let mut elements = 0usize;
-    let mut work: Vec<&CdtTerm> = alloc::vec![term];
+    let mut work = Vec::new();
+    memory.push(&mut work, term)?;
     while let Some(current) = work.pop() {
         match current {
             CdtTerm::Composite(inner) => {
                 elements = elements.saturating_add(inner.extent().elements);
             }
             CdtTerm::TripleTerm(triple) => {
-                work.push(&triple.subject);
-                work.push(&triple.predicate);
-                work.push(&triple.object);
+                memory.push(&mut work, &triple.subject)?;
+                memory.push(&mut work, &triple.predicate)?;
+                memory.push(&mut work, &triple.object)?;
             }
             CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::Literal(_) | CdtTerm::Null => {}
         }
     }
-    elements
+    memory.release_vec(work)?;
+    Ok(elements)
 }
 
 /// The extent of the list these elements would form.
+#[cfg(test)]
 pub(crate) fn list_extent<'a>(items: impl IntoIterator<Item = &'a CdtTerm>) -> Extent {
+    try_list_extent(items, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
+}
+
+pub(crate) fn try_list_extent<'a>(
+    items: impl IntoIterator<Item = &'a CdtTerm>,
+    memory: &mut Memory<'_>,
+) -> Result<Extent, StorageError> {
     let mut count = 0usize;
     let mut elements = 0usize;
     let mut bytes = 0usize;
     for term in items {
         count = count.saturating_add(1);
-        elements = elements.saturating_add(term_elements(term));
-        bytes = bytes.saturating_add(term_lexical_len(term));
+        elements = elements.saturating_add(try_term_elements(term, memory)?);
+        bytes = bytes.saturating_add(try_term_lexical_len(term, memory)?);
     }
-    Extent {
+    Ok(Extent {
         elements: elements.saturating_add(count),
         // `[`, `]`, and one `,` between each adjacent pair.
         bytes: bytes
             .saturating_add(2)
             .saturating_add(count.saturating_sub(1)),
-    }
+    })
 }
 
 /// The extent of the map these key/value pairs would form. The pairs must already be
 /// deduplicated by key.
+#[cfg(test)]
 pub(crate) fn map_extent<'a>(pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>) -> Extent {
+    try_map_extent(pairs, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
+}
+
+pub(crate) fn try_map_extent<'a>(
+    pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>,
+    memory: &mut Memory<'_>,
+) -> Result<Extent, StorageError> {
     let mut count = 0usize;
     let mut elements = 0usize;
     let mut bytes = 0usize;
     for (key, value) in pairs {
         count = count.saturating_add(1);
-        elements = elements.saturating_add(term_elements(value));
+        elements = elements.saturating_add(try_term_elements(value, memory)?);
         // `key` `:` `value`.
         bytes = bytes
             .saturating_add(key_lexical_len(key))
             .saturating_add(1)
-            .saturating_add(term_lexical_len(value));
+            .saturating_add(try_term_lexical_len(value, memory)?);
     }
-    Extent {
+    Ok(Extent {
         elements: elements.saturating_add(count),
         // `{`, `}`, and one `,` between each adjacent pair.
         bytes: bytes
             .saturating_add(2)
             .saturating_add(count.saturating_sub(1)),
-    }
+    })
 }
 
 /// Check a composite, built or prospective, against both bounds.
@@ -218,25 +242,6 @@ pub(crate) fn check_extent(extent: &Extent) -> Result<(), CdtError> {
         });
     }
     Ok(())
-}
-
-/// Check a prospective **element** against both bounds.
-///
-/// An element is not itself a composite value, so it carries no invariant of its own;
-/// what this answers is whether the element could ever appear in one. The measure is
-/// therefore the **smallest composite that could hold it** — the one-element list
-/// `[term]`, which is one element larger and two bytes longer than the element. An
-/// element that fails here can never be placed anywhere, so
-/// [`CdtTerm::composite`](crate::CdtTerm::composite) and
-/// [`CdtTerm::triple`](crate::CdtTerm::triple) refuse it where it is made rather than
-/// leaving the caller to discover it when it is finally placed. A triple term is the
-/// case that most needs this: it combines three separately admissible elements' element
-/// counts and canonical lengths into one that need not be.
-pub(crate) fn check_term(term: &CdtTerm) -> Result<(), CdtError> {
-    check_extent(&Extent {
-        elements: term_elements(term).saturating_add(1),
-        bytes: term_lexical_len(term).saturating_add(2),
-    })
 }
 
 #[cfg(test)]

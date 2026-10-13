@@ -566,6 +566,118 @@ as in debug ones. What it forgoes is advance notice about the pages it does not 
 
 ---
 
+### G11 — layered paged snapshots
+
+`PagedStack` composes one or more independently sealed bases, chronological
+sealed delta generations, and one mutable resident value head. G3 remains a
+requirement within each sealed generation. Equal facts in different generations
+are ordinary repeated ingestion and become one effective dataset fact. Each
+generation's removal set suppresses every older occurrence; an addition in that
+generation or a newer generation wins. In a mutable batch, insert/remove/insert
+leaves the fact present. `insert`, `remove`, and `contains` return typed results:
+unreadable lower storage is never reported as an absent or unchanged boolean.
+An externally sealed delta can be appended only after the pending head is sealed,
+so accepted mutations cannot silently change chronological position.
+
+Each owned `PagedStackSnapshot` pins the ordered sealed source descriptors, copied
+head values, head graph declarations, and per-layer value removals. Source
+dictionaries remain independent. The snapshot rebuilds one private physical
+dictionary and remaps translations by RDF value, retaining the original local
+summary verbatim. Neither append nor snapshot materializes a lower page. Snapshot
+work and retention are `O(all retained dictionary values + translation entries +
+head and removal metadata)`, including recursively referenced term dependencies.
+Repeated small publications can therefore accumulate quadratic metadata work.
+Reuse a published immutable snapshot across queries. Mutable membership reuses
+sealed routing metadata throughout a batch, checks head presence/removals first,
+and creates a fresh I/O cache for each lower membership operation.
+
+`query_view` supplies one guarded `FallibleDatasetView` with `GlobalTermId` IDs
+local to that snapshot. All physical pages pass through the existing
+`PagedQueryView` admission, certification, cache, byte/page limits, and first-fault
+latch. Limits apply to the entire operation; there is no per-layer allowance.
+The head is resident but is charged as one page and its deterministic reference
+RDF byte size on first admission, once per operation. An empty head contributes
+no page. Sealed head batches use the actual deterministic pack byte size instead.
+Receipts share the exact immutable head/removal values and every original source
+generation/page count, including zero-page sources; they also map each first
+physical request to its chronological layer and original page, or the head.
+Sealed depth is the descriptor count. Compaction timing and depth policy remain
+consumer-owned, with no hidden ceiling or recursive per-layer call chain.
+
+At every operation checkpoint, the composed provider checks every pinned source
+generation and page count directly. A combined generation hash is never used as
+proof of vector equality. Drift in a skipped or zero-page source refuses even a
+constants-only operation. Source failures retain their typed causes and routing
+addresses. After any terminal fault, further logical rows, head rows, point reads,
+and named-graph metadata are gated by the same sticky latch. Partial internal rows
+are not a complete answer; only final guarded readiness permits publication.
+
+Logical candidate order is newest source first, annotation candidates before
+ordinary candidates within a source, then original ascending page/in-page order.
+The newest visible occurrence chooses a value row's physical type before logical
+stream filtering; within one source, annotation typing takes precedence over a
+duplicate ordinary occurrence. Thus a value row appears in at most one of the
+logical ordinary/annotation streams. The virtual reifier stream retains native
+IR behavior, which permits an equal physical ordinary or annotation row beside
+that reifier binding. Native ordinary typing in a sealed source is retained when all
+applicable reifier declarations are in that source. A surviving declaration in
+another generation promotes that ordinary row to an annotation, in the same graph
+only. A physical annotation becomes ordinary when an originally applicable
+graph-scoped declaration was visible in that annotation's introduction prefix
+and no effective declaration survives. Prefix visibility includes removals through
+that source and excludes future sources. An explicit annotation introduced after
+an older declaration was removed remains an orphan; a future declaration does
+not retroactively change its original association. An explicit annotation with
+no original declaration remains typed;
+annotation-only pages are legitimate. Removing one of several declarations does
+not demote the row. These classification decisions share the mutable-view home;
+source-specific cursors retain their own indexed probes.
+
+Physical summaries remain exact. Removals, duplicate suppression and stream
+classification make effective cardinality estimates conservative upper bounds,
+not exact logical counts. Ordinary and annotation reads probe both corresponding
+physical streams, using exact local subject/graph counts and ordinary positional
+counts. Side-table predicate/object presence is a conservative admission test,
+followed by exact row filtering. Reifier presence is queried in the correct graph
+through the same admitted physical page accessor. An annotation-only page cannot
+be skipped merely because its ordinary count is zero. Named graphs with no
+physical rows at sealing are remembered declarations; head declarations are
+explicit. Row-bearing implicit graphs disappear after their final effective row
+is removed. Determining their effective membership can require admitted reads
+when removals exist; it is not always a free physical graph-index union.
+Explicit writer declarations also survive `seal_head` while their graph is
+populated: they remain separate immutable layer metadata and appear in the
+snapshot receipt. `compact` returns a plain `PagedDataset` whose observable
+contract is the current typed rows and named-graph membership. Only graphs empty
+in that folded output have declaration-only carrier records; a populated graph's
+earlier explicit/implicit lifetime distinction is not part of `DatasetView` and
+is not encoded in the plain base. A consumer retaining that extra writer policy
+across base replacement retains its declaration set separately.
+
+`canonical_paged_seal` is the shared eager-seal/fold partitioner. It drains a
+complete guarded RDF 1.2 view, resolves typed rows by value, and sorts records by
+table (ordinary, reifier, annotation, declaration-only graph), then by the
+`(subject, predicate, object, graph)` `TermValue` tuple; graph records sort by
+graph value. A graph represented by any row needs no extra declaration record.
+Each typed row or declaration-only graph consumes one record of the caller's
+positive `NonZeroUsize` page bound. Consecutive sorted records form each page;
+completely empty output has zero pages. Each page is reconstructed through the
+native typed builder, validated and encoded with `PackBuilder`; its charge is
+that actual carrier's byte length. Nested triples, datatype dependencies, blank
+scopes and literal direction retain their values, and an annotation stays typed
+even when its declaration falls on another output page. Checked G3 sealing and
+canonical global dictionary remapping finish the new base. A failed checkpoint,
+read, validation, capacity admission or encoder returns no partial artifact.
+
+Compaction discards historical tombstones and older duplicate occurrences.
+For equal effective typed rows, named-graph membership and page bound, it produces
+identical ordered page carrier bytes and identical canonical global value IDs,
+independent of source IDs, page boundaries and mutation history. Locations and
+other non-RDF sidecars are outside `DatasetView` and remain consumer-owned.
+Storage, commit-log reconstruction and atomic publication remain under G5.
+
+---
+
 ## P-clauses — the pack backend (a read-only succinct `DatasetView`)
 
 The pack codec is a THIRD `DatasetView` implementer alongside the frozen

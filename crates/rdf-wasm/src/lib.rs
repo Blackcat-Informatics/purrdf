@@ -95,6 +95,7 @@ mod convert;
 mod dataset;
 pub mod entail;
 mod factory;
+pub mod geo;
 #[doc(hidden)]
 pub mod host;
 pub mod interleaving;
@@ -108,6 +109,7 @@ pub mod shacl;
 mod shadow_stack;
 mod stream;
 mod term;
+mod xpath_regex;
 mod xsd;
 
 #[cfg(target_arch = "wasm32")]

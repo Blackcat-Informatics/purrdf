@@ -97,7 +97,7 @@ fn registry(
                         predicate: Some(ex(predicate)),
                     },
                     placements: vec![TermPlacement {
-                        facet: RequestFacet::Value,
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 1,
                         datatype: None,
                     }],

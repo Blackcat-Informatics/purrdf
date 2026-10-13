@@ -191,6 +191,39 @@ impl std::error::Error for ShexError {}
 /// Convenience alias for fallible ShEx parse operations.
 pub type Result<T> = core::result::Result<T, ShexError>;
 
+/// Why a textual shape-map validation under a native XPath law could not finish.
+/// Pattern-language errors remain conformance findings, not variants here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum XPathValidationError {
+    /// Parsing or admitting the requested shape map failed.
+    ShapeMap(ShexError),
+    /// Native pattern execution or construction was operationally refused.
+    Regex(purrdf_core::xsd_regex::xpath::Error),
+}
+
+purrdf_lex::variant_from!(XPathValidationError {
+    ShapeMap(ShexError), Regex(purrdf_core::xsd_regex::xpath::Error)
+});
+
+impl fmt::Display for XPathValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ShapeMap(error) => error.fmt(f),
+            Self::Regex(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for XPathValidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ShapeMap(error) => Some(error),
+            Self::Regex(error) => Some(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

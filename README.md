@@ -32,6 +32,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://blackcat-informatics.github.io/purrdf/playground/"><img src="https://img.shields.io/badge/RDF--1.2%20playground-try%20it%20live-brightgreen" alt="Try the RDF-1.2 playground in your browser"></a>
 </p>
 
+<p align="center">
+  English · <a href="./README_zh.md">简体中文</a> ·
+  <a href="https://blackcat-informatics.github.io/purrdf/zh-Hans/">中文手册</a>
+</p>
+
 ---
 
 PurRDF is a Rust toolkit for building applications around knowledge graphs.
@@ -98,8 +103,9 @@ predicate remains an ordinary RDF pattern.
   annotation layer, with Unicode normalization, case folding and segmentation.
   BM25 scores use exact fixed-point arithmetic. Ranked search and term-occurrence
   relations support phrase and proximity composition in SPARQL. The index is
-  resident and built over a frozen dataset; stemming, stop-word dictionaries and
-  a separate query dialect are outside its surface.
+  resident and built over a frozen dataset. The default preserves lexical spelling;
+  callers can select English stemming. Stop-word dictionaries and a separate query
+  dialect are outside its surface.
 - **Geometry:** [`purrdf-geo`](./crates/geo/) implements GeoSPARQL 1.1 topological
   predicates over exact rational WKT/GeoJSON geometry, plus accessors and
   exactly computable measures and constructors. Coordinate transformation,
@@ -216,7 +222,7 @@ entailment-aware SPARQL run alongside the materialization regimes. See
 Query governors bound execution and return evidence about a trip, including
 which rows can be certified under non-monotone operators. Governed Update
 commits entirely or not at all. Prepared execution and scoped callbacks reuse
-the same evaluator. The charge schedule and the frozen 50-case governor corpus
+the same evaluator. The charge schedule and the frozen 54-case governor corpus
 are published in the [governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md).
 Structured diagnostics preserve stable codes and readable English, with named
 parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
@@ -374,7 +380,7 @@ so an install-time feature selection cannot change the carrier's behavior.
 
 The [conformance scoreboard](./docs/CONFORMANCE.md) distinguishes official
 suites, first-party corpora, approved divergences and untested boundaries.
-SPARQL evaluation has **862 passing**, 5 ledgered upstream-errata fixtures.
+SPARQL evaluation has **1393 passing**, 0 ledgered.
 SHACL has **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered,
 and **538/544 passing** on the vendored W3C SHACL 1.2 test suite (6 approved results
 spell a computed decimal non-canonically and are graded by canonical XSD spelling).
@@ -394,11 +400,11 @@ explicitly recorded boundaries. The full scoreboard and commands are in
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **20 / 20** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC toRDF + compaction (`crates/rdf/tests/fixtures/jsonld-w3c-rec/`) | **73 / 73** applicable toRDF · **13 / 13** exact compaction |
-| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **862** pass · 5 ledgered (upstream errata) |
+| SPARQL 1.0/1.1/1.2 | full W3C sparql10 (data-r2) + sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **1393** pass · 0 ledgered |
 | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
-| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
+| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **54 / 54**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
-| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
+| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **262 / 262** agreeing, 0 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
 | RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **12 / 12** |
@@ -423,7 +429,8 @@ contracts and the implemented surfaces above are the basis for that growth.
 ## Documentation and development
 
 - [The PurRDF Book](https://blackcat-informatics.github.io/purrdf/): language
-  guides, concepts and engine contracts.
+  guides, concepts and engine contracts; also in
+  [Simplified Chinese](https://blackcat-informatics.github.io/purrdf/zh-Hans/).
 - [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
   parse, query, validate, serialize and compare graphs locally in the browser.
 - [Migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
@@ -437,7 +444,7 @@ make metadata      # regenerate and verify projections and license bundles
 make check         # formatting, clippy, build, tests and hygiene
 make bench         # report-only microbenchmarks
 make scale-corpus  # deterministic corpus generation
-make lubm          # comparison lane; pinned network inputs and a JRE
+make lubm          # comparison lane; native Rust generator, pinned external ontology/queries
 make watdiv        # comparison lane; frozen network dataset
 ```
 

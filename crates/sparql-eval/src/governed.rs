@@ -387,11 +387,11 @@ impl<R> PartialAnswers<R> {
     }
 }
 
-impl PartialAnswers {
+impl<R> PartialAnswers<R> {
     /// The rows in hand, when they bound the answer on either side; `None` is
     /// [`Self::Unknown`]. See [`Self::into_result`].
     #[must_use]
-    pub fn result(&self) -> Option<&PartialSparqlResult> {
+    pub fn result(&self) -> Option<&R> {
         self.as_ref().into_result()
     }
 
@@ -409,7 +409,9 @@ impl PartialAnswers {
     pub const fn is_certain(&self) -> bool {
         matches!(self, Self::Certain(_))
     }
+}
 
+impl PartialAnswers {
     /// Withhold every solution row or graph item that mentions a blank node selected by
     /// `withhold`, when there are rows in hand.
     ///
@@ -527,7 +529,7 @@ fn withhold_blank_nodes_from_result(
             let removed_rows = rows.len() != before;
             let removed_aux =
                 if let Some(filtered) = dataset_without_withheld_blank_nodes(aux, withhold) {
-                    *aux = filtered;
+                    *aux = filtered.into();
                     true
                 } else {
                     false
@@ -536,7 +538,7 @@ fn withhold_blank_nodes_from_result(
         }
         SparqlResult::Graph(graph) => {
             if let Some(filtered) = dataset_without_withheld_blank_nodes(graph, withhold) {
-                *graph = filtered;
+                *graph = filtered.into();
                 true
             } else {
                 false
@@ -599,7 +601,7 @@ fn rdf_term_mentions_withheld_blank(
 /// so the reported `removed` fact describes the transformation actually applied rather than
 /// the result of a separate preflight scan.
 fn dataset_without_withheld_blank_nodes(
-    dataset: &Arc<RdfDataset>,
+    dataset: &RdfDataset,
     withhold: &mut impl FnMut(&str) -> bool,
 ) -> Option<Arc<RdfDataset>> {
     let mut builder = RdfDatasetBuilder::new();
@@ -785,14 +787,6 @@ mod withheld_blank_walk_tests {
         }
     }
 
-    /// Release a deep egress term one level at a time; its derived drop would take one
-    /// stack frame per level.
-    fn dismantle(mut term: RdfTerm) {
-        while let RdfTerm::Triple(triple) = term {
-            term = triple.object;
-        }
-    }
-
     #[test]
     fn the_term_value_walk_offers_the_same_labels_as_the_recursive_reference() {
         for seed in 0..200_u64 {
@@ -883,7 +877,7 @@ mod withheld_blank_walk_tests {
                 label == "deep"
             }));
             assert_eq!(offered, DEPTH + 1);
-            dismantle(egress);
+            drop(egress);
         })
         .expect("spawn");
     }

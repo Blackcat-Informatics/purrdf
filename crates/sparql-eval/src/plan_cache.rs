@@ -4,11 +4,8 @@
 //! Bounded deterministic LRU storage for prepared plans and join orders.
 
 use std::borrow::Borrow;
-use std::collections::BTreeMap;
 use std::hash::Hash;
-use std::sync::{Arc, Mutex};
-
-use crate::DetHashMap;
+use std::sync::Mutex;
 
 /// Retention ceilings for a query-plan or join-order cache.
 ///
@@ -51,22 +48,25 @@ pub struct CacheStats {
 }
 
 #[derive(Debug)]
-struct Entry<V> {
+struct Entry<K, V> {
     value: V,
     bytes: usize,
     stamp: u64,
+    previous: Option<K>,
+    next: Option<K>,
 }
 
 #[derive(Debug)]
 pub(crate) struct BoundedCache<K, V> {
-    entries: DetHashMap<K, Entry<V>>,
-    recency: BTreeMap<u64, K>,
+    entries: crate::AdmittedMap<K, Entry<K, V>>,
+    oldest: Option<K>,
+    newest: Option<K>,
     limits: CacheLimits,
     stats: CacheStats,
     clock: u64,
 }
 
-pub(crate) type BoundedOrderCache = Mutex<BoundedCache<(u64, u64), Arc<[usize]>>>;
+pub(crate) type BoundedOrderCache = Mutex<BoundedCache<(u64, u64), crate::bgp::BgpOrder>>;
 
 #[derive(Clone, Copy)]
 pub(crate) enum OrderCacheRef<'a> {
@@ -80,11 +80,15 @@ impl<K: Clone + Eq + Hash, V: Clone> Default for BoundedCache<K, V> {
     }
 }
 
+// This private cache's actual key homes are u64, (u64, u64), and Arc<[u8]>.
+// Their clones never allocate. Recency uses those existing identities, and the
+// admitted table certificate includes both inline link slots in every entry.
 impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
     pub(crate) fn new(limits: CacheLimits) -> Self {
         Self {
-            entries: DetHashMap::default(),
-            recency: BTreeMap::new(),
+            entries: crate::AdmittedMap::default(),
+            oldest: None,
+            newest: None,
             limits,
             stats: CacheStats::default(),
             clock: 0,
@@ -96,27 +100,65 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
-        self.entries.values().map(|entry| &entry.value)
+        self.entries.iter().map(|(_, entry)| &entry.value)
     }
 
     fn tick(&mut self) -> u64 {
         if self.clock == u64::MAX {
-            // Preserve LRU order at counter rollover; never introduce a timestamp
-            // collision or a hash-iteration tie break.
-            let old = std::mem::take(&mut self.recency);
+            // Only clock rollover walks the list. No temporary list/tree or
+            // hash-order tie break is introduced; links preserve exact LRU law.
             self.clock = 0;
-            for (_, key) in old {
-                self.entries
-                    .get_mut(&key)
-                    .expect("recency entry exists")
-                    .stamp = self.clock;
-                self.recency.insert(self.clock, key);
+            let mut key = self.oldest.clone();
+            while let Some(current) = &key {
+                let entry = self.entries.get_mut(current).expect("recency entry exists");
+                entry.stamp = self.clock;
+                key.clone_from(&entry.next);
                 self.clock += 1;
             }
         }
         let stamp = self.clock;
         self.clock += 1;
         stamp
+    }
+
+    fn unlink(&mut self, key: &K) {
+        let entry = self.entries.get_mut(key).expect("recency entry exists");
+        let previous = entry.previous.take();
+        let next = entry.next.take();
+        if let Some(previous_key) = &previous {
+            self.entries
+                .get_mut(previous_key)
+                .expect("previous recency entry exists")
+                .next
+                .clone_from(&next);
+        } else {
+            self.oldest.clone_from(&next);
+        }
+        if let Some(next_key) = &next {
+            self.entries
+                .get_mut(next_key)
+                .expect("next recency entry exists")
+                .previous
+                .clone_from(&previous);
+        } else {
+            self.newest = previous;
+        }
+    }
+
+    fn append_newest(&mut self, key: &K, stamp: u64) {
+        if let Some(previous) = &self.newest {
+            self.entries
+                .get_mut(previous)
+                .expect("newest recency entry exists")
+                .next = Some(key.clone());
+        } else {
+            self.oldest = Some(key.clone());
+        }
+        let entry = self.entries.get_mut(key).expect("new entry exists");
+        entry.previous = self.newest.take();
+        entry.next = None;
+        entry.stamp = stamp;
+        self.newest = Some(key.clone());
     }
 
     pub(crate) fn get<Q: ?Sized + Eq + Hash>(&mut self, key: &Q) -> Option<V>
@@ -128,70 +170,105 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
             return None;
         };
         self.stats.hits = self.stats.hits.saturating_add(1);
-        // Repeated hits on the newest entry do not change LRU order. Avoid
-        // rebuilding the recency tree and bumping its clock on this hot path.
-        if self
-            .recency
-            .last_key_value()
-            .is_some_and(|(&stamp, _)| stamp == entry.stamp)
-        {
-            return Some(entry.value.clone());
+        debug_assert!(
+            entry.stamp < self.clock,
+            "live recency stamp precedes clock"
+        );
+        let value = entry.value.clone();
+        if entry.next.is_none() {
+            return Some(value);
         }
         let stored_key = stored_key.clone();
         let stamp = self.tick();
-        let entry = self.entries.get_mut(key).expect("checked cache entry");
-        self.recency.remove(&entry.stamp);
-        entry.stamp = stamp;
-        self.recency.insert(stamp, stored_key);
-        Some(entry.value.clone())
+        self.unlink(&stored_key);
+        self.append_newest(&stored_key, stamp);
+        Some(value)
     }
 
+    #[cfg(test)]
     pub(crate) fn insert(&mut self, key: K, value: V, bytes: usize) {
         self.insert_with_eviction(key, value, bytes, |_| {});
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_with_eviction(
         &mut self,
         key: K,
         value: V,
         bytes: usize,
-        mut evicted: impl FnMut(&V),
+        evicted: impl FnMut(&V),
     ) -> bool {
+        self.insert_with_eviction_admitted(
+            key,
+            value,
+            bytes,
+            &crate::WorkspaceCapability::resident(),
+            evicted,
+        )
+        .expect("resident cache destination allocation failed")
+    }
+
+    pub(crate) fn insert_admitted(
+        &mut self,
+        key: K,
+        value: V,
+        bytes: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, crate::EvalError> {
+        self.insert_with_eviction_admitted(key, value, bytes, workspace, |_| {})
+    }
+
+    pub(crate) fn insert_with_eviction_admitted(
+        &mut self,
+        key: K,
+        value: V,
+        bytes: usize,
+        workspace: &crate::WorkspaceCapability,
+        mut evicted: impl FnMut(&V),
+    ) -> Result<bool, crate::EvalError> {
         if self.limits.entries == 0
             || self.limits.bytes == 0
             || bytes == usize::MAX
             || bytes > self.limits.bytes
         {
             self.stats.unretained = self.stats.unretained.saturating_add(1);
-            return false;
+            return Ok(false);
         }
-        if let Some(previous) = self.entries.remove(&key) {
+        if self.entries.get(&key).is_some() {
+            self.unlink(&key);
+            let previous = self.entries.remove(&key).expect("checked cache entry");
             evicted(&previous.value);
-            self.recency.remove(&previous.stamp);
             self.stats.bytes -= previous.bytes;
+            self.stats.entries = self.entries.len();
         }
         while self.entries.len() >= self.limits.entries
             || self.stats.bytes > self.limits.bytes - bytes
         {
-            let (_, oldest) = self.recency.pop_first().expect("nonempty cache to evict");
+            let oldest = self.oldest.clone().expect("nonempty cache to evict");
+            self.unlink(&oldest);
             let entry = self.entries.remove(&oldest).expect("recency entry exists");
             evicted(&entry.value);
             self.stats.bytes -= entry.bytes;
             self.stats.evictions = self.stats.evictions.saturating_add(1);
+            self.stats.entries = self.entries.len();
         }
         let stamp = self.tick();
-        self.recency.insert(stamp, key.clone());
-        self.entries.insert(
-            key,
+        self.entries.insert_admitted(
+            key.clone(),
             Entry {
                 value,
                 bytes,
                 stamp,
+                previous: None,
+                next: None,
             },
-        );
+            workspace,
+        )?;
+        self.append_newest(&key, stamp);
         self.stats.bytes += bytes;
         self.stats.entries = self.entries.len();
-        true
+        drop(key);
+        Ok(true)
     }
 }
 

@@ -19,6 +19,7 @@
 //! pre-commit hook, `make check` and CI.
 
 mod census;
+mod glossary;
 mod layout;
 mod ledger;
 mod non_rust;
@@ -38,6 +39,8 @@ use crate::source::{Disk, Memory, Tree, Workspace};
 /// The CLI contract, printed by `--help` and beside every argument error.
 const USAGE: &str = "\
 Usage: helper-census [--root DIR] [--ledger FILE] <mode>
+       helper-census --glossary-gate [--root DIR] [--po FILE]
+                     [--glossary FILE] [--self-test] [--inventory FILE]
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)
                      --target (index | worktree | rev:REV)
@@ -192,6 +195,16 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--glossary-gate") {
+        return match glossary::run(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("helper-census glossary: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let arguments = match parse_arguments(std::env::args().skip(1)) {
         Ok(arguments) => arguments,
         Err(error) => {

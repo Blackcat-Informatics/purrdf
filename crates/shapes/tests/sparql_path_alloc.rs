@@ -53,16 +53,26 @@
 //! `N = 1,280` and `2N = 2,560`. The "before" column is this same file, unchanged,
 //! run against the revision this one replaced:
 //!
-//! | surface | allocations before | after | requested bytes before | after |
+//! | surface | allocations before | after | historical requested bytes before | after |
 //! |---|---|---|---|---|
 //! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 86 | 16,156 | 6,555 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 77 | 16,156 | 6,555 |
 //! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 101 | 13,393 | 6,744 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 79 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
+//! Historically, moving short BIND loops to the sequential path made the expression fixture
+//! requests 5,737,974 bytes at N and 11,496,054 at 2N, with 85 allocations per
+//! focus node; its governed counterpart has 110 allocations per focus node.
+//!
+//! Native ownership now retains unchanged immutable schemas through unions and
+//! projections, instead of cloning their columns and allocating another outer
+//! control. The current expression cost is79 per focus node, six fewer across
+//! its two scalar calls; ASK is77. The governed costs are56/97/64/104. Existing
+//! filtered schemas still construct their exact admitted layout before birth.
+//! The entry constants and every N/2N/4N closed-form assertion are unchanged.
 //!
 //! # What a run does not pay for
 //!
@@ -517,7 +527,7 @@ const CASES: &[SparqlCase] = &[
             "        }\"\"\" ] .\n",
         ),
         per_focus_node: 40,
-        governed_per_focus_node: 61,
+        governed_per_focus_node: 56,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -536,12 +546,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 86,
+        per_focus_node: 77,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 114,
+        governed_per_focus_node: 97,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -565,7 +575,7 @@ const CASES: &[SparqlCase] = &[
             "    ex:selectParam true .\n",
         ),
         per_focus_node: 48,
-        governed_per_focus_node: 69,
+        governed_per_focus_node: 64,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -582,8 +592,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 101,
-        governed_per_focus_node: 126,
+        per_focus_node: 79,
+        governed_per_focus_node: 104,
         governed_entry: 41,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -832,6 +842,7 @@ fn warm_every_worker(fixture: &Fixture, case: usize) {
 /// never a worker in this pool (there is only one process-wide `rayon` pool, so
 /// that means no other thread at all) never sees the flag change.
 fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
+    #[cfg(debug_assertions)]
     rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
     // `AssertUnwindSafe`, not a real `UnwindSafe` bound: `operation` only reads the
     // fixture (validation takes `&self`) and this function never inspects any state
@@ -839,6 +850,7 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     // hazard `UnwindSafe` exists to flag (observing a value a panic left
     // half-written) does not apply to a caller that never looks.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+    #[cfg(debug_assertions)]
     rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
     match result {
         Ok(value) => value,
@@ -1368,7 +1380,9 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// rewritten trees (per run: the node rows, the expression slots and the shared
 /// shape), 4 to the filter's forked worker context, 2 to compiling the filter's
 /// program, and the rest to the engine entry and the SHACL side's value terms.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 212;
+/// That trace was taken at 212; a query the seed alone reaches now skips the
+/// rewrite's expression walk, which took 12 of the rewrite's share.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 198;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.

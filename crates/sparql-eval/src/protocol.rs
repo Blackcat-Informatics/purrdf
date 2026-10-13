@@ -1233,6 +1233,10 @@ impl From<&EvalError> for FailureCode {
     fn from(error: &EvalError) -> Self {
         match error {
             EvalError::Parse(_) => Self::QueryParse,
+            EvalError::RetainedServiceFailure(error) => error.failure_code(),
+            EvalError::RetainedDiagnostic(diagnostic) => {
+                Self::from_diagnostic_code(&diagnostic.diagnostic().code)
+            }
             EvalError::Unsupported { kind, .. } => match kind {
                 None => Self::Unsupported,
                 Some(UnsupportedKind::CustomFunction) => Self::CustomFunction,
@@ -1247,6 +1251,10 @@ impl From<&EvalError> for FailureCode {
             EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
             EvalError::SourceRead(_)
+            | EvalError::NativeDiagnostic(_)
+            | EvalError::UnstableNativeDiagnostic
+            | EvalError::WorkspaceStopped
+            | EvalError::XPathRegex(_)
             | EvalError::ExchangeIdExhausted
             | EvalError::WorkspaceUnpriced(_)
             | EvalError::WorkspaceBoundOverflow
@@ -1255,12 +1263,13 @@ impl From<&EvalError> for FailureCode {
             | EvalError::Internal(_)
             | EvalError::Data(_)
             | EvalError::Function(_)
+            | EvalError::FunctionAdmission(_)
+            | EvalError::FunctionOperational(_)
             | EvalError::ExistsScopeCollision { .. }
             | EvalError::Config(_)
             | EvalError::CompositeBound(_)
             | EvalError::RelationIncomplete { .. }
-            | EvalError::FloatEnvironment(_)
-            | EvalError::Numeric(_) => Self::Evaluation,
+            | EvalError::FloatEnvironment(_) => Self::Evaluation,
         }
     }
 }
@@ -1300,7 +1309,9 @@ impl From<&LoadError> for FailureCode {
 impl From<&RemoteError> for FailureCode {
     fn from(error: &RemoteError) -> Self {
         match error {
-            RemoteError::SourceRead(_) | RemoteError::ExchangeIdExhausted => Self::Evaluation,
+            RemoteError::SourceRead(_)
+            | RemoteError::WorkspaceStopped
+            | RemoteError::ExchangeIdExhausted => Self::Evaluation,
             RemoteError::Transport(_) | RemoteError::Decode(_) | RemoteError::Disabled => {
                 Self::ServiceFailed
             }

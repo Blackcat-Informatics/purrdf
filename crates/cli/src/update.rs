@@ -4,8 +4,9 @@
 //! The `update` subcommand: COW-atomic SPARQL UPDATE followed by RDF serialization.
 
 use purrdf_core::SparqlRequest;
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_sparql_eval::{GovernedUpdateOutcome, NativeSparqlEngine, QueryOptions};
+use purrdf_sparql_eval::{GovernedUpdateOutcome, QueryOptions};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::{CliError, CliOutcome};
@@ -16,6 +17,8 @@ use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
 pub(crate) struct UpdateOptions<'a> {
+    /// The immutable geographic profile selected by `--geo-profile`.
+    pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     pub(crate) data: &'a str,
     pub(crate) from: Option<CliRdfFormat>,
     pub(crate) output: &'a str,
@@ -34,6 +37,13 @@ pub(crate) struct UpdateOptions<'a> {
     /// `QueryOptions::property_functions` at its `EMPTY` value, exactly as before this
     /// flag existed.
     pub(crate) path_relations: &'a [PathRelationSpec],
+    /// `--xpath-regex`: the dated native XPath pattern law the request's `REGEX` and
+    /// `REPLACE` evaluate under. `None` keeps the compatibility pattern engine, exactly
+    /// as before this flag existed.
+    pub(crate) xpath_regex: Option<Profile>,
+    /// `--division`: the precision of every `xsd:integer`/`xsd:decimal` quotient the
+    /// request computes.
+    pub(crate) division: purrdf_sparql_eval::DivisionPolicy,
 }
 
 /// Apply the request and emit the new dataset only after the whole request commits.
@@ -44,7 +54,9 @@ pub(crate) fn run(
     let source_format = format::resolve(options.from, options.data)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     let mut dataset = source::load_dataset(options.data, source_format, options.base)?;
-    let engine = NativeSparqlEngine::new();
+    // The same engine `query` builds: one law for the whole request, and a native
+    // resource refusal is an `Err` that applies nothing and writes no dataset.
+    let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
     let request = SparqlRequest {
         query: options.update,
         base_iri: options.base,
@@ -77,16 +89,24 @@ pub(crate) fn run(
         ),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
-    let query_options = QueryOptions::new().with_env(&env);
+    let query_options = QueryOptions::new()
+        .with_geo(options.geo)
+        .with_env(&env)
+        .with_division(options.division);
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;
         match engine.update_governed(&mut dataset, request, query_options, &governors)? {
-            GovernedUpdateOutcome::Applied { .. } => {}
+            // A governed request names the F&O errors its expressions absorbed into
+            // unbound values on stderr, as a governed query does.
+            GovernedUpdateOutcome::Applied { evidence, .. } => {
+                eprint!("{}", governors::render_expression_errors(&evidence));
+            }
             GovernedUpdateOutcome::BudgetExhausted {
                 tripped, evidence, ..
             } => {
                 eprint!("{}", governors::render_update_trip(tripped, &evidence));
+                eprint!("{}", governors::render_expression_errors(&evidence));
                 return Ok(CliOutcome::BudgetExhausted);
             }
         }

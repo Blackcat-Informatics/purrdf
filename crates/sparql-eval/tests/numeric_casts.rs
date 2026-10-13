@@ -319,7 +319,9 @@ fn a_string_source_is_still_read_lexically() {
         typed(&canonical_float(1.000_000_1), "float"),
     );
     check(r#"xsd:decimal("0.1")"#, typed("0.1", "decimal"));
-    check(r#"xsd:integer("  7")"#, None);
+    // The target's whiteSpace facet (collapse) applies first (F&O 3.1 §19.2).
+    check(r#"xsd:integer("  7")"#, typed("7", "integer"));
+    check(r#"xsd:integer("7 7")"#, None);
     check(r#"xsd:integer("1.5")"#, None);
     check(r#"xsd:double("+INF")"#, None);
 }
@@ -407,13 +409,13 @@ fn str_of_a_numeric_literal_is_its_lexical_form_unchanged() {
     );
 }
 
-/// `xsd:decimal` division under the default policy (`op:numeric-divide`, eighteen
-/// fractional digits truncated toward zero, F&O 3.1 §4.2): the quotient is exact
-/// whenever it terminates within eighteen digits and truncated there otherwise, at
+/// `xsd:decimal` division under the default policy (`op:numeric-divide`, F&O 3.1
+/// §4.2): the quotient is exact whenever it terminates and rounded to eighteen
+/// fractional digits, half to even, otherwise, at
 /// every magnitude of the integer part. Division by zero is the one error, beside
 /// its neighbours.
 #[test]
-fn decimal_division_answers_every_quotient_at_eighteen_digits() {
+fn decimal_division_keeps_terminating_quotients_and_rounds_repeating_ones() {
     let min = i128::MIN;
     let max = i128::MAX;
     let two_pow_127 = "170141183460469231731687303715884105728";
@@ -435,7 +437,8 @@ fn decimal_division_answers_every_quotient_at_eighteen_digits() {
         typed(&format!("{}.5", max / 2), "decimal"),
     );
     check("(1 / 3)", typed("0.333333333333333333", "decimal"));
-    check("(-2 / 3.0)", typed("-0.666666666666666666", "decimal"));
+    check("(-2 / 3.0)", typed("-0.666666666666666667", "decimal"));
+    check("(1 / 1048576)", typed("0.00000095367431640625", "decimal"));
     let fits = max / 10;
     check(
         &format!(r#"("{fits}"^^xsd:decimal / 0.1)"#),

@@ -350,19 +350,89 @@ pub fn best(k: usize, candidates: impl IntoIterator<Item = Ranked>) -> Vec<Ranke
     if k == 0 {
         return Vec::new();
     }
-    let mut heap: std::collections::BinaryHeap<Ranked> = std::collections::BinaryHeap::new();
+    select_best(k, candidates, std::collections::BinaryHeap::new())
+        .unwrap_or_else(|never| match never {})
+        .into_sorted_vec()
+}
+
+/// Native selection retains the scored buffer while admitting the heap, then
+/// transfers the heap's allocation unchanged to the sorted result.
+/// Its capacity is bounded by the actual candidate count, even when k is huge.
+pub(crate) fn best_admitted(
+    k: usize,
+    candidates: crate::AdmittedVec<Ranked>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::AdmittedVec<Ranked>, crate::EvalError> {
+    let capacity = k.min(candidates.len());
+    if capacity == 0 {
+        return Ok(crate::AdmittedVec::new(workspace));
+    }
+    let heap = crate::AdmittedHeap::with_capacity(capacity, workspace)?;
+    Ok(select_best(k, candidates, heap)?.into_sorted_vec())
+}
+
+/// The selection algorithm uses both native storage owners without duplicating
+/// its rank ordering or introducing a second candidate materialization.
+trait RankHeap {
+    type Error;
+    fn len(&self) -> usize;
+    fn peek(&self) -> Option<&Ranked>;
+    fn pop(&mut self);
+    fn push(&mut self, candidate: Ranked) -> Result<(), Self::Error>;
+}
+
+impl RankHeap for std::collections::BinaryHeap<Ranked> {
+    type Error = std::convert::Infallible;
+    fn len(&self) -> usize {
+        Self::len(self)
+    }
+    fn peek(&self) -> Option<&Ranked> {
+        Self::peek(self)
+    }
+    fn pop(&mut self) {
+        let _ = Self::pop(self);
+    }
+    fn push(&mut self, candidate: Ranked) -> Result<(), Self::Error> {
+        Self::push(self, candidate);
+        Ok(())
+    }
+}
+
+impl RankHeap for crate::AdmittedHeap<Ranked> {
+    type Error = crate::EvalError;
+    fn len(&self) -> usize {
+        Self::len(self)
+    }
+    fn peek(&self) -> Option<&Ranked> {
+        Self::peek(self)
+    }
+    fn pop(&mut self) {
+        let _ = Self::pop(self);
+    }
+    fn push(&mut self, candidate: Ranked) -> Result<(), Self::Error> {
+        Self::push(self, candidate)
+    }
+}
+
+/// One ordering/selection body for resident and admitted callers. The native
+/// caller reserves min(k, candidate count), so this body cannot grow its heap.
+fn select_best<H: RankHeap>(
+    k: usize,
+    candidates: impl IntoIterator<Item = Ranked>,
+    mut heap: H,
+) -> Result<H, H::Error> {
     for candidate in candidates {
         if heap.len() < k {
-            heap.push(candidate);
+            heap.push(candidate)?;
             continue;
         }
         // `peek` is the worst retained entry; a candidate no better than it cannot enter.
         if heap.peek().is_some_and(|worst| candidate < *worst) {
             heap.pop();
-            heap.push(candidate);
+            heap.push(candidate)?;
         }
     }
-    heap.into_sorted_vec()
+    Ok(heap)
 }
 
 #[cfg(test)]

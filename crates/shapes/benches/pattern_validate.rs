@@ -37,14 +37,20 @@
 //! which leaves the row as the cost of validation itself (target discovery, the
 //! focus-node sort's canonical IRI comparisons, value-node collection).
 //!
+//! `native_shacl_pattern_validate` uses the same short-value fixtures under each
+//! dated native XPath law. Preparation and binding are untimed; cold validation
+//! admits and compiles the first native program, while warm validation reuses an
+//! admitted program and applies current finite limits to every match.
+//!
 //! Report-only, `cargo bench -p purrdf-shapes --bench pattern_validate` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
 use purrdf_testkit::text::lowercase_filler as filler;
 use std::sync::Arc;
 
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
-use purrdf_shapes::engine::{parse_shapes, validate_projected_dataset};
+use purrdf_shapes::engine::{PreparedShapes, parse_shapes, validate_projected_dataset};
 use purrdf_testkit::bench::{
     BatchSize, Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box,
 };
@@ -147,6 +153,50 @@ fn bench_pattern_validate(c: &mut Bench) {
     group.finish();
 }
 
+/// The same declared patterns and value populations through the selected native
+/// binding: cold compilation/inventory beside warm current-limit matching.
+fn bench_native_pattern_validate(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_shacl_pattern_validate");
+    group.sample_size(10);
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        for &(focus_nodes, values_per_focus) in CASES {
+            let (dataset, shapes_ttl) = pattern_fixture(focus_nodes, values_per_focus);
+            let label = format!("{}/{focus_nodes}x{values_per_focus}", profile.name());
+            group.throughput(Throughput::Elements(
+                u64::try_from(focus_nodes * values_per_focus).expect("fixture fits u64"),
+            ));
+            let selected = PreparedShapes::new(Arc::new(parse_shapes(&shapes_ttl, None).unwrap()))
+                .with_xpath_regex(profile, Limits::new());
+            let warm = selected.bind_shared_dataset(Arc::clone(&dataset)).unwrap();
+            assert!(warm.validate().unwrap().conforms);
+            group.bench_function(BenchmarkId::new("cold_constraint", &label), |bencher| {
+                bencher.iter_batched(
+                    || {
+                        PreparedShapes::new(Arc::new(parse_shapes(&shapes_ttl, None).unwrap()))
+                            .with_xpath_regex(profile, Limits::new())
+                            .bind_shared_dataset(Arc::clone(&dataset))
+                            .unwrap()
+                    },
+                    |bound| {
+                        let report = bound.validate().unwrap();
+                        assert!(report.conforms);
+                        black_box(report);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+            group.bench_function(BenchmarkId::new("warm_constraint", &label), |bencher| {
+                bencher.iter(|| {
+                    let report = black_box(&warm).validate().unwrap();
+                    assert!(report.conforms);
+                    black_box(report);
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 /// The text every value ends with, which every long-value pattern matches.
 const MATCH_TAIL: &str = " foo needle bar 2026-09 x1a2";
 
@@ -224,5 +274,10 @@ ex:DocShape a sh:NodeShape ;
     group.finish();
 }
 
-bench_group!(benches, bench_pattern_validate, bench_pattern_long_values);
+bench_group!(
+    benches,
+    bench_pattern_validate,
+    bench_pattern_long_values,
+    bench_native_pattern_validate
+);
 bench_main!(benches);

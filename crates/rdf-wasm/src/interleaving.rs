@@ -72,6 +72,12 @@ const TEST_ONLY: &str = "Declared under `#[cfg(test)]`, so it is not compiled in
 
 /// Every `thread_local!` static under `crates/`, with its reason.
 pub const LEDGER: &[ThreadLocal] = &[
+    ThreadLocal {
+        file: "crates/sparql-eval/tests/expr_vm_owned_strings.rs",
+        name: "TEXT_WINDOW",
+        safety: Safety::NotCompiledIn,
+        reason: "The evaluator integration-test executable's counting window is not compiled into the WASM package or its asynchronous job runtime.",
+    },
     // ── purrdf-stack: the stack context ─────────────────────────────────────────────
     ThreadLocal {
         file: "crates/stack/src/lib.rs",
@@ -149,6 +155,18 @@ pub const LEDGER: &[ThreadLocal] = &[
     ThreadLocal {
         file: "crates/shapes/src/sparql.rs",
         name: "CURRENT_CALL_DEPTH",
+        safety: Safety::Swapped,
+        reason: SHACL_CONTEXT,
+    },
+    ThreadLocal {
+        file: "crates/shapes/src/query_law.rs",
+        name: "CURRENT",
+        safety: Safety::Swapped,
+        reason: SHACL_CONTEXT,
+    },
+    ThreadLocal {
+        file: "crates/shapes/src/xpath.rs",
+        name: "CURRENT",
         safety: Safety::Swapped,
         reason: SHACL_CONTEXT,
     },
@@ -243,6 +261,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: TEST_ONLY,
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/parallel.rs",
+        name: "DIRECT_ROW_LOOPS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/binop.rs",
         name: "MERGE_COUNT",
         safety: Safety::NotCompiledIn,
@@ -293,6 +317,19 @@ pub const LEDGER: &[ThreadLocal] = &[
     ThreadLocal {
         file: "crates/sparql-eval/src/vm/mod.rs",
         name: "TRACE",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    // Paging operation counts measure private production boundaries in tests only.
+    ThreadLocal {
+        file: "crates/rdf-core/src/ir/paged/admission.rs",
+        name: "BOUNDARY_COMPARISONS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
+        file: "crates/rdf-core/src/ir/paged/query.rs",
+        name: "SUMMARY_VISITS",
         safety: Safety::NotCompiledIn,
         reason: TEST_ONLY,
     },
@@ -463,7 +500,7 @@ mod tests {
     }
 
     /// The swapped entries are exactly the statics of the two contexts `JobAmbient` moves:
-    /// the five of `purrdf_stack::Context` and the eight of the SHACL `AmbientContext`.
+    /// the five of `purrdf_stack::Context` and the ten of the SHACL `AmbientContext`.
     #[test]
     fn the_swapped_entries_are_the_two_contexts() {
         let swapped: Vec<_> = LEDGER
@@ -482,9 +519,14 @@ mod tests {
         assert_eq!(
             swapped
                 .iter()
-                .filter(|file| **file == "crates/shapes/src/sparql.rs")
+                .filter(|file| matches!(
+                    **file,
+                    "crates/shapes/src/sparql.rs"
+                        | "crates/shapes/src/query_law.rs"
+                        | "crates/shapes/src/xpath.rs"
+                ))
                 .count(),
-            8
+            10
         );
     }
 }

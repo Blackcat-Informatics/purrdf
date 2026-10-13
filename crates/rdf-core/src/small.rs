@@ -56,6 +56,10 @@ use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::ptr::{self, NonNull};
 use core::slice::{self, SliceIndex};
 
+pub use purrdf_lex::allocation::{
+    Shared, SharedAllocError, SharedCloneError, SharedOwned, shared, try_boxed, try_boxed_one,
+};
+
 mod sealed {
     /// Restricts [`Array`](super::Array) to real `[T; N]` arrays, whose layout
     /// (`N` contiguous `T`s at `T`'s alignment) the inline storage relies on.
@@ -513,6 +517,105 @@ impl<A: Array> SmallVec<A> {
         }
     }
 
+    /// Fallibly reserve an exact additional capacity without moving inline
+    /// elements until allocation succeeds.
+    ///
+    /// # Errors
+    /// Returns capacity overflow or the allocator's refusal.
+    pub fn try_reserve_exact(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
+        if self.capacity() - self.len() >= additional {
+            return Ok(());
+        }
+        let Some(required) = self.len().checked_add(additional) else {
+            return Vec::<u8>::new().try_reserve_exact(usize::MAX);
+        };
+        if Self::IS_ZST {
+            return Vec::<u8>::new().try_reserve_exact(usize::MAX);
+        }
+        self.try_grow(required)
+    }
+
+    /// Push after admitting the actual replacement buffer, retaining the old
+    /// buffer's admission until its allocation has been destroyed.
+    ///
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocation failure.
+    pub fn push_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        value: A::Item,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        if self.len() == self.capacity() {
+            let capacity = self
+                .len()
+                .checked_add(1)
+                .and_then(usize::checked_next_power_of_two)
+                .ok_or(StorageError::SizeOverflow)?;
+            self.reserve_exact_with_memory(capacity - self.len(), memory)?;
+        }
+        self.push(value);
+        Ok(())
+    }
+
+    /// Admit the actual replacement capacity before native fallible growth.
+    /// The original buffer stays covered until the allocator has replaced it.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn reserve_exact_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        additional: usize,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        let required = self
+            .len()
+            .checked_add(additional)
+            .ok_or(StorageError::SizeOverflow)?;
+        if required <= self.capacity() {
+            return Ok(());
+        }
+        let bytes = core::alloc::Layout::array::<A::Item>(required)
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let old = if self.spilled() {
+            core::alloc::Layout::array::<A::Item>(self.capacity())
+                .map_err(|_| StorageError::SizeOverflow)?
+                .size()
+        } else {
+            0
+        };
+        memory.add_bytes(bytes)?;
+        if self.try_reserve_exact(additional).is_err() {
+            let _ = memory.release_bytes(bytes);
+            return Err(StorageError::AllocationFailed);
+        }
+        memory.release_bytes(old)
+    }
+
+    /// Destroy a native vector before returning its original buffer admission.
+    ///
+    /// # Errors
+    /// Returns a refused admission shrink or layout overflow.
+    pub fn release_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        let bytes = if self.spilled() {
+            self.capacity()
+                .checked_mul(size_of::<A::Item>())
+                .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?
+        } else {
+            0
+        };
+        drop(self);
+        memory.release_bytes(bytes)
+    }
+
     #[cold]
     #[inline(never)]
     fn grow(&mut self, len: usize, additional: usize, amortized: bool) {
@@ -528,11 +631,18 @@ impl<A: Array> SmallVec<A> {
         } else {
             required
         };
+        self.try_grow(cap)
+            .expect("small vector capacity allocation failed");
+    }
+
+    fn try_grow(&mut self, cap: usize) -> Result<(), std::collections::TryReserveError> {
+        let len = self.len();
         if self.spilled() {
-            self.with_heap(|vec| vec.reserve_exact(cap - len));
+            self.with_heap(|vec| vec.try_reserve_exact(cap - len))?;
         } else {
             // Inline and `required > N`: move to a heap buffer larger than `N`.
-            let mut vec = Vec::with_capacity(cap);
+            let mut vec = Vec::new();
+            vec.try_reserve_exact(cap)?;
             // SAFETY: inline, so the first `len` slots are initialised; they
             // move into the new buffer (capacity >= required > len) and `self`
             // is then overwritten, never dropping the moved-from slots.
@@ -542,6 +652,7 @@ impl<A: Array> SmallVec<A> {
                 self.adopt_vec(vec);
             }
         }
+        Ok(())
     }
 
     /// Frees unused heap capacity; moves the elements back inline when they
@@ -969,6 +1080,10 @@ impl<A: Array> DerefMut for SmallVec<A> {
 }
 
 impl<A: Array> Extend<A::Item> for SmallVec<A> {
+    // The reserved-slot bulk loop belongs in its caller: a separate per-row
+    // frame must not replace its SSA fill and single final length publication.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn extend<I: IntoIterator<Item = A::Item>>(&mut self, iterable: I) {
         let mut iter = iterable.into_iter();
         self.reserve(iter.size_hint().0);

@@ -20,11 +20,12 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as sixteen
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seventeen
 subcommands:
 
 | Subcommand | Pipeline |
 |---|---|
+| [`geo`](#geo) | execute a geographic scalar, batch, conversion, cover or point-index request |
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | `update` | atomically apply a SPARQL UPDATE to an RDF source |
@@ -93,6 +94,35 @@ materialization for `convert` passthroughs, `query`, or serialization. A pack
 arriving on stdin is read into a buffer and verified the same way. A `pack → pack`
 `convert` is a verified byte passthrough (no decode/re-encode churn).
 
+## `geo`
+
+```text
+purrdf [--geo-profile PROFILE.json] geo [INPUT] [OUTPUT]
+```
+
+Execute a version-one geographic JSON request through the shared geographic
+engine. Both positional paths default to `-` for stdin and stdout. Coordinates
+are exact decimal strings. The default profile supplies standard CRS84
+longitude/latitude coordinates and WGS84 metric execution.
+
+```sh
+printf '%s\n' '{"version":1,"operation":"distance","a":{"longitude":"0","latitude":"0"},"b":{"longitude":"1","latitude":"0"}}' | purrdf geo
+purrdf --geo-profile profile.json geo request.json response.json
+```
+
+The first request returns `111319.490793` in `result.metres`, together with its
+identity and certificate. A profile explicitly supplies other coordinate
+references, axis orders and named conversion chains; `--geo-profile` also applies
+to `query` and `update`. For example, EPSG:4326 latitude/longitude input requires
+an explicit registration. The [geographic profile and request specification](../../docs/GEO-PROFILE.md)
+defines scalar, batch, geometry, hierarchy and reusable point-index records.
+
+Success exits 0. A semantic refusal or invalid request record writes its canonical
+JSON error to the selected output and exits 1. An operational failure, including
+precision, work or memory exhaustion, exits 1 and preserves its original cause on
+stderr without a response document. This keeps incomplete computations from
+appearing as completed geographic results.
+
 ## `convert`
 
 ```text
@@ -149,7 +179,7 @@ purrdf convert --base http://example.org/ data.ttl data.nt
 purrdf query --data <file|pack> [--base <IRI>] [--entailment <R>] [--results-format <FMT>]
              [--fuel <N>] [--deadline <D>] [--max-answers <N>] [--max-intermediate-cells <N>]
              [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--no-ceiling]
-             [--explain] [--path-relation <SPEC>]... '<SPARQL>'
+             [--explain] [--path-relation <SPEC>]... [--xpath-regex <PROFILE>] '<SPARQL>'
 ```
 
 Evaluate a SPARQL 1.2 query over a data source. The source is opened as a view (a
@@ -187,6 +217,9 @@ relative IRIs against `--base`.
 - `--rules <FILE>` — the RIF-in-XML rule document `--entailment rif` runs;
   required by that regime and a usage error for any other.
 - `--results-format <FMT>` — the result serialization (default `json`).
+- `--xpath-regex <PROFILE>` — evaluate `REGEX` and `REPLACE` under a dated
+  native XPath pattern law; see
+  [Dated XPath pattern laws](#dated-xpath-pattern-laws---xpath-regex).
 
 The **result shape** selects which half of `--results-format` is legal:
 
@@ -270,6 +303,52 @@ evaluation over the completed closure. `--deadline` additionally reaches closure
 materialization through its stop signal: a stopped closure returns no model and no
 query result, while a completed closure is evaluated through the ordinary governed
 query outcome. Numeric ceilings deliberately do not truncate a reasoning closure.
+
+### Dated XPath pattern laws (`--xpath-regex`)
+
+`--xpath-regex <PROFILE>` selects the law every pattern the run decides is
+evaluated under. Six subcommands take it: `query` and `update` (SPARQL `REGEX`
+and `REPLACE`), [`validate`](#validate) (`sh:pattern` with its `sh:flags`, and
+`REGEX`/`REPLACE` in SHACL-SPARQL targets, constraints and functions),
+[`shex`](#shex) (string-facet `PATTERN`s), [`rules`](#rules) (`REGEX`/`REPLACE`
+in a `sh:SPARQLRule`, a SHACL-AF function, a node expression or a SPARQL 1.2 RL
+filter or assignment, and `sh:pattern` in a rule's condition) and
+[`node-expr`](#node-expr) (`sh:pattern` in a filter shape, and `REGEX`/`REPLACE`
+in a function call or a SPARQL-based expression). [`shapes lint`](#shapes-lint)
+does not: it certifies a shapes graph without compiling or matching any of its
+patterns, so the flag is not offered there. `rules --check` evaluates nothing
+and refuses the flag. `PROFILE` is a law's stable, edition-dated name:
+
+| `PROFILE` | Law |
+|---|---|
+| `xpath-2.0-2010-12-14` | XPath and XQuery Functions and Operators 2.0 (Second Edition), 14 December 2010 |
+| `xpath-3.1-2017-03-21` | XPath and XQuery Functions and Operators 3.1, 21 March 2017 |
+
+Both laws admit backreferences (`^(a)\1$` matches `"aa"`); only 3.1 admits
+non-capturing groups (`(?:…)`) and the `q` flag. The name is matched exactly —
+no case folding, abbreviation or undated alias — and any other value is a usage
+error (exit `2`) listing the accepted names. Without the flag, the
+compatibility pattern engine runs exactly as before; it rejects backreferences.
+
+A pattern the selected law does not define is handled as any invalid pattern
+is on that surface: an expression error in SPARQL (so `REGEX` leaves a `BIND`
+unbound and a `FILTER` drops the row), a finding of the declaring shape in
+SHACL, and a failed facet in ShEx. The native law runs under its production
+resource limits — a finite bound on the pattern's source bytes and on every
+compiler, matcher and replacement resource. A pattern or match that exceeds one
+is an **operational** refusal, never a non-match: the run fails (exit `1`)
+naming the refused resource (for example `xpath-pattern-bytes`), `query` writes
+no answers, `update` applies nothing and writes no dataset, `validate` and
+`shex` write no report, `rules` writes no graph and `node-expr` no output.
+
+```sh
+# A backreference, which the compatibility engine refuses.
+purrdf query --data people.ttl --xpath-regex xpath-3.1-2017-03-21 \
+  'SELECT ?p WHERE { ?p <http://example.org/code> ?c FILTER(REGEX(?c, "^(.)\\1")) }'
+
+# Validate every sh:pattern under the 2.0 law.
+purrdf validate --shapes shapes.ttl --xpath-regex xpath-2.0-2010-12-14 data.ttl
+```
 
 ### `--explain`
 
@@ -647,7 +726,7 @@ purrdf validate (--shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
                 [--from <F>] [--base <IRI>] [--format <F>]
                 [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
                 [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--no-ceiling]
-                [IN] [OUT]
+                [--xpath-regex <PROFILE>] [IN] [OUT]
 ```
 
 Validate an RDF data graph against a SHACL shapes graph — SHACL 1.2 Core,
@@ -797,7 +876,17 @@ purrdf query --data report.nt --results-format csv \
 
 # Bound the SHACL-SPARQL paths; a trip writes no report and exits 3.
 purrdf validate --shapes shapes.ttl --deadline 5s data.ttl
+
+# Decide every pattern under the dated XPath F&O 3.1 law.
+purrdf validate --shapes shapes.ttl --xpath-regex xpath-3.1-2017-03-21 data.ttl
 ```
+
+**Pattern laws.** `--xpath-regex <PROFILE>` decides every pattern of the
+validation — `sh:pattern` and SHACL-SPARQL `REGEX`/`REPLACE` alike — under a
+[dated XPath pattern law](#dated-xpath-pattern-laws---xpath-regex). It applies to
+`--shapes` and `--shapes-product` (a product needs no re-packing: the law is a
+property of the evaluation, not of the prepared shapes), to the `--changes`
+lane, and under the governors, which bound exactly what they bound without it.
 
 ## `rules`
 
@@ -808,6 +897,7 @@ purrdf rules (--shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
              [--import <IRI>=<FILE>]... [--explain[=<PATH>]]
              [--max-term-generating-rounds <N>] [--max-generated-terms <N>]
              [--max-stored-facts <N>] [--max-join-steps <N>]
+             [--xpath-regex <PROFILE>]
              [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
@@ -923,6 +1013,7 @@ purrdf node-expr --shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
                   | --expr-at <IRI|_:LABEL> --expr-via <IRI>...
                   | --expr-turtle <TURTLE> | --expr-turtle-file <FILE>)
                  --focus <TERM> [--scope <NAME>=<TERM>]...
+                 [--xpath-regex <PROFILE>]
                  [--from <F>] [--base <IRI>] [IN] [OUT]
 ```
 
@@ -1108,7 +1199,7 @@ purrdf shapes lint --import http://example.org/common=common.ttl shapes.ttl repo
 
 ```text
 purrdf shex --schema <FILE> [--schema-from <shexc|shexj>] [--import <IRI=FILE>]…
-            --data <FILE> [--from <F>] [--base <IRI>] MAP [OUT]
+            --data <FILE> [--from <F>] [--base <IRI>] [--xpath-regex <PROFILE>] MAP [OUT]
 ```
 
 Validate RDF nodes against a **ShEx 2.1** schema through a query shape map. The
@@ -1143,6 +1234,13 @@ reifier focus node's neighbourhood is the union of its ordinary arcs, its
 `rdf:reifies` arc, and its annotations. ShEx 2.1 predates RDF 1.2 and describes
 only arcs; PurRDF extends the data model rather than inheriting the gap, so
 `shex`, `validate` (SHACL) and `query` (SPARQL) all answer alike.
+
+**Pattern laws.** `--xpath-regex <PROFILE>` decides every string-facet
+`PATTERN` under a [dated XPath pattern law](#dated-xpath-pattern-laws---xpath-regex).
+ShExJ hands the pattern and flag text over as written; ShExC keeps its own
+concrete-syntax escape grammar, which has no `\1`, so a backreference is written
+in ShExJ. A native resource refusal fails the whole shape map (exit `1`) and
+writes no result shape map.
 
 ```sh
 # One fixed association.
@@ -1348,7 +1446,7 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | Code | Meaning |
 |---|---|
 | `0` | success — including every **decided negative verdict** (see below) |
-| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds`, `--max-generated-terms`, `--max-stored-facts` or `--max-join-steps`, a `reason` or `convert --entailment` run that passes `--max-stored-facts` or `--max-join-steps`, or a [`shapes lint`](#shapes-lint) report with a finding |
+| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a pattern the [`--xpath-regex`](#dated-xpath-pattern-laws---xpath-regex) law refused on a resource limit, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds`, `--max-generated-terms`, `--max-stored-facts` or `--max-join-steps`, a `reason` or `convert --entailment` run that passes `--max-stored-facts` or `--max-join-steps`, or a [`shapes lint`](#shapes-lint) report with a finding |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, a malformed `--import` pair, two documents reading stdin, or a flag that names something the selected mode does not produce |
 | `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, an `update` or a [`validate`](#validate); or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `update` and `validate`, nothing was produced (a mutation is atomic and a truncated SHACL run cannot license a verdict) and the receipt is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
 

@@ -34,7 +34,7 @@ fn fixture_dataset() -> Dataset {
 
 fn run_select(engine: &QueryEngine, dataset: &Dataset) -> usize {
     engine
-        .select(dataset, SELECT_BY_OBJECT, None)
+        .select(dataset, SELECT_BY_OBJECT, None, None)
         .expect("SELECT succeeds")
         .row_count()
 }

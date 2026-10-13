@@ -180,13 +180,9 @@ impl PfCursor for IndexedCursor {
 
     fn service_level(&self) -> ServiceLevel {
         match self.index {
-            Index::ShortFromTheStart => ServiceLevel::Incomplete {
-                reason: SHORT_REASON.to_owned(),
-            },
+            Index::ShortFromTheStart => ServiceLevel::incomplete_static(SHORT_REASON),
             Index::FoundShortUnderTheRead if self.emitted >= MOVES_AFTER => {
-                ServiceLevel::Incomplete {
-                    reason: SHORT_REASON.to_owned(),
-                }
+                ServiceLevel::incomplete_static(SHORT_REASON)
             }
             _ => ServiceLevel::Undeclared,
         }
@@ -226,7 +222,7 @@ fn counted_registry(left: Index) -> (PropertyFunctionRegistry, [Arc<AtomicU64>; 
                         predicate: Some(ex(predicate)),
                     },
                     placements: vec![TermPlacement {
-                        facet: RequestFacet::Value,
+                        facet: RequestFacet::ScopedLexicalValue,
                         position: 1,
                         datatype: None,
                     }],
@@ -363,7 +359,10 @@ fn materialised(left: Index, dataset: &RdfDataset) -> purrdf_retrieval::FusionRe
         compiled.fused_bound,
     ))
     .expect("the materialised streams fuse");
-    fused.trailer = fused.trailer.completed_with(execution.statuses);
+    fused.trailer = fused
+        .trailer
+        .completed_with(execution.statuses)
+        .expect("status publication is admitted");
     fused
 }
 
@@ -514,8 +513,8 @@ fn an_unweighted_stratum_whose_index_moves_under_its_read_is_refused_not_certifi
         let admitted = searched_under(index.clone(), &profile, dataset)
             .unwrap_or_else(|error| panic!("{index:?}: admitted, got {error:?}"));
         assert_eq!(
-            admitted.unweighted_strata,
-            vec![left.clone()],
+            &**admitted.unweighted_strata,
+            std::slice::from_ref(&left),
             "{index:?}: the left stratum ran unweighted"
         );
         assert_eq!(
@@ -647,9 +646,7 @@ fn a_shortfall_found_after_the_announcement_is_refused_and_one_announced_is_carr
         announced.trailer.attestations[&strata()[0]],
         PfAttestation {
             generation: IndexGeneration::declared(OPENED_ON),
-            service: ServiceLevel::Incomplete {
-                reason: SHORT_REASON.to_owned(),
-            },
+            service: ServiceLevel::incomplete_static(SHORT_REASON),
         },
         "the shortfall is carried, not dropped"
     );
@@ -800,7 +797,9 @@ fn joined_call(predicate: &str) -> String {
 
 /// What one hand-composed read of caller-supplied units came to.
 struct Supplied {
-    rows: Vec<purrdf_retrieval::FusedRow>,
+    rows: purrdf_sparql_eval::SharedWorkspace<
+        purrdf_sparql_eval::AdmittedVec<purrdf_retrieval::FusedRow>,
+    >,
     /// Per stratum: `(ranks the fusion pulled, rows the stream reports it produced)`.
     resolution: Vec<(u64, Option<u64>)>,
     /// Per stratum, the rows the producer itself minted.

@@ -220,6 +220,36 @@ pub trait PageProvider: Send + Sync {
     /// The provider's current immutable snapshot generation.
     fn generation(&self) -> PageGeneration;
 
+    /// Check the complete descriptor pinned by an operation, without reading pages.
+    /// Composed providers override this to check every retained source descriptor
+    /// directly, including sources with no pages.
+    ///
+    /// # Errors
+    /// Returns typed generation or page-count drift. A successful checkpoint is
+    /// required even for an operation that reads no pages.
+    fn check_snapshot(
+        &self,
+        expected: PageGeneration,
+        page_count: u64,
+    ) -> Result<(), super::PagedQueryError> {
+        let actual = self.generation();
+        if actual != expected {
+            return Err(super::PagedQueryError::StaleGeneration {
+                page: None,
+                expected,
+                actual,
+            });
+        }
+        let actual = self.page_count();
+        if actual != page_count {
+            return Err(super::PagedQueryError::PageCountMismatch {
+                expected: page_count,
+                actual,
+            });
+        }
+        Ok(())
+    }
+
     /// Materialize one page or return a typed operational failure.
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault>;
 }

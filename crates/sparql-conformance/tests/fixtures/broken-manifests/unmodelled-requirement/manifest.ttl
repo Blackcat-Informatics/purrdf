@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# A case whose mf:requires names a feature the harness does not model. The
+# loader refuses it: run without the behavior it depends on, the case would
+# grade a different question. Its sibling `../modelled-requirement/` names a
+# modelled feature and loads.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<#manifest> a mf:Manifest ;
+    mf:entries ( <#requiringEntry> ) .
+
+<#requiringEntry> a mf:PositiveSyntaxTest ;
+    mf:name "requiringEntry" ;
+    mf:action <requiringEntry.rq> ;
+    mf:requires <http://example.org/unmodelled-feature> .

@@ -113,6 +113,41 @@ Text codecs are *not* here — parsing and serialization live one layer up in
 [`purrdf-rdf`](https://crates.io/crates/purrdf-rdf). This split keeps the
 kernel small and its invariants enforceable at the crate boundary.
 
+## Dated native XPath patterns
+
+`xsd_regex::xpath` compiles an explicitly selected XPath F&O 2.0 Second Edition
+(2010-12-14) or 3.1 (2017-03-21) law. Its flat native program supports ordered
+captures, backreferences and replacement. Non-capturing groups and the `q` flag
+belong to the 3.1 law. The existing `xsd_regex::compile` compatibility API and
+its `regex::Regex` representation retain their behavior.
+
+```rust
+use purrdf_core::xsd_regex::xpath::{compile, Error, Limits, Profile, Resource};
+
+let program = compile(Profile::Xpath31, r"(a)\1", "", Limits::new()).unwrap();
+assert!(program.is_match("aa", Limits::new()).unwrap());
+assert!(matches!(
+    program.is_match("aa", Limits::new().with(Resource::MatchSteps, 0)),
+    Err(Error::Resource(refusal)) if refusal.resource == Resource::MatchSteps
+));
+```
+
+Every `Limits` resource is finite; zero withholds that resource. Source bytes,
+compiler work, program nodes and construction slots are admitted before use.
+Matching bounds work, pending states and their live slots; replacement also
+bounds output bytes. `Error::Resource` carries the exact resource, requirement
+and ceiling, and `Error::Allocation` carries an actual storage failure. Neither
+is a syntax verdict or a negative match. Replacement retains the distinct
+`FORX0003` empty-match and `FORX0004` replacement-language failures.
+
+`PatternCache` retains one successful program by exact profile/source/flag
+identity. Cache reuse admits current source and program-storage limits; matching
+always receives current execution limits. Failed attempts preserve prior success.
+`compiled_shared` shares the admitted program when an owner needs concurrent
+matching, while `compiled` keeps the borrowed owned path. Unicode categories,
+blocks and full case variants come from the workspace's one Unicode generator.
+The JSON Schema ECMA-262 matcher remains its existing separate engine.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)

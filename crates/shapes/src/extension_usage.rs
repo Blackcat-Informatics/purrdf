@@ -199,7 +199,12 @@ pub(crate) trait SparqlSink {
     /// One SPARQL-based node expression's query (`sh:select` / `sh:sparqlExpr`), which
     /// runs with `$this` pre-bound to the focus node. Delivered to [`Self::record`]
     /// unless a sink asks for these texts apart.
-    fn select_expression(&mut self, site: String, text: &str) {
+    fn select_expression(
+        &mut self,
+        site: String,
+        text: &str,
+        _purpose: crate::profile::QueryPurpose,
+    ) {
         self.record(site, text);
     }
 }
@@ -236,36 +241,70 @@ pub(crate) fn walk_reachable(shapes: &Shapes, sink: &mut dyn SparqlSink) {
 }
 
 /// The first SPARQL-based node expression a shape reaches — at any depth, through the
-/// body of any custom function it calls — whose query violates the pre-binding
-/// restrictions, as `(site, violation)`; `None` when none does.
+/// body of any custom function it calls — or one of the free-standing `expressions`
+/// reaches, whose query violates the pre-binding restrictions, as `(site, violation)`;
+/// `None` when none does.
 ///
 /// SHACL 1.2 SPARQL Extensions §6.1: "The value of focusNode is pre-bound as the value
 /// of the SPARQL variable this", so a select expression is a query "executed with
-/// pre-bound variables" and Appendix A's restrictions apply to it — read as a
-/// `sh:SPARQLFunction` body's are ([`crate::prebinding::check_function_body`], with
-/// `this` as the pre-bound variable), `SERVICE` included. An expression nothing reaches
-/// never executes and is not judged.
-pub(crate) fn reachable_select_expression_violation(shapes: &Shapes) -> Option<(String, String)> {
-    #[derive(Default)]
-    struct Selects {
-        first: Option<(String, String)>,
+/// pre-bound variables" and Appendix A's restrictions apply to it
+/// ([`crate::prebinding::check_node_expression`]) — for `$this` and for every other name
+/// its context pre-binds, as `prebound` records them by query text: `$value` inside
+/// `sh:expression`, a custom function's arguments, a free evaluation's scope names. An
+/// expression nothing reaches never executes and is not judged. A dated `profile`
+/// judges the query by its own law for the expression's purpose instead.
+pub(crate) fn reachable_select_expression_violation(
+    shapes: &Shapes,
+    expressions: &[NodeExpr],
+    prebound: &BTreeMap<String, std::collections::BTreeSet<String>>,
+    profile: crate::profile::ShaclProfile,
+) -> Option<(String, crate::shapes::QueryRefusal)> {
+    struct Selects<'p> {
+        prebound: &'p BTreeMap<String, std::collections::BTreeSet<String>>,
+        profile: crate::profile::ShaclProfile,
+        first: Option<(String, crate::shapes::QueryRefusal)>,
     }
-    impl SparqlSink for Selects {
+    impl SparqlSink for Selects<'_> {
         fn record(&mut self, _site: String, _text: &str) {}
-        fn select_expression(&mut self, site: String, text: &str) {
+        fn select_expression(
+            &mut self,
+            site: String,
+            text: &str,
+            purpose: crate::profile::QueryPurpose,
+        ) {
             if self.first.is_some() {
                 return;
             }
+            let names: Vec<&str> = self.prebound.get(text).map_or_else(
+                || vec!["this"],
+                |names| names.iter().map(String::as_str).collect(),
+            );
             // Every text reached here parsed when the shapes graph loaded.
             if let Ok(query) = SparqlParser::new().parse_query(text)
-                && let Err(violation) = crate::prebinding::check_function_body(&query, &["this"])
+                && let Err(violation) =
+                    crate::shapes::audit_query(self.profile, purpose, &query, &[], || {
+                        crate::prebinding::check_node_expression(&query, &names)
+                    })
             {
                 self.first = Some((site, violation));
             }
         }
     }
-    let mut sink = Selects::default();
+    let mut sink = Selects {
+        prebound,
+        profile,
+        first: None,
+    };
     walk_reachable(shapes, &mut sink);
+    let mut flight = InFlight::default();
+    for expression in expressions {
+        walk_node_expr(
+            expression,
+            "the free node expression",
+            &mut sink,
+            &mut flight,
+        );
+    }
     sink.first
 }
 
@@ -572,7 +611,12 @@ fn walk_constraints(
 fn walk_node_expr(expr: &NodeExpr, owner: &str, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     match expr {
         NodeExpr::Select { query, key, .. } => {
-            sink.select_expression(format!("{key} node expression on {owner}"), query);
+            let purpose = if *key == "sh:sparqlExpr" {
+                crate::profile::QueryPurpose::ScalarExpression
+            } else {
+                crate::profile::QueryPurpose::SelectExpression
+            };
+            sink.select_expression(format!("{key} node expression on {owner}"), query, purpose);
         }
         // Every call kind carries its arguments as node expressions, and a `sh:select`
         // can sit inside any of them. The three arms are spelled out rather than

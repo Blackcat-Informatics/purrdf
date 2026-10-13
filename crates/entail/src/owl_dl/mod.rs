@@ -3,14 +3,16 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Eight layers compose here: [`concept`] is the DL syntax and its structural
+//! The layers compose here: [`concept`] is the DL syntax and its structural
 //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
 //! datatype map fixes rather than the ontology; [`parser`] reverse-maps a [`DatasetView`]
 //! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`absorb`] decides,
 //! per general concept inclusion, whether it becomes a GUARDED CLAUSE or is internalized into
 //! every node's label; [`clause`] compiles the concept table and that decision into
 //! DL-clauses; [`graph`] is the completion graph and the two-domain
-//! semantics of a node; [`hyper`] is the `SHOIQ(D)` HYPERTABLEAU that decides consistency
+//! semantics of a node; [`roles`] admits theorem-backed regular SROIQ role
+//! inclusions and compiles their languages and finite universal-state obligations;
+//! [`hyper`] is the HYPERTABLEAU that decides consistency
 //! over those clauses; and [`saturate`] is the consequence-based
 //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
 //! so classification is not a loop over the decision procedure. [`Kb`] ties them together and
@@ -49,6 +51,7 @@ use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
 pub(crate) mod absorb;
+pub(crate) mod bounds;
 pub(crate) mod clause;
 pub(crate) mod concept;
 pub(crate) mod constructs;
@@ -63,7 +66,9 @@ pub(crate) mod parser;
 /// Independently replayable tableau PROOF TERMS, and the checker that re-derives them.
 pub(crate) mod proof;
 pub(crate) mod query;
+pub(crate) mod roles;
 pub(crate) mod saturate;
+pub(crate) mod support;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
 ///
 /// Compiled only under `cfg(test)`: it decides no question this crate asks, so shipping it
@@ -79,9 +84,13 @@ pub(crate) mod tableau;
 /// `owl:Thing` as an opaque atomic class instead of `⊤` would make `C ⊑ owl:Thing`
 /// undecidable-looking and `owl:Nothing`'s emptiness a fact nobody stated.
 pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
-    if class == v.thing {
+    class_concept_ids(class, v.thing, v.nothing)
+}
+
+pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept {
+    if class == thing {
         Concept::Top
-    } else if class == v.nothing {
+    } else if class == nothing {
         Concept::Bottom
     } else {
         Concept::Named(class)
@@ -90,11 +99,32 @@ pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
 
 /// A Description-Logic knowledge base: the interned TBox/RBox/ABox plus the concept
 /// table needed to reason over it.
+///
+/// A shipped build holds encoding and key-application flags; the other switches are `cfg(test)`
+/// mutations the differential corpus runs, each an independent switch, so the bool count is
+/// the honest shape rather than a state machine in disguise.
+#[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
+    /// Term-id boundary before any query/refutation symbol is minted.
+    pub(crate) source_terms: u32,
     /// The structural concept interner.
     pub(crate) table: ConceptTable,
+    /// Source-owned class-bound products; invalidated only at TBox ingress.
+    pub(crate) schema: bounds::Preparation,
+    /// Preparation limits selected before the first encoding.
+    pub(crate) schema_budget: bounds::SchemaPreparationBudget,
+    /// Deferred only by an honest incomplete preparation, never silently omitted.
+    keys_applied: bool,
+    /// Same-producer uncached control; absent from every shipped build.
+    #[cfg(test)]
+    pub(crate) schema_reference: bool,
+    #[cfg(test)]
+    pub(crate) schema_reference_stats: std::cell::Cell<bounds::SchemaPreparationStats>,
+    /// Test-only admission at the actual observational current-support producer.
+    #[cfg(test)]
+    pub(crate) schema_recording_budget: Option<bounds::SchemaPreparationBudget>,
     /// `⊤` concept id.
     pub(crate) top: u32,
     /// `⊥` concept id.
@@ -129,6 +159,9 @@ pub(crate) struct Kb {
     pub(crate) inverses: BTreeMap<u32, BTreeSet<u32>>,
     /// Role hierarchy: super-property term id → its sub-property term ids.
     pub(crate) role_sub: BTreeMap<u32, BTreeSet<u32>>,
+    /// Regular role languages and their finite universal-state blocking closure.
+    /// Absent on the legacy chain-free path.
+    pub(crate) role_program: Option<roles::RoleProgram>,
     /// Concept assertions `a : C` — `(individual term id, concept id)`.
     pub(crate) abox_types: Vec<(u32, u32)>,
     /// Role assertions `a r b` — `(subject, property, object)` term ids.
@@ -235,6 +268,16 @@ pub(crate) struct Kb {
     /// the calculus rather than a setting somebody wanted.
     #[cfg(test)]
     pub(crate) label_only_blocking: bool,
+    /// Whether every hypertableau round must re-match EVERY node, not only the region a
+    /// change since the last round can reach.
+    ///
+    /// Compiled only under `cfg(test)`, for the reason [`Kb::label_only_blocking`] is: delta
+    /// saturation rests on a claim — a node farther than the clause set's match radius from
+    /// every change, counted in neighbourhood READS, already matched everything it can match
+    /// now — and the DELTA DIFFERENTIAL in [`crate::owl_dl::oracle`] runs the mutation that
+    /// claim names. A verdict that moves under it is a delta region that missed a node.
+    #[cfg(test)]
+    pub(crate) full_rematch: bool,
 }
 
 impl Kb {
@@ -247,7 +290,17 @@ impl Kb {
         let bottom = table.bottom();
         Self {
             interner: Interner::default(),
+            source_terms: 0,
             table,
+            schema: bounds::Preparation::default(),
+            schema_budget: bounds::SchemaPreparationBudget::default(),
+            keys_applied: false,
+            #[cfg(test)]
+            schema_reference: false,
+            #[cfg(test)]
+            schema_reference_stats: std::cell::Cell::default(),
+            #[cfg(test)]
+            schema_recording_budget: None,
             top,
             bottom,
             tbox: Vec::new(),
@@ -256,6 +309,7 @@ impl Kb {
             generating: Vec::new(),
             inverses: BTreeMap::new(),
             role_sub: BTreeMap::new(),
+            role_program: None,
             abox_types: Vec::new(),
             abox_roles: Vec::new(),
             same_as: Vec::new(),
@@ -274,6 +328,7 @@ impl Kb {
             stop: None,
             internalize_only: false,
             label_only_blocking: false,
+            full_rematch: false,
         }
     }
 
@@ -305,10 +360,18 @@ impl Kb {
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
     ) -> Result<Self, EntailError> {
+        Self::from_dataset_with_preparation(ds, stop, bounds::SchemaPreparationBudget::default())
+    }
+
+    pub(crate) fn from_dataset_with_preparation<D: DatasetView>(
+        ds: &D,
+        stop: Option<Arc<dyn StopSignal>>,
+        budget: bounds::SchemaPreparationBudget,
+    ) -> Result<Self, EntailError> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
             return Err(EntailError::Stopped);
         }
-        let mut kb = parser::build_until(ds, stop.as_deref())?;
+        let mut kb = parser::build_with_preparation(ds, stop.as_deref(), budget)?;
         kb.stop = stop;
         if kb.stopped() {
             return Err(EntailError::Stopped);
@@ -339,11 +402,15 @@ impl Kb {
     /// # Errors
     ///
     /// Propagates [`Kb::entails_instance`]'s failures.
-    fn apply_keys(&mut self) -> Result<(), EntailError> {
-        if self.keys.is_empty() {
+    pub(crate) fn apply_keys(&mut self) -> Result<(), EntailError> {
+        if self.keys_applied || self.schema.stats.obstruction.is_some() {
             return Ok(());
         }
-        self.finalize();
+        if self.keys.is_empty() {
+            self.keys_applied = true;
+            return Ok(());
+        }
+        self.finalize()?;
         let named: Vec<u32> = self.individuals.iter().copied().collect();
         let mut forced: Vec<(u32, u32)> = Vec::new();
         for (class, properties) in &self.keys {
@@ -366,6 +433,7 @@ impl Kb {
             }
         }
         self.same_as.extend(forced);
+        self.keys_applied = true;
         Ok(())
     }
 
@@ -392,8 +460,8 @@ impl Kb {
         &self.boundaries
     }
 
-    /// Record a general concept inclusion `sub ⊑ sup`. Used by the tableau unit tests and by
-    /// the oracle's generators (the RDF build path records inclusions inline in [`parser`]).
+    /// Record a general concept inclusion `sub ⊑ sup`. Query class-expression definitions,
+    /// tableau unit tests and the oracle's generators use this same TBox ingress.
     ///
     /// Recording is all it does: which ENCODING an inclusion gets — a guarded clause in
     /// [`Kb::absorbed`] or a meta-concept in [`Kb::meta`] — is decided once, over the whole
@@ -404,12 +472,12 @@ impl Kb {
     /// Clears [`Kb::encoded`]: this is the one way [`Kb::tbox`] grows after construction, and
     /// [`Kb::encode_until`]'s absorption pass must see the grown list on the next call rather
     /// than skip itself over an inclusion it has not yet absorbed.
-    #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
         let sub_id = self.table.intern(sub);
         let sup_id = self.table.intern(sup);
         self.tbox.push((sub_id, sup_id));
         self.encoded = false;
+        self.schema = bounds::Preparation::default();
     }
 
     /// Intern a query concept and refresh the negation cache so it can be negated by
@@ -425,7 +493,7 @@ impl Kb {
     /// Finalize the knowledge base for DECIDING: clausify the TBox, and disclose the
     /// completeness limit the finished terminology forces. Call once after all axioms and
     /// assertions are in place.
-    pub(crate) fn finalize(&mut self) {
+    pub(crate) fn finalize(&mut self) -> Result<(), EntailError> {
         // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
         // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
         // so those sub-cardinalities must be interned now, before encoding. The production
@@ -433,10 +501,7 @@ impl Kb {
         // and its concept table is left byte-for-byte as it was.
         #[cfg(test)]
         self.intern_sub_cardinalities();
-        match self.encode_until(|| Ok::<(), std::convert::Infallible>(())) {
-            Ok(()) => {}
-            Err(never) => match never {},
-        }
+        self.encode_until(|| Ok::<(), EntailError>(()))
     }
 
     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
@@ -470,7 +535,7 @@ impl Kb {
     /// interns MORE concepts — a named class, a query concept, a refutation witness — that
     /// need negation-cache entries of their own, and [`ConceptTable::finalize_until`] is
     /// already cheap for a concept it has already covered (a single `is_none` check per id).
-    pub(crate) fn encode_until<E>(
+    pub(crate) fn encode_until<E: From<roles::RoleHierarchyError>>(
         &mut self,
         mut poll: impl FnMut() -> Result<(), E>,
     ) -> Result<(), E> {
@@ -494,6 +559,17 @@ impl Kb {
             }
         }
         self.table.finalize_until(&mut poll)?;
+        if let Some(program) = &mut self.role_program {
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory =
+                purrdf_lex::allocation::Memory::resume(&mut resident, program.admitted_bytes);
+            let result =
+                program.extend_obligations(&mut self.table, self.stop.as_deref(), &mut memory);
+            // Original producer metadata, including a retained replacement
+            // capacity on refusal. No recount of the constructed payload.
+            program.admitted_bytes = memory.admitted_bytes();
+            result.map_err(E::from)?;
+        }
         // LAST, over the finished table: the closure reads the absorbed clauses just derived,
         // and the negation pass above interned the residual concepts a partial absorption or a
         // `≤n` restriction's decided filler puts into a case split. Cheap even when the middle
@@ -501,7 +577,10 @@ impl Kb {
         // so it stays unconditional rather than adding a second flag to keep in step with the
         // first.
         self.generating = absorb::generating(&self.table, &self.absorbed);
-        Ok(())
+        let mut schema = core::mem::take(&mut self.schema);
+        let result = schema.extend_until(self, self.schema_budget, &mut poll);
+        self.schema = schema;
+        result
     }
 
     /// Whether holding `concept` forces witnesses to be minted — see [`Kb::generating`].
@@ -572,6 +651,20 @@ impl Kb {
     #[cfg(not(test))]
     const fn encoding(&self) -> Encoding {
         Encoding::Absorbing
+    }
+
+    /// Whether every hypertableau round re-matches every node — see [`Kb::full_rematch`],
+    /// which the delta differential sets.
+    #[cfg(test)]
+    pub(crate) const fn rematches_everything(&self) -> bool {
+        self.full_rematch
+    }
+
+    /// Whether every hypertableau round re-matches every node. A shipped build re-matches
+    /// only the region a change can reach; the full re-match exists to be compared against.
+    #[cfg(not(test))]
+    pub(crate) const fn rematches_everything(&self) -> bool {
+        false
     }
 
     /// Whether the hypertableau's blocking signature is LABELS ALONE — see
@@ -906,6 +999,57 @@ mod tests {
     }
 
     #[test]
+    fn both_drivers_refuse_a_stop_during_a_regular_role_round() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "p");
+        let r = iri(&mut b, "r");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let c = iri(&mut b, "c");
+        let cell0 = b.intern_blank("cell0", purrdf_core::BlankScope::DEFAULT);
+        let cell1 = b.intern_blank("cell1", purrdf_core::BlankScope::DEFAULT);
+        let first = vocab(&mut b, RDF_FIRST);
+        let rest = vocab(&mut b, RDF_REST);
+        let nil = vocab(&mut b, RDF_NIL);
+        let chain = vocab(&mut b, purrdf_iri::vocab::owl::PROPERTY_CHAIN_AXIOM);
+        for (s, predicate, o) in [
+            (r, chain, cell0),
+            (cell0, first, r),
+            (cell0, rest, cell1),
+            (cell1, first, p),
+            (cell1, rest, nil),
+            (a, r, bb),
+            (bb, p, c),
+        ] {
+            b.push_quad(s, predicate, o, None);
+        }
+        let restriction = b.intern_blank("restriction", purrdf_core::BlankScope::DEFAULT);
+        let filler = iri(&mut b, "C");
+        let on = vocab(&mut b, purrdf_iri::vocab::owl::ON_PROPERTY);
+        let all = vocab(&mut b, purrdf_iri::vocab::owl::ALL_VALUES_FROM);
+        let ty = vocab(&mut b, RDF_TYPE);
+        b.push_quad(restriction, on, r, None);
+        b.push_quad(restriction, all, filler, None);
+        b.push_quad(a, ty, restriction, None);
+        let dataset = b.freeze().expect("regular source");
+        let mut kb = Kb::from_dataset(&dataset).expect("regular recursive hierarchy");
+        for decide in [hyper::decide, tableau::decide] {
+            let healthy = Arc::new(StopAtPoll::new(u64::MAX));
+            kb.stop = Some(healthy.clone());
+            let answer = decide(&kb, &Assumptions::of_kb(), graph::Budget::for_kb(&kb));
+            assert!(answer.consistent && !answer.undecided());
+            assert!(healthy.polls() > 3);
+            for fire_at in 1..healthy.polls() {
+                kb.stop = Some(Arc::new(StopAtPoll::new(fire_at)));
+                let answer = decide(&kb, &Assumptions::of_kb(), graph::Budget::for_kb(&kb));
+                assert!(answer.stopped, "{fire_at}: {answer:?}");
+                assert!(!answer.consistent && !answer.exhausted);
+                assert!(answer.storage_refusal.is_none());
+            }
+        }
+    }
+
+    #[test]
     fn governed_construction_stops_during_reverse_mapping() {
         // Poll 0 is the API preflight, poll 1 is the parser preflight, and the following
         // polls are dataset cells. Firing at poll 3 therefore proves the signal is observed
@@ -1023,7 +1167,7 @@ mod tests {
         ));
         kb.abox_types.push((dudley, dudley_all));
 
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         (kb, ids)
     }
 
@@ -1101,7 +1245,7 @@ mod tests {
         // finalize again.
         let acls = kb.iri_id(&format!("{NS}A")).unwrap();
         kb.table.intern(Concept::Named(acls));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert_eq!(
             kb.absorb_calls, 1,
             "Kb::tbox did not change, so the second finalize() must not re-absorb it"
@@ -1110,7 +1254,7 @@ mod tests {
         // Growing the TBox is the one thing that must force a re-absorption, proving the
         // skip is conditional on `Kb::tbox` rather than a blanket no-op after the first call.
         kb.push_gci(Concept::Named(acls), Concept::Top);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert_eq!(
             kb.absorb_calls, 2,
             "a grown Kb::tbox must be re-absorbed on the next finalize()"
@@ -1130,8 +1274,8 @@ mod absorption_tests {
     use super::{Kb, hyper, tableau};
     use crate::owl_dl::graph::{Assumptions, Budget};
     use crate::vocab::{
-        OWL_NOTHING, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM, OWL_THING, RDF_TYPE,
-        RDFS_RANGE, RDFS_SUBCLASSOF,
+        OWL_NOTHING, OWL_OBJECTPROPERTY, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM,
+        OWL_THING, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE, RDFS_RANGE, RDFS_SUBCLASSOF,
     };
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
@@ -1242,6 +1386,63 @@ mod absorption_tests {
              above a scope and not a dropped clause"
         );
     }
+    #[test]
+    fn domain_bottom_roles_and_finite_class_cycles_agree_with_the_reference_core() {
+        use purrdf_iri::vocab::owl::{
+            BOTTOM_OBJECT_PROPERTY, COMPLEMENT_OF, EQUIVALENT_CLASS, UNION_OF,
+        };
+        // The object domain cannot disappear merely because no named individual
+        // was stated. The two cores must reject the same empty-domain equation.
+        let mut b = RdfDatasetBuilder::new();
+        let thing = b.intern_iri(OWL_THING);
+        let nothing = b.intern_iri(OWL_NOTHING);
+        let equivalent = b.intern_iri(EQUIVALENT_CLASS);
+        b.push_quad(thing, equivalent, nothing, None);
+        assert!(!consistent_by_both(
+            &b.freeze().expect("empty-domain fixture")
+        ));
+
+        for asserted in [false, true] {
+            let mut b = RdfDatasetBuilder::new();
+            let role = b.intern_iri(BOTTOM_OBJECT_PROPERTY);
+            let kind = b.intern_iri(OWL_OBJECTPROPERTY);
+            let ty = b.intern_iri(RDF_TYPE);
+            b.push_quad(role, ty, kind, None);
+            if asserted {
+                let source = b.intern_iri(EX_SUBJECT);
+                let target = b.intern_iri(EX_OBJECT);
+                b.push_quad(source, role, target, None);
+            }
+            assert_eq!(
+                consistent_by_both(&b.freeze().expect("empty-role fixture")),
+                !asserted
+            );
+        }
+
+        for complement in [false, true] {
+            let mut b = RdfDatasetBuilder::new();
+            let c = b.intern_iri(EX_A);
+            let equivalent = b.intern_iri(EQUIVALENT_CLASS);
+            b.push_quad(c, equivalent, c, None);
+            if complement {
+                let predicate = b.intern_iri(COMPLEMENT_OF);
+                b.push_quad(c, predicate, c, None);
+            } else {
+                let predicate = b.intern_iri(UNION_OF);
+                let list = b.intern_blank("list", BlankScope::DEFAULT);
+                let first = b.intern_iri(RDF_FIRST);
+                let rest = b.intern_iri(RDF_REST);
+                let nil = b.intern_iri(RDF_NIL);
+                b.push_quad(c, predicate, list, None);
+                b.push_quad(list, first, c, None);
+                b.push_quad(list, rest, nil, None);
+            }
+            assert_eq!(
+                consistent_by_both(&b.freeze().expect("finite-cycle fixture")),
+                !complement
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1271,10 +1472,10 @@ mod boundary_tests {
     /// axiom's RDF list head, so the knowledge base held `chained(chained, _:cell0)` — a
     /// statement the ontology does not make, about an individual that does not exist.
     ///
-    /// This asserts all three halves of the repair: the boundary is RAISED, the list head
-    /// is NOT an individual, and no role assertion was invented.
+    /// The regular inclusion is compiled, its list head is not an individual,
+    /// and no role assertion is invented from the structural predicate.
     #[test]
-    fn a_property_chain_is_bounded_rather_than_ingested_as_a_role_assertion() {
+    fn a_regular_property_chain_is_compiled_without_inventing_a_role_assertion() {
         let mut b = RdfDatasetBuilder::new();
         let chained = b.intern_iri(EX_CHAINED);
         let chain = b.intern_iri(OWL_PROPERTYCHAINAXIOM);
@@ -1293,11 +1494,8 @@ mod boundary_tests {
         let ds = b.freeze().expect("freeze");
 
         let kb = Kb::from_dataset(&ds).expect("the chain axiom parses");
-        assert!(
-            kb.boundaries().contains(&Construct::PropertyChain),
-            "a chain axiom must raise its boundary: {:?}",
-            kb.boundaries()
-        );
+        assert!(!kb.boundaries().contains(&Construct::PropertyChain));
+        assert!(kb.role_program.is_some());
         assert!(
             kb.abox_roles.is_empty(),
             "a chain axiom must not become a role assertion: {:?}",
@@ -1309,23 +1507,14 @@ mod boundary_tests {
             kb.individuals
         );
 
-        // …and the boundary reaches the caller, with the completeness narrowed to match.
+        // A regular role inclusion no longer narrows the completeness contract.
         let (_, report) = materialize_dl_reported(&ds, &[] as &[QTriple]).expect("consistent");
         assert_eq!(
             report.completeness(),
-            Completeness::ExactWithinBoundaries,
-            "a run that met a boundary is not exact"
+            Completeness::Exact,
+            "a regular role inclusion is part of the exact calculus"
         );
-        let constructs: Vec<Construct> = report
-            .boundaries()
-            .iter()
-            .map(|boundary| boundary.construct())
-            .collect();
-        assert_eq!(constructs, vec![Construct::PropertyChain]);
-        assert!(
-            report.boundaries()[0].reason().contains("REGULARITY"),
-            "the reason must name the check that is missing"
-        );
+        assert_eq!(report.boundaries(), []);
     }
 
     /// OWL 2 DL forbids a number restriction over a NON-SIMPLE role, and the condition is

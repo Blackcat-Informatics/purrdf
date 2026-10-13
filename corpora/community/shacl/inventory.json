@@ -1,0 +1,3128 @@
+{
+  "contractVersion": 1,
+  "copyright": "2026 Blackcat Informatics Inc.",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "cases": [
+    {
+      "id": "empty-left-optional-iri-violating",
+      "iri": "http://example.org/community/empty-left-optional-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/empty-left-optional-iri-violating/manifest.ttl",
+      "shapes": "shacl/empty-left-optional-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/empty-left-optional-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "empty-left-optional",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before empty-left-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "empty-left-optional-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "empty-left-optional-iri-conforming",
+      "iri": "http://example.org/community/empty-left-optional-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/empty-left-optional-iri-conforming/manifest.ttl",
+      "shapes": "shacl/empty-left-optional-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/empty-left-optional-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "empty-left-optional",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before empty-left-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "empty-left-optional-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "empty-left-optional-blank-violating",
+      "iri": "http://example.org/community/empty-left-optional-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/empty-left-optional-blank-violating/manifest.ttl",
+      "shapes": "shacl/empty-left-optional-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/empty-left-optional-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "empty-left-optional",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before empty-left-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "empty-left-optional-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "empty-left-optional-blank-conforming",
+      "iri": "http://example.org/community/empty-left-optional-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/empty-left-optional-blank-conforming/manifest.ttl",
+      "shapes": "shacl/empty-left-optional-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/empty-left-optional-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "empty-left-optional",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before empty-left-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "empty-left-optional-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "anchored-optional-iri-violating",
+      "iri": "http://example.org/community/anchored-optional-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/anchored-optional-iri-violating/manifest.ttl",
+      "shapes": "shacl/anchored-optional-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/anchored-optional-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "anchored-optional",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before anchored-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "anchored-optional-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "anchored-optional-iri-conforming",
+      "iri": "http://example.org/community/anchored-optional-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/anchored-optional-iri-conforming/manifest.ttl",
+      "shapes": "shacl/anchored-optional-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/anchored-optional-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "anchored-optional",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before anchored-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "anchored-optional-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "anchored-optional-blank-violating",
+      "iri": "http://example.org/community/anchored-optional-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/anchored-optional-blank-violating/manifest.ttl",
+      "shapes": "shacl/anchored-optional-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/anchored-optional-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "anchored-optional",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before anchored-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "anchored-optional-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "anchored-optional-blank-conforming",
+      "iri": "http://example.org/community/anchored-optional-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/anchored-optional-blank-conforming/manifest.ttl",
+      "shapes": "shacl/anchored-optional-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/anchored-optional-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "anchored-optional",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before anchored-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "anchored-optional-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-optional-iri-violating",
+      "iri": "http://example.org/community/nested-optional-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/nested-optional-iri-violating/manifest.ttl",
+      "shapes": "shacl/nested-optional-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-optional-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-optional",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-optional-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-optional-iri-conforming",
+      "iri": "http://example.org/community/nested-optional-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/nested-optional-iri-conforming/manifest.ttl",
+      "shapes": "shacl/nested-optional-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-optional-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-optional",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-optional-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-optional-blank-violating",
+      "iri": "http://example.org/community/nested-optional-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/nested-optional-blank-violating/manifest.ttl",
+      "shapes": "shacl/nested-optional-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-optional-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-optional",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-optional-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-optional-blank-conforming",
+      "iri": "http://example.org/community/nested-optional-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/nested-optional-blank-conforming/manifest.ttl",
+      "shapes": "shacl/nested-optional-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-optional-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-optional",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-optional evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-optional-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "not-exists-iri-violating",
+      "iri": "http://example.org/community/not-exists-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/not-exists-iri-violating/manifest.ttl",
+      "shapes": "shacl/not-exists-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/not-exists-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "not-exists",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "not-exists-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "not-exists-iri-conforming",
+      "iri": "http://example.org/community/not-exists-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/not-exists-iri-conforming/manifest.ttl",
+      "shapes": "shacl/not-exists-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/not-exists-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "not-exists",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "not-exists-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "not-exists-blank-violating",
+      "iri": "http://example.org/community/not-exists-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/not-exists-blank-violating/manifest.ttl",
+      "shapes": "shacl/not-exists-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/not-exists-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "not-exists",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "not-exists-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "not-exists-blank-conforming",
+      "iri": "http://example.org/community/not-exists-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/not-exists-blank-conforming/manifest.ttl",
+      "shapes": "shacl/not-exists-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/not-exists-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "not-exists",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "not-exists-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-not-exists-iri-violating",
+      "iri": "http://example.org/community/nested-not-exists-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/nested-not-exists-iri-violating/manifest.ttl",
+      "shapes": "shacl/nested-not-exists-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-not-exists-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-not-exists",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-not-exists-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-not-exists-iri-conforming",
+      "iri": "http://example.org/community/nested-not-exists-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/nested-not-exists-iri-conforming/manifest.ttl",
+      "shapes": "shacl/nested-not-exists-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-not-exists-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-not-exists",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-not-exists-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-not-exists-blank-violating",
+      "iri": "http://example.org/community/nested-not-exists-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/nested-not-exists-blank-violating/manifest.ttl",
+      "shapes": "shacl/nested-not-exists-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-not-exists-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-not-exists",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-not-exists-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "nested-not-exists-blank-conforming",
+      "iri": "http://example.org/community/nested-not-exists-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/nested-not-exists-blank-conforming/manifest.ttl",
+      "shapes": "shacl/nested-not-exists-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/nested-not-exists-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "nested-not-exists",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before nested-not-exists evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "nested-not-exists-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "exists-absence-iri-violating",
+      "iri": "http://example.org/community/exists-absence-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/exists-absence-iri-violating/manifest.ttl",
+      "shapes": "shacl/exists-absence-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/exists-absence-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "exists-absence",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before exists-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "exists-absence-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "exists-absence-iri-conforming",
+      "iri": "http://example.org/community/exists-absence-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/exists-absence-iri-conforming/manifest.ttl",
+      "shapes": "shacl/exists-absence-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/exists-absence-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "exists-absence",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before exists-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "exists-absence-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "exists-absence-blank-violating",
+      "iri": "http://example.org/community/exists-absence-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/exists-absence-blank-violating/manifest.ttl",
+      "shapes": "shacl/exists-absence-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/exists-absence-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "exists-absence",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before exists-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "exists-absence-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "exists-absence-blank-conforming",
+      "iri": "http://example.org/community/exists-absence-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/exists-absence-blank-conforming/manifest.ttl",
+      "shapes": "shacl/exists-absence-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/exists-absence-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "exists-absence",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before exists-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "exists-absence-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "union-absence-iri-violating",
+      "iri": "http://example.org/community/union-absence-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/union-absence-iri-violating/manifest.ttl",
+      "shapes": "shacl/union-absence-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/union-absence-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "union-absence",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before union-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "union-absence-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "union-absence-iri-conforming",
+      "iri": "http://example.org/community/union-absence-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/union-absence-iri-conforming/manifest.ttl",
+      "shapes": "shacl/union-absence-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/union-absence-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "union-absence",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before union-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "union-absence-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "union-absence-blank-violating",
+      "iri": "http://example.org/community/union-absence-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/union-absence-blank-violating/manifest.ttl",
+      "shapes": "shacl/union-absence-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/union-absence-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "union-absence",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before union-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "union-absence-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "union-absence-blank-conforming",
+      "iri": "http://example.org/community/union-absence-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/union-absence-blank-conforming/manifest.ttl",
+      "shapes": "shacl/union-absence-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/union-absence-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "union-absence",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before union-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "union-absence-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "path-absence-iri-violating",
+      "iri": "http://example.org/community/path-absence-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/path-absence-iri-violating/manifest.ttl",
+      "shapes": "shacl/path-absence-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/path-absence-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "path-absence",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before path-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "path-absence-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "path-absence-iri-conforming",
+      "iri": "http://example.org/community/path-absence-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/path-absence-iri-conforming/manifest.ttl",
+      "shapes": "shacl/path-absence-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/path-absence-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "path-absence",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before path-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "path-absence-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "path-absence-blank-violating",
+      "iri": "http://example.org/community/path-absence-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/path-absence-blank-violating/manifest.ttl",
+      "shapes": "shacl/path-absence-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/path-absence-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "path-absence",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before path-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "path-absence-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "path-absence-blank-conforming",
+      "iri": "http://example.org/community/path-absence-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/path-absence-blank-conforming/manifest.ttl",
+      "shapes": "shacl/path-absence-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/path-absence-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "path-absence",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before path-absence evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "path-absence-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "projected-subquery-iri-violating",
+      "iri": "http://example.org/community/projected-subquery-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/projected-subquery-iri-violating/manifest.ttl",
+      "shapes": "shacl/projected-subquery-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/projected-subquery-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "projected-subquery",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before projected-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "projected-subquery-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "projected-subquery-iri-conforming",
+      "iri": "http://example.org/community/projected-subquery-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/projected-subquery-iri-conforming/manifest.ttl",
+      "shapes": "shacl/projected-subquery-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/projected-subquery-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "projected-subquery",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before projected-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "projected-subquery-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "projected-subquery-blank-violating",
+      "iri": "http://example.org/community/projected-subquery-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/projected-subquery-blank-violating/manifest.ttl",
+      "shapes": "shacl/projected-subquery-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/projected-subquery-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "projected-subquery",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before projected-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "projected-subquery-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "projected-subquery-blank-conforming",
+      "iri": "http://example.org/community/projected-subquery-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/projected-subquery-blank-conforming/manifest.ttl",
+      "shapes": "shacl/projected-subquery-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/projected-subquery-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "projected-subquery",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before projected-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "projected-subquery-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "aggregate-subquery-iri-violating",
+      "iri": "http://example.org/community/aggregate-subquery-iri-violating",
+      "kind": "validation",
+      "manifest": "shacl/aggregate-subquery-iri-violating/manifest.ttl",
+      "shapes": "shacl/aggregate-subquery-iri-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/aggregate-subquery-iri-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "aggregate-subquery",
+        "prebinding",
+        "iri",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before aggregate-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "aggregate-subquery-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "aggregate-subquery-iri-conforming",
+      "iri": "http://example.org/community/aggregate-subquery-iri-conforming",
+      "kind": "validation",
+      "manifest": "shacl/aggregate-subquery-iri-conforming/manifest.ttl",
+      "shapes": "shacl/aggregate-subquery-iri-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/aggregate-subquery-iri-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "aggregate-subquery",
+        "prebinding",
+        "iri",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before aggregate-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three iri focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "aggregate-subquery-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "aggregate-subquery-blank-violating",
+      "iri": "http://example.org/community/aggregate-subquery-blank-violating",
+      "kind": "validation",
+      "manifest": "shacl/aggregate-subquery-blank-violating/manifest.ttl",
+      "shapes": "shacl/aggregate-subquery-blank-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/aggregate-subquery-blank-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "aggregate-subquery",
+        "prebinding",
+        "blank",
+        "violating",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before aggregate-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "aggregate-subquery-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "aggregate-subquery-blank-conforming",
+      "iri": "http://example.org/community/aggregate-subquery-blank-conforming",
+      "kind": "validation",
+      "manifest": "shacl/aggregate-subquery-blank-conforming/manifest.ttl",
+      "shapes": "shacl/aggregate-subquery-blank-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/aggregate-subquery-blank-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "aggregate-subquery",
+        "prebinding",
+        "blank",
+        "conforming",
+        "SELECT-constraint",
+        "control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Values insertion joins the current focus at every matched basic graph/path leaf before aggregate-subquery evaluates. Only a has p in the violating data; b and c each produce one absent-value solution. The conforming control gives all three focuses p, so none is selected. Explicit recordA/B/C anchors independently identify the three blank focuses; blank names are local graph identities, not interchangeable wildcards. Every SELECT solution yields one SPARQL constraint result with its current focus/value, named source constraint and source shape.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "aggregate-subquery-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "ask-validator-parameter-violating",
+      "iri": "http://example.org/community/ask-validator-parameter-violating",
+      "kind": "validation",
+      "manifest": "shacl/ask-validator-parameter-violating/manifest.ttl",
+      "shapes": "shacl/ask-validator-parameter-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/ask-validator-parameter-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "ASK-validator",
+        "component-parameter",
+        "prebound-role",
+        "violating"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The component parameter required is prebound to ex:p. ASK prebinds value to the node-shape value node and false creates one result; SELECT prebinds this, has no potentially-prebound value variable, and each absent-property row creates one result. Only b,c lack p in the violating control; all three have p in the conforming control. The source component is ex:Component, not sh:SPARQLConstraintComponent.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "ask-validator-parameter",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "ask-validator-parameter-conforming",
+      "iri": "http://example.org/community/ask-validator-parameter-conforming",
+      "kind": "validation",
+      "manifest": "shacl/ask-validator-parameter-conforming/manifest.ttl",
+      "shapes": "shacl/ask-validator-parameter-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/ask-validator-parameter-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "ASK-validator",
+        "component-parameter",
+        "prebound-role",
+        "conforming"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The component parameter required is prebound to ex:p. ASK prebinds value to the node-shape value node and false creates one result; SELECT prebinds this, has no potentially-prebound value variable, and each absent-property row creates one result. Only b,c lack p in the violating control; all three have p in the conforming control. The source component is ex:Component, not sh:SPARQLConstraintComponent.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "ask-validator-parameter",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "select-validator-parameter-violating",
+      "iri": "http://example.org/community/select-validator-parameter-violating",
+      "kind": "validation",
+      "manifest": "shacl/select-validator-parameter-violating/manifest.ttl",
+      "shapes": "shacl/select-validator-parameter-violating/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/select-validator-parameter-violating/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "SELECT-validator",
+        "component-parameter",
+        "prebound-role",
+        "violating"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The component parameter required is prebound to ex:p. ASK prebinds value to the node-shape value node and false creates one result; SELECT prebinds this, has no potentially-prebound value variable, and each absent-property row creates one result. Only b,c lack p in the violating control; all three have p in the conforming control. The source component is ex:Component, not sh:SPARQLConstraintComponent.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "select-validator-parameter",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "select-validator-parameter-conforming",
+      "iri": "http://example.org/community/select-validator-parameter-conforming",
+      "kind": "validation",
+      "manifest": "shacl/select-validator-parameter-conforming/manifest.ttl",
+      "shapes": "shacl/select-validator-parameter-conforming/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/select-validator-parameter-conforming/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": true
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "SELECT-validator",
+        "component-parameter",
+        "prebound-role",
+        "conforming"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The component parameter required is prebound to ex:p. ASK prebinds value to the node-shape value node and false creates one result; SELECT prebinds this, has no potentially-prebound value variable, and each absent-property row creates one result. Only b,c lack p in the violating control; all three have p in the conforming control. The source component is ex:Component, not sh:SPARQLConstraintComponent.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "select-validator-parameter",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "predicate-focus-iri",
+      "iri": "http://example.org/community/predicate-focus-iri",
+      "kind": "validation",
+      "manifest": "shacl/predicate-focus-iri/manifest.ttl",
+      "shapes": "shacl/predicate-focus-iri/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/predicate-focus-iri/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "predicate-position",
+        "iri",
+        "prebinding",
+        "SELECT-constraint"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Prebinding this in predicate position matches ex:p exactly. ex:q has no triple. A blank focus is not an RDF predicate and therefore matches no predicate triple; the OPTIONAL retains the current focus and the absence filter selects it.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "predicate-focus-iri",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "predicate-focus-blank",
+      "iri": "http://example.org/community/predicate-focus-blank",
+      "kind": "validation",
+      "manifest": "shacl/predicate-focus-blank/manifest.ttl",
+      "shapes": "shacl/predicate-focus-blank/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/predicate-focus-blank/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "predicate-position",
+        "blank",
+        "prebinding",
+        "SELECT-constraint"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Prebinding this in predicate position matches ex:p exactly. ex:q has no triple. A blank focus is not an RDF predicate and therefore matches no predicate triple; the OPTIONAL retains the current focus and the absence filter selects it.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "predicate-focus-blank",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-local-values-rec",
+      "iri": "http://example.org/community/admission-local-values-rec",
+      "kind": "validation",
+      "manifest": "shacl/admission-local-values-rec/manifest.ttl",
+      "shapes": "shacl/admission-local-values-rec/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-local-values-rec/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "explicit-values",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720"
+      ],
+      "categories": [
+        "profile-admission",
+        "local-values",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-local-values",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-local-values-draft",
+      "iri": "http://example.org/community/admission-local-values-draft",
+      "kind": "validation",
+      "manifest": "shacl/admission-local-values-draft/manifest.ttl",
+      "shapes": "shacl/admission-local-values-draft/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-local-values-draft/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "profile-admission",
+        "local-values",
+        "paired-legal-control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-local-values",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-hidden-prebound-subquery-rec",
+      "iri": "http://example.org/community/admission-hidden-prebound-subquery-rec",
+      "kind": "validation",
+      "manifest": "shacl/admission-hidden-prebound-subquery-rec/manifest.ttl",
+      "shapes": "shacl/admission-hidden-prebound-subquery-rec/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-hidden-prebound-subquery-rec/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "subquery-projection",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720"
+      ],
+      "categories": [
+        "profile-admission",
+        "hidden-prebound-subquery",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-hidden-prebound-subquery",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-hidden-prebound-subquery-draft",
+      "iri": "http://example.org/community/admission-hidden-prebound-subquery-draft",
+      "kind": "validation",
+      "manifest": "shacl/admission-hidden-prebound-subquery-draft/manifest.ttl",
+      "shapes": "shacl/admission-hidden-prebound-subquery-draft/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-hidden-prebound-subquery-draft/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "profile-admission",
+        "hidden-prebound-subquery",
+        "paired-legal-control"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-hidden-prebound-subquery",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-prebound-values-rec",
+      "iri": "http://example.org/community/admission-prebound-values-rec",
+      "kind": "validation",
+      "manifest": "shacl/admission-prebound-values-rec/manifest.ttl",
+      "shapes": "shacl/admission-prebound-values-rec/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-prebound-values-rec/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "explicit-values",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720"
+      ],
+      "categories": [
+        "profile-admission",
+        "prebound-values",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-prebound-values",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-prebound-values-draft",
+      "iri": "http://example.org/community/admission-prebound-values-draft",
+      "kind": "validation",
+      "manifest": "shacl/admission-prebound-values-draft/manifest.ttl",
+      "shapes": "shacl/admission-prebound-values-draft/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-prebound-values-draft/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "prebound-values",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "profile-admission",
+        "prebound-values",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-prebound-values",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-prebound-as-rec",
+      "iri": "http://example.org/community/admission-prebound-as-rec",
+      "kind": "validation",
+      "manifest": "shacl/admission-prebound-as-rec/manifest.ttl",
+      "shapes": "shacl/admission-prebound-as-rec/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-prebound-as-rec/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "prebound-as",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720"
+      ],
+      "categories": [
+        "profile-admission",
+        "prebound-as",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-prebound-as",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-prebound-as-draft",
+      "iri": "http://example.org/community/admission-prebound-as-draft",
+      "kind": "validation",
+      "manifest": "shacl/admission-prebound-as-draft/manifest.ttl",
+      "shapes": "shacl/admission-prebound-as-draft/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-prebound-as-draft/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "prebound-as",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "profile-admission",
+        "prebound-as",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-prebound-as",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-minus-rec",
+      "iri": "http://example.org/community/admission-minus-rec",
+      "kind": "validation",
+      "manifest": "shacl/admission-minus-rec/manifest.ttl",
+      "shapes": "shacl/admission-minus-rec/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-minus-rec/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "minus",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720"
+      ],
+      "categories": [
+        "profile-admission",
+        "minus",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-minus",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-minus-draft",
+      "iri": "http://example.org/community/admission-minus-draft",
+      "kind": "validation",
+      "manifest": "shacl/admission-minus-draft/manifest.ttl",
+      "shapes": "shacl/admission-minus-draft/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-minus-draft/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "minus",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "profile-admission",
+        "minus",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-minus",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-service-rec",
+      "iri": "http://example.org/community/admission-service-rec",
+      "kind": "validation",
+      "manifest": "shacl/admission-service-rec/manifest.ttl",
+      "shapes": "shacl/admission-service-rec/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-service-rec/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "service",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720"
+      ],
+      "categories": [
+        "profile-admission",
+        "service",
+        "required-rejection"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-service",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "admission-service-draft",
+      "iri": "http://example.org/community/admission-service-draft",
+      "kind": "validation",
+      "manifest": "shacl/admission-service-draft/manifest.ttl",
+      "shapes": "shacl/admission-service-draft/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/admission-service-draft/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "admission-rejection",
+        "node": "sht:Failure",
+        "reason": "service-policy",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "profile-admission",
+        "service",
+        "processor-policy"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The Recommendation forbids every explicit VALUES and requires nested projections to return potentially-prebound variables except its two optional context variables. The dated draft forbids only VALUES mentioning potentially-prebound variables and removes that projection rule. Both forbid MINUS and AS assigning this. The draft SERVICE refusal is PurRDF implementation policy under the draft SHOULD/MUST refusal rule; it is not a universal draft prohibition.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "admission-service",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      },
+      "extensions": {
+        "processorPolicy": "PurRDF refuses SERVICE under the dated draft; the draft permits a processor that admits it, so this case grades a declared PurRDF policy rather than a universal draft requirement"
+      }
+    },
+    {
+      "id": "solution-declared-failure",
+      "iri": "http://example.org/community/solution-declared-failure",
+      "kind": "validation",
+      "manifest": "shacl/solution-declared-failure/manifest.ttl",
+      "shapes": "shacl/solution-declared-failure/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/solution-declared-failure/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "semantic-failure",
+        "node": "sht:Failure",
+        "reason": "solution-failure",
+        "conforms": null
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "semantic-failure",
+        "SELECT-constraint",
+        "typed-outcome"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The SELECT has one solution whose failure binding is true. The SHACL SPARQL validator must report a semantic processor failure; producing a normal nonconformance report, a file error or a runner crash does not satisfy this contract.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "solution-declared-failure",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "solution-message-priority",
+      "iri": "http://example.org/community/solution-message-priority",
+      "kind": "validation",
+      "manifest": "shacl/solution-message-priority/manifest.ttl",
+      "shapes": "shacl/solution-message-priority/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/solution-message-priority/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "report-message",
+        "SELECT-expression",
+        "mapping-priority"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#sparql-constraints-variables",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "The single solution binds message to \"row message\". The ordered SPARQL report mapping chooses this binding before the constraint declaration. The expected result therefore requires row message and does not require the lower-priority declared message.",
+      "requires": [
+        "shacl-sparql",
+        "full-report"
+      ],
+      "options": {},
+      "family": "solution-message-priority",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "quoted-focus-optional",
+      "iri": "http://example.org/community/quoted-focus-optional",
+      "kind": "validation",
+      "manifest": "shacl/quoted-focus-optional/manifest.ttl",
+      "shapes": "shacl/quoted-focus-optional/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/quoted-focus-optional/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "RDF1.2",
+        "quoted-focus",
+        "OPTIONAL",
+        "identity"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#sparql-constraints-variables"
+      ],
+      "rationale": "Both targets are distinct RDF 1.2 triple terms. The matched about object must equal the complete focus triple term before the OPTIONAL runs. Only recordGood has p; the expected sole result carries the bad triple term exactly as focus and value.",
+      "requires": [
+        "shacl-sparql",
+        "rdf12-triple-terms",
+        "full-report"
+      ],
+      "options": {},
+      "family": "quoted-focus-optional",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "complex-sequence-inverse-path",
+      "iri": "http://example.org/community/complex-sequence-inverse-path",
+      "kind": "validation",
+      "manifest": "shacl/complex-sequence-inverse-path/manifest.ttl",
+      "shapes": "shacl/complex-sequence-inverse-path/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/complex-sequence-inverse-path/manifest.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "report",
+        "node": "_:report",
+        "reason": "",
+        "conforms": false
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "categories": [
+        "complex-report-path",
+        "sequence",
+        "inverse",
+        "required-field"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#MinCountConstraintComponent",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#property-paths",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#results-path",
+        "https://www.w3.org/TR/2026/WD-shacl12-core-20260917/#MinCountConstraintComponent",
+        "https://www.w3.org/TR/2026/WD-shacl12-core-20260917/#property-paths",
+        "https://www.w3.org/TR/2026/WD-shacl12-core-20260917/#results-path"
+      ],
+      "rationale": "The sequence ex:p followed by inverse ex:q reaches z from a through m, but reaches no node from b. Exactly b violates minCount 1. The result path must encode this sequence/inverse topology; a blank wildcard, reversed sequence or alternative-path structure cannot satisfy it. MinCount does not require a value.",
+      "requires": [
+        "shacl-core",
+        "full-report"
+      ],
+      "options": {},
+      "family": "complex-sequence-inverse-path",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "rule-optional",
+      "iri": "http://example.org/community/rule-optional",
+      "kind": "rules",
+      "manifest": "shacl/rule-optional/manifest.ttl",
+      "shapes": "shacl/rule-optional/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/rule-optional/data.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "inferences",
+        "path": "shacl/rule-optional/expected.ttl"
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "extensions": [
+        "shacl-af-20170608"
+      ],
+      "categories": [
+        "SPARQL-rule",
+        "optional",
+        "prebinding"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/NOTE-shacl-af-20170608/#SPARQLRule",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding"
+      ],
+      "rationale": "Attached rules prebind this to each target. Only b,c lack p, so exactly b missing true and c missing true are inferred. Existing input triples are not counted as new inferences; no a missing triple is permitted.",
+      "requires": [
+        "shacl-sparql-rules"
+      ],
+      "options": {},
+      "family": "rule-absence",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    },
+    {
+      "id": "rule-not-exists",
+      "iri": "http://example.org/community/rule-not-exists",
+      "kind": "rules",
+      "manifest": "shacl/rule-not-exists/manifest.ttl",
+      "shapes": "shacl/rule-not-exists/shapes.ttl",
+      "data": [
+        {
+          "path": "shacl/rule-not-exists/data.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "expected": {
+        "kind": "inferences",
+        "path": "shacl/rule-not-exists/expected.ttl"
+      },
+      "profiles": [
+        "shacl-20170720",
+        "shacl12-20260918"
+      ],
+      "extensions": [
+        "shacl-af-20170608"
+      ],
+      "categories": [
+        "SPARQL-rule",
+        "not-exists",
+        "prebinding"
+      ],
+      "specifications": [
+        "https://www.w3.org/TR/2017/NOTE-shacl-af-20170608/#SPARQLRule",
+        "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding",
+        "https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding"
+      ],
+      "rationale": "Attached rules prebind this to each target. Only b,c lack p, so exactly b missing true and c missing true are inferred. Existing input triples are not counted as new inferences; no a missing triple is permitted.",
+      "requires": [
+        "shacl-sparql-rules"
+      ],
+      "options": {},
+      "family": "rule-absence",
+      "oracleReview": {
+        "status": "accepted",
+        "derivation": "reviews/shacl.md",
+        "reviewer": "automated agent source review"
+      }
+    }
+  ]
+}

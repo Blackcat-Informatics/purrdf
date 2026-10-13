@@ -75,6 +75,7 @@
 //! | range term | read as |
 //! |---|---|
 //! | an XSD datatype IRI `purrdf-xsd` models | that datatype's value space |
+//! | `rdf:langString`, `rdf:dirLangString` | the respective disjoint, infinite tagged value space |
 //! | `rdfs:Literal` | the whole data domain |
 //! | any other IRI, or a blank node | [`DataRange::Opaque`] |
 //!
@@ -104,7 +105,7 @@
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{
-    DataRange, Satisfiability, containment, counterexample, is_exactly_decided,
+    DataRange, Satisfiability, TermSpace, containment, counterexample, is_exactly_decided,
 };
 
 use std::collections::BTreeSet;
@@ -113,7 +114,7 @@ use crate::entails::graph::{Triple, show};
 use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::warrant::{EntailmentWarrant, Replay};
 use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
-use crate::vocab::{RDFS_LITERAL, RDFS_RANGE};
+use crate::vocab::{RDF_DIRLANGSTRING, RDF_LANGSTRING, RDFS_LITERAL, RDFS_RANGE};
 use crate::{EntailError, Regime};
 
 /// WHY one `rdfs:range` axiom of the conclusion holds: the declarations it follows from.
@@ -217,6 +218,12 @@ impl DataRangeWarrant {
 fn range_of(term: &TermValue) -> DataRange {
     match term {
         TermValue::Iri(iri) if iri == RDFS_LITERAL => DataRange::Any,
+        TermValue::Iri(iri) if iri == RDF_LANGSTRING => {
+            DataRange::TermDatatype(TermSpace::LangString)
+        }
+        TermValue::Iri(iri) if iri == RDF_DIRLANGSTRING => {
+            DataRange::TermDatatype(TermSpace::DirLangString)
+        }
         TermValue::Iri(iri) => {
             XsdDatatype::from_iri(iri).map_or(DataRange::Opaque, DataRange::Datatype)
         }
@@ -231,7 +238,7 @@ fn range_of(term: &TermValue) -> DataRange {
 /// Narrower than [`range_of`]: an opaque target would make every answer `Undecided`, so a
 /// conclusion whose range this module cannot read is not this module's question at all.
 fn is_readable_target(term: &TermValue) -> bool {
-    matches!(term, TermValue::Iri(iri) if iri == RDFS_LITERAL || XsdDatatype::from_iri(iri).is_some())
+    matches!(term, TermValue::Iri(iri) if iri == RDFS_LITERAL || iri == RDF_LANGSTRING || iri == RDF_DIRLANGSTRING || XsdDatatype::from_iri(iri).is_some())
 }
 
 /// One recognized `rdfs:range` axiom, with the declarations it is decided against.
@@ -502,6 +509,54 @@ mod tests {
             .expect("a consistent premise")
             .into_parts()
             .0
+    }
+
+    #[test]
+    fn tagged_and_datetime_stamp_declared_ranges_use_the_public_containment_lane() {
+        use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
+        use purrdf_xsd::datatype::{XSD_DATE_TIME, XSD_DATE_TIME_STAMP};
+
+        let premise = ranges(&[XSD_DATE_TIME_STAMP]);
+        let conclusion = graph(&[(P, RDFS_RANGE, XSD_DATE_TIME)]);
+        let EntailmentOutcome::Entailed(warrant) = decide(&premise, &conclusion) else {
+            panic!("every timezone-bearing dateTimeStamp value is a dateTime value");
+        };
+        assert!(verify(&warrant, &premise, &conclusion));
+        assert!(
+            !matches!(
+                decide(
+                    &ranges(&[XSD_DATE_TIME]),
+                    &graph(&[(P, RDFS_RANGE, XSD_DATE_TIME_STAMP)])
+                ),
+                EntailmentOutcome::Entailed(_)
+            ),
+            "timezone-less dateTime values prevent the reverse containment"
+        );
+
+        for datatype in [LANG_STRING, DIR_LANG_STRING] {
+            let premise = ranges(&[datatype]);
+            let conclusion = graph(&[(P, RDFS_RANGE, purrdf_iri::vocab::rdfs::LITERAL)]);
+            let EntailmentOutcome::Entailed(warrant) = decide(&premise, &conclusion) else {
+                panic!("every tagged value is in the data domain");
+            };
+            assert!(verify(&warrant, &premise, &conclusion));
+            for disjoint in [
+                XSD_STRING,
+                if datatype == LANG_STRING {
+                    DIR_LANG_STRING
+                } else {
+                    LANG_STRING
+                },
+            ] {
+                assert!(
+                    !matches!(
+                        decide(&premise, &graph(&[(P, RDFS_RANGE, disjoint)])),
+                        EntailmentOutcome::Entailed(_)
+                    ),
+                    "a populated datatype space is not contained in its disjoint neighbor"
+                );
+            }
+        }
     }
 
     // ── The three W3C cases, by shape ──────────────────────────────────────────────────

@@ -43,6 +43,8 @@ use crate::{
 ///
 /// The query, UPDATE, iteration and validation-capsule surface is the
 /// [`PyQuadStore`] base class's, shared with `MutableDataset`.
+/// The keyword-only `remember_empty_graphs=True` selects native remembered
+/// graph slots; the 3.x default is false. Checkpoint and UPDATE retain the choice.
 #[pyclass(name = "Store", extends = PyQuadStore)]
 #[derive(Debug)]
 pub struct PyStore {
@@ -54,11 +56,14 @@ pub struct PyStore {
 #[pymethods]
 impl PyStore {
     #[new]
-    fn new() -> PyResult<PyClassInitializer<Self>> {
+    #[pyo3(signature = (*, remember_empty_graphs=false))]
+    fn new(remember_empty_graphs: bool) -> PyResult<PyClassInitializer<Self>> {
         Ok(
-            PyClassInitializer::from(PyQuadStore::empty()?).add_subclass(Self {
-                next_load_scope: AtomicU64::new(1),
-            }),
+            PyClassInitializer::from(PyQuadStore::empty(remember_empty_graphs)?).add_subclass(
+                Self {
+                    next_load_scope: AtomicU64::new(1),
+                },
+            ),
         )
     }
 
@@ -138,8 +143,8 @@ impl PyStore {
         Ok(())
     }
 
-    /// Remove a single quad. No-op if the quad is absent (matches the RDFLib
-    /// `Graph.remove` contract, which silently ignores misses).
+    /// Remove a single quad. No-op if the quad is absent: removing a member a set
+    /// does not hold leaves the set unchanged.
     fn remove(mut slf: PyRefMut<'_, Self>, quad: &PyQuad) -> PyResult<()> {
         slf.as_super()
             .inner
@@ -170,7 +175,7 @@ impl PyStore {
             let base = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store checkpoint failed: {e}")))?;
-            *inner = MutableDataset::new(base);
+            *inner = MutableDataset::new_with_graph_existence(base, inner.graph_existence());
             Ok(())
         })
     }
@@ -225,7 +230,9 @@ impl PyStore {
     /// `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
     /// and `aggregate_namespace` all admit the plan and are then CARRIED by the
     /// returned object, so [`PreparedQuery::run`](super::prepared::PyPreparedQuery::run)
-    /// evaluates under the SAME registries the plan was admitted under. Nothing here
+    /// evaluates under the SAME registries the plan was admitted under. `xpath_regex`
+    /// (see [`query`](Self::query)) is carried the same way: every run's `REGEX` and
+    /// `REPLACE` evaluate under the dated law selected here. Nothing here
     /// widens what a registered relation reaches — running under a different registry
     /// than the one a plan was prepared against is refused, not silently answered
     /// short, exactly as [`query`](Self::query) would refuse it if asked to.
@@ -257,6 +264,7 @@ impl PyStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None, geo=None,
         division=None,
     ))]
     #[allow(
@@ -275,6 +283,8 @@ impl PyStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        geo: Option<&Bound<'_, PyAny>>,
         division: Option<String>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
         presentation::settled(move || {
@@ -292,7 +302,16 @@ impl PyStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+                geo: Some(crate::py_geo::decode(geo)?),
             };
+            // Carried forward exactly as `standpoint_for_run` is: the law is read at
+            // EVALUATION time, off the engine `run` builds, so the handle keeps it.
+            let xpath_regex_for_run = config.xpath_regex;
+            let geo_for_run = config
+                .geo
+                .clone()
+                .unwrap_or_else(|| purrdf_validate::geo::GeoSession::default().profile_snapshot());
             let parameters = parameters.unwrap_or_default();
             // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
             // does: the namespace declarations are parse configuration, they belong to
@@ -343,6 +362,8 @@ impl PyStore {
                     registry.as_ref(),
                     aggregates.as_ref(),
                     standpoint_for_run,
+                    xpath_regex_for_run,
+                    geo_for_run,
                     graph_derived,
                     division,
                 )

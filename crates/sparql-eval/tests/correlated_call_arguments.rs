@@ -660,25 +660,11 @@ fn a_prepared_parameter_reaches_the_correlated_call_on_every_run() {
                     .clone();
                 seen.sort();
                 seen.dedup();
-                // A blank-node parameter is never written into the left side's
-                // triple — a blank in a pattern is an anonymous variable — so that
-                // side is narrowed by the seed join above the `LATERAL`, not before
-                // it. A call the rewrite reaches inside the `LATERAL`'s right side is
-                // driven with the parameter itself and runs for it alone; a call in an
-                // `OPTIONAL` arm there, which the rewrite does not enter, is handed each
-                // left row's own value, bound, so it also runs for the left rows the
-                // seed then discards. Every other kind is written into the triple.
-                let expected: Vec<String> = match kind {
-                    Kind::Blank
-                        if matches!(
-                            shape,
-                            Shape::LateralOptional | Shape::NestedLateralOptional
-                        ) =>
-                    {
-                        bound_invocations(kind)
-                    }
-                    _ => vec![format!("bf:{key}")],
-                };
+                // The rewrite reaches every call — the `LATERAL`'s right side and an
+                // `OPTIONAL` arm there alike — writing the parameter in (an IRI, a
+                // literal) or driving it (a blank node, a quoted triple), so the relation
+                // runs for the bound value alone.
+                let expected = vec![format!("bf:{key}")];
                 assert_eq!(
                     seen, expected,
                     "{text} bound to {key} invokes the relation bound, with {key} for \

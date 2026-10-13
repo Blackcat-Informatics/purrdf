@@ -61,6 +61,40 @@ results = shex.validate(my_schema_shexc, my_data_ttl,
 print(results[0]["conformant"])
 ```
 
+## Dated XPath regex laws
+
+String-facet `PATTERN`s run on the compatibility regular expressions unless the
+caller selects a dated native XPath law by name: `xpath-2.0-2010-12-14` (XPath
+and XQuery Functions and Operators 2.0, Second Edition) or
+`xpath-3.1-2017-03-21` (Functions and Operators 3.1). Both admit
+backreferences; only 3.1 admits non-capturing groups and the `q` flag.
+
+| Host | Spelling |
+|---|---|
+| Rust | `validate_with_xpath` and `validate_shape_map_with_xpath`, with `Profile` and `Limits` from `purrdf_core::xsd_regex::xpath`; an `XPathValidator::new(&schema)` serves repeated validations of a fixed map |
+| CLI | `--xpath-regex <NAME>` on `shex` |
+| Python | `xpath_regex=` on `shex.validate` |
+
+```python
+results = shex.validate(my_schema_shexc, my_data_ttl,
+                        [("https://example.org/alice", "https://example.org/PersonShape")],
+                        xpath_regex="xpath-3.1-2017-03-21")
+```
+
+Names match exactly, so `xpath-3.1` is refused with a list of the accepted
+names. With no selection, `validate`, `validate_with` and `validate_shape_map`
+keep the compatibility behaviour exactly. ShExJ hands the pattern and flag text
+over as written. ShExC keeps its own concrete-syntax escape grammar, which has
+no `\1`, so a backreference is written in ShExJ.
+
+A pattern or flag the selected law does not define fails its facet, as any
+invalid pattern does. A selected law also runs under finite resource bounds,
+64 KiB of pattern source among them. Exceeding one aborts the whole shape map
+with the resource's
+[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core).
+Negation, alternatives and previously decided entries cannot turn that refusal
+into a nonconformant entry or a partial result map.
+
 ## Conformance
 
 The engine is gated against the vendored official

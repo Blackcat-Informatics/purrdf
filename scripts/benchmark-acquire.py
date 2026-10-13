@@ -6,7 +6,7 @@
 
 PurRDF's own scale corpus is generated, not downloaded. Comparing PurRDF against
 other RDF stores needs the two workloads the literature actually uses — LUBM and
-WatDiv — and neither one may live in this repository. This script fetches six
+WatDiv — and neither one may live in this repository. This script fetches
 pinned artifacts into a cache under ``target/`` and verifies every byte against a
 digest recorded here. Nothing is vendored, nothing is redistributed, and no
 unverified byte is ever handed to a caller.
@@ -15,17 +15,7 @@ LICENSING — the conclusions that force the fetch-by-digest design
 ================================================================
 
 The design is not a matter of taste. A licensing review of each upstream
-artifact reached three binding conclusions, and the bytes bear all three out:
-
-* **The LUBM UBA data generator is GPL-2.0-or-later.** Every Java source file in
-  ``uba1.7.zip`` carries the GNU General Public License header, "either version
-  2 of the License, or (at your option) any later version", and
-  ``GeneratorLinuxFix.zip`` is a modified copy of that same source carrying the
-  same header. PurRDF is MIT OR Apache-2.0 OR MulanPSL-2.0. The generator is therefore **RUN,
-  NEVER VENDORED**: copying it into this tree would place a copyleft work inside
-  a permissively licensed distribution. Running a GPL program to produce data is
-  not distribution of that program, and the data it emits is what the benchmark
-  consumes.
+artifact reached two binding conclusions, and the bytes bear both out:
 
 * **``univ-bench.owl`` carries no license text at all.** The ontology file
   contains no license, copyright, or rights statement of any kind, and the LUBM
@@ -85,10 +75,6 @@ are pinned, **the candidate set behind every query template's ``#mapping`` is
 fixed too**, so query instantiation can be made a pure function of the dataset
 and a seed. ``scripts/watdiv-queries.py`` makes it one, which upstream's
 equally time-seeded query instantiator cannot.
-
-LUBM is the opposite case and needs no such caveat: UBA accepts ``-index`` and
-``-seed``, and ``-index 0 -seed 0`` reproduces the datasets used in the LUBM
-papers. Its generation IS pinnable, given the generator it is run with.
 
 WHAT THIS SCRIPT GUARANTEES
 ===========================
@@ -183,12 +169,6 @@ class Artifact(NamedTuple):
     posture: str
 
 
-_LUBM_GPL = (
-    "The UBA generator is RUN, NEVER VENDORED: copyleft cannot enter this "
-    "MIT OR Apache-2.0 OR MulanPSL-2.0 tree. Running it to produce data is not distribution of "
-    "it. Cite Guo, Pan and Heflin, Journal of Web Semantics 3(2), in results."
-)
-
 _LUBM_UNLICENSED = (
     "NO license, copyright, or rights statement accompanies this file upstream. "
     "Absent an explicit grant there is no permission to redistribute it, so it "
@@ -219,27 +199,6 @@ _WATDIV_FROZEN_OUTPUT = (
 )
 
 ARTIFACTS: tuple[Artifact, ...] = (
-    Artifact(
-        filename="uba1.7.zip",
-        url="https://swat.cse.lehigh.edu/projects/lubm/uba1.7.zip",
-        sha256="3d44f468e36b7f3cd532f0f5693a019d020877846397b1fa657367cbd53f380a",
-        size=35075,
-        md5=None,
-        licence="GPL-2.0-or-later",
-        posture=_LUBM_GPL,
-    ),
-    Artifact(
-        filename="GeneratorLinuxFix.zip",
-        url="https://swat.cse.lehigh.edu/projects/lubm/GeneratorLinuxFix.zip",
-        sha256="cc92e7a8373306086c593b519b15a5991f859d40e220e04cebb994d0cdc44be4",
-        size=9141,
-        md5=None,
-        licence="GPL-2.0-or-later",
-        posture=(
-            "A single modified Generator.java carrying the same GNU General "
-            "Public License header as the UBA sources it patches. " + _LUBM_GPL
-        ),
-    ),
     Artifact(
         filename="queries-sparql.txt",
         url="https://swat.cse.lehigh.edu/projects/lubm/queries-sparql.txt",
@@ -359,28 +318,12 @@ LUBM_PUBLISHED_QUERIES: int = 14
 # publisher, so the inputs are certain even though the recorded output is our own
 # measurement of them.
 #
-# The two ROW COUNTS are different in kind and stronger: `rows.Q1` and `rows.Q14`
-# are LUBM's OWN PUBLISHED ANSWERS for LUBM(1, 0), corroborated by the paper rather
-# than by this tree, so those two are an independent oracle and not self-derived at
-# all. They are the only external check either lane has.
-# The project-version pins below were freshly requalified with the 3.0.1 CLI:
-# UBA 1.7, one university, index/seed 0, and the existing document-base law
-# produced 102,737 converted rows with the same corpus digest. The frozen WatDiv
-# 10M data (10,916,457 rows), census and seed-0 query-set identities were verified;
-# all 20 original queries executed and reproduced their individual counts and
-# the 434,748-row total. This is functional output evidence, not timing evidence.
-# The project version does not change the external generator or frozen data.
+# WatDiv pins bind the qualified CLI version and frozen external bytes.
 WORKLOAD_PINS: dict[str, str] = {
     # sha256 over the normalised LUBM query set, at the default ontology namespace.
     "lubm.queries.sha256": (
         "5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8"
     ),
-    # LUBM's own published answers for LUBM(1, 0) seed 0. These two queries need NO
-    # entailment, so they run on the full corpus on any engine and their counts are
-    # the only oracle this lane has. `> 0` was letting a conversion bug that halved
-    # either one pass silently.
-    "lubm.1.0.seed0.rows.Q1": "4",
-    "lubm.1.0.seed0.rows.Q14": "5916",
     # sha256 over the EXTRACTED WatDiv corpus. The tarball is pinned and verified
     # every run, but what comes out of an extraction was certified only by a stamp
     # the first extraction itself wrote -- trust-on-first-use, which cannot detect a
@@ -409,23 +352,6 @@ WORKLOAD_PINS: dict[str, str] = {
     "watdiv.10M.census.sha256": (
         "8ac40d776b37f026ad04f6c154e9f92c4759ebb3682ac0a185de4eae2c945aa7"
     ),
-    # sha256 over the concatenated LUBM corpus at the default knobs -- AND FOR A
-    # NAMED BINARY, which is why the version is in the key.
-    #
-    # These bytes are the purrdf serializer's OUTPUT: the lane converts each
-    # generated RDF/XML document with `purrdf convert` and digests the
-    # concatenation. So the binary is an input to this digest exactly as the seed
-    # is, and a pin taken with one version does not apply to another --
-    # `watdiv-lane.sh` already reasons this way about its pack, whose stamp key is
-    # the dataset digest AND the binary version.
-    #
-    # Putting the version in the key rather than in a second condition makes a
-    # version bump a MISSING pin, which the lane reports as "not checked for this
-    # binary", instead of a mismatch that would blame generation or conversion for
-    # a difference the new serializer is entitled to.
-    "lubm.1.0.seed0.corpus.sha256.purrdf-3.0.1": (
-        "b3fbfcc822092428fcf6e03757f0ca555e39c2b29304bc8638c9d9d05f875308"
-    ),
     # The total answer rows the twenty WatDiv queries return at the default scale and
     # seed. This is ENGINE OUTPUT, so neither pin-verified digest covers it: a wrong
     # pack built from the right corpus would publish wrong row counts that nothing
@@ -434,7 +360,7 @@ WORKLOAD_PINS: dict[str, str] = {
     #
     # This is a REGRESSION pin, not an oracle -- WatDiv publishes no reference answers,
     # so the value is this engine's own measurement over pinned inputs. Which is exactly
-    # why the VERSION is in the key, as it is for the LUBM corpus digest two entries up:
+    # why the VERSION is in the key, as it is for other serializer-dependent outputs:
     # an engine-output pin that is not keyed on the engine turns the next release that
     # legitimately changes an answer count into "the engine answered them differently",
     # blaming the engine for a difference a new version is entitled to produce. Keyed, a
@@ -847,16 +773,11 @@ def _offending_status_lines(status_text: str, top: str) -> list[str]:
 def _licence_posture_sentence() -> str:
     """Describe the pinned set's licensing posture, counted from ARTIFACTS.
 
-    Restating these counts in prose is how a licensing diagnostic goes stale: the
-    sentence this replaced still described four artifacts, and named one as GPL,
-    after a second GPL artifact and two more pins had been added.
+    Counts follow the current artifact inventory.
     """
-    gpl = sum(1 for a in ARTIFACTS if a.licence.startswith("GPL"))
     ungranted = sum(1 for a in ARTIFACTS if a.licence.startswith("unlicensed"))
     citation = sum(1 for a in ARTIFACTS if a.licence.startswith("citation"))
     parts = []
-    if gpl:
-        parts.append(f"{gpl} of these artifacts {'is' if gpl == 1 else 'are'} GPL-2.0-or-later")
     if ungranted:
         parts.append(f"{ungranted} carry no licence grant at all")
     if citation:
@@ -922,9 +843,7 @@ def select_artifacts(names: list[str] | None) -> tuple[Artifact, ...]:
     one — never a silent no-op (fetch nothing) and never a silent fallback (fetch
     everything). This is what lets each lane ask for only the artifacts it
     actually consumes, instead of every lane paying for every pinned artifact
-    regardless of which one it uses. ``GeneratorLinuxFix.zip`` is the reason that
-    distinction is worth having: it is pinned here so the licensing analysis is on
-    the record, and no lane fetches it, because no lane uses it.
+    regardless of which one it uses.
 
     Order follows ``ARTIFACTS``, not *names*, and a name repeated in *names* is
     fetched once: this selects a subset, it does not resequence or multiply it.
@@ -963,7 +882,6 @@ def list_artifacts() -> int:
     print(f"cache: {CACHE}")
     print(
         "Nothing below is vendored. Every file is fetched by digest at use time.\n"
-        "The LUBM generator is GPL-2.0-or-later and is RUN, never copied into this tree.\n"
         "Results derived from these workloads must carry the citations noted below."
     )
     for artifact in ARTIFACTS:
@@ -1170,17 +1088,9 @@ def self_test() -> int:
         else:
             print("OK: self-test — an md5 mismatch is refused and nothing is installed")
 
-    # 7c. The licensing sentence is DERIVED from ARTIFACTS, so it is checked like
-    #     any other derived value. It is reached only from a `sys.exit` branch, so
-    #     nothing else in the gate would notice it going stale -- which is how its
-    #     hand-written predecessor came to describe four artifacts when there were
-    #     six, and to call one GPL when two are.
+    # 7c. The licensing diagnostic follows the current artifact inventory.
     posture = _licence_posture_sentence()
-    gpl = sum(1 for a in ARTIFACTS if a.licence.startswith("GPL"))
-    if f"{gpl} of these artifacts" not in posture or "GPL-2.0-or-later" not in posture:
-        print(f"SELF-TEST FAIL: the licensing sentence does not count the GPL pins: {posture}")
-        ok = False
-    elif str(len(ARTIFACTS)) == posture:
+    if str(len(ARTIFACTS)) == posture:
         print("SELF-TEST FAIL: the licensing sentence is a bare total, not a posture breakdown")
         ok = False
     else:
@@ -1284,27 +1194,6 @@ def self_test() -> int:
     else:
         print(f"OK: self-test — all {len(counts)} answer pin(s) are decimal counts")
 
-    # A ZERO IS A REAL ANSWER for a regression pin and NOT for an oracle, and the
-    # distinction is the whole difference between the two kinds. WatDiv's skew
-    # concentrates a property on some entities and leaves others without it, so a
-    # pattern demanding several at once legitimately matches none -- pinning that zero
-    # is what turns "matched nothing" from an unfalsifiable note into a claim. LUBM's
-    # Q1/Q14 are PUBLISHED answers used as an oracle, and an oracle of zero is
-    # satisfied by an engine that answers nothing, so those must be positive.
-    oracle_counts = {k: v for k, v in counts.items() if k.startswith("lubm.")}
-    if not oracle_counts:
-        print("SELF-TEST FAIL: no published-answer oracle is pinned")
-        ok = False
-    elif any(int(v) <= 0 for v in oracle_counts.values()):
-        zero = [k for k, v in oracle_counts.items() if int(v) <= 0]
-        print(f"SELF-TEST FAIL: an oracle pin is zero, which any engine satisfies: {zero}")
-        ok = False
-    else:
-        print(
-            f"OK: self-test — all {len(oracle_counts)} published-answer oracle pin(s) are "
-            "positive, so no engine satisfies one by answering nothing"
-        )
-
     # AND THE TWENTY-ONE NUMBERS MUST AGREE WITH EACH OTHER. The per-query pins and the
     # aggregate are recorded separately, so a transcription error in any one of them is
     # invisible from inside its own row: a lane comparing 20 counts and a total against
@@ -1323,7 +1212,7 @@ def self_test() -> int:
     # AND EVERY ANSWER PIN MUST BE CLASSIFIED. A third workload family added to the table
     # was checked by nothing at all: not by the oracle arm (which selects `lubm.`), not by
     # the per-query arm (now `watdiv.10M.seed0.rows.`), and not by the sum.
-    unclassified = sorted(set(counts) - set(per_query) - set(oracle_counts))
+    unclassified = sorted(set(counts) - set(per_query))
     if unclassified:
         print(
             f"SELF-TEST FAIL: answer pin(s) {unclassified} are checked by nothing -- they "
@@ -1443,7 +1332,7 @@ def self_test() -> int:
     flagged = _offending_status_lines(
         "?? target\n"
         "?? target/\n"
-        "?? target/bench-artifacts/uba1.7.zip\n"
+        "?? target/bench-artifacts/queries-sparql.txt\n"
         "?? targeted-notes.md\n"
         " M crates/bench/src/lib.rs\n"
         'R  "old name" -> "target/bench-artifacts/x"\n',
@@ -1574,7 +1463,6 @@ def acquire(artifacts: tuple[Artifact, ...]) -> int:
         f"{len(artifacts) - fetched} already cached) in {CACHE}\n"
         "      None of them is vendored or redistributable from here. Results derived from\n"
         "      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);\n"
-        "      the LUBM generator is GPL-2.0-or-later and is run, never copied into this tree.\n"
         "      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run."
     )
     return 0
@@ -1623,7 +1511,7 @@ def main() -> int:
         metavar="NAME",
         default=None,
         help=(
-            "fetch only the named artifact(s) (bare filenames, e.g. uba1.7.zip) instead of "
+            "fetch only the named artifact(s) (bare filenames, e.g. queries-sparql.txt) instead of "
             "every pinned artifact. An unknown name is a hard failure that lists the valid "
             "ones. Omit --only to fetch everything, unchanged from before this flag existed."
         ),

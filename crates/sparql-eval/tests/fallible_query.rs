@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_core::{
     InMemoryPageProvider, PackBuilder, PackView, PageFault, PageGeneration, PageId,
     PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, RdfDataset, SparqlRequest, SparqlResult, StopCause, TermValue,
+    PagedQueryLimits, RdfDataset, SparqlRequest, StopCause, TermValue,
 };
 use purrdf_sparql_eval::{
     CancellationFlag, ExtensionEnv, FallibleSparqlError, MemoryRelation, NativeSparqlEngine,
@@ -53,15 +53,9 @@ fn successful_and_empty_results_are_explicitly_complete() {
             QueryOptions::EMPTY,
         )
         .expect("complete SELECT");
-    match complete.result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => {
-            assert_eq!(variables, vec!["s"]);
-            assert_eq!(rows.len(), 1);
-        }
-        other => panic!("expected SELECT solutions, got: {other:?}"),
-    }
+    let (variables, rows) = complete.result.solutions().expect("SELECT shape");
+    assert_eq!(variables, ["s"]);
+    assert_eq!(rows.len(), 1);
     assert_eq!(complete.evidence.requested_pages, vec![PageId(0)]);
     assert_eq!(complete.evidence.consumed_pages, 1);
     assert_eq!(complete.evidence.consumed_bytes, 25);
@@ -74,10 +68,10 @@ fn successful_and_empty_results_are_explicitly_complete() {
             QueryOptions::EMPTY,
         )
         .expect("a genuinely empty answer is complete");
-    match empty.result {
-        SparqlResult::Solutions { rows, .. } => assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]),
-        other => panic!("expected empty SELECT solutions, got: {other:?}"),
-    }
+    assert_eq!(
+        empty.result.solutions().expect("SELECT shape").1,
+        &[] as &[Vec<Option<TermValue>>]
+    );
     assert!(
         empty.evidence.requested_pages.is_empty(),
         "an absent constant is proven by the complete global dictionary"
@@ -99,7 +93,7 @@ fn prepared_entry_uses_the_same_completeness_boundary() {
     let complete = engine
         .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
         .expect("complete prepared ASK");
-    assert!(matches!(complete.result, SparqlResult::Boolean(true)));
+    assert_eq!(complete.result.boolean(), Some(true));
     assert_eq!(complete.evidence.requested_pages, vec![PageId(0)]);
     assert_eq!(complete.evidence.consumed_bytes, 17);
 }
@@ -686,7 +680,7 @@ fn identical_executions_have_identical_results_status_and_evidence() {
             .query_fallible_view(&view, query, QueryOptions::EMPTY)
             .expect("identical complete execution");
         let (variables, rows) = solutions(complete.result);
-        let current = (variables, rows, complete.evidence);
+        let current = (variables, rows, (*complete.evidence).clone());
         if let Some(expected) = &expected_success {
             assert_eq!(&current, expected);
         } else {
@@ -760,11 +754,11 @@ fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
         assert_eq!(complete.evidence.consumed_bytes, 20);
         if let Some(expected) = &expected {
             assert_eq!(
-                &complete.evidence, expected,
+                &*complete.evidence, expected,
                 "warming the BGP-order cache must not change provider demand"
             );
         } else {
-            expected = Some(complete.evidence);
+            expected = Some((*complete.evidence).clone());
         }
     }
 }

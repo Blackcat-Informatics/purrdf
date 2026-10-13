@@ -118,6 +118,23 @@ impl ContentIdScheme {
         Ok(Self { prefix })
     }
 
+    /// Copy the validated original spelling under physical admission.
+    ///
+    /// # Errors
+    /// Returns storage refusal before allocating the prefix.
+    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            prefix: memory.string(&self.prefix)?,
+        })
+    }
+
+    pub(crate) fn owned_text_bytes(&self) -> usize {
+        self.prefix.capacity()
+    }
+
     /// The validated recognition prefix (e.g. `"blake3:"`).
     #[must_use]
     pub fn prefix(&self) -> &str {

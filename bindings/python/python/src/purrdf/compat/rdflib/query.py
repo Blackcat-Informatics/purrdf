@@ -129,6 +129,7 @@ class ResultRow(tuple[Identifier | None, ...]):
     """A SELECT solution row: positional ``row[0]`` and named ``row["var"]``."""
 
     _vars: tuple[str, ...]
+    _labels: dict[str, int]
 
     def __new__(
         cls,
@@ -138,12 +139,13 @@ class ResultRow(tuple[Identifier | None, ...]):
         """Construct from the projected values and their variable names."""
         self = super().__new__(cls, values)
         self._vars = tuple(str(v) for v in variables)
+        self._labels = {name: index for index, name in enumerate(self._vars)}
         return self
 
     @property
     def labels(self) -> dict[str, int]:
         """Map each variable name to its positional index (RDFLib parity)."""
-        return {name: idx for idx, name in enumerate(self._vars)}
+        return dict(self._labels)
 
     def asdict(self) -> dict[str, Identifier]:
         """Return bound variable names mapped to their values (RDFLib parity).
@@ -151,17 +153,17 @@ class ResultRow(tuple[Identifier | None, ...]):
         Unbound positions are omitted, matching RDFLib's ``ResultRow.asdict``.
         """
         return {
-            name: value
-            for name, value in zip(self._vars, self)
-            if value is not None
+            name: self[index]
+            for name, index in self._labels.items()
+            if self[index] is not None
         }
 
     def __getitem__(self, key: int | str | Variable | slice) -> Any:  # type: ignore[override]
         """Index by position (``int``/``slice``) or by variable name (``str`` / ``Variable``)."""
         if isinstance(key, (str, Variable)):
             try:
-                idx = self._vars.index(key)
-            except ValueError as exc:
+                idx = self._labels[str(key)]
+            except KeyError as exc:
                 raise KeyError(key) from exc
             return tuple.__getitem__(self, idx)
         return tuple.__getitem__(self, key)
@@ -171,21 +173,20 @@ class ResultRow(tuple[Identifier | None, ...]):
         if name.startswith("__"):
             raise AttributeError(name)
         try:
-            idx = self._vars.index(name)
-        except ValueError as exc:
+            idx = self._labels[name]
+        except KeyError as exc:
             raise AttributeError(name) from exc
         return tuple.__getitem__(self, idx)
 
     def get(
         self, name: str | Variable, default: Identifier | None = None
     ) -> Identifier | None:
-        """Return the binding for ``name`` or ``default`` if absent/unbound."""
+        """Return the binding for ``name`` or ``default`` if absent."""
         try:
-            idx = self._vars.index(name)
-        except ValueError:
+            idx = self._labels[str(name)]
+        except KeyError:
             return default
-        value = tuple.__getitem__(self, idx)
-        return value if value is not None else default
+        return tuple.__getitem__(self, idx)
 
 
 class Result:

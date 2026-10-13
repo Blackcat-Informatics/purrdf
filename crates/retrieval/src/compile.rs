@@ -89,24 +89,15 @@
 //! received the depth as an argument and bounds itself, so its branch carries no
 //! `LIMIT`; the outer one still applies.
 //!
-//! No admitted plan carries a depth of zero, so nothing here emits `LIMIT 0`.
-//! That bound reads no rows: whatever the relation holds, the unit hands back
-//! nothing, and the stratum is then reported exhausted having emitted nothing —
-//! the one ending that names no stopper, said about the bound rather
-//! than about the data, and indistinguishable in every trailer field from an
-//! honest empty answer. A bound may narrow a read and
-//! must never eliminate one, so the planner floors every derived depth at one,
-//! admission refuses a zero outright ([`AdmissionError::ZeroDepth`]), and
-//! [`emitted_limit`] reads a declared row count of zero rather than obeying it —
-//! the emitted bound is one row past the floored depth there as anywhere else.
-//! Emptiness is reported by the producer, in the
-//! receipt fusion verifies against the rows it actually pulled, and a stratum
-//! that is to run at all runs deep enough to ask.
+//! Fused plans preserve their original positive-depth policy: the planner
+//! floors every derived depth at one and admission refuses zero. Candidate
+//! plans may explicitly request a zero prefix; the emitted bound is still one
+//! probe row, and execution returns no candidates while retaining the actual
+//! read evidence. No route emits `LIMIT 0` or calls that bound an exhaustion.
 //!
-//! A stratum that is to read nothing is expressed by carrying no depth entry —
-//! which is also how the planner expresses it, since it records a depth only for
-//! a stratum a surviving producer ranks under. Absence emits no unit and claims
-//! nothing; a zero would have claimed everything.
+//! Candidate depths are the caller's independent work requests. They may exceed
+//! a producer's own finite cap. The unit retains both facts, and execution
+//! distinguishes reaching that cap below the request from verified exhaustion.
 //!
 //! # The depth arrives already narrowed, and this stage narrows nothing
 //!
@@ -480,6 +471,15 @@ impl RenderedQuery {
     /// ceiling (or, for a self-bounding producer, the depth argument in its call)
     /// and the unit's outer bound. Neither is stored, so neither can be replaced.
     fn text(&self, depth: ProbedDepth, declared_rows: Option<u64>) -> String {
+        self.text_retaining_outputs(depth, declared_rows, false)
+    }
+
+    fn text_retaining_outputs(
+        &self,
+        depth: ProbedDepth,
+        declared_rows: Option<u64>,
+        retain: bool,
+    ) -> String {
         let render = |position: usize, argument: &UnitArgument| match argument {
             UnitArgument::Placed(text) => text.clone(),
             // The variable the projections below read the candidate and the block
@@ -507,7 +507,7 @@ impl RenderedQuery {
         let candidate = self.candidate;
         // One projection per position the unit reads back, in the order the executor
         // reads them: the candidate, then the block where the producer declared one.
-        let (projected, projections) = match self.block {
+        let (mut projected, mut projections) = match self.block {
             None => (
                 format!("?{CANDIDATE_NAME}"),
                 format!("(?c{candidate} AS ?{CANDIDATE_NAME})"),
@@ -517,6 +517,15 @@ impl RenderedQuery {
                 format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})"),
             ),
         };
+        if retain {
+            for (position, argument) in self.arguments().enumerate() {
+                if matches!(argument, UnitArgument::Free) {
+                    use core::fmt::Write as _;
+                    write!(projected, " ?c{position}").expect("string formatting");
+                    write!(projections, " ?c{position}").expect("string formatting");
+                }
+            }
+        }
         // A producer that took the depth as an argument bounds itself, with the
         // number rendered into that argument above — which carries the probe row
         // wherever its own declaration leaves room for it. One that did not is
@@ -711,6 +720,9 @@ pub(crate) enum ReadReach {
     /// depth argument and cannot be asked for a row past it, so a read that fills
     /// the depth has an ending nobody can observe.
     AtDepth,
+    /// The producer's own argument bound is below the requested candidate depth.
+    /// Filling it proves only that its cap stopped the read, not exhaustion.
+    AtBound(u64),
     /// Not known. The query text is a caller's, so what bound the read was taken
     /// under is not a fact this layer holds: the probe row may have been cut by
     /// something inside that text, and its absence is therefore no evidence at all.
@@ -745,7 +757,8 @@ fn read_reach(depth: u32, declared_rows: Option<u64>, query: &UnitQuery) -> Read
         // `max(1)` is the floor `depth_argument` applies: a declared zero is read
         // rather than obeyed, and the one row it is read for is the floored depth
         // itself, so the argument lands *on* the depth there too.
-        Some(declared) if declared.max(1) <= u64::from(depth) => ReadReach::AtDepth,
+        Some(declared) if declared.max(1) < u64::from(depth) => ReadReach::AtBound(declared.max(1)),
+        Some(declared) if declared.max(1) == u64::from(depth) => ReadReach::AtDepth,
         Some(_) => ReadReach::PastDepth,
     }
 }
@@ -1320,6 +1333,17 @@ impl StratumUnit {
         }
     }
 
+    /// The same original bounded invocation with its authored output columns
+    /// retained for scoped score/distance receipts. Ordinary emission is unchanged.
+    pub(crate) fn sparql_scoped(&self) -> String {
+        match &self.query {
+            UnitQuery::Rendered(rendered) => {
+                rendered.text_retaining_outputs(self.depth, self.declared_rows, true)
+            }
+            UnitQuery::Supplied { .. } => self.sparql(),
+        }
+    }
+
     /// The query text a caller supplied, or `None` for a query this layer rendered.
     ///
     /// Read-only, and the read is not the hazard: a caller may look at, log or re-run
@@ -1488,7 +1512,7 @@ impl StratumUnit {
 /// go through a checked constructor and neither can mint a false ending. Recording them
 /// here would refuse the seam instead of the substitution above it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct UnitAttribution {
+pub(crate) struct UnitAttribution {
     /// The stratum the unit's rows are reported under.
     stratum: Iri,
     /// The duplicate policy and candidate domains its stream is held to.
@@ -1497,7 +1521,7 @@ struct UnitAttribution {
 
 impl UnitAttribution {
     /// Read one unit's attribution off the unit.
-    fn of(unit: &StratumUnit) -> Self {
+    pub(crate) fn of(unit: &StratumUnit) -> Self {
         Self {
             stratum: unit.stratum.clone(),
             contract: unit.contract.clone(),
@@ -1526,6 +1550,7 @@ impl UnitAttribution {
 /// and reporting the first shifted tag would name a unit nothing was done to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
+    constraints: Vec<crate::RequestTerm>,
     /// Per-stratum query units, ordered by stratum IRI.
     ///
     /// Writable, and checked rather than sealed: a caller may substitute a unit's
@@ -1581,7 +1606,114 @@ pub struct CompiledRetrieval {
     attribution: Vec<UnitAttribution>,
 }
 
+pub(crate) mod sealed {
+    pub trait Sealed {}
+}
+
+/// The two admitted native read bundles executable by the shared executor.
+///
+/// The trait is sealed: a caller cannot supply a forged admission/publication
+/// implementation. CompiledRetrieval produces the existing fusion streams;
+/// CompiledCandidates produces depth-bearing streams without any score/profile.
+pub trait CompiledRead: sealed::Sealed {
+    /// The output carrier belonging to this bundle's requested stage.
+    type Output<'d>;
+    /// Original admitted hard membership conditions, independent of rank terms.
+    #[doc(hidden)]
+    fn constraints(&self) -> &[crate::RequestTerm] {
+        &[]
+    }
+    /// The actual native units to execute.
+    #[doc(hidden)]
+    fn units(&self) -> &[StratumUnit];
+    /// The registry instance the units were admitted against.
+    #[doc(hidden)]
+    fn registry_id(&self) -> RegistryId;
+    /// The pinned plan whose actual unit reads are reported.
+    #[doc(hidden)]
+    fn plan_id(&self) -> PlanId;
+    /// Check immutable candidate depths or the existing fusion attribution seam.
+    #[doc(hidden)]
+    fn tagged_as_assembled(&self) -> Result<(), ExecutionError>;
+    /// Publish native read streams without changing their reads or evidence.
+    #[doc(hidden)]
+    fn finish<'d>(
+        &self,
+        streams: purrdf_sparql_eval::AdmittedVec<crate::execute::ReadStratum<'d>>,
+        statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, crate::fusion_stream::ProducerStatus>,
+    ) -> Result<Self::Output<'d>, ExecutionError>;
+}
+
+impl sealed::Sealed for CompiledRetrieval {}
+impl CompiledRead for CompiledRetrieval {
+    type Output<'d> = crate::execute::ExecutionResult<'d>;
+    fn constraints(&self) -> &[crate::RequestTerm] {
+        &self.constraints
+    }
+    fn units(&self) -> &[StratumUnit] {
+        &self.units
+    }
+    fn registry_id(&self) -> RegistryId {
+        self.registry_id
+    }
+    fn plan_id(&self) -> PlanId {
+        self.plan_id
+    }
+    fn tagged_as_assembled(&self) -> Result<(), ExecutionError> {
+        Self::tagged_as_assembled(self)
+    }
+    fn finish<'d>(
+        &self,
+        streams: purrdf_sparql_eval::AdmittedVec<crate::execute::ReadStratum<'d>>,
+        statuses: purrdf_sparql_eval::AdmittedOrderedMap<Iri, crate::fusion_stream::ProducerStatus>,
+    ) -> Result<Self::Output<'d>, ExecutionError> {
+        let workspace = statuses.workspace().clone();
+        Ok(crate::execute::ExecutionResult {
+            streams: purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                streams
+                    .into_iter()
+                    .map(|stream| crate::execute::StratumStream {
+                        stratum: stream.stratum,
+                        plan_id: stream.plan_id,
+                        fused_bound: self.fused_bound,
+                        contract: stream.contract,
+                        attestation: stream.attestation,
+                        stream: stream.stream,
+                    }),
+                &workspace,
+            )
+            .map_err(ExecutionError::NativeFailure)?,
+            statuses,
+        })
+    }
+}
+
 impl CompiledRetrieval {
+    /// Publish the admitted waist's exact resolution under an execution authority.
+    ///
+    /// # Errors
+    /// Returns the original key, nested array, arena or control refusal.
+    pub fn resolution_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<
+        purrdf_sparql_eval::SharedWorkspace<
+            purrdf_sparql_eval::AdmittedOrderedMap<Iri, PlannedResolution>,
+        >,
+        purrdf_sparql_eval::EvalError,
+    > {
+        let values = purrdf_sparql_eval::AdmittedOrderedMap::try_from_iter_admitted(
+            self.resolution.iter().map(|(stratum, resolution)| {
+                Ok((
+                    stratum.clone_admitted(workspace)?,
+                    resolution.clone_admitted(workspace)?,
+                ))
+            }),
+            workspace,
+        )?;
+        purrdf_sparql_eval::SharedWorkspace::new_admitted(values, workspace)
+    }
+
     /// Assemble a bundle out of `units` and the identities that pin them.
     ///
     /// This is the seam a caller starts at to drive [`execute`](crate::execute) over a
@@ -1606,6 +1738,7 @@ impl CompiledRetrieval {
     ) -> Self {
         let attribution = units.iter().map(UnitAttribution::of).collect();
         Self {
+            constraints: Vec::new(),
             units,
             plan_id,
             registry_id,
@@ -1628,45 +1761,54 @@ impl CompiledRetrieval {
     /// shifts every position after it and reporting the first shifted tag would name a
     /// unit nothing was done to.
     pub(crate) fn tagged_as_assembled(&self) -> Result<(), ExecutionError> {
-        let held: Vec<UnitAttribution> = self.units.iter().map(UnitAttribution::of).collect();
-        if held.len() != self.attribution.len() {
-            return Err(ExecutionError::UnitsNotAsAssembled {
-                plan: self.plan_id,
-                reason: format!(
-                    "it was assembled with {} unit(s) and holds {}, so a producer it \
+        tagged_units_as_assembled(self.plan_id, &self.units, &self.attribution)
+    }
+}
+
+/// Original producer-attribution check shared by both native compiled bundles.
+pub(crate) fn tagged_units_as_assembled(
+    plan_id: PlanId,
+    units: &[StratumUnit],
+    attribution: &[UnitAttribution],
+) -> Result<(), ExecutionError> {
+    let held: Vec<UnitAttribution> = units.iter().map(UnitAttribution::of).collect();
+    if held.len() != attribution.len() {
+        return Err(ExecutionError::UnitsNotAsAssembled {
+            plan: plan_id,
+            reason: format!(
+                "it was assembled with {} unit(s) and holds {}, so a producer it \
                      answers for is one this bundle was not built to answer for",
-                    self.attribution.len(),
-                    held.len()
+                attribution.len(),
+                held.len()
+            ),
+        });
+    }
+    for (position, (assembled, held)) in attribution.iter().zip(&held).enumerate() {
+        if assembled.stratum != held.stratum {
+            return Err(ExecutionError::UnitsNotAsAssembled {
+                plan: plan_id,
+                reason: format!(
+                    "the unit at position {position} was assembled under stratum {} and \
+                         now reports under {}, which attaches its read's evidence to \
+                         another producer",
+                    assembled.stratum, held.stratum
                 ),
             });
         }
-        for (position, (assembled, held)) in self.attribution.iter().zip(&held).enumerate() {
-            if assembled.stratum != held.stratum {
-                return Err(ExecutionError::UnitsNotAsAssembled {
-                    plan: self.plan_id,
-                    reason: format!(
-                        "the unit at position {position} was assembled under stratum {} and \
-                         now reports under {}, which attaches its read's evidence to \
-                         another producer",
-                        assembled.stratum, held.stratum
-                    ),
-                });
-            }
-            if assembled.contract != held.contract {
-                return Err(ExecutionError::UnitsNotAsAssembled {
-                    plan: self.plan_id,
-                    reason: format!(
-                        "the unit at position {position} reports under stratum {} with a \
+        if assembled.contract != held.contract {
+            return Err(ExecutionError::UnitsNotAsAssembled {
+                plan: plan_id,
+                reason: format!(
+                    "the unit at position {position} reports under stratum {} with a \
                          duplicate policy or candidate domain the bundle was not assembled \
                          with, so the promise its stream is held to is not the one its \
                          producer declared",
-                        held.stratum
-                    ),
-                });
-            }
+                    held.stratum
+                ),
+            });
         }
-        Ok(())
     }
+    Ok(())
 }
 
 /// What a planned depth costs in rank resolution under a named fusion profile.
@@ -1708,10 +1850,35 @@ pub struct PlannedResolution {
     /// Empty only for a stratum this plan gave a depth and no producer, which
     /// emits no unit, contributes no stream and therefore has no declaration to
     /// meet anyone else's.
-    pub sharing_weights: Vec<Fixed>,
+    pub sharing_weights:
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Fixed>>,
 }
 
 impl PlannedResolution {
+    /// Copy caller weights once through their original admitted array home.
+    ///
+    /// # Errors
+    /// Returns the first nested array or shared-control refusal.
+    pub fn clone_admitted(
+        &self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Self, purrdf_sparql_eval::EvalError> {
+        if self.sharing_weights.workspace().is_bounded() {
+            return Ok(self.clone());
+        }
+        Ok(Self {
+            separation: self.separation,
+            requested_depth: self.requested_depth,
+            sharing_weights: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                    self.sharing_weights.iter().copied(),
+                    workspace,
+                )?,
+                workspace,
+            )?,
+        })
+    }
+
     /// Whether every rank this plan reads is still separated from its
     /// neighbours by score alone.
     ///
@@ -1764,12 +1931,90 @@ pub fn compile(
 ) -> Result<CompiledRetrieval, AdmissionError> {
     let admitted = admit_plan(plan, env)?;
 
+    let units = emit_units(&admitted)?;
+
+    // The profile the answer will be fused under is read here for what it can
+    // say about this plan's depths, and it says it rather than refusing it. A
+    // stratum the profile does not weight contributes nothing to that fusion, so
+    // a profile silent about it has nothing to report and gets no entry.
+    let resolution = env.fusion_profile.map_or_else(BTreeMap::new, |profile| {
+        // The declarations the crossing derivation reads, taken off the units
+        // this call just emitted rather than off the registry a second time: a
+        // stratum contributes to a threshold only by contributing a stream, and
+        // a unit is exactly the evidence that it will. Ascending stratum order
+        // comes free with the sort above, which is what makes every weight list
+        // below a pure function of the plan.
+        let declared: Vec<(&Iri, &CandidateDomains)> = units
+            .iter()
+            .map(|unit| (&unit.stratum, &unit.contract.domains))
+            .collect();
+        admitted
+            .stratum_depths
+            .iter()
+            .filter_map(|(stratum, depth)| {
+                profile.monotone_depth(stratum).map(|separation| {
+                    // Every stratum whose declared blocks meet this one's, this
+                    // one included — a producer's declaration always meets
+                    // itself — and weighted, because an unweighted stratum
+                    // contributes nothing for a threshold to be a maximum of.
+                    // A stratum with no unit has no declaration here and meets
+                    // nobody, which is the honest empty answer rather than an
+                    // `Unrestricted` fabricated on its behalf.
+                    let mine = declared
+                        .iter()
+                        .find(|(named, _)| *named == stratum)
+                        .map(|(_, domains)| *domains);
+                    let sharing_weights = mine.map_or_else(Vec::new, |mine| {
+                        declared
+                            .iter()
+                            .filter(|(_, theirs)| mine.intersects(theirs))
+                            .filter_map(|(named, _)| profile.weight(named))
+                            .collect()
+                    });
+                    (
+                        stratum.clone(),
+                        PlannedResolution {
+                            separation,
+                            requested_depth: depth.get(),
+                            sharing_weights: purrdf_sparql_eval::SharedWorkspace::new_admitted(
+                                purrdf_sparql_eval::AdmittedVec::from_iter_admitted(
+                                    sharing_weights,
+                                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                                )
+                                .expect("resident planning weights"),
+                                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                            )
+                            .expect("resident planning publication"),
+                        },
+                    )
+                })
+            })
+            .collect()
+    });
+
+    let mut compiled = CompiledRetrieval::new(
+        units,
+        plan.id(),
+        admitted.instance_id,
+        admitted.fingerprint,
+        fused_bound(plan),
+        resolution,
+    );
+    compiled.constraints.clone_from(&plan.constraints);
+    Ok(compiled)
+}
+
+/// Emit units from the single admitted placement/depth view. Candidate work
+/// bounds and statistically derived fusion depths reach the same renderer.
+pub(crate) fn emit_units(
+    admitted: &crate::admission::AdmittedRegistry<'_>,
+) -> Result<Vec<StratumUnit>, AdmissionError> {
     let mut units = Vec::new();
     // The depths are read from the admitted view rather than from the plan, and
     // the map has one entry per entry of `Plan::stratum_depths`, so this iterates
     // exactly the strata the plan recorded a depth for. What it cannot iterate is
     // a depth nobody checked: a `ProbedDepth` exists only where the waist refused
-    // neither a zero nor a depth too deep to carry its probe row, which is what
+    // a depth too deep to carry its probe row under either typed policy, which is what
     // makes an emitted `LIMIT` equal to its own depth unwritable here rather than
     // merely unwritten.
     for (stratum, depth) in &admitted.stratum_depths {
@@ -1822,65 +2067,7 @@ pub fn compile(
     }
     units.sort_by(|left, right| left.stratum.cmp(&right.stratum));
 
-    // The profile the answer will be fused under is read here for what it can
-    // say about this plan's depths, and it says it rather than refusing it. A
-    // stratum the profile does not weight contributes nothing to that fusion, so
-    // a profile silent about it has nothing to report and gets no entry.
-    let resolution = env.fusion_profile.map_or_else(BTreeMap::new, |profile| {
-        // The declarations the crossing derivation reads, taken off the units
-        // this call just emitted rather than off the registry a second time: a
-        // stratum contributes to a threshold only by contributing a stream, and
-        // a unit is exactly the evidence that it will. Ascending stratum order
-        // comes free with the sort above, which is what makes every weight list
-        // below a pure function of the plan.
-        let declared: Vec<(&Iri, &CandidateDomains)> = units
-            .iter()
-            .map(|unit| (&unit.stratum, &unit.contract.domains))
-            .collect();
-        admitted
-            .stratum_depths
-            .iter()
-            .filter_map(|(stratum, depth)| {
-                profile.monotone_depth(stratum).map(|separation| {
-                    // Every stratum whose declared blocks meet this one's, this
-                    // one included — a producer's declaration always meets
-                    // itself — and weighted, because an unweighted stratum
-                    // contributes nothing for a threshold to be a maximum of.
-                    // A stratum with no unit has no declaration here and meets
-                    // nobody, which is the honest empty answer rather than an
-                    // `Unrestricted` fabricated on its behalf.
-                    let mine = declared
-                        .iter()
-                        .find(|(named, _)| *named == stratum)
-                        .map(|(_, domains)| *domains);
-                    let sharing_weights = mine.map_or_else(Vec::new, |mine| {
-                        declared
-                            .iter()
-                            .filter(|(_, theirs)| mine.intersects(theirs))
-                            .filter_map(|(named, _)| profile.weight(named))
-                            .collect()
-                    });
-                    (
-                        stratum.clone(),
-                        PlannedResolution {
-                            separation,
-                            requested_depth: depth.get(),
-                            sharing_weights,
-                        },
-                    )
-                })
-            })
-            .collect()
-    });
-
-    Ok(CompiledRetrieval::new(
-        units,
-        plan.id(),
-        admitted.instance_id,
-        admitted.fingerprint,
-        fused_bound(plan),
-        resolution,
-    ))
+    Ok(units)
 }
 
 /// The [`TopK`] a fusion of this plan's units must be run at.
@@ -1920,7 +2107,7 @@ fn ranked_declaration<'a>(
         .get(&binding.producer)
         .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?
         .ranked
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| malformed(binding, "declares no ranked capability to compile against"))
 }
 

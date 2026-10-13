@@ -313,11 +313,14 @@ prop_test! {
         }
     }
 
-    /// Narrowing a truncated decimal to `i128` returns the exact value exactly when
-    /// it fits, and a typed refusal otherwise — never a wrapped value.
+    /// The public decimal stays exact across the former bounded boundary;
+    /// explicit integer narrowing alone can refuse with its typed code.
     #[test]
-    fn integer_narrowing_is_exact_or_refused(text in decimal_lexical()) {
+    fn exact_decimal_and_explicit_integer_narrowing(text in decimal_lexical()) {
         let value = Decimal::from_str(&text).expect("valid");
+        let exact = oracle(&text);
+        let written = exact.canonical_terminating();
+        prop_assert_eq!(value.canonical_lexical(), written);
         let integer = value.to_integer_truncated();
         match integer.to_i128() {
             Ok(small) => prop_assert_eq!(small.to_string(), integer.to_string()),
@@ -328,26 +331,27 @@ prop_test! {
         }
     }
 
-    /// The `XsdValue` operators are the tower's: every sum, difference, product and
-    /// default quotient of two decimals is the tower's own, at any size.
+    /// The public numeric path and exact tower agree across the old bounded
+    /// threshold, including decimal products and default division.
     #[test]
-    fn the_value_operators_are_the_towers(a in decimal_lexical(), b in decimal_lexical()) {
-        let (vx, vy) = (
-            parse(&a, XsdDatatype::Decimal).expect("valid"),
-            parse(&b, XsdDatatype::Decimal).expect("valid"),
-        );
+    fn the_public_numeric_path_agrees_with_the_tower(a in decimal_lexical(), b in decimal_lexical()) {
+        let (Ok(bx), Ok(by)) = (parse(&a, XsdDatatype::Decimal), parse(&b, XsdDatatype::Decimal)) else {
+            return Ok(());
+        };
         let (x, y) = (Decimal::from_str(&a).expect("valid"), Decimal::from_str(&b).expect("valid"));
-        prop_assert_eq!(numeric_add(&vx, &vy).expect("exact").to_exact_decimal().expect("decimal"), &x + &y);
-        prop_assert_eq!(numeric_sub(&vx, &vy).expect("exact").to_exact_decimal().expect("decimal"), &x - &y);
-        prop_assert_eq!(
-            numeric_mul(&vx, &vy).expect("exact").to_exact_decimal().expect("decimal"),
-            x.try_mul(&y).expect("small scales")
-        );
-        if !y.is_zero() {
-            prop_assert_eq!(
-                numeric_div(&vx, &vy).expect("nonzero").to_exact_decimal().expect("decimal"),
-                x.div(&y, DivisionPolicy::default()).expect("nonzero")
-            );
+        if let Ok(sum) = numeric_add(&bx, &by) {
+            prop_assert_eq!(sum.to_exact_decimal().expect("decimal"), &x + &y);
+        }
+        if let Ok(difference) = numeric_sub(&bx, &by) {
+            prop_assert_eq!(difference.to_exact_decimal().expect("decimal"), &x - &y);
+        }
+        let product = x.try_mul(&y).expect("small scales");
+        if let Ok(public) = numeric_mul(&bx, &by) {
+            prop_assert_eq!(public.to_exact_decimal().expect("decimal"), product);
+        }
+        if let Ok(public) = numeric_div(&bx, &by) {
+            let quotient = x.div(&y, DivisionPolicy::default()).expect("nonzero");
+            prop_assert_eq!(public.to_exact_decimal().expect("decimal"), quotient);
         }
     }
 
@@ -364,6 +368,10 @@ prop_test! {
         }
         let (dx, dy) = (Decimal::from_integer(x), Decimal::new(y, exp));
         prop_assert!((&dx + &dy).heap_bytes() <= dx.add_cost(&dy).bytes());
+        for precision in [-39, -1, 0, 1, i32::try_from(exp).expect("small exponent")] {
+            let rounded = dy.round(precision, Rounding::HalfEven);
+            prop_assert!(rounded.heap_bytes() <= dy.round_cost(precision).bytes());
+        }
         if !dy.is_zero() {
             let quotient = dx.div(&dy, DivisionPolicy::default()).expect("nonzero");
             prop_assert!(quotient.heap_bytes() <= dx.div_cost(&dy, DivisionPolicy::default()).bytes());
@@ -419,7 +427,7 @@ fn division_by_zero_is_refused_and_a_unit_divisor_is_not() {
 }
 
 #[test]
-fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
+fn integer_narrowing_refuses_and_exact_decimal_crosses_the_old_bound() {
     let max = Integer::from_i128(i128::MAX);
     let min = Integer::from_i128(i128::MIN);
     assert_eq!(max.to_i128(), Ok(i128::MAX));
@@ -446,6 +454,52 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
             .map_err(|e| e.code().local_name()),
         Err("FOCA0003")
     );
+
+    let at_scale = Decimal::from_str("0.000000000000000001").expect("valid");
+    assert_eq!(at_scale.canonical_lexical(), "0.000000000000000001");
+    let past_scale = Decimal::from_str("0.0000000000000000001").expect("valid");
+    assert_eq!(past_scale.canonical_lexical(), "0.0000000000000000001");
+    // Trailing zeros are not significant: scale 30 written, scale 1 meant.
+    let padded = Decimal::from_str("2.500000000000000000000000000000").expect("valid");
+    assert_eq!(padded.canonical_lexical(), "2.5");
+    let huge = Decimal::from_integer(Integer::from_i128(i128::MAX));
+    assert_eq!(huge.canonical_lexical(), i128::MAX.to_string());
+    let huger = &huge + &Decimal::ONE;
+    assert_eq!(
+        huger.canonical_lexical(),
+        (Integer::from_i128(i128::MAX) + Integer::ONE).to_string()
+    );
+    let negative_edge = Decimal::from_integer(Integer::from_i128(i128::MIN));
+    assert_eq!(negative_edge.canonical_lexical(), i128::MIN.to_string());
+    assert_eq!(
+        (&negative_edge - &Decimal::ONE).canonical_lexical(),
+        (Integer::from_i128(i128::MIN) - Integer::ONE).to_string()
+    );
+    // Rounding remains explicit, even though neither value requires narrowing.
+    let rounded = past_scale.round(18, Rounding::HalfEven);
+    assert_eq!(rounded.canonical_lexical(), "0");
+}
+
+#[test]
+fn owl_rational_identifies_the_full_exact_decimal_branch_only() {
+    let half = Rational::from_str("1/2").unwrap();
+    let decimal_half = parse("0.5", XsdDatatype::Decimal).unwrap();
+    assert_eq!(Rational::from_xsd(&decimal_half), Some(half));
+
+    let digits = "7".repeat(160);
+    let integer = parse(&digits, XsdDatatype::Integer).unwrap();
+    let wide_decimal = parse(&format!("{digits}.5"), XsdDatatype::Decimal).unwrap();
+    let integer_rational = Rational::from_xsd(&integer).expect("integer branch is exact");
+    let decimal_rational = Rational::from_xsd(&wide_decimal).expect("decimal branch is exact");
+    assert_eq!(integer_rational.to_string(), format!("{digits}/1"));
+    assert_eq!(
+        decimal_rational,
+        Rational::from_str(&format!("{digits}5/10")).unwrap(),
+    );
+    assert_ne!(decimal_rational, integer_rational);
+
+    let binary_half = parse("0.5", XsdDatatype::Float).unwrap();
+    assert_eq!(Rational::from_xsd(&binary_half), None);
 }
 
 #[test]
@@ -553,6 +607,111 @@ fn non_terminating_quotients_are_refused_and_terminating_ones_are_exact() {
             .to_string(),
         "0.999999999999999999"
     );
+}
+
+#[test]
+fn default_division_keeps_terminating_digits_and_rounds_only_repeating_results() {
+    let default = DivisionPolicy::default();
+    assert_eq!(default, "exact-or-18:half-even".parse().expect("policy"));
+    assert_eq!(default.to_string(), "exact-or-18:half-even");
+    assert_eq!(
+        "18".parse(),
+        Ok(DivisionPolicy::scale(18, Rounding::TowardZero))
+    );
+
+    let one = Decimal::ONE;
+    let deep_divisor = Decimal::from_integer(Integer::from(2_i128).pow(80));
+    let deep = one
+        .div(&deep_divisor, default)
+        .expect("terminating quotient");
+    assert_eq!(deep.scale(), 80);
+    assert_eq!(
+        deep,
+        one.div(&deep_divisor, DivisionPolicy::Exact)
+            .expect("exact")
+    );
+    assert_eq!(
+        one.try_div_fallible(&deep_divisor, default)
+            .expect("fallible exact quotient"),
+        deep
+    );
+    assert_eq!(
+        one.div(&Decimal::from(3), default)
+            .expect("rounded repeating quotient")
+            .to_string(),
+        "0.333333333333333333"
+    );
+    assert_eq!(
+        Decimal::from(2)
+            .div(&Decimal::from(3), default)
+            .expect("half-even rounded quotient")
+            .to_string(),
+        "0.666666666666666667"
+    );
+    let two_value = parse("2", XsdDatatype::Integer).expect("integer");
+    let three_value = parse("3", XsdDatatype::Integer).expect("integer");
+    assert_eq!(
+        numeric_div(&two_value, &three_value)
+            .expect("numeric production quotient")
+            .canonical_lexical(),
+        "0.666666666666666667"
+    );
+    let charged = purrdf_xsd::numeric::numeric_cost(
+        &two_value,
+        &three_value,
+        purrdf_xsd::numeric::CostOp::Div(default),
+    );
+    assert!(charged.work() > 0, "the default tower path must be charged");
+    assert_eq!(
+        Decimal::from(-2)
+            .div(&Decimal::from(3), default)
+            .expect("symmetric rounded quotient")
+            .to_string(),
+        "-0.666666666666666667"
+    );
+    assert_eq!(
+        Decimal::from(3)
+            .div(&Decimal::from(6), default)
+            .expect("reduced terminating quotient")
+            .to_string(),
+        "0.5"
+    );
+    assert_eq!(
+        one.div(
+            &Decimal::from(8),
+            DivisionPolicy::scale(2, Rounding::HalfEven)
+        )
+        .expect("explicit tie")
+        .to_string(),
+        "0.12"
+    );
+}
+
+#[test]
+fn exact_first_division_preserves_physical_admission_refusal() {
+    use purrdf_xsd::bigint::LimbScratchError;
+    use purrdf_xsd::exact::ExactOperationError;
+
+    let one = Decimal::ONE;
+    let three = Decimal::from(3);
+    let mut calls = 0;
+    let refused = one.try_div_admitted(&three, DivisionPolicy::default(), &mut |_| {
+        calls += 1;
+        Err(LimbScratchError::Capacity {
+            required_limbs: 2,
+            admitted_limbs: 1,
+        })
+    });
+    assert_eq!(calls, 1, "the exact attempt must refuse before fallback");
+    assert_eq!(
+        refused,
+        Err(ExactOperationError::Storage(LimbScratchError::Capacity {
+            required_limbs: 2,
+            admitted_limbs: 1,
+        }))
+    );
+    assert_eq!(one, Decimal::ONE);
+    assert_eq!(three, Decimal::from(3));
 }
 
 #[test]

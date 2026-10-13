@@ -1110,20 +1110,28 @@ class Graph:
         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
         base: str | None = None,
         extension_namespaces: list[str] | None = None,
+        property_fn_namespaces: list[str] | None = None,
         standpoint_predicates: tuple[str, str] | None = None,
+        relations: dict[str, object] | None = None,
+        relations_from_graph: dict[str, object] | None = None,
+        path_relations: dict[str, object] | None = None,
+        aggregate_namespace: str | None = None,
+        division: str | None = None,
+        xpath_regex: str | None = None,
         **kwargs: object,
     ) -> Result:
         """Run a SPARQL query; return a :class:`~.query.Result`.
 
-        ``initBindings`` are applied through the native ``substitutions`` kwarg —
-        the engine pre-binds each variable (keeping it projectable and propagating
-        into ``OPTIONAL``/``MINUS``/``EXISTS``/sub-queries), matching RDFLib's
-        ``initBindings`` semantics without an injected ``VALUES`` row.
+        The native contextual compiler keeps ``initBindings`` separate from each
+        returned mapping, preserving RDFLib assignment and fallback semantics
+        through ``OPTIONAL``/``MINUS``/``EXISTS`` and subqueries.
 
         ``base`` is spliced in as a leading ``BASE`` prologue declaration so
         relative IRIs in the query text resolve against it, matching RDFLib's
-        ``base`` semantics. ``extension_namespaces``/``standpoint_predicates``
-        are the native engine configuration knobs (see ``Store.query``) and are
+        ``base`` semantics. ``extension_namespaces``/``standpoint_predicates``/
+        ``xpath_regex`` are the native engine configuration knobs (see
+        ``Store.query``; ``xpath_regex`` names the dated XPath law ``REGEX`` and
+        ``REPLACE`` evaluate under, one of ``purrdf.XPATH_REGEX_PROFILES``) and are
         forwarded verbatim. Any other keyword is a param the native surface
         genuinely cannot honor, so it raises rather than being swallowed.
         """
@@ -1137,11 +1145,21 @@ class Graph:
         if base:
             query_object = f"BASE <{base}>\n" + query_object
         substitutions = _native_substitutions(initBindings) if initBindings else None
-        res = self._store.query(
+        res = self._store.query_rdflib(
             query_object,
             substitutions=substitutions,
             extension_namespaces=extension_namespaces,
+            property_fn_namespaces=property_fn_namespaces,
             standpoint_predicates=standpoint_predicates,
+            relations=relations,
+            relations_from_graph=relations_from_graph,
+            path_relations=path_relations,
+            aggregate_namespace=aggregate_namespace,
+            division=division,
+            named_graphs=isinstance(self, Dataset),
+            default_graph=_native_subject(self._graph_name) if self._graph_name is not None else None,
+            default_union=getattr(self, "default_union", False),
+            xpath_regex=xpath_regex,
         )
         if isinstance(res, purrdf.QueryBoolean):
             return Result("ASK", ask=bool(res))
@@ -1169,7 +1187,7 @@ class Graph:
         variables = list(res.variables)
         var_names = tuple(Variable(v.value) for v in variables)
         rows = [
-            ResultRow(tuple(from_native(sol[v]) for v in variables), var_names)
+            ResultRow(tuple(from_native(sol[index]) for index in range(len(variables))), var_names)
             for sol in res
         ]
         return Result("SELECT", rows=rows, variables=var_names)
@@ -1182,6 +1200,7 @@ class Graph:
         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
         extension_namespaces: list[str] | None = None,
         standpoint_predicates: tuple[str, str] | None = None,
+        xpath_regex: str | None = None,
         **kwargs: object,
     ) -> None:
         """Run a SPARQL UPDATE against this graph.
@@ -1190,9 +1209,9 @@ class Graph:
         ``Store.query``), so ``initBindings`` is honored by textually inlining
         each bound term's N3 form in place of its ``?var``/``$var`` token
         (see :func:`_inline_bound_variables`) before the update reaches the
-        native engine. ``extension_namespaces``/``standpoint_predicates`` are the
-        native engine configuration knobs (see ``Store.update``) and are
-        forwarded verbatim. Any other keyword is a param the native surface
+        native engine. ``extension_namespaces``/``standpoint_predicates``/
+        ``xpath_regex`` are the native engine configuration knobs (see
+        ``Store.update``) and are forwarded verbatim. Any other keyword is a param the native surface
         genuinely cannot honor, so it raises rather than being swallowed.
         """
         if kwargs:
@@ -1208,6 +1227,7 @@ class Graph:
             update_object,
             extension_namespaces=extension_namespaces,
             standpoint_predicates=standpoint_predicates,
+            xpath_regex=xpath_regex,
         )
         self._reconcile_literal_terms()
 

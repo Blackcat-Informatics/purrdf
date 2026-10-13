@@ -6,106 +6,146 @@
 //! cost law and shared positive schedule choose physical drivers from the dataset.
 //! No triple is copied into an arm, and every other operator remains a boundary.
 
+use crate::property_fn_plan::{PrepResult, PreparationError};
+use crate::solution::{SchemaBuilder, VarSchema};
+use crate::workspace::{AdmittedHeap, AdmittedMap, AdmittedVec, LexicalFrame};
+use purrdf_lex::allocation::Memory;
+#[cfg(test)]
+use purrdf_sparql_algebra::walk_pre_post;
 use purrdf_sparql_algebra::{
-    Child, Flow, GraphPattern, NodeRef, TriplePattern, Visit, fold_post_order, walk_pre_post,
+    Child, Flow, GraphPattern, NodeRef, TriplePattern, Visit, fold_post_order_with_memory,
+    walk_pre_post_with_memory,
 };
 
-use crate::{DetHashMap, DetHashSet};
-
-/// Apply the shared topology repair to a raw query before its tree is numbered.
 pub(crate) fn normalize_query(
     query: &purrdf_sparql_algebra::Query,
 ) -> Option<purrdf_sparql_algebra::Query> {
-    use purrdf_sparql_algebra::Query;
-    let pattern = match query {
-        Query::Select { pattern, .. }
-        | Query::Ask { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. } => pattern,
-    };
-    let normalized = normalize(pattern)?;
-    Some(crate::blank_scope::query_with_pattern(query, normalized))
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    let mut memory = Memory::new(&mut frame);
+    let normalized = normalize_with_memory(query.pattern(), &mut memory)
+        .expect("resident positive normalization")?;
+    Some(
+        crate::blank_scope::query_with_pattern_with_memory(query, normalized, &mut memory)
+            .expect("resident query head copy"),
+    )
 }
 
-/// Factor independent positive regions with one source-sized owned copy. Payload
-/// is moved exactly once; repeat normalization preserves the exact factored tree.
 pub(crate) fn normalize(pattern: &GraphPattern) -> Option<GraphPattern> {
+    let capability = crate::WorkspaceCapability::resident();
+    normalize_with_memory(
+        pattern,
+        &mut Memory::new(&mut LexicalFrame::new(&capability)),
+    )
+    .expect("resident positive normalization")
+}
+
+/// Original positive-region factoring; original AST grant before every producer.
+pub(crate) fn normalize_with_memory(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<GraphPattern>> {
+    let before = memory.admitted_bytes();
+    let capability = memory.admission_mut().workspace().clone();
     let mut has_union = false;
-    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-        if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Union { .. })) {
-            has_union = true;
-            return Flow::Stop;
-        }
-        Flow::Descend
-    });
+    walk_pre_post_with_memory(
+        NodeRef::Pattern(pattern),
+        |visit, node, _| {
+            if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Union { .. }))
+            {
+                has_union = true;
+                return Ok::<_, PreparationError>(Flow::Stop);
+            }
+            Ok(Flow::Descend)
+        },
+        memory,
+    )?;
     if !has_union {
-        return None;
+        return Ok(None);
     }
-    let owned = pattern.clone();
-    // map_patterns moves inline nodes while keeping their child boxes alive.
-    // The two box addresses identify each original Join through those moves.
-    let mut eligible = DetHashMap::default();
-    fold_post_order(NodeRef::Pattern(&owned), |node, children| {
-        let mut summary = match node {
-            NodeRef::Pattern(GraphPattern::Bgp { .. }) => (true, false),
-            NodeRef::Pattern(GraphPattern::Join { .. }) => (true, false),
-            NodeRef::Pattern(GraphPattern::Union { .. }) => (true, true),
-            _ => (false, false),
-        };
-        if matches!(
-            node,
-            NodeRef::Pattern(GraphPattern::Join { .. } | GraphPattern::Union { .. })
-        ) {
-            for (pure, union) in children {
-                summary.0 &= pure;
-                summary.1 |= union;
+    let owned = pattern.clone_with_memory(memory)?;
+    let mut eligible = AdmittedMap::default();
+    fold_post_order_with_memory(
+        NodeRef::Pattern(&owned),
+        |node, children, _| {
+            let mut summary = match node {
+                NodeRef::Pattern(GraphPattern::Bgp { .. } | GraphPattern::Join { .. }) => {
+                    (true, false)
+                }
+                NodeRef::Pattern(GraphPattern::Union { .. }) => (true, true),
+                _ => (false, false),
+            };
+            if matches!(
+                node,
+                NodeRef::Pattern(GraphPattern::Join { .. } | GraphPattern::Union { .. })
+            ) {
+                for (pure, union) in children {
+                    summary.0 &= pure;
+                    summary.1 |= union;
+                }
             }
-        }
-        if let NodeRef::Pattern(node @ GraphPattern::Join { .. }) = node {
-            eligible.insert(join_key(node), summary);
-        }
-        summary
-    });
-    let rewritten = crate::blank_scope::map_patterns(owned, true, &mut |node, in_join| {
-        if !matches!(node, GraphPattern::Join { .. }) {
-            return false;
-        }
-        if in_join {
-            return true;
-        }
-        let (pure, union) = eligible[&join_key(node)];
-        if !pure || !union {
-            return false;
-        }
-        let mut factors = Vec::new();
-        flatten(
-            std::mem::replace(node, GraphPattern::empty_bgp()),
-            &mut factors,
-        );
-        if !factors
-            .iter()
-            .any(|factor| matches!(factor, GraphPattern::Union { .. }))
-        {
-            *node = join(factors);
-            return true;
-        }
-        let mut triples = Vec::new();
-        let mut connectors = Vec::new();
-        for factor in factors {
-            match factor {
-                GraphPattern::Bgp { patterns } => triples.extend(patterns),
-                factor => connectors.push(factor),
+            if let NodeRef::Pattern(node @ GraphPattern::Join { .. }) = node {
+                eligible.insert_admitted(join_key(node), summary, &capability)?;
             }
-        }
-        *node = connected_join(compact_components(triples, connectors));
-        true
-    });
-    (rewritten != *pattern).then_some(rewritten)
+            Ok::<_, PreparationError>(summary)
+        },
+        memory,
+    )?;
+    let rewritten = crate::blank_scope::map_patterns_with_memory(
+        owned,
+        true,
+        &mut |node, in_join, memory| {
+            if !matches!(node, GraphPattern::Join { .. }) {
+                return Ok(false);
+            }
+            if in_join {
+                return Ok(true);
+            }
+            let &(pure, union) = eligible
+                .get(&join_key(node))
+                .expect("each original Join has its summary");
+            if !pure || !union {
+                return Ok(false);
+            }
+            let mut factors = AdmittedVec::new(&capability);
+            flatten(
+                std::mem::replace(node, GraphPattern::empty_bgp()),
+                &mut factors,
+                memory,
+            )?;
+            if !factors
+                .iter()
+                .any(|factor| matches!(factor, GraphPattern::Union { .. }))
+            {
+                *node = join(factors, memory)?;
+                return Ok(true);
+            }
+            let mut triples = Vec::new();
+            let mut connectors = AdmittedVec::new(&capability);
+            for factor in factors {
+                match factor {
+                    GraphPattern::Bgp { patterns } => memory.append(&mut triples, patterns)?,
+                    factor => connectors.push(factor)?,
+                }
+            }
+            *node = connected_join(compact_components(triples, connectors, memory)?, memory)?;
+            Ok(true)
+        },
+        memory,
+    )?;
+    if rewritten.eq_with_memory(pattern, memory)? {
+        let bytes = memory.admitted_bytes() - before;
+        drop(rewritten);
+        memory.release_bytes(bytes)?;
+        Ok(None)
+    } else {
+        Ok(Some(rewritten))
+    }
 }
 
 fn join_key(pattern: &GraphPattern) -> (usize, usize) {
     let GraphPattern::Join { left, right } = pattern else {
-        unreachable!("only a Join has a box key")
+        unreachable!("only Join has a box key")
     };
     (
         std::ptr::from_ref(&**left) as usize,
@@ -113,56 +153,94 @@ fn join_key(pattern: &GraphPattern) -> (usize, usize) {
     )
 }
 
-fn flatten(pattern: GraphPattern, factors: &mut Vec<GraphPattern>) {
-    let mut pending = purrdf_lex::walk::WorkList::<_, 16>::new();
-    pending.push(pattern);
+fn flatten(
+    pattern: GraphPattern,
+    factors: &mut AdmittedVec<GraphPattern>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
+    let mut pending = purrdf_lex::walk::WorkList::<_, 16>::with(pattern);
     while let Some(pattern) = pending.pop() {
         match pattern {
             GraphPattern::Join { left, right } => {
-                pending.push(right.into_inner());
-                pending.push(left.into_inner());
+                let right = right.into_inner();
+                memory.release_bytes(core::alloc::Layout::new::<GraphPattern>().size())?;
+                pending.try_push_admitted(right, memory)?;
+                let left = left.into_inner();
+                memory.release_bytes(core::alloc::Layout::new::<GraphPattern>().size())?;
+                pending.try_push_admitted(left, memory)?;
             }
-            factor => factors.push(factor),
+            factor => factors.push(factor)?,
         }
     }
+    pending.release_admitted(memory)?;
+    Ok(())
 }
 
-fn join(factors: impl IntoIterator<Item = GraphPattern>) -> GraphPattern {
-    factors
-        .into_iter()
-        .reduce(|left, right| GraphPattern::Join {
-            left: Child::new(left),
-            right: Child::new(right),
-        })
-        .unwrap_or_else(GraphPattern::empty_bgp)
+fn join(
+    factors: impl IntoIterator<Item = GraphPattern>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    let mut joined = None;
+    for right in factors {
+        joined = Some(match joined {
+            None => right,
+            Some(left) => GraphPattern::Join {
+                left: Child::try_new(left, memory)?,
+                right: Child::try_new(right, memory)?,
+            },
+        });
+    }
+    Ok(joined.unwrap_or_else(GraphPattern::empty_bgp))
 }
 
-/// A connector can make only components sharing one of its slots selective.
-/// Keep those components independently driveable, and leave unrelated ordinary
-/// conjunctions in one native BGP rather than inventing a wide join frontier.
 struct Factor {
     pattern: GraphPattern,
-    slots: std::sync::Arc<crate::solution::VarSchema>,
+    slots: crate::solution::SharedSchema,
 }
 
-fn compact_components(triples: Vec<TriplePattern>, connectors: Vec<GraphPattern>) -> Vec<Factor> {
-    let connectors: Vec<_> = connectors
-        .into_iter()
-        .map(|pattern| Factor {
-            slots: crate::eval::syntactic_schema(&pattern),
+fn slot_schema(
+    patterns: &[TriplePattern],
+    capability: &crate::WorkspaceCapability,
+) -> Result<VarSchema, crate::EvalError> {
+    let mut schema = SchemaBuilder::new(capability);
+    for pattern in patterns {
+        crate::bgp::visit_triple_slots_admitted(pattern, capability, |slot| {
+            schema.push(match slot {
+                crate::bgp::SlotKey::Variable(variable) => variable.clone(),
+                crate::bgp::SlotKey::Blank(label) => {
+                    crate::bgp::blank_var_admitted(label, capability)?
+                }
+            })?;
+            Ok(())
+        })?;
+    }
+    schema.finish()
+}
+
+fn compact_components(
+    triples: Vec<TriplePattern>,
+    connectors: AdmittedVec<GraphPattern>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<AdmittedVec<Factor>> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut described = AdmittedVec::with_capacity(connectors.len(), &capability)?;
+    for pattern in connectors {
+        described.push(Factor {
+            slots: crate::eval::syntactic_schema_admitted(&pattern, &capability)?,
             pattern,
-        })
-        .collect();
-    let connector_slots: DetHashSet<_> = connectors
-        .iter()
-        .flat_map(|connector| connector.slots.vars().iter().cloned())
-        .collect();
-    let mut factors = Vec::new();
+        })?;
+    }
+    let connector_slots = VarSchema::from_vars_admitted(
+        described
+            .iter()
+            .flat_map(|connector| connector.slots.vars().iter().cloned()),
+        &capability,
+    )?;
+    let mut factors = AdmittedVec::new(&capability);
     let mut unrelated = Vec::new();
-    let mut unrelated_slots = crate::solution::VarSchema::default();
-    for patterns in components(triples) {
-        let slots =
-            crate::solution::VarSchema::from_vars(patterns.iter().flat_map(crate::bgp::slot_keys));
+    let mut unrelated_slots = SchemaBuilder::new(&capability);
+    for patterns in components(triples, memory)? {
+        let slots = slot_schema(&patterns, &capability)?;
         if slots
             .vars()
             .iter()
@@ -170,11 +248,13 @@ fn compact_components(triples: Vec<TriplePattern>, connectors: Vec<GraphPattern>
         {
             factors.push(Factor {
                 pattern: GraphPattern::Bgp { patterns },
-                slots: std::sync::Arc::new(slots),
-            });
+                slots: slots.shared_admitted(&capability)?,
+            })?;
         } else {
-            unrelated_slots.append(&slots);
-            unrelated.extend(patterns);
+            for variable in slots.vars() {
+                unrelated_slots.push(variable.clone())?;
+            }
+            memory.append(&mut unrelated, patterns)?;
         }
     }
     if !unrelated.is_empty() {
@@ -182,98 +262,136 @@ fn compact_components(triples: Vec<TriplePattern>, connectors: Vec<GraphPattern>
             pattern: GraphPattern::Bgp {
                 patterns: unrelated,
             },
-            slots: std::sync::Arc::new(unrelated_slots),
-        });
+            slots: unrelated_slots.finish()?.shared_admitted(&capability)?,
+        })?;
+    } else {
+        memory.release_vec(unrelated)?;
     }
-    factors.extend(connectors);
-    factors
+    for connector in described {
+        factors.push(connector)?;
+    }
+    Ok(factors)
 }
 
-/// Build a connected factor spine, so a selective component can drive its
-/// connector before an independent component forms a product. Each slot's
-/// incidence list is consumed once; the frontier chooses stable source ordinals.
-fn connected_join(factors: Vec<Factor>) -> GraphPattern {
-    let mut slots = Vec::with_capacity(factors.len());
-    let mut incident = DetHashMap::<_, Vec<usize>>::default();
+fn connected_join(
+    factors: AdmittedVec<Factor>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut slots = AdmittedVec::with_capacity(factors.len(), &capability)?;
+    let mut incident = AdmittedMap::<VariableKey, AdmittedVec<usize>>::default();
     for (index, factor) in factors.iter().enumerate() {
         for variable in factor.slots.vars() {
-            incident.entry(variable.clone()).or_default().push(index);
+            if let Some(neighbors) = incident.get_mut(variable) {
+                neighbors.push(index)?;
+            } else {
+                let mut neighbors = AdmittedVec::new(&capability);
+                neighbors.push(index)?;
+                incident.insert_admitted(variable.clone(), neighbors, &capability)?;
+            }
         }
-        slots.push(std::sync::Arc::clone(&factor.slots));
+        slots.push(factor.slots.clone())?;
     }
-    let mut factors: Vec<_> = factors
-        .into_iter()
-        .map(|factor| Some(factor.pattern))
-        .collect();
-    let mut queued = vec![false; factors.len()];
-    let mut frontier = std::collections::BinaryHeap::<std::cmp::Reverse<usize>>::new();
-    let mut next = 0;
+    let count = factors.len();
+    let mut pending = AdmittedVec::with_capacity(count, &capability)?;
+    for factor in factors {
+        pending.push(Some(factor.pattern))?;
+    }
+    let mut queued = AdmittedVec::with_capacity(count, &capability)?;
+    for _ in 0..count {
+        queued.push(false)?;
+    }
+    let mut frontier = AdmittedHeap::<std::cmp::Reverse<usize>>::new(&capability);
+    let mut next = 0usize;
     let mut result = None;
-    for _ in 0..factors.len() {
+    for _ in 0..count {
         let index = loop {
             if let Some(std::cmp::Reverse(index)) = frontier.pop() {
-                if factors[index].is_some() {
+                if pending[index].is_some() {
                     break index;
                 }
             } else {
-                while factors[next].is_none() {
+                while pending[next].is_none() {
                     next += 1;
                 }
                 break next;
             }
         };
-        let factor = factors[index]
+        let factor = pending.as_mut_slice()[index]
             .take()
-            .expect("the selected factor remains available");
-        queued[index] = true;
+            .expect("selected factor remains");
+        queued.as_mut_slice()[index] = true;
         for variable in slots[index].vars() {
             if let Some(neighbors) = incident.remove(variable) {
                 for neighbor in neighbors {
                     if !queued[neighbor] {
-                        queued[neighbor] = true;
-                        frontier.push(std::cmp::Reverse(neighbor));
+                        queued.as_mut_slice()[neighbor] = true;
+                        frontier.push(std::cmp::Reverse(neighbor))?;
                     }
                 }
             }
         }
         result = Some(match result {
             Some(left) => GraphPattern::Join {
-                left: Child::new(left),
-                right: Child::new(factor),
+                left: Child::try_new(left, memory)?,
+                right: Child::try_new(factor, memory)?,
             },
             None => factor,
         });
     }
-    result.unwrap_or_else(GraphPattern::empty_bgp)
+    Ok(result.unwrap_or_else(GraphPattern::empty_bgp))
 }
 
-/// Slot-connected components of the ordinary triples. Union-find bounds this by
-/// the number of slots rather than repeatedly scanning a long disconnected BGP.
-fn components(triples: Vec<TriplePattern>) -> Vec<Vec<TriplePattern>> {
-    let mut roots: Vec<usize> = (0..triples.len()).collect();
-    let mut first = DetHashMap::default();
+type VariableKey = purrdf_sparql_algebra::Variable;
+
+fn components(
+    mut triples: Vec<TriplePattern>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<AdmittedVec<Vec<TriplePattern>>> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut roots = AdmittedVec::with_capacity(triples.len(), &capability)?;
+    for index in 0..triples.len() {
+        roots.push(index)?;
+    }
+    let mut first = AdmittedMap::default();
     for (index, triple) in triples.iter().enumerate() {
-        for variable in crate::bgp::slot_keys(triple) {
+        crate::bgp::visit_triple_slots_admitted(triple, &capability, |slot| {
+            let variable = match slot {
+                crate::bgp::SlotKey::Variable(variable) => variable.clone(),
+                crate::bgp::SlotKey::Blank(label) => {
+                    crate::bgp::blank_var_admitted(label, &capability)?
+                }
+            };
             if let Some(&other) = first.get(&variable) {
-                let a = root(&mut roots, index);
-                let b = root(&mut roots, other);
-                roots[a.max(b)] = a.min(b);
+                let a = root(roots.as_mut_slice(), index);
+                let b = root(roots.as_mut_slice(), other);
+                roots.as_mut_slice()[a.max(b)] = a.min(b);
             } else {
-                first.insert(variable, index);
+                first.insert_admitted(variable, index, &capability)?;
             }
-        }
+            Ok(())
+        })?;
     }
-    let mut groups = DetHashMap::default();
-    let mut out: Vec<Vec<TriplePattern>> = Vec::new();
-    for (index, triple) in triples.into_iter().enumerate() {
-        let root = root(&mut roots, index);
-        let group = *groups.entry(root).or_insert_with(|| {
-            out.push(Vec::new());
-            out.len() - 1
-        });
-        out[group].push(triple);
+    let mut groups = AdmittedMap::default();
+    let mut out = AdmittedVec::new(&capability);
+    #[expect(
+        clippy::iter_with_drain,
+        reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
+    )]
+    for (index, triple) in triples.drain(..).enumerate() {
+        let representative = root(roots.as_mut_slice(), index);
+        let group = if let Some(&group) = groups.get(&representative) {
+            group
+        } else {
+            let group = out.len();
+            out.push(Vec::new())?;
+            groups.insert_admitted(representative, group, &capability)?;
+            group
+        };
+        memory.push(&mut out.as_mut_slice()[group], triple)?;
     }
-    out
+    memory.release_vec(triples)?;
+    Ok(out)
 }
 
 fn root(roots: &mut [usize], mut index: usize) -> usize {

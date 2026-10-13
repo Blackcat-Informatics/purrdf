@@ -77,6 +77,29 @@ let json = to_shexj(&schema);
 Hard-fail discipline: every malformed schema is a typed `ShexError`;
 no lenient mode, no panics on any input.
 
+## Explicit XPath pattern laws
+
+`validate_with_xpath` and `validate_shape_map_with_xpath` select the native
+XPath F&O 2.0 Second Edition (2010-12-14) or 3.1 (2017-03-21) law explicitly,
+with `purrdf_core::xsd_regex::xpath::{Profile, Limits}`. Both admit
+backreferences; only 3.1 admits non-capturing groups and `q`. ShExJ supplies
+pattern and flag text directly. ShExC retains its concrete-syntax escape and
+flag grammar.
+
+An invalid pattern or flag produces an ordinary facet finding. Source,
+compiler, program-storage or matching exhaustion returns the typed native
+`xpath::Error` and aborts the whole shape map. Negation, alternative branches,
+triple assignment and previously computed entries cannot turn that refusal
+into a finding or a partial map. The textual shape-map door wraps its actual
+map error or native cause in `XPathValidationError`.
+
+Keep `XPathValidator::new(&schema)` for repeated fixed-map validations. Each
+call still supplies its dated profile and current limits; the product retains
+at most one successful native program, never a finding, failed compilation or
+spent execution budget. Cache hits recheck source/program/storage admission,
+and matching receives fresh current fuel. The existing `validate`,
+`validate_with` and `validate_shape_map` retain their compatibility behavior.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)

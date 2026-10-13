@@ -58,9 +58,7 @@ impl PfCursor for AttestingCursor {
 
     fn service_level(&self) -> ServiceLevel {
         match self.incomplete {
-            Some(reason) => ServiceLevel::Incomplete {
-                reason: reason.to_owned(),
-            },
+            Some(reason) => ServiceLevel::incomplete_static(reason),
             None => ServiceLevel::Undeclared,
         }
     }

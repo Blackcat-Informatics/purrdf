@@ -281,7 +281,7 @@ fn registry(
             accepted_terms: vec![AcceptedTerm {
                 pattern: TermPattern::of_kind(TermKind::Literal),
                 placements: vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     datatype: None,
                 }],
@@ -886,7 +886,7 @@ fn registry_declaring(
             accepted_terms: vec![AcceptedTerm {
                 pattern: TermPattern::of_kind(TermKind::Literal),
                 placements: vec![TermPlacement {
-                    facet: RequestFacet::Value,
+                    facet: RequestFacet::ScopedLexicalValue,
                     position: 1,
                     datatype: None,
                 }],

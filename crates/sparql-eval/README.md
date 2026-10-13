@@ -198,6 +198,29 @@ if let SparqlResult::Solutions { rows, .. } = result {
 Serialize results to SPARQL JSON/XML/CSV/TSV with the sibling
 [`purrdf-sparql-results`](https://crates.io/crates/purrdf-sparql-results) crate.
 
+## Dated native XPath expressions
+
+`NativeSparqlEngine::with_xpath_regex(profile, limits)` selects a dated native
+law for `REGEX` and `REPLACE`. The profiles and finite limits live in
+`purrdf_core::xsd_regex::xpath`. `QueryOptions::with_xpath_regex` selects the law
+and limits for one request; an unset request inherits the engine's selection.
+An unselected engine retains its compatibility behavior.
+
+Selection reaches constant-linked and dynamic patterns, prepared execution,
+worker and user-function children, governed and fallible queries, on-demand row
+filters and UPDATE WHERE clauses. Preparation retains algebra; execution links
+patterns under the current request. A retained program is reused only by exact
+law/source/flags identity after current source and program-storage admission.
+Every match and replacement receives current finite execution/output limits.
+
+Pattern and flag syntax retains SPARQL expression-error behavior. Resource or
+allocation exhaustion is an operational query failure with its native machine
+code, including oversized source patterns. It cannot become UNDEF, a false
+filter result or a partial answer. A refused UPDATE leaves the input dataset
+unchanged. Both dated laws admit backreferences; non-capturing groups and `q`
+require the 3.1 law. Replacement checks empty-match and replacement-language
+errors independently of operational refusal.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)

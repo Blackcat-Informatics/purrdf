@@ -52,390 +52,468 @@
 //! handed straight to the `native_codecs` serializers (Turtle / N-Triples / N-Quads /
 //! TriG / RDF-XML) and the JSON-LD serializer — the one serialization seam.
 
-use std::collections::{BTreeMap, BTreeSet};
+use crate::{
+    DatasetView, FastMap, NativeBuildError, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
+    TermGuard as _, TermId, TermRef, TermValue,
+};
+use core::hash::Hash;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use crate::{
-    DatasetView, FastSet, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral,
-    RdfTerm, RdfTriple, TermGuard as _, TermId, TermRef, TermValue,
-};
+/// A source or physical storage failure during description construction.
+#[derive(Debug)]
+pub enum DescribeError<E> {
+    /// The original backing view's read failure.
+    Source(E),
+    /// Refusal before native buffer growth.
+    Storage(StorageError),
+    /// Invalid RDF encountered while building the selected graph.
+    Build(NativeBuildError),
+    /// A malformed term returned by the view.
+    Invalid(&'static str),
+}
+impl<E: std::fmt::Display> std::fmt::Display for DescribeError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source(error) => write!(f, "description source read: {error}"),
+            Self::Storage(error) => std::fmt::Display::fmt(error, f),
+            Self::Build(error) => std::fmt::Display::fmt(error, f),
+            Self::Invalid(reason) => f.write_str(reason),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for DescribeError<E> {}
+purrdf_lex::variant_from!(impl<E> DescribeError<E> { Storage(StorageError) });
 
-/// Resolve a term id to the owned [`RdfTerm`] model through the [`DatasetView`] read
-/// path, triple terms included — the id-agnostic twin of
-/// `RdfDataset::to_owned_term`, so the extractor rebuilds a describing subgraph over
-/// any backend whose id type is [`TermId`].
-///
-/// A triple term is assembled bottom-up over [`crate::ir::try_fold_term`]'s work list: its subject,
-/// predicate and object are resolved in that order, each fully before the next.
+type ReifierDeclaration<I> = (I, I, Option<I>);
+type AnnotationBinding<I> = (I, I, Option<I>);
+type AnnotationRow<I> = (I, I, I, Option<I>);
+
 fn read_diagnostic(error: impl std::fmt::Display) -> RdfDiagnostic {
     RdfDiagnostic::error("rdf-describe-source-read", error.to_string())
 }
 
-fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> Result<RdfTerm, RdfDiagnostic> {
-    crate::ir::try_fold_term(
-        dataset,
-        id,
-        |_, term| {
-            Ok::<_, RdfDiagnostic>(match term {
-                TermRef::Iri(iri) => RdfTerm::iri(iri),
-                TermRef::Blank { label, scope } => RdfTerm::blank_node(scope.qualify_label(label)),
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let guard = dataset.resolve(datatype).map_err(read_diagnostic)?;
-                    let datatype_iri = match guard.term() {
-                        TermRef::Iri(iri) => iri.to_owned(),
-                        other => {
-                            return Err(RdfDiagnostic::error(
-                                "rdf-describe-invalid-term",
-                                format!("literal datatype must resolve to an IRI, got {other:?}"),
-                            ));
-                        }
-                    };
-                    RdfTerm::literal(RdfLiteral {
-                        lexical_form: lexical.to_owned(),
-                        datatype: Some(datatype_iri),
-                        language: language.map(str::to_owned),
-                        direction,
-                    })
-                }
-                TermRef::Triple { .. } => {
-                    unreachable!("a triple term is assembled from its components")
-                }
-            })
-        },
-        |_, subject, predicate, object| {
-            let RdfTerm::Iri(predicate) = predicate else {
-                return Err(RdfDiagnostic::error(
-                    "rdf-describe-invalid-term",
-                    format!("triple predicate must resolve to an IRI, got {predicate:?}"),
-                ));
-            };
-            Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
-        },
-        read_diagnostic,
-    )
+fn insert<K: Eq + Hash, V, S: Admission + ?Sized>(
+    map: &mut FastMap<K, V>,
+    key: K,
+    value: V,
+    memory: &mut Memory<'_, S>,
+) -> Result<Option<V>, StorageError> {
+    if let Some(existing) = map.get_mut(&key) {
+        // HashMap::insert may grow a full table even when replacing an existing key.
+        return Ok(Some(std::mem::replace(existing, value)));
+    }
+    crate::hash::reserve_map_with_memory(
+        map,
+        map.len().checked_add(1).ok_or(StorageError::SizeOverflow)?,
+        memory,
+    )?;
+    Ok(map.insert(key, value))
 }
 
-/// A view id → the quads touching it as subject/object (the endpoint adjacency).
-type EndpointQuads<I> = BTreeMap<I, Vec<QuadIds<I>>>;
+fn adjacency<K: Copy + Eq + Hash, V, S: Admission + ?Sized>(
+    map: &mut FastMap<K, Vec<V>>,
+    key: K,
+    value: V,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    if !map.contains_key(&key) {
+        let _ = insert(map, key, Vec::new(), memory)?;
+    }
+    memory.push(map.get_mut(&key).expect("adjacency key inserted"), value)
+}
 
-/// One reifier **declaration**: `(reifier, triple-term, graph)`, where `graph` is `None`
-/// for the default graph. The unit clause 4 selects and emits — not `(reifier, triple)`,
-/// because the statement layer is keyed per graph.
-type ReifierDeclaration<I> = (I, I, Option<I>);
+fn release_map<K, V, S: Admission + ?Sized>(
+    map: FastMap<K, V>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    let bytes = crate::hash::hash_table_allocation_bound::<(K, V)>(map.capacity())
+        .ok_or(StorageError::SizeOverflow)?;
+    drop(map);
+    memory.release_bytes(bytes)
+}
 
-/// One annotation as it hangs off a reifier: `(predicate, object, graph)`.
-type AnnotationBinding<I> = (I, I, Option<I>);
-
-/// One annotation row as harvested: `(reifier, predicate, object, graph)`.
-type AnnotationRow<I> = (I, I, I, Option<I>);
-
-/// A view id → the reifier declarations whose reified triple has it as subject or object.
-type EndpointReifiers<I> = BTreeMap<I, Vec<ReifierDeclaration<I>>>;
-
-/// A reifier id → the annotation rows hung off that reifier, each in the graph it was
-/// asserted in.
-type ReifierAnnotations<I> = BTreeMap<I, Vec<AnnotationBinding<I>>>;
-
-/// A reusable extractor: it builds the subject/object adjacency and the reifier
-/// endpoint index **once**, so extracting the SCBD of many subjects (one per exported
-/// term/slice) is cheap — each extraction is a bounded graph walk over the index, not
-/// a full re-scan of the dataset.
-///
-/// Generic over the read view `D` (any [`DatasetView`]), so the SCBD walk runs over the
-/// concrete [`RdfDataset`] or any other backend id width unchanged; the extracted
-/// subgraph is always a fresh [`RdfDataset`].
+/// Reusable endpoint and RDF 1.2 statement-layer adjacency for symmetric CBD.
+/// Native construction and extraction use the same algorithm as resident APIs.
 #[derive(Debug)]
 pub struct Describer<'a, D: DatasetView = RdfDataset> {
     dataset: &'a D,
-    /// term id → the quads that touch it as subject or object.
-    by_endpoint: EndpointQuads<D::Id>,
-    /// term id → the `(reifier, triple-term, graph)` declarations whose reified triple
-    /// has this id as its subject or object. The graph slot is carried, not indexed on:
-    /// selection is by reified-triple endpoint alone (see the module docs).
-    reifiers_by_endpoint: EndpointReifiers<D::Id>,
-    /// reifier id → the `(p, o, graph)` annotation rows hung off that reifier.
-    annotations_by_reifier: ReifierAnnotations<D::Id>,
+    by_endpoint: FastMap<D::Id, Vec<QuadIds<D::Id>>>,
+    reifiers_by_endpoint: FastMap<D::Id, Vec<ReifierDeclaration<D::Id>>>,
+    annotations_by_reifier: FastMap<D::Id, Vec<AnnotationBinding<D::Id>>>,
 }
 
 impl<'a, D: DatasetView<ReadError = Infallible>> Describer<'a, D> {
-    /// Build the adjacency indices over a resident, infallible dataset.
+    /// Build reusable adjacency over a resident infallible dataset.
     #[must_use]
     pub fn new(dataset: &'a D) -> Self {
         match Self::try_new(dataset) {
-            Ok(describer) => describer,
+            Ok(value) => value,
             Err(error) => match error {},
         }
     }
 }
 
 impl<'a, D: DatasetView> Describer<'a, D> {
-    /// Build adjacency indices through a fallible read session.
+    /// Build adjacency, returning the original source failure.
     ///
     /// # Errors
-    /// Returns a typed source failure instead of publishing a partial index.
+    /// Returns source read failure; resident allocator refusal is terminal.
     pub fn try_new(dataset: &'a D) -> Result<Self, D::ReadError> {
-        dataset.checked_read(|_| Self::build(dataset))?
+        let mut resident = Resident;
+        match Self::try_new_with_memory(dataset, &mut Memory::new(&mut resident)) {
+            Ok(value) => Ok(value),
+            Err(DescribeError::Source(error)) => Err(error),
+            Err(error) => panic!("resident description construction: {error}"),
+        }
     }
 
-    fn build(dataset: &'a D) -> Result<Self, D::ReadError> {
-        let mut by_endpoint: EndpointQuads<D::Id> = BTreeMap::new();
-        for q in dataset.quads() {
-            by_endpoint.entry(q.s).or_default().push(q);
-            // Avoid double-listing a reflexive `s p s` quad under the same key.
-            if q.o != q.s {
-                by_endpoint.entry(q.o).or_default().push(q);
+    /// Admit each concrete adjacency table and row buffer before its growth.
+    /// The original Memory owner must enclose this extractor until destruction.
+    ///
+    /// # Errors
+    /// Returns typed source or native storage refusal without partial publication.
+    pub fn try_new_with_memory<S: Admission + ?Sized>(
+        dataset: &'a D,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, DescribeError<D::ReadError>> {
+        dataset
+            .checked_read(|_| Self::build(dataset, memory))
+            .map_err(DescribeError::Source)?
+    }
+
+    fn build<S: Admission + ?Sized>(
+        dataset: &'a D,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, DescribeError<D::ReadError>> {
+        let mut result = Self {
+            dataset,
+            by_endpoint: FastMap::default(),
+            reifiers_by_endpoint: FastMap::default(),
+            annotations_by_reifier: FastMap::default(),
+        };
+        for quad in dataset.quads() {
+            adjacency(&mut result.by_endpoint, quad.s, quad, memory)?;
+            if quad.o != quad.s {
+                adjacency(&mut result.by_endpoint, quad.o, quad, memory)?;
             }
         }
-
-        let mut reifiers_by_endpoint: EndpointReifiers<D::Id> = BTreeMap::new();
-        for (reifier, triple, g) in dataset.reifier_quads().map(|q| (q.s, q.o, q.g)) {
-            let guard = dataset.resolve(triple)?;
+        for quad in dataset.reifier_quads() {
+            let guard = dataset.resolve(quad.o).map_err(DescribeError::Source)?;
             if let TermRef::Triple { s, p: _, o } = guard.term() {
-                reifiers_by_endpoint
-                    .entry(s)
-                    .or_default()
-                    .push((reifier, triple, g));
+                let binding = (quad.s, quad.o, quad.g);
+                adjacency(&mut result.reifiers_by_endpoint, s, binding, memory)?;
                 if o != s {
-                    reifiers_by_endpoint
-                        .entry(o)
-                        .or_default()
-                        .push((reifier, triple, g));
+                    adjacency(&mut result.reifiers_by_endpoint, o, binding, memory)?;
                 }
             }
         }
-
-        let mut annotations_by_reifier: ReifierAnnotations<D::Id> = BTreeMap::new();
-        for (reifier, p, o, g) in dataset.annotation_quads().map(|q| (q.s, q.p, q.o, q.g)) {
-            annotations_by_reifier
-                .entry(reifier)
-                .or_default()
-                .push((p, o, g));
+        for quad in dataset.annotation_quads() {
+            adjacency(
+                &mut result.annotations_by_reifier,
+                quad.s,
+                (quad.p, quad.o, quad.g),
+                memory,
+            )?;
         }
-
-        Ok(Self {
-            dataset,
-            by_endpoint,
-            reifiers_by_endpoint,
-            annotations_by_reifier,
-        })
+        Ok(result)
     }
 
-    /// The SCBD of the IRI `subject`, or an **empty** dataset if the dataset contains
-    /// no such subject. (An absent subject is not an error — a term may legitimately
-    /// carry no asserted or incoming triples.)
+    /// Destroy adjacency buffers before releasing their original physical bytes.
     ///
     /// # Errors
-    /// Propagates a freeze diagnostic if the extracted subgraph is somehow invalid
-    /// (it never should be, being a subset of an already-valid dataset).
+    /// Propagates the original account's refusal to shrink conservatively.
+    pub fn release_with_memory<S: Admission + ?Sized>(
+        mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        for (_, rows) in self.by_endpoint.drain() {
+            memory.release_vec(rows)?;
+        }
+        for (_, rows) in self.reifiers_by_endpoint.drain() {
+            memory.release_vec(rows)?;
+        }
+        for (_, rows) in self.annotations_by_reifier.drain() {
+            memory.release_vec(rows)?;
+        }
+        release_map(self.by_endpoint, memory)?;
+        release_map(self.reifiers_by_endpoint, memory)?;
+        release_map(self.annotations_by_reifier, memory)
+    }
+
+    /// Describe one resource, preserving its source graph and statement metadata.
+    ///
+    /// # Errors
+    /// Returns source or RDF construction diagnostics.
     pub fn describe_iri(&self, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let seed = self
-            .dataset
-            .term_id_by_value(&TermValue::iri(subject))
-            .map_err(read_diagnostic)?;
-        self.describe_seeds(seed.into_iter().collect())
+        self.describe_iris([subject])
     }
 
-    /// The union SCBD of several IRI subjects — the slice-scope export (every subject
-    /// the slice module mints, described as one subgraph).
+    /// Describe the union of several resources using the same native walk.
     ///
     /// # Errors
-    /// Propagates a freeze diagnostic (see [`describe_iri`](Self::describe_iri)).
+    /// Returns source or RDF construction diagnostics.
     pub fn describe_iris<'s>(
         &self,
         subjects: impl IntoIterator<Item = &'s str>,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        let mut resident = Resident;
+        self.describe_iris_with_memory(subjects, &mut Memory::new(&mut resident))
+            .map(Arc::new)
+            .map_err(|error| match error {
+                DescribeError::Build(NativeBuildError::Diagnostic(diagnostic)) => diagnostic,
+                DescribeError::Invalid(reason) => {
+                    RdfDiagnostic::error("rdf-describe-invalid-term", reason)
+                }
+                error => read_diagnostic(error),
+            })
+    }
+
+    /// Build a frozen description by value under the original native admission.
+    ///
+    /// # Errors
+    /// Returns source, storage, or RDF validation failure before publication.
+    pub fn describe_iris_with_memory<'s, S: Admission + ?Sized>(
+        &self,
+        subjects: impl IntoIterator<Item = &'s str>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<RdfDataset, DescribeError<D::ReadError>> {
         let mut seeds = Vec::new();
         for subject in subjects {
-            if let Some(id) = self
+            let term = TermValue::Iri(memory.string(subject)?);
+            let result = self
                 .dataset
-                .term_id_by_value(&TermValue::iri(subject))
-                .map_err(read_diagnostic)?
-            {
-                seeds.push(id);
+                .term_id_by_value(&term)
+                .map_err(DescribeError::Source);
+            let TermValue::Iri(text) = term else {
+                unreachable!("IRI lookup term")
+            };
+            memory.release_string(text)?;
+            if let Some(id) = result? {
+                memory.push(&mut seeds, id)?;
             }
         }
-        self.describe_seeds(seeds)
-    }
-
-    /// The shared walk: a single BFS from `seeds`, expanding **every** blank node it
-    /// can reach — whether that blank surfaces as a quad endpoint, as a reifier id, as
-    /// an endpoint of a reified triple, or as an annotation object — then re-intern the
-    /// collected quads + statement layer into a fresh dataset.
-    ///
-    /// Folding the reifier/annotation harvest **into** the frontier loop (rather than
-    /// running it once after the quad walk) is what makes the blank-node closure
-    /// transitive across the statement layer: a blank reifier's own describing triples
-    /// ride along because the reifier id is pushed to the frontier (its quads live in
-    /// `by_endpoint`), and a blank annotation object's triples ride along because it is
-    /// pushed to the frontier when the annotation is harvested. Otherwise those blanks
-    /// dangle — emitted in the subgraph with nothing describing them.
-    fn describe_seeds(&self, seeds: Vec<D::Id>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         self.dataset
-            .checked_read(|_| self.describe_seeds_read(seeds))
-            .map_err(read_diagnostic)?
+            .checked_read(|_| self.describe_seeds_read(seeds, memory))
+            .map_err(DescribeError::Source)?
     }
 
-    fn describe_seeds_read(&self, seeds: Vec<D::Id>) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let mut anchors: BTreeSet<D::Id> = BTreeSet::new();
-        let mut frontier: Vec<D::Id> = Vec::new();
-        for s in seeds {
-            if anchors.insert(s) {
-                frontier.push(s);
+    fn describe_seeds_read<S: Admission + ?Sized>(
+        &self,
+        seeds: Vec<D::Id>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<RdfDataset, DescribeError<D::ReadError>> {
+        let mut anchors = FastMap::default();
+        let mut frontier = Vec::new();
+        for &seed in &seeds {
+            if insert(&mut anchors, seed, (), memory)?.is_none() {
+                memory.push(&mut frontier, seed)?;
             }
         }
-
-        let mut quads: FastSet<QuadIds<D::Id>> = FastSet::default();
-        // The selected reifier DECLARATIONS, `(reifier, triple-term, graph)`.
-        let mut reifiers: BTreeSet<ReifierDeclaration<D::Id>> = BTreeSet::new();
-        // The harvested annotation rows, `(reifier, p, o, graph)`.
+        memory.release_vec(seeds)?;
+        let mut quads = FastMap::default();
+        let mut reifiers = FastMap::default();
         let mut annotations: Vec<AnnotationRow<D::Id>> = Vec::new();
-        // Keyed by `(reifier, graph)`, not by the reifier alone: annotations are
-        // harvested per DECLARATION, so a reifier declared in two graphs harvests each
-        // graph's rows exactly once.
-        let mut visited_reifiers: FastSet<(D::Id, Option<D::Id>)> = FastSet::default();
-
-        // Expand a blank endpoint into the frontier; named nodes never expand (that
-        // would drag in the entire neighbourhood of the graph).
+        let mut visited_reifiers = FastMap::default();
         macro_rules! expand_blank {
-            ($frontier:ident, $anchors:ident, $end:expr) => {{
-                let end = $end;
-                if self.is_blank(end)? && $anchors.insert(end) {
-                    $frontier.push(end);
+            ($endpoint:expr) => {{
+                let endpoint = $endpoint;
+                let guard = self
+                    .dataset
+                    .resolve(endpoint)
+                    .map_err(DescribeError::Source)?;
+                let blank = matches!(guard.term(), TermRef::Blank { .. });
+                drop(guard);
+                if blank && insert(&mut anchors, endpoint, (), memory)?.is_none() {
+                    memory.push(&mut frontier, endpoint)?;
                 }
             }};
         }
-
         while let Some(anchor) = frontier.pop() {
             if let Some(touching) = self.by_endpoint.get(&anchor) {
-                for &q in touching {
-                    quads.insert(q);
-                    expand_blank!(frontier, anchors, q.s);
-                    expand_blank!(frontier, anchors, q.o);
+                for &quad in touching {
+                    let _ = insert(&mut quads, quad, (), memory)?;
+                    expand_blank!(quad.s);
+                    expand_blank!(quad.o);
                 }
             }
-
-            // Reifier declarations whose reified triple is about this anchor. Selection
-            // is by reified-triple endpoint and by nothing else — the declaration's
-            // graph is carried, never matched on; a named-node reifier is still kept
-            // (only blank ids/objects expand).
             if let Some(bindings) = self.reifiers_by_endpoint.get(&anchor) {
-                for &b @ (reifier, triple, graph) in bindings {
-                    reifiers.insert(b);
-                    // Close THIS declaration's blank endpoints every time: a reifier may
-                    // reify more than one triple, so each triple's blank subject/object
-                    // (and a blank reifier id, whose own plain quads live in
-                    // `by_endpoint`) must be anchored — `expand_blank!` is idempotent.
-                    expand_blank!(frontier, anchors, reifier);
-                    let guard = self.dataset.resolve(triple).map_err(read_diagnostic)?;
+                for &(reifier, triple, graph) in bindings {
+                    let _ = insert(&mut reifiers, (reifier, triple, graph), (), memory)?;
+                    expand_blank!(reifier);
+                    let guard = self
+                        .dataset
+                        .resolve(triple)
+                        .map_err(DescribeError::Source)?;
                     if let TermRef::Triple { s, p: _, o } = guard.term() {
-                        expand_blank!(frontier, anchors, s);
-                        expand_blank!(frontier, anchors, o);
+                        expand_blank!(s);
+                        expand_blank!(o);
                     }
                     drop(guard);
-                    // Harvest this DECLARATION's annotations once: the rows keyed by
-                    // this reifier that were asserted in the declaration's own graph.
-                    // The guard is `(reifier, graph)` because a reifier that reifies two
-                    // triples in one graph must not re-harvest, while the same reifier
-                    // declared in a second graph must harvest that graph's rows too.
-                    if visited_reifiers.insert((reifier, graph))
-                        && let Some(annos) = self.annotations_by_reifier.get(&reifier)
+                    if insert(&mut visited_reifiers, (reifier, graph), (), memory)?.is_none()
+                        && let Some(bindings) = self.annotations_by_reifier.get(&reifier)
                     {
-                        for &(p, o, _) in annos.iter().filter(|&&(_, _, g)| g == graph) {
-                            annotations.push((reifier, p, o, graph));
-                            expand_blank!(frontier, anchors, p);
-                            expand_blank!(frontier, anchors, o);
+                        for &(predicate, object, _) in
+                            bindings.iter().filter(|binding| binding.2 == graph)
+                        {
+                            memory.push(&mut annotations, (reifier, predicate, object, graph))?;
+                            expand_blank!(predicate);
+                            expand_blank!(object);
                         }
                     }
                 }
             }
         }
-
-        // Re-intern the selected quads + statement layer into a fresh dataset. A remap
-        // memoizes old-id → new-id so the owned-term round-trip runs once per term.
-        // `quads` is a `FastSet` (for dedup during the walk), whose iteration order is
-        // unspecified — re-interning in that order would make the extracted subgraph's
-        // bytes unstable across runs. Sort by the source `(g, s, p, o)` ids first so the
-        // output is deterministic (byte-reproducibility).
-        let mut ordered: Vec<QuadIds<D::Id>> = quads.into_iter().collect();
-        ordered.sort_unstable_by_key(|q| (q.g, q.s, q.p, q.o));
+        memory.release_vec(frontier)?;
+        release_map(anchors, memory)?;
+        release_map(visited_reifiers, memory)?;
+        let mut ordered = memory.collect(quads.keys().copied())?;
+        release_map(quads, memory)?;
+        ordered.sort_unstable_by_key(|quad| (quad.g, quad.s, quad.p, quad.o));
+        let mut ordered_reifiers = memory.collect(reifiers.keys().copied())?;
+        release_map(reifiers, memory)?;
+        ordered_reifiers.sort_unstable();
         let mut builder = RdfDatasetBuilder::new();
-        let mut remap: BTreeMap<D::Id, TermId> = BTreeMap::new();
-        for q in &ordered {
-            let s = self.map_id(&mut builder, &mut remap, q.s)?;
-            let p = self.map_id(&mut builder, &mut remap, q.p)?;
-            let o = self.map_id(&mut builder, &mut remap, q.o)?;
-            let g =
-                q.g.map(|g| self.map_id(&mut builder, &mut remap, g))
-                    .transpose()?;
-            builder.push_quad(s, p, o, g);
-        }
-        // The statement layer is re-emitted through the `_in_graph` forms, so a
-        // declaration and its annotations land back in the graph they were asserted in
-        // rather than being relocated into the default graph.
-        for &(reifier, triple, g) in &reifiers {
-            let r = self.map_id(&mut builder, &mut remap, reifier)?;
-            let t = self.map_id(&mut builder, &mut remap, triple)?;
-            let g = g
-                .map(|g| self.map_id(&mut builder, &mut remap, g))
+        let mut remap = FastMap::default();
+        for quad in &ordered {
+            let s = self.map_id(&mut builder, &mut remap, quad.s, memory)?;
+            let p = self.map_id(&mut builder, &mut remap, quad.p, memory)?;
+            let o = self.map_id(&mut builder, &mut remap, quad.o, memory)?;
+            let g = quad
+                .g
+                .map(|id| self.map_id(&mut builder, &mut remap, id, memory))
                 .transpose()?;
-            builder.push_reifier_in_graph(r, t, g);
+            builder.push_quad_with_memory(s, p, o, g, memory)?;
         }
-        for &(reifier, p, o, g) in &annotations {
-            let r = self.map_id(&mut builder, &mut remap, reifier)?;
-            let p = self.map_id(&mut builder, &mut remap, p)?;
-            let o = self.map_id(&mut builder, &mut remap, o)?;
-            let g = g
-                .map(|g| self.map_id(&mut builder, &mut remap, g))
+        for &(reifier, triple, graph) in &ordered_reifiers {
+            let r = self.map_id(&mut builder, &mut remap, reifier, memory)?;
+            let t = self.map_id(&mut builder, &mut remap, triple, memory)?;
+            let g = graph
+                .map(|id| self.map_id(&mut builder, &mut remap, id, memory))
                 .transpose()?;
-            builder.push_annotation_in_graph(r, p, o, g);
+            builder.push_reifier_in_graph_with_memory(r, t, g, memory)?;
         }
-
-        builder.freeze()
+        for &(reifier, predicate, object, graph) in &annotations {
+            let r = self.map_id(&mut builder, &mut remap, reifier, memory)?;
+            let p = self.map_id(&mut builder, &mut remap, predicate, memory)?;
+            let o = self.map_id(&mut builder, &mut remap, object, memory)?;
+            let g = graph
+                .map(|id| self.map_id(&mut builder, &mut remap, id, memory))
+                .transpose()?;
+            builder.push_annotation_in_graph_with_memory(r, p, o, g, memory)?;
+        }
+        memory.release_vec(ordered)?;
+        memory.release_vec(ordered_reifiers)?;
+        memory.release_vec(annotations)?;
+        release_map(remap, memory)?;
+        builder
+            .freeze_with_memory(memory)
+            .map_err(DescribeError::Build)
     }
 
-    /// Whether a term id is a blank node in the source dataset.
-    fn is_blank(&self, id: D::Id) -> Result<bool, RdfDiagnostic> {
-        self.dataset
-            .with_term(id, |term| matches!(term, TermRef::Blank { .. }))
-            .map_err(read_diagnostic)
-    }
-
-    /// Intern a source term id into `builder`, memoized. `to_owned_term` resolves
-    /// triple terms whole, and `intern_owned_term` re-interns them, so quoted
-    /// triples inside reifiers rebuild faithfully.
-    fn map_id(
+    fn map_id<S: Admission + ?Sized>(
         &self,
         builder: &mut RdfDatasetBuilder,
-        remap: &mut BTreeMap<D::Id, TermId>,
+        remap: &mut FastMap<D::Id, TermId>,
         old: D::Id,
-    ) -> Result<TermId, RdfDiagnostic> {
-        if let Some(&new) = remap.get(&old) {
-            return Ok(new);
-        }
-        let owned = owned_term(self.dataset, old)?;
-        let new = builder.intern_owned_term(&owned);
-        remap.insert(old, new);
-        Ok(new)
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, DescribeError<D::ReadError>> {
+        intern_view_term_with_memory(self.dataset, builder, remap, old, memory)
     }
 }
 
-/// One-shot convenience: the SCBD of a single IRI subject in `dataset`.
+/// Copy a source term into a builder using the original source guard and admitted storage.
 ///
-/// For extracting many subjects (the docs export walks every term) build a
-/// [`Describer`] once and reuse it — this rebuilds the adjacency index per call.
+/// The memo preserves shared nested components without constructing an owned intermediate.
 ///
 /// # Errors
-/// Propagates a freeze diagnostic (see [`Describer::describe_iri`]).
+/// Returns the original source failure, physical storage refusal, or invalid datatype.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "native term memoization must retain the workspace's required fixed-key hasher"
+)]
+pub fn intern_view_term_with_memory<D: DatasetView, S: Admission + ?Sized>(
+    dataset: &D,
+    builder: &mut RdfDatasetBuilder,
+    remap: &mut FastMap<D::Id, TermId>,
+    old: D::Id,
+    memory: &mut Memory<'_, S>,
+) -> Result<TermId, DescribeError<D::ReadError>> {
+    let mut pending = Vec::new();
+    memory.push(&mut pending, (old, false))?;
+    while let Some((id, assemble)) = pending.pop() {
+        if remap.contains_key(&id) {
+            continue;
+        }
+        let guard = dataset.resolve(id).map_err(DescribeError::Source)?;
+        let new = match guard.term() {
+            TermRef::Triple { s, p, o } if !assemble => {
+                memory.push(&mut pending, (id, true))?;
+                memory.push(&mut pending, (o, false))?;
+                memory.push(&mut pending, (p, false))?;
+                memory.push(&mut pending, (s, false))?;
+                continue;
+            }
+            TermRef::Triple { s, p, o } => {
+                builder.intern_triple_with_memory(remap[&s], remap[&p], remap[&o], memory)?
+            }
+            TermRef::Iri(iri) => builder.intern_iri_with_memory(iri, memory)?,
+            TermRef::Blank { label, scope } => {
+                builder.intern_blank_with_memory(label, scope, memory)?
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype = dataset.resolve(datatype).map_err(DescribeError::Source)?;
+                let TermRef::Iri(iri) = datatype.term() else {
+                    return Err(DescribeError::Invalid(
+                        "literal datatype must resolve to an IRI",
+                    ));
+                };
+                builder.intern_literal_parts_with_memory(
+                    lexical,
+                    Some(iri),
+                    language,
+                    direction,
+                    memory,
+                )?
+            }
+        };
+        crate::hash::reserve_map_with_memory(remap, remap.len() + 1, memory)?;
+        let _ = remap.insert(id, new);
+    }
+    memory.release_vec(pending)?;
+    Ok(remap[&old])
+}
+
+/// One-shot symmetric CBD using the same reusable extractor.
+///
+/// # Errors
+/// Returns source or RDF construction diagnostics.
 pub fn describe(dataset: &RdfDataset, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     Describer::try_new(dataset)
         .map_err(read_diagnostic)?
         .describe_iri(subject)
+}
+
+#[cfg(test)]
+fn owned_term<D: DatasetView>(dataset: &D, id: D::Id) -> Result<crate::RdfTerm, RdfDiagnostic> {
+    let describer = Describer::try_new(dataset).map_err(read_diagnostic)?;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut builder = RdfDatasetBuilder::new();
+    let mut remap = FastMap::default();
+    let mapped = describer
+        .map_id(&mut builder, &mut remap, id, &mut memory)
+        .map_err(read_diagnostic)?;
+    let graph = builder
+        .freeze_with_memory(&mut memory)
+        .map_err(read_diagnostic)?;
+    Ok(graph.to_owned_term(mapped))
 }
 
 #[cfg(test)]
@@ -445,6 +523,49 @@ mod tests {
 
     const S: &str = "https://e/s";
     const OTHER: &str = "https://e/other";
+
+    #[test]
+    fn full_description_table_replacement_preserves_original_capacity_and_grant() {
+        struct Boundary {
+            limit: usize,
+            live: usize,
+        }
+        impl Admission for Boundary {
+            fn resize(&mut self, required: usize) -> Result<(), StorageError> {
+                if required > self.limit {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live = required;
+                Ok(())
+            }
+        }
+        let mut boundary = Boundary {
+            limit: usize::MAX,
+            live: 0,
+        };
+        let mut memory = Memory::new(&mut boundary);
+        let mut map = FastMap::default();
+        for key in 0..3_u32 {
+            assert_eq!(insert(&mut map, key, key, &mut memory), Ok(None));
+        }
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.capacity(), 3);
+        let original = memory.admitted_bytes();
+        memory.admission_mut().limit = original;
+        assert_eq!(insert(&mut map, 1, 9, &mut memory), Ok(Some(1)));
+        assert_eq!(map[&1], 9);
+        assert_eq!(map.capacity(), 3);
+        assert_eq!(memory.admitted_bytes(), original);
+        assert_eq!(
+            insert(&mut map, 3, 3, &mut memory),
+            Err(StorageError::AdmissionFailed)
+        );
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.capacity(), 3);
+        release_map(map, &mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(memory.admission_mut().live, 0);
+    }
 
     fn iri(v: &str) -> RdfTerm {
         RdfTerm::iri(v)

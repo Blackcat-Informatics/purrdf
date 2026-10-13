@@ -60,11 +60,13 @@ use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
+use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
 use crate::registry_id::{RegistryId, append_framed_part};
 use crate::witness::RelationWitness;
+use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
 
 /// The result form of a function body: a `sh:select` returns the projected value of
 /// its one solution (a second solution is an error); a `sh:ask` returns an
@@ -188,6 +190,178 @@ pub struct UserFunction {
     pub return_constraint: TypeConstraint,
 }
 
+/// A typed refusal of a SPARQL-bodied function's actual invocation.
+///
+/// The original error remains available through [`Self::cause`] across nested
+/// function calls and parallel worker reduction. Clones share its identity;
+/// equality compares that identity rather than its rendered message.
+#[derive(Clone)]
+pub struct UserFunctionRefusal {
+    cause: Arc<dyn std::error::Error + Send + Sync>,
+    observer: Option<Arc<dyn UserFunctionAdmission>>,
+}
+
+impl UserFunctionRefusal {
+    /// Retain an exact caller-owned cause. This allocates only on refusal.
+    pub fn new(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            cause: Arc::new(cause),
+            observer: None,
+        }
+    }
+
+    /// The original typed cause, including its downcast identity.
+    #[must_use]
+    pub fn cause(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.cause.as_ref()
+    }
+
+    fn with_observer(mut self, observer: &Arc<dyn UserFunctionAdmission>) -> Self {
+        self.observer = Some(Arc::clone(observer));
+        self
+    }
+
+    /// Retain the selected cause before diagnostic conversion discards its type.
+    /// An engine request decorates this observer until its final source checkpoint
+    /// has decided whether the query error is authoritative.
+    pub(crate) fn observe(&self) {
+        if let Some(observer) = &self.observer {
+            observer.observe_refusal(self);
+        }
+    }
+}
+
+purrdf_hash::debug_non_exhaustive!(UserFunctionRefusal { cause });
+
+impl PartialEq for UserFunctionRefusal {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cause, &other.cause)
+    }
+}
+
+impl Eq for UserFunctionRefusal {}
+
+impl core::fmt::Display for UserFunctionRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.cause, f)
+    }
+}
+
+impl std::error::Error for UserFunctionRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause())
+    }
+}
+
+/// A caller-selected law for actual SPARQL-bodied function invocations.
+///
+/// Admission sees the original prepared query and every declared parameter,
+/// including optional parameters omitted on this call. It runs after argument
+/// validation and the invocation's governor charge, before substitution or body
+/// evaluation. A mandatory unbound argument or a short-circuited expression does
+/// not invoke it. Implementations must make admission deterministic and safe for
+/// concurrent calls; retain diagnostic evidence in [`Self::observe_refusal`],
+/// which receives only the authoritative query error after the engine's final
+/// source checkpoint. Operational source failures and suppressed errors are not
+/// observed.
+///
+/// Ordinary requests install no law and perform no callback or allocation.
+pub trait UserFunctionAdmission: Send + Sync {
+    /// Admit this original query under the function's declared parameter set.
+    ///
+    /// # Errors
+    ///
+    /// Return the exact typed cause when the selected law refuses invocation.
+    fn admit(
+        &self,
+        function: &UserFunction,
+        query: &purrdf_sparql_algebra::Query,
+    ) -> Result<(), UserFunctionRefusal>;
+
+    /// Recover the exact cause selected for the returned engine diagnostic after
+    /// its final source checkpoint. Worker-local refusals that lose to an earlier
+    /// error, and query refusals replaced by an operational failure, are not observed.
+    fn observe_refusal(&self, refusal: &UserFunctionRefusal);
+}
+
+/// Request-local publication of an admission cause after storage precedence is
+/// settled. The empty path allocates nothing; selected requests lazily allocate
+/// one decorator after their configured context passes workspace admission.
+#[derive(Default)]
+pub(crate) struct RefusalPublication {
+    admission: std::sync::OnceLock<DeferredAdmission>,
+}
+
+type DeferredAdmission = (
+    Arc<dyn UserFunctionAdmission>,
+    Arc<DeferredFunctionAdmission>,
+);
+
+impl RefusalPublication {
+    pub(crate) fn admission(
+        &self,
+        owner: &Arc<dyn UserFunctionAdmission>,
+    ) -> &Arc<dyn UserFunctionAdmission> {
+        &self
+            .admission
+            .get_or_init(|| {
+                let deferred = Arc::new(DeferredFunctionAdmission {
+                    owner: Arc::clone(owner),
+                    refusal: std::sync::Mutex::new(None),
+                });
+                (deferred.clone(), deferred)
+            })
+            .0
+    }
+
+    /// Publish only a returned query error. A discarded pending capsule has no
+    /// observer owner, so it cannot retain its decorator in an Arc cycle.
+    pub(crate) fn finish<T, E>(
+        &self,
+        result: Result<T, E>,
+        is_query_error: impl FnOnce(&E) -> bool,
+    ) -> Result<T, E> {
+        if let Some((_, admission)) = self.admission.get() {
+            let refusal = admission
+                .refusal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if result.as_ref().is_err_and(is_query_error)
+                && let Some(refusal) = refusal
+            {
+                admission.owner.observe_refusal(&refusal);
+            }
+        }
+        result
+    }
+}
+
+struct DeferredFunctionAdmission {
+    owner: Arc<dyn UserFunctionAdmission>,
+    refusal: std::sync::Mutex<Option<UserFunctionRefusal>>,
+}
+
+impl UserFunctionAdmission for DeferredFunctionAdmission {
+    fn admit(
+        &self,
+        function: &UserFunction,
+        query: &purrdf_sparql_algebra::Query,
+    ) -> Result<(), UserFunctionRefusal> {
+        self.owner.admit(function, query)
+    }
+
+    fn observe_refusal(&self, refusal: &UserFunctionRefusal) {
+        *self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(UserFunctionRefusal {
+            cause: Arc::clone(&refusal.cause),
+            observer: None,
+        });
+    }
+}
+
 /// A native (host-Rust) user function body: a closure over the already-evaluated,
 /// dataset-independent argument values.
 ///
@@ -241,6 +415,156 @@ pub struct UserFunction {
 /// diverge under parallel evaluation.
 pub type NativeFnBody =
     Arc<dyn Fn(&[&TermValue]) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+/// A native producer sharing the invocation's physical admission capability.
+///
+/// The body admits every temporary before allocating it and returns its original
+/// output owner. An operational refusal must stop production immediately.
+pub type AdmittedNativeFnBody = Arc<
+    dyn Fn(&[&TermValue], &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send
+        + Sync,
+>;
+
+/// An admitted native body with internal work and cancellation checkpoints.
+/// The result keeps its original physical allocation, including across clones.
+pub type MeteredNativeFnBody =
+    Arc<dyn Fn(&NativeFnCall<'_>) -> Result<Option<WorkspaceTerm>, EvalError> + Send + Sync>;
+
+/// Arguments and immutable capabilities of one native function invocation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct NativeFnCall<'a> {
+    /// The actual call-position IRI.
+    pub iri: &'a str,
+    /// Values borrowed from the evaluator's original argument owners.
+    pub args: &'a [&'a TermValue],
+    /// Work charging and stop checks, with no evaluator or dataset access.
+    pub context: &'a NativeFnContext<'a>,
+    /// Actual physical admission shared with the invoking query.
+    pub workspace: &'a WorkspaceCapability,
+    /// Caller-selected immutable geographic bindings and numerical policy.
+    pub geo: &'a purrdf_geo_kernel::GeoProfile,
+}
+
+#[derive(Clone, Copy)]
+enum NativeCharge {
+    Work(u64),
+    WorkspaceGrowth(u64),
+    Checkpoint,
+}
+
+/// A borrowed native body's restricted work and cancellation capability.
+/// Numerical code releases its floating environment guard before invoking it.
+pub struct NativeFnContext<'a> {
+    charge: &'a dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
+    stopped: core::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+    workspace: &'a WorkspaceCapability,
+    physical_failure: core::cell::RefCell<Option<EvalError>>,
+}
+purrdf_hash::debug_non_exhaustive!(NativeFnContext<'_> { stopped });
+
+impl NativeFnContext<'_> {
+    /// Borrow the actual query's physical admission capability.
+    #[must_use]
+    pub const fn workspace(&self) -> &WorkspaceCapability {
+        self.workspace
+    }
+
+    /// Preserve the first actual physical failure without rendering a second
+    /// diagnostic or replacing the governor's original stop cause.
+    pub(crate) fn record_physical_failure(&self, error: EvalError) {
+        let mut failure = self.physical_failure.borrow_mut();
+        if failure.is_none() {
+            *failure = Some(error);
+        }
+    }
+
+    /// Charge the operation law's documented units before the next work chunk.
+    /// # Errors
+    /// Returns the first governor that refused work or stopped this invocation.
+    pub fn charge_work(&self, units: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::Work(units))
+    }
+    /// Report additional numerical-policy workspace to the scratch governor.
+    /// Physical ownership must also use [`NativeFnCall::workspace`] before birth.
+    /// # Errors
+    /// Returns the original refusing governor; this never acquires a physical grant.
+    pub fn charge_workspace_growth(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::WorkspaceGrowth(bytes))
+    }
+    /// Poll the selected host stop law without consuming fuel.
+    /// # Errors
+    /// Returns the governor that stopped the call.
+    pub fn checkpoint(&self) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.apply(NativeCharge::Checkpoint)
+    }
+    fn apply(&self, charge: NativeCharge) -> Result<(), purrdf_core::TrippedGovernor> {
+        if let Some(stopped) = self.stopped.get() {
+            return Err(stopped);
+        }
+        let result = (self.charge)(charge);
+        if let Err(stopped) = result {
+            self.stopped.set(Some(stopped));
+        }
+        result
+    }
+}
+
+pub(crate) fn metered_native_call<D: DatasetView + Sync, T>(
+    ctx: &EvalCtx<'_, D>,
+    work_point: crate::governor::ChargePoint,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
+    let charge = |point| match point {
+        NativeCharge::Work(units) => ctx.charge_occurrences(work_point, units),
+        NativeCharge::WorkspaceGrowth(bytes) => {
+            if let Some(stopped) = ctx.stop_check() {
+                return Err(stopped);
+            }
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+        }
+        NativeCharge::Checkpoint => ctx.stop_check().map_or(Ok(()), Err),
+    };
+    native_call(&ctx.growth, &charge, body)
+}
+
+fn native_call<T>(
+    workspace: &WorkspaceCapability,
+    charge: &dyn Fn(NativeCharge) -> Result<(), purrdf_core::TrippedGovernor>,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<purrdf_core::TrippedGovernor>, Option<EvalError>) {
+    let context = NativeFnContext {
+        charge,
+        stopped: core::cell::Cell::new(None),
+        workspace,
+        physical_failure: core::cell::RefCell::new(None),
+    };
+    let result = body(&context);
+    let failure = context.physical_failure.into_inner();
+    (result, context.stopped.get(), failure)
+}
+
+pub(crate) fn unmetered_native_call<T>(
+    workspace: &WorkspaceCapability,
+    body: impl FnOnce(&NativeFnContext<'_>) -> Result<T, EvalError>,
+) -> Result<T, EvalError> {
+    let (result, _, failure) = native_call(workspace, &|_| Ok(()), body);
+    if let Some(error) = failure {
+        drop(result);
+        Err(error)
+    } else {
+        result
+    }
+}
+
+#[derive(Clone)]
+enum NativeBody {
+    Resident(NativeFnBody),
+    Admitted(AdmittedNativeFnBody),
+    Metered(MeteredNativeFnBody),
+    Standard(crate::geo::functions::GeofFunction),
+}
 
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
@@ -310,6 +634,20 @@ pub struct ExprFnCall<'a> {
 pub type ExprFnBody =
     Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
+/// A dataset-aware producer using the same physical capability as its caller.
+/// Temporary allocations and the returned term retain their original grants.
+pub type AdmittedExprFnBody = Arc<
+    dyn Fn(&ExprFnCall<'_>, &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+enum ExprBody {
+    Resident(ExprFnBody),
+    Admitted(AdmittedExprFnBody),
+}
+
 impl ExprFnCall<'_> {
     /// Record what the relations this body invoked attested, so it reaches the
     /// CALLING query's receipt.
@@ -342,7 +680,7 @@ impl ExprFnCall<'_> {
 /// declaration either way would be a distinction without a difference.
 #[derive(Clone)]
 pub struct ExprFunction {
-    pub(crate) body: ExprFnBody,
+    body: ExprBody,
     pub(crate) arity: Arity,
 }
 
@@ -439,11 +777,22 @@ impl Arity {
     /// happen: it is a variant tag plus its numeric fields, with no wording to
     /// drift.
     pub(crate) fn stable_encoding(self) -> String {
-        match self {
-            Self::Exact(n) => format!("exact:{n}"),
-            Self::Range { min, max } => format!("range:{min}:{max}"),
-            Self::AtLeast(n) => format!("atleast:{n}"),
+        self.stable_display().to_string()
+    }
+
+    /// The stable identity encoding, borrowing no allocated rendering.
+    pub(crate) fn stable_display(self) -> impl core::fmt::Display {
+        struct Encoding(Arity);
+        impl core::fmt::Display for Encoding {
+            fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self.0 {
+                    Arity::Exact(n) => write!(out, "exact:{n}"),
+                    Arity::Range { min, max } => write!(out, "range:{min}:{max}"),
+                    Arity::AtLeast(n) => write!(out, "atleast:{n}"),
+                }
+            }
         }
+        Encoding(self)
     }
 }
 
@@ -466,9 +815,102 @@ impl core::fmt::Display for Arity {
 /// itself must uphold.
 #[derive(Clone)]
 pub struct NativeFunction {
-    pub(crate) body: NativeFnBody,
+    body: NativeBody,
     pub(crate) arity: Arity,
     pub(crate) volatility: Volatility,
+}
+
+macro_rules! standard_native_population {
+    ($($index:literal),* $(,)?) => { [$(NativeFunction {
+        body: NativeBody::Standard(crate::geo::functions::GeofFunction::ALL[$index]),
+        arity: crate::geo::functions::GeofFunction::ALL[$index].arity(),
+        volatility: Volatility::Stable,
+    }),*] };
+}
+static STANDARD_NATIVE: [NativeFunction; crate::geo::functions::GeofFunction::COUNT] = standard_native_population!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+);
+
+fn standard_native(iri: &str) -> Option<&'static NativeFunction> {
+    let local = iri.strip_prefix(purrdf_iri::vocab::ogc::geof::NS)?;
+    crate::geo::functions::GeofFunction::ALL
+        .iter()
+        .position(|function| function.local_name() == local)
+        .map(|index| &STANDARD_NATIVE[index])
+}
+
+/// A parser namespace cannot intercept an immutable standard scalar function.
+pub(crate) fn validate_standard_parser(
+    options: &purrdf_sparql_algebra::ParserOptions,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut conflict: Option<&str> = None;
+    for function in crate::geo::functions::GeofFunction::ALL {
+        // A namespace may end within either the official prefix or local name;
+        // compare the borrowed split spelling without constructing a String.
+        for namespace in &options.extension_fn_namespaces {
+            let prefix = purrdf_iri::vocab::ogc::geof::NS;
+            let intercepts = prefix.starts_with(namespace)
+                || namespace
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| function.local_name().starts_with(suffix));
+            if intercepts && conflict.is_none_or(|old| function.local_name() < old) {
+                conflict = Some(function.local_name());
+            }
+        }
+    }
+    if let Some(local) = conflict {
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::StandardFunctionConflict,
+            format_args!(
+                "extension parser namespace intercepts immutable standard function <{}{local}>",
+                purrdf_iri::vocab::ogc::geof::NS
+            ),
+            workspace,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_standard_algebra_with_memory(
+    pattern: &purrdf_sparql_algebra::GraphPattern,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    use purrdf_sparql_algebra::{Expression, Flow, Function, NodeRef, Visit};
+    let mut conflict = None;
+    purrdf_sparql_algebra::walk::walk_pre_post_with_memory(
+        NodeRef::Pattern(pattern),
+        |visit, node, _| -> Result<Flow, purrdf_lex::allocation::StorageError> {
+            if visit == Visit::Enter
+                && let NodeRef::Expr(Expression::FunctionCall(Function::Purrdf(call), _)) = node
+                && standard_native(&call.iri).is_some()
+            {
+                conflict = Some(call.iri.as_str());
+                return Ok(Flow::Stop);
+            }
+            Ok(Flow::Descend)
+        },
+        memory,
+    )
+    .map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "standard scalar validation walk")
+    })?;
+    // The shared walk's temporary grant must cover the work-list until it dies.
+    // Its owner callback is the lower Memory scope, not a post-traversal fee.
+    if let Some(iri) = conflict {
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::StandardFunctionConflict,
+            format_args!(
+                "closed function annotation intercepts immutable standard function <{iri}>"
+            ),
+            memory.admission_mut().workspace(),
+        ));
+    }
+    Ok(())
 }
 
 purrdf_hash::debug_non_exhaustive!(
@@ -570,7 +1012,23 @@ impl UserFunctionRegistry {
     /// a [`NativeFunction`] â see [`Self::insert`]'s panic doc for the rationale
     /// (symmetric guard).
     pub fn register_expr(&mut self, iri: impl Into<String>, arity: Arity, body: ExprFnBody) {
-        let iri = iri.into();
+        self.register_expr_body(iri.into(), arity, ExprBody::Resident(body));
+    }
+
+    /// Register a dataset-aware producer with physical ownership of its output.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_expr`] does.
+    pub fn register_expr_admitted(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        body: AdmittedExprFnBody,
+    ) {
+        self.register_expr_body(iri.into(), arity, ExprBody::Admitted(body));
+    }
+
+    fn register_expr_body(&mut self, iri: String, arity: Arity, body: ExprBody) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as expression-bodied"
@@ -608,7 +1066,86 @@ impl UserFunctionRegistry {
         volatility: Volatility,
         body: NativeFnBody,
     ) {
-        let iri = iri.into();
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Resident(body));
+    }
+
+    /// Register a native producer that admits its allocations before production.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_native`] does.
+    pub fn register_native_admitted(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: AdmittedNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Admitted(body));
+    }
+
+    /// Register a producer that admits its own allocations and meters native work.
+    pub fn register_native_metered(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: MeteredNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Metered(body));
+    }
+
+    pub(crate) fn register_standard_geo(
+        &mut self,
+        iri: String,
+        function: crate::geo::functions::GeofFunction,
+    ) {
+        self.register_native_body(
+            iri,
+            function.arity(),
+            Volatility::Stable,
+            NativeBody::Standard(function),
+        );
+    }
+
+    /// Reject any non-identical shadow of the immutable official scalar set.
+    /// The minimum conflicting IRI makes the refusal independent of map order.
+    pub(crate) fn validate_standard(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let nonnative = self
+            .fns
+            .keys()
+            .chain(self.exprs.keys())
+            .filter(|iri| standard_native(iri).is_some());
+        let native = self.native.iter().filter_map(|(iri, native)| {
+            let standard = standard_native(iri)?;
+            let same_body = matches!((&native.body, &standard.body),
+                (NativeBody::Standard(left), NativeBody::Standard(right)) if left == right);
+            (!same_body
+                || native.arity != standard.arity
+                || native.volatility != standard.volatility)
+                .then_some(iri)
+        });
+        if let Some(iri) = nonnative.chain(native).min() {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::StandardFunctionConflict,
+                format_args!(
+                    "caller registration conflicts with immutable standard function <{iri}>"
+                ),
+                workspace,
+            ));
+        }
+        Ok(())
+    }
+
+    fn register_native_body(
+        &mut self,
+        iri: String,
+        arity: Arity,
+        volatility: Volatility,
+        body: NativeBody,
+    ) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as native"
@@ -649,7 +1186,7 @@ impl UserFunctionRegistry {
     /// Resolve a call-position IRI to its declared native function, if any.
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
-        self.native.get(iri)
+        standard_native(iri).or_else(|| self.native.get(iri))
     }
 
     /// Resolve a call-position IRI to its declared dataset-aware
@@ -1165,9 +1702,10 @@ fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity or type-constraint violation, or on exceeding the
-/// user-function recursion bound during an ungoverned execution; propagates body evaluation
-/// errors. During a governed execution, fuel and depth exhaustion are recorded on the
+/// [`EvalError::Function`] on an arity or type-constraint violation, and
+/// [`EvalError::FunctionOperational`] on exceeding the user-function recursion bound
+/// during an ungoverned execution; propagates body evaluation errors. During a
+/// governed execution, fuel and depth exhaustion are recorded on the
 /// expression truncation channel and return `Ok(None)` here so they cannot masquerade as a
 /// function failure.
 pub(crate) fn eval_user_function<D: DatasetView + Sync>(
@@ -1177,6 +1715,20 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
+    eval_user_function_evidence(func, body, iri, args, ctx, &mut None)
+}
+
+/// Return a body's original evidence beside its value from the same execution.
+/// The caller owns the suspension slot; no context-global last-result is used.
+pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
+    func: &UserFunction,
+    body: &crate::engine::PreparedQuery,
+    iri: &str,
+    args: &[Option<TermValue>],
+    ctx: &mut EvalCtx<'_, D>,
+    evidence: &mut Option<crate::evidence_exec::RowEvidence>,
+) -> Result<Option<TermValue>, EvalError> {
+    *evidence = None;
     if args.len() < func.required || args.len() > func.params.len() {
         return Err(EvalError::function(format!(
             "SHACL-AF function <{iri}> expects {}..={} argument(s), got {}",
@@ -1211,8 +1763,14 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // evaluation then charges through the shared state, so a query cannot evade its
     // ceiling by moving work into a function.
     if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         return Ok(None);
+    }
+
+    if let Some(admission) = ctx.user_function_admission {
+        admission
+            .admit(func, body.query())
+            .map_err(|refusal| EvalError::FunctionAdmission(refusal.with_observer(admission)))?;
     }
 
     // The body is copied, rewritten and evaluated from here, wherever in the caller's
@@ -1226,14 +1784,14 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // test includes nested SPARQL functions; only a body that can mint needs the
     // parent's concrete identity reservations in its fresh computed-term table.
     if !child.pattern_is_parallel_safe(crate::eval::query_pattern(body.query())) {
-        child.scratch = ctx.scratch.fresh_for_user_function();
+        child.scratch = ctx.scratch.fresh_for_user_function_admitted(&ctx.growth)?;
         // Lazy indexing grows the parent and the copy retains its own labels.
         // Each arena owns a separate watermark against the same request budget.
         if let Err(tripped) = ctx
             .charge_scratch_growth()
             .and_then(|()| child.charge_scratch_growth())
         {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
     }
@@ -1248,7 +1806,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
         crate::eval::query_pattern(body.query()),
     ));
     let copied = body.query().clone();
-    let substituted = crate::substitute::apply_substitutions(
+    let substituted = crate::substitute::apply_shacl_prebinding(
         copied,
         crate::substitute::Prebindings::Owned(&substitutions),
     )
@@ -1263,16 +1821,18 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             // expression barrier, which makes the operator that owns the calling
             // expression withhold every row it produced â the same treatment an `EXISTS`
             // gets, for the same reason.
-            child.expression_barrier.record(certificate.tripped());
+            child.record_barrier(certificate.tripped());
             ctx.bnode_counter = child.bnode_counter;
             ctx.rng_state = child.rng_state;
             // The body's attestations survive the truncation for the same reason the
             // minted identity state does: a relation the body invoked really did serve
             // this query, and the caller's receipt is the only place that fact can land.
-            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
+            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
             return Ok(None);
         }
     };
+
+    let body_evidence = function_body_evidence(&outcome, &child)?;
 
     let result: Option<TermValue> = match (func.kind, outcome) {
         (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::boolean(value)),
@@ -1323,16 +1883,18 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // listConcat remain reachable in the enclosing query's results.
     ctx.bnode_counter = child.bnode_counter;
     ctx.rng_state = child.rng_state;
-    ctx.constructed.append(&mut child.constructed);
+    ctx.constructed
+        .append_admitted(&mut child.constructed, &ctx.growth)?;
     // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
     // other and may invoke a registered relation, so what that relation attested belongs
     // on the CALLING query's receipt â there is no second receipt for a function body.
-    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
+    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
 
     // `sh:returnType` is informational (SHACL-AF Â§5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
     // runtime datatype constraint would spuriously reject IRI/blank-node returns,
     // so it is retained on `UserFunction` for callers but NOT enforced here.
+    *evidence = body_evidence;
     Ok(result)
 }
 
@@ -1355,26 +1917,31 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity violation, on a panic inside the closure
-/// (converted to a fixed, payload-free error so the message is identical
-/// regardless of which worker thread panicked â mirrors the `native-codec-panic`
-/// guard in `purrdf_rdf::native_codecs::parse`), or propagated straight through
-/// from the closure's own `Err`. An arity violation stays hard on purpose: the call
+/// [`EvalError::Function`] on an arity violation, and [`EvalError::FunctionOperational`]
+/// on a caught panic or opaque host-returned failure. Panic messages stay fixed and
+/// payload-free across worker threads; more specific typed causes propagate unchanged.
+/// An arity violation stays hard on purpose: the call
 /// as written cannot be evaluated at all, which is a defect in the query text
 /// rather than a value this row happens not to have.
-pub(crate) fn eval_native_function(
+pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     native: &NativeFunction,
     iri: &str,
     args: &[Option<TermValue>],
-) -> Result<Option<TermValue>, EvalError> {
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let workspace = &ctx.growth;
     // Fail-fast: a wrong-count call never reaches the host closure with a short
     // or long slice.
     if !native.arity.accepts(args.len()) {
-        return Err(EvalError::function(format!(
-            "native function <{iri}> expects {} argument(s), got {}",
-            native.arity,
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "native function <{iri}> expects {} argument(s), got {}",
+                native.arity,
+                args.len()
+            ),
+            workspace,
+        ));
     }
 
     // A native function declares no per-parameter optionality: any unbound
@@ -1384,21 +1951,72 @@ pub(crate) fn eval_native_function(
     }
     // Lend the closure borrows into the caller's argument buffer â no per-call
     // deep clone of the (heap-string-owning) TermValues on the scoring hot path.
-    let values: Vec<&TermValue> = args
-        .iter()
-        .map(|arg| arg.as_ref().expect("checked all-Some above"))
-        .collect();
+    if workspace.is_bounded() && matches!(native.body, NativeBody::Resident(_)) {
+        return Err(EvalError::WorkspaceUnpriced(
+            "native function allocation contract",
+        ));
+    }
+    let mut values = AdmittedVec::with_capacity(args.len(), workspace)?;
+    for arg in args {
+        values.push(arg.as_ref().expect("checked all-Some above"))?;
+    }
 
     // Guard the host closure with catch_unwind: a panicking closure (dim
     // mismatch, unwrap, OOB index) must not abort a rayon worker or otherwise
     // surface nondeterministically. The error message is fixed and
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
-    match catch_unwind(AssertUnwindSafe(|| (native.body)(&values))) {
-        Ok(inner_result) => inner_result,
-        Err(_) => Err(EvalError::function(format!(
-            "native function <{iri}> panicked"
-        ))),
+    if let Err(stopped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
+        ctx.expression_barrier.record(stopped);
+        return Ok(None);
+    }
+    let (result, stopped, physical_failure) = metered_native_call(
+        ctx,
+        crate::governor::ChargePoint::NativeFunctionWork,
+        |context| {
+            let call = NativeFnCall {
+                iri,
+                args: &values,
+                context,
+                workspace,
+                geo: ctx.geo,
+            };
+            catch_unwind(AssertUnwindSafe(|| match &native.body {
+                NativeBody::Resident(body) => {
+                    body(&values).map(|value| value.map(WorkspaceTerm::resident))
+                }
+                NativeBody::Admitted(body) => body(&values, workspace),
+                NativeBody::Metered(body) => body(&call),
+                NativeBody::Standard(function) => {
+                    crate::geo::functions::evaluate_standard(*function, &call)
+                }
+            }))
+        },
+    );
+    // The actual physical account's first failure outranks an observed governor.
+    // Never render a second diagnostic after admission has already stopped.
+    if let Some(error) = physical_failure {
+        drop(result);
+        return Err(error);
+    }
+    if workspace.has_failed() {
+        return match result {
+            Ok(Err(error)) => Err(error),
+            _ => Err(EvalError::WorkspaceStopped),
+        };
+    }
+    if let Some(stopped) = stopped {
+        drop(result);
+        ctx.expression_barrier.record(stopped);
+        return Ok(None);
+    }
+    match result {
+        Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!("native function <{iri}> panicked"),
+            workspace,
+        )),
     }
 }
 
@@ -1433,35 +2051,53 @@ pub(crate) fn eval_native_function(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity violation, an absent focus graph, a depth-bound
-/// breach, or a panic inside the closure (converted to a fixed, payload-free error, as
-/// on the native path); propagates the closure's own `Err` unchanged.
+/// [`EvalError::Function`] on an arity violation or an absent focus graph, and
+/// [`EvalError::FunctionOperational`] on a depth-bound breach, a caught panic or an
+/// opaque host-returned failure. More specific typed causes propagate unchanged.
 pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     func: &ExprFunction,
     iri: &str,
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<TermValue>, EvalError> {
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let workspace = ctx.workspace.capability();
     if !func.arity.accepts(args.len()) {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> expects {} argument(s), got {}",
-            func.arity,
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "expression-bodied function <{iri}> expects {} argument(s), got {}",
+                func.arity,
+                args.len()
+            ),
+            &workspace,
+        ));
     }
     let Some(focus_graph) = ctx.focus_graph else {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
              against, and this query supplied none (QueryOptions::focus_graph); the call is \
              refused rather than answered from a graph it never read"
-        )));
+            ),
+            &workspace,
+        ));
     };
     let depth = ctx.udf_depth.saturating_add(1);
     if depth > crate::eval::MAX_UDF_DEPTH {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
-            crate::eval::MAX_UDF_DEPTH
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!(
+                "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
+                crate::eval::MAX_UDF_DEPTH
+            ),
+            &workspace,
+        ));
+    }
+    if workspace.is_bounded() && matches!(func.body, ExprBody::Resident(_)) {
+        return Err(EvalError::WorkspaceUnpriced(
+            "expression function allocation contract",
+        ));
     }
     let relations = core::cell::RefCell::new(RelationWitness::default());
     let call = ExprFnCall {
@@ -1474,11 +2110,16 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // The same `catch_unwind` contract the native path documents: a panicking host
     // closure must not abort a worker or surface nondeterministically, and the
     // message is fixed and payload-free so it does not depend on which thread ran.
-    let result = match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
-        Ok(inner_result) => inner_result,
-        Err(_) => Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> panicked"
-        ))),
+    let result = match catch_unwind(AssertUnwindSafe(|| match &func.body {
+        ExprBody::Resident(body) => body(&call).map(|value| value.map(WorkspaceTerm::resident)),
+        ExprBody::Admitted(body) => body(&call, &workspace),
+    })) {
+        Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!("expression-bodied function <{iri}> panicked"),
+            &workspace,
+        )),
     };
 
     // Whatever the body recorded reaches the caller's receipt, and it does so on
@@ -1488,10 +2129,45 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // attestation because the call errored would be the silent-drop this channel
     // exists to prevent, arriving through the failure path instead of the happy one.
     let witness = relations.into_inner();
-    if !witness.is_empty() {
-        ctx.absorb_worker_witnesses([witness]);
+    let witness_result = if witness.is_empty() {
+        Ok(())
+    } else {
+        ctx.absorb_worker_witnesses([witness])
+    };
+    // The original function failure wins over a derived receipt refusal.
+    result.and_then(|value| witness_result.map(|()| value))
+}
+
+fn function_body_evidence<D: DatasetView + Sync>(
+    outcome: &Outcome<D::Id>,
+    child: &EvalCtx<'_, D>,
+) -> Result<Option<crate::RowEvidence>, EvalError> {
+    let rows = match outcome {
+        Outcome::Solutions(rows) => Some(rows),
+        Outcome::Boolean(_) => child.evidence_answer.as_ref(),
+        Outcome::Graph(_) => None,
+    };
+    let Some(rows) = rows else {
+        return if child.evidence_input.is_some() {
+            Err(EvalError::internal(
+                "SPARQL function lost its original evidence rows",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    if !child.may_have_evidence()
+        && !rows.rows.may_have_evidence_attachment()
+        && rows.rows.search_evidence().is_virtual()
+    {
+        return Ok(None);
     }
-    result
+    child
+        .existential_evidence(
+            rows.rows.iter().map(crate::solution::RetainedRow::evidence),
+            rows.rows.search_evidence(),
+        )
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -1509,6 +2185,49 @@ mod tests {
         GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
         QueryOptions,
     };
+
+    #[test]
+    fn native_empty_ask_body_keeps_original_incomplete_search_like_exists() {
+        use purrdf_core::evidence::{
+            EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
+        };
+        use purrdf_lex::allocation::{Memory, Resident};
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let mut child = EvalCtx::new(&dataset);
+        let query = crate::QueryEvidence::new(&child.growth).unwrap();
+        let search = query
+            .retain(
+                &EvidenceRecord::from_parts(
+                    &InformationMap::default(),
+                    SearchCompleteness::Undetermined,
+                    &Frame::actual(),
+                    &[],
+                    &[],
+                    &mut Memory::new(&mut Resident),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let schema = crate::solution::VarSchema::default()
+            .shared_admitted(&child.growth)
+            .unwrap();
+        let mut rows = crate::solution::SolutionSeq::empty(schema);
+        rows.rows.retain_search_evidence(search.clone());
+        child.evidence_answer = Some(rows);
+        assert!(child.evidence_input.is_none());
+        let body = function_body_evidence(&Outcome::Boolean(false), &child)
+            .unwrap()
+            .unwrap();
+        let direct = child
+            .existential_evidence(std::iter::empty(), &search)
+            .unwrap();
+        assert!(body.same_attachment(&direct));
+        body.with_record(|record| {
+            assert_eq!(record.information().fallback(), Information::Neither);
+            assert_eq!(record.completeness(), SearchCompleteness::Undetermined);
+        })
+        .unwrap();
+    }
 
     const EX_INC: &str = "http://example.org/ns#inc";
     const EX_EVEN: &str = "http://example.org/ns#isEven";
@@ -1689,10 +2408,614 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    mod invocation_admission {
+        use super::*;
+
+        #[derive(Debug)]
+        struct InvocationCause(Arc<str>, Option<Arc<std::sync::atomic::AtomicU64>>);
+
+        impl core::fmt::Display for InvocationCause {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                // Fault injection happens after raw evaluator reduction and at
+                // diagnostic rendering, before the final carrier checkpoint.
+                if let Some(generation) = &self.1 {
+                    generation.store(9, std::sync::atomic::Ordering::Relaxed);
+                }
+                f.write_str("invocation refused")
+            }
+        }
+
+        impl std::error::Error for InvocationCause {}
+
+        /// A native-only admission oracle. All refused bodies have the same Display
+        /// message; the observer must recover their actual typed body identities.
+        struct InvocationCall {
+            parameters: Vec<String>,
+            thread: std::thread::ThreadId,
+        }
+
+        #[derive(Default)]
+        struct InvocationLaw {
+            refused: Vec<Arc<str>>,
+            calls: std::sync::Mutex<Vec<InvocationCall>>,
+            observed: std::sync::Mutex<Vec<Arc<str>>>,
+            concurrent_calls: Option<std::sync::Barrier>,
+            source_generation: Option<Arc<std::sync::atomic::AtomicU64>>,
+        }
+
+        impl UserFunctionAdmission for InvocationLaw {
+            fn admit(
+                &self,
+                function: &UserFunction,
+                query: &purrdf_sparql_algebra::Query,
+            ) -> Result<(), UserFunctionRefusal> {
+                let parsed = purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(&function.body)
+                    .expect("fixture body parses without substitutions");
+                assert_eq!(query, &parsed, "admission must see the original query");
+                self.calls.lock().expect("calls").push(InvocationCall {
+                    parameters: function.params.iter().map(|p| p.var.clone()).collect(),
+                    thread: std::thread::current().id(),
+                });
+                if let Some(barrier) = &self.concurrent_calls {
+                    barrier.wait();
+                }
+                if self.refused.contains(&function.body) {
+                    Err(UserFunctionRefusal::new(InvocationCause(
+                        Arc::clone(&function.body),
+                        self.source_generation.clone(),
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn observe_refusal(&self, refusal: &UserFunctionRefusal) {
+                let exact = refusal
+                    .cause()
+                    .downcast_ref::<InvocationCause>()
+                    .expect("exact invocation cause survives the evaluator");
+                self.observed
+                    .lock()
+                    .expect("observed")
+                    .push(Arc::clone(&exact.0));
+            }
+        }
+
+        #[test]
+        fn invocation_refusal_retains_exact_source_and_clone_identity() {
+            use std::error::Error;
+            let first = UserFunctionRefusal::new(InvocationCause(body_text("first"), None));
+            let same = first.clone();
+            let other = UserFunctionRefusal::new(InvocationCause(body_text("second"), None));
+            assert_eq!(first, same);
+            assert_ne!(first, other);
+            assert_eq!(first.to_string(), other.to_string());
+            let error = EvalError::FunctionAdmission(first);
+            assert_eq!(error.clone(), error);
+            assert_eq!(error.diagnostic_code(), None);
+            assert_eq!(
+                crate::protocol::FailureCode::from(&error),
+                crate::protocol::FailureCode::Evaluation
+            );
+            assert_eq!(
+                error
+                    .source()
+                    .expect("source")
+                    .downcast_ref::<InvocationCause>()
+                    .expect("typed cause")
+                    .0
+                    .as_ref(),
+                "first"
+            );
+        }
+
+        #[test]
+        fn invocation_law_observes_actual_calls_and_all_optional_parameters() {
+            let body = body_text("SELECT (?n AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            registry.insert(
+                EX_INC,
+                UserFunction {
+                    params: vec![int_param("n"), int_param("optional")],
+                    required: 1,
+                    body: Arc::clone(&body),
+                    kind: UserFnBody::Select,
+                    return_constraint: TypeConstraint::default(),
+                },
+            );
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![body],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let dataset = empty_dataset();
+            let engine = NativeSparqlEngine::new();
+            for projection in [
+                format!("IF(false, <{EX_INC}>(1), 7)"),
+                format!("<{EX_INC}>(?missing)"),
+            ] {
+                let query = format!("SELECT ({projection} AS ?v) WHERE {{}}");
+                engine
+                    .query_with_options_view(
+                        &dataset,
+                        SparqlRequest {
+                            query: &query,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        QueryOptions::EMPTY
+                            .with_functions(&bound)
+                            .with_user_function_admission(&law),
+                    )
+                    .expect("not invoked");
+            }
+            assert!(exact.calls.lock().expect("calls").is_empty());
+            assert!(exact.observed.lock().expect("observed").is_empty());
+            let query = format!("SELECT (<{EX_INC}>(3) AS ?v) WHERE {{}}");
+            let request = SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            };
+            engine
+                .query_with_options_view(
+                    &dataset,
+                    request,
+                    QueryOptions::EMPTY.with_functions(&bound),
+                )
+                .expect("ordinary execution has no admission callback");
+            assert!(exact.calls.lock().expect("calls").is_empty());
+            engine
+                .query_with_options_view(
+                    &dataset,
+                    request,
+                    QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law),
+                )
+                .expect_err("actual invocation refuses");
+            let calls = exact.calls.lock().expect("calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].parameters, ["n", "optional"]);
+            assert_eq!(exact.observed.lock().expect("observed").len(), 1);
+        }
+
+        struct InvocationSource {
+            page: Arc<RdfDataset>,
+            generation: Arc<std::sync::atomic::AtomicU64>,
+        }
+
+        impl purrdf_core::PageProvider for InvocationSource {
+            fn page_count(&self) -> u64 {
+                1
+            }
+
+            fn generation(&self) -> purrdf_core::PageGeneration {
+                purrdf_core::PageGeneration(
+                    self.generation.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            }
+
+            fn materialize(
+                &self,
+                _: purrdf_core::PageId,
+            ) -> Result<purrdf_core::PageMaterialization, purrdf_core::PageFault> {
+                Ok(purrdf_core::PageMaterialization::new(
+                    Arc::clone(&self.page),
+                    purrdf_core::PageProvider::generation(self),
+                    0,
+                ))
+            }
+        }
+
+        /// The provider changes generation while rendering the selected query
+        /// diagnostic, after raw evaluation has returned. No data page is read:
+        /// the actual final carrier checkpoint must select the source failure
+        /// over that diagnostic and withhold its losing invocation capsule.
+        #[test]
+        fn invocation_observation_waits_for_final_source_checkpoint() {
+            use crate::{FallibleSparqlError, GovernorState, QueryGovernors};
+            use purrdf_core::{PageGeneration, PagedDataset, PagedQueryError, PagedQueryLimits};
+
+            let body = body_text("SELECT (11 AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            registry.insert(
+                EX_INC,
+                UserFunction {
+                    body: Arc::clone(&body),
+                    ..select_body_function()
+                },
+            );
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let query = format!("SELECT (<{EX_INC}>() AS ?v) WHERE {{}}");
+            let construct = format!(
+                "CONSTRUCT {{ <http://example.org/s> <http://example.org/p> ?v }} WHERE {{ BIND(<{EX_INC}>() AS ?v) }}"
+            );
+            let engine = NativeSparqlEngine::new();
+            let prepared = engine.prepare_query(&query, None).expect("prepared query");
+            let graph = engine
+                .prepare_query(&construct, None)
+                .expect("prepared graph");
+            for entry in [
+                "query",
+                "prepared",
+                "governed",
+                "prepared-governed",
+                "operation",
+                "explain",
+                "execute",
+                "construct",
+            ] {
+                for fail_source in [false, true] {
+                    let generation = Arc::new(std::sync::atomic::AtomicU64::new(8));
+                    let paged = PagedDataset::from_provider(Arc::new(InvocationSource {
+                        page: empty_dataset(),
+                        generation: Arc::clone(&generation),
+                    }))
+                    .expect("seal source at generation eight");
+                    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+                    let exact = Arc::new(InvocationLaw {
+                        refused: vec![Arc::clone(&body)],
+                        source_generation: fail_source.then(|| Arc::clone(&generation)),
+                        ..InvocationLaw::default()
+                    });
+                    let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+                    let options = QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law);
+                    let request = SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    };
+                    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+                    let error = match entry {
+                        "query" => engine
+                            .query_fallible_view(&view, request, options)
+                            .map(|_| ()),
+                        "prepared" => engine
+                            .query_prepared_fallible_view(&view, &prepared, &[], options)
+                            .map(|_| ()),
+                        "governed" => engine
+                            .query_governed_fallible_view(
+                                &view,
+                                request,
+                                options,
+                                &QueryGovernors::METERED,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        "prepared-governed" => engine
+                            .query_prepared_governed_fallible_view(
+                                &view,
+                                &prepared,
+                                &[],
+                                options,
+                                &QueryGovernors::METERED,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        "operation" => engine
+                            .query_prepared_governed_fallible_in_operation(
+                                &view,
+                                &prepared,
+                                &[],
+                                options,
+                                &state,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        "explain" => engine
+                            .explain_query_with_options_fallible_view(&view, &query, None, options)
+                            .map(|_| ()),
+                        "execute" => {
+                            let mut execution = engine
+                                .prepare_execution(&query, None, &[], options)
+                                .expect("prepared execution");
+                            engine
+                                .execute_fallible(&mut execution, &view, options, |_| ())
+                                .map(|_| ())
+                        }
+                        "construct" => engine
+                            .construct_prepared_fallible_in_operation_into_view(
+                                &view,
+                                &graph,
+                                &[],
+                                options,
+                                &state,
+                                &mut RdfDatasetBuilder::new(),
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        _ => unreachable!("the entries above name actual public execution doors"),
+                    }
+                    .expect_err("invocation or its final source checkpoint refuses");
+                    assert_eq!(exact.calls.lock().expect("calls").len(), 1, "{entry}");
+                    assert!(error.evidence().requested_pages.is_empty(), "{entry}");
+                    if fail_source {
+                        assert!(
+                            matches!(
+                                error,
+                                FallibleSparqlError::Operational {
+                                    error: PagedQueryError::StaleGeneration {
+                                        page: None,
+                                        expected: PageGeneration(8),
+                                        actual: PageGeneration(9),
+                                    },
+                                    ..
+                                }
+                            ),
+                            "{entry}: {error:?}"
+                        );
+                        assert!(
+                            exact.observed.lock().expect("observed").is_empty(),
+                            "{entry}: source failure must discard the losing query cause"
+                        );
+                    } else {
+                        assert!(
+                            matches!(error, FallibleSparqlError::Query { .. }),
+                            "{entry}: {error:?}"
+                        );
+                        assert_eq!(
+                            *exact.observed.lock().expect("observed"),
+                            [Arc::clone(&body)],
+                            "{entry}: ready source publishes the exact invocation cause"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn invocation_law_is_inherited_by_nested_function_children() {
+            let inner = body_text("SELECT (11 AS ?result) WHERE {}");
+            let outer = body_text(&format!("SELECT (<{EX_INC}>() AS ?result) WHERE {{}}"));
+            let mut registry = UserFunctionRegistry::default();
+            for (iri, body) in [(EX_INC, Arc::clone(&inner)), (EX_LOOP, outer)] {
+                registry.insert(
+                    iri,
+                    UserFunction {
+                        body,
+                        ..select_body_function()
+                    },
+                );
+            }
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![Arc::clone(&inner)],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let query = format!("SELECT (<{EX_LOOP}>() AS ?v) WHERE {{}}");
+            NativeSparqlEngine::new()
+                .query_with_options_view(
+                    &empty_dataset(),
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law),
+                )
+                .expect_err("nested invocation refuses");
+            assert_eq!(exact.calls.lock().expect("calls").len(), 2);
+            assert_eq!(*exact.observed.lock().expect("observed"), [inner]);
+        }
+
+        /// Exercise the production indexed worker primitive with actual forked
+        /// evaluator contexts. Ordinary group routing remains conservative: a
+        /// SPARQL-bodied function is not made parallel-safe by this admission hook.
+        #[test]
+        fn invocation_worker_errors_select_exact_canonical_cause_before_observation() {
+            let first = body_text("SELECT (11 AS ?result) WHERE {}");
+            let second = body_text("SELECT (22 AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            for (iri, body) in [(EX_INC, Arc::clone(&first)), (EX_EVEN, Arc::clone(&second))] {
+                registry.insert(
+                    iri,
+                    UserFunction {
+                        body,
+                        ..select_body_function()
+                    },
+                );
+            }
+            registry.register_native(
+                EX_NATIVE_ERR,
+                Arity::Exact(0),
+                Volatility::Stable,
+                Arc::new(|_| Err(EvalError::function("earlier host failure"))),
+            );
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let dataset = empty_dataset();
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .expect("two-worker test pool");
+            for (iris, expected) in [([EX_INC, EX_EVEN], &first), ([EX_EVEN, EX_INC], &second)] {
+                let exact = Arc::new(InvocationLaw {
+                    refused: vec![Arc::clone(&first), Arc::clone(&second)],
+                    concurrent_calls: Some(std::sync::Barrier::new(2)),
+                    ..InvocationLaw::default()
+                });
+                let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+                let queries: Vec<_> = iris
+                    .into_iter()
+                    .map(|iri| {
+                        purrdf_sparql_algebra::SparqlParser::new()
+                            .parse_query(&format!("SELECT (<{iri}>() AS ?v) WHERE {{}}"))
+                            .expect("worker query parses")
+                    })
+                    .collect();
+                let error = pool.install(|| {
+                    let _parallel = crate::parallel::force_parallel_for_test(true);
+                    let _chunk = crate::parallel::force_chunk_size_for_test(1);
+                    let parent = EvalCtx::new(&dataset)
+                        .with_user_functions(&bound)
+                        .with_user_function_admission(Some(&law));
+                    let result: Result<(Vec<()>, purrdf_core::SmallVec<[(); 1]>), EvalError> =
+                        crate::parallel::par_chunk_try_map_init(
+                            false,
+                            &queries,
+                            || {
+                                parent
+                                    .fork_for_worker()
+                                    .expect("resident worker owner admission")
+                            },
+                            |child, _rows, query| {
+                                evaluate_query_evaluated(query, child)?;
+                                Ok(())
+                            },
+                            |_| (),
+                        );
+                    result.expect_err("both worker queries refuse")
+                });
+                let calls = exact.calls.lock().expect("calls");
+                assert_eq!(calls.len(), 2);
+                assert_ne!(
+                    calls[0].thread, calls[1].thread,
+                    "actual distinct workers invoked admission"
+                );
+                assert!(
+                    exact.observed.lock().expect("observed").is_empty(),
+                    "workers do not publish diagnostic causes"
+                );
+                let EvalError::FunctionAdmission(ref refusal) = error else {
+                    panic!("expected retained invocation refusal, got {error:?}");
+                };
+                assert_eq!(
+                    &refusal
+                        .cause()
+                        .downcast_ref::<InvocationCause>()
+                        .expect("typed worker cause")
+                        .0,
+                    expected
+                );
+                assert_eq!(
+                    crate::engine::eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                    "native-sparql-query-eval"
+                );
+                assert_eq!(
+                    *exact.observed.lock().expect("observed"),
+                    [Arc::clone(expected)]
+                );
+            }
+
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![Arc::clone(&second)],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let queries: Vec<_> = [EX_NATIVE_ERR, EX_EVEN]
+                .into_iter()
+                .map(|iri| {
+                    purrdf_sparql_algebra::SparqlParser::new()
+                        .parse_query(&format!("SELECT (<{iri}>() AS ?v) WHERE {{}}"))
+                        .expect("worker query parses")
+                })
+                .collect();
+            let error = pool.install(|| {
+                let _parallel = crate::parallel::force_parallel_for_test(true);
+                let _chunk = crate::parallel::force_chunk_size_for_test(1);
+                let parent = EvalCtx::new(&dataset)
+                    .with_user_functions(&bound)
+                    .with_user_function_admission(Some(&law));
+                let result: Result<(Vec<()>, purrdf_core::SmallVec<[(); 1]>), EvalError> =
+                    crate::parallel::par_chunk_try_map_init(
+                        false,
+                        &queries,
+                        || {
+                            parent
+                                .fork_for_worker()
+                                .expect("resident worker owner admission")
+                        },
+                        |child, _rows, query| {
+                            evaluate_query_evaluated(query, child)?;
+                            Ok(())
+                        },
+                        |_| (),
+                    );
+                result.expect_err("earlier host worker fails")
+            });
+            assert_eq!(
+                error,
+                EvalError::function_operational("earlier host failure")
+            );
+            assert_eq!(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                EvalError::FUNCTION_OPERATIONAL_CODE
+            );
+            assert_eq!(exact.calls.lock().expect("calls").len(), 1);
+            assert!(
+                exact.observed.lock().expect("observed").is_empty(),
+                "losing typed worker cause must not replace the earlier failure"
+            );
+        }
+
+        #[test]
+        fn ordinary_group_routing_keeps_sparql_functions_serial_and_observes_actual_error() {
+            let first = body_text("SELECT (11 AS ?result) WHERE {}");
+            let second = body_text("SELECT (22 AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            for (iri, body) in [(EX_INC, Arc::clone(&first)), (EX_EVEN, Arc::clone(&second))] {
+                registry.insert(
+                    iri,
+                    UserFunction {
+                        body,
+                        ..select_body_function()
+                    },
+                );
+            }
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![Arc::clone(&first), Arc::clone(&second)],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let query = format!(
+                "SELECT ?g (SUM(IF(?g = 1, <{EX_INC}>(), <{EX_EVEN}>())) AS ?v) WHERE {{ VALUES ?g {{ 1 2 }} }} GROUP BY ?g"
+            );
+            let parsed = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(&query)
+                .expect("group parses");
+            let dataset = empty_dataset();
+            let context = EvalCtx::new(&dataset)
+                .with_user_functions(&bound)
+                .with_user_function_admission(Some(&law));
+            assert!(
+                !context.pattern_is_parallel_safe(crate::eval::query_pattern(&parsed)),
+                "admission must not weaken the existing function safety gate"
+            );
+            let caller = std::thread::current().id();
+            let _parallel = crate::parallel::force_parallel_for_test(true);
+            NativeSparqlEngine::new()
+                .query_with_options_view(
+                    &dataset,
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law),
+                )
+                .expect_err("first actual function refuses");
+            let calls = exact.calls.lock().expect("calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].thread, caller);
+            assert_eq!(*exact.observed.lock().expect("observed"), [first]);
+        }
+    }
+
     // ── the pre-binding soundness envelope at THIS call site ──────────────────
     //
     // [`eval_user_function`] pre-binds a call's arguments into the declared body
-    // through `crate::substitute::apply_substitutions`. It is the third of the
+    // through `crate::substitute::apply_shacl_prebinding`. It is the third of the
     // three pre-binding call sites, and it was the one with no envelope coverage:
     // the engine's `&str` query door (`crate::engine`'s `prebinding_*` tests) and
     // the prepared handle (`tests/prepared_execution.rs`) each pin this envelope
@@ -1717,7 +3040,7 @@ mod tests {
     // as a local and hands it straight to evaluation, exposing no algebra to assert
     // on, so an answer-shaped test for that clause here would pass whether or not
     // the rule held — a test that cannot fail for the reason it states. The clause
-    // is a property of `apply_substitutions` itself, and this site calls that very
+    // is a property of `apply_shacl_prebinding` itself, and this site calls that very
     // function, so it is pinned where it is observable and not restated where it is
     // not.
 
@@ -1813,17 +3136,12 @@ mod tests {
     }
 
     #[test]
-    fn a_user_function_argument_is_not_pushed_into_an_optional_right_arm() {
-        // `?s :p ?o OPTIONAL { ?s :p ?n }` with the argument :x.
-        //
-        // The right arm binds ?n to each subject's own object, so only :a's row
-        // carries ?n = :x and only it survives the seed join: ONE row.
-        //
-        // Restricting the right arm to `?s :p <x>` instead would leave it matching
-        // only :a; :b and the blank subject would become OPTIONAL MISSES, be
-        // null-padded with ?n UNBOUND, and an unbound cell is compatible with the
-        // seed — so all THREE rows would survive. Three against one: the divergence
-        // is the whole answer, not a rounding of it.
+    fn a_user_function_argument_reaches_an_optional_right_arm() {
+        // `?s :p ?o OPTIONAL { ?s :p ?n }` with the argument :x is
+        // `?s :p ?o OPTIONAL { ?s :p :x }` — the argument is one value at every depth,
+        // as every pre-binding lane binds it: :a matches the arm, :b and the blank
+        // subject are kept null-padded, so THREE rows. Reading ?n from the arm's data
+        // and joining the argument afterwards would keep one.
         let count = probe_count(
             &["n"],
             &format!(
@@ -1831,21 +3149,15 @@ mod tests {
             ),
             &format!("<{ENV}x>"),
         );
-        assert_eq!(
-            count, 1,
-            "only the subject whose object IS :x survives the seed join; 3 would mean \
-             the pushdown entered the OPTIONAL and turned matches into null-padded misses"
-        );
+        assert_eq!(count, 3, "every left row survives the OPTIONAL");
     }
 
     #[test]
-    fn a_user_function_argument_is_not_pushed_into_a_minus_right_arm() {
-        // `?s :p ?o MINUS { ?s :p ?n }` with the argument :x.
-        //
-        // The right arm produces one row per subject and shares ?s with the left, so
-        // MINUS removes EVERY left row: the count is zero. Restricting the right arm
-        // to `?s :p <x>` would leave it matching only :a, so :b and the blank subject
-        // would survive — two where the algebra says none.
+    fn a_user_function_argument_reaches_a_minus_right_arm() {
+        // `?s :p ?o MINUS { ?s :p ?n }` with the argument :x is
+        // `?s :p ?o MINUS { ?s :p :x }`: only :a has a compatible right row, so :b and
+        // the blank subject survive — TWO. Reading ?n from the arm's data would remove
+        // every row.
         let count = probe_count(
             &["n"],
             &format!(
@@ -1853,11 +3165,7 @@ mod tests {
             ),
             &format!("<{ENV}x>"),
         );
-        assert_eq!(
-            count, 0,
-            "every left row has a compatible right row, so MINUS removes all of them; \
-             a non-zero count would mean the pushdown narrowed the right arm"
-        );
+        assert_eq!(count, 2, "MINUS removes only :a");
     }
 
     #[test]
@@ -2340,6 +3648,7 @@ mod tests {
             err.to_string().contains("recursion"),
             "expected recursion-bound error, got {err}"
         );
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
     }
 
     #[test]
@@ -2806,6 +4115,7 @@ mod tests {
         }
         let err = run(crate::eval::MAX_UDF_DEPTH).expect_err("the ceiling must be enforced");
         assert!(err.to_string().contains("depth bound"), "got: {err}");
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
     }
 
     /// One IRI cannot be two function kinds at once: registering an
@@ -2992,10 +4302,74 @@ mod tests {
             err.to_string().contains("boom"),
             "expected the closure's own message to propagate, got {err}"
         );
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_and_expression_bodies_preserve_returned_failure_identity() {
+        use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+        let ds = empty_dataset();
+        let query = format!("SELECT (<{EX_NATIVE_ERR}>() AS ?v) WHERE {{}}");
+        for (expected, code) in [
+            (
+                EvalError::function("opaque host refusal"),
+                EvalError::FUNCTION_OPERATIONAL_CODE,
+            ),
+            (
+                EvalError::source_read("source refused"),
+                "native-sparql-source-read",
+            ),
+            (
+                EvalError::XPathRegex(Error::Allocation {
+                    resource: Resource::MatchSlots,
+                    units: 1,
+                }),
+                Resource::MatchSlots.code(),
+            ),
+        ] {
+            for expression_body in [false, true] {
+                let mut registry = UserFunctionRegistry::default();
+                let body_error = expected.clone();
+                if expression_body {
+                    registry.register_expr(
+                        EX_NATIVE_ERR,
+                        Arity::Exact(0),
+                        Arc::new(move |_call: &ExprFnCall<'_>| Err(body_error.clone())),
+                    );
+                } else {
+                    registry.register_native(
+                        EX_NATIVE_ERR,
+                        Arity::Exact(0),
+                        Volatility::Stable,
+                        Arc::new(move |_args: &[&TermValue]| Err(body_error.clone())),
+                    );
+                }
+                let functions = BoundFunctionRegistry::bound_for_test(registry);
+                let error = NativeSparqlEngine::new()
+                    .query_with_options_view(
+                        &ds,
+                        SparqlRequest {
+                            query: &query,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        QueryOptions {
+                            functions: &functions,
+                            focus_graph: Some(&ds),
+                            ..QueryOptions::EMPTY
+                        },
+                    )
+                    .expect_err("host refusal aborts the query");
+                assert_eq!(error.code, code, "expression body: {expression_body}");
+                assert_eq!(error.message, expected.to_string());
+            }
+        }
     }
 
     /// A panic inside a native closure is caught and converted to a clean,
-    /// deterministic [`EvalError::Function`] â the query fails cleanly rather than
+    /// deterministic [`EvalError::FunctionOperational`] â the query fails cleanly rather than
     /// aborting the test process.
     #[test]
     fn native_function_panic_is_a_clean_error() {
@@ -3031,6 +4405,7 @@ mod tests {
 
         std::panic::set_hook(default_hook);
 
+        assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
         assert!(
             err.to_string().contains("panicked"),
             "expected a clean 'panicked' error, got {err}"
@@ -3071,6 +4446,7 @@ mod tests {
                 },
             )
             .expect_err("arity mismatch must fail");
+        assert_eq!(err.code, "native-sparql-query-eval");
         assert!(
             err.to_string().contains("expects"),
             "expected arity error, got {err}"

@@ -53,10 +53,10 @@ impl NamedNode {
         Ok(Self { iri })
     }
 
-    /// Wrap an IRI without validation (a static/already-validated IRI).
-    pub fn new_unchecked(iri: impl Into<String>) -> Self {
-        Self { iri: iri.into() }
-    }
+    purrdf_lex::constructors!(@items
+        /// Wrap an IRI without validation (a static/already-validated IRI).
+        pub fn new_unchecked(iri) -> Self { .. };
+    );
 
     /// The IRI lexical form.
     pub fn as_str(&self) -> &str {

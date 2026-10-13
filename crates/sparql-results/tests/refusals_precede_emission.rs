@@ -26,7 +26,8 @@ fn solutions(variables: &[&str], rows: Vec<Vec<Option<TermValue>>>) -> SparqlRes
         rows,
         aux: RdfDatasetBuilder::new()
             .freeze()
-            .expect("empty aux dataset"),
+            .expect("empty aux dataset")
+            .into(),
     }
 }
 
@@ -152,7 +153,8 @@ fn srx_refuses_a_graph_and_spares_the_kinds_it_defines() {
     let graph = SparqlResult::Graph(
         RdfDatasetBuilder::new()
             .freeze()
-            .expect("an empty dataset freezes"),
+            .expect("an empty dataset freezes")
+            .into(),
     );
     let rendered = to_xml(&graph, &provenance, None)
         .expect_err("SRX must refuse a CONSTRUCT graph")

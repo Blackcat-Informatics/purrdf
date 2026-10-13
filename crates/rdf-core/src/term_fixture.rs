@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::ir::{QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 use crate::{
-    BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfStoreCapabilities, RdfTextDirection,
-    TermBox, TermValue, ViewOperationStatus,
+    BlankScope, DatasetView, GraphMatch, RdfStoreCapabilities, RdfTextDirection, TermBox,
+    TermValue, ViewOperationStatus,
 };
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
@@ -120,27 +120,16 @@ pub type Triple = (TermValue, TermValue, TermValue);
 /// Intern one dataset-independent value into `builder`, triple terms included: the
 /// by-value inverse every paged and packed fixture builds its pages with.
 pub fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-    match value {
-        TermValue::Iri(iri) => builder.intern_iri(iri),
-        TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => builder.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_value(builder, s);
-            let p = intern_value(builder, p);
-            let o = intern_value(builder, o);
-            builder.intern_triple(s, p, o)
-        }
-    }
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut resident = Resident;
+    let mut memory = Memory::resume(
+        &mut resident,
+        builder
+            .interner_buffer_bytes()
+            .expect("resident interner layout"),
+    );
+    intern_value_with_memory(builder, value, &mut memory)
+        .expect("resident term interning allocation failed")
 }
 
 /// Freeze one page (or a single reference dataset) from `triples`, all in the
@@ -429,6 +418,67 @@ impl RowBudget {
     pub fn read_error(&self) -> Option<ProbeFault> {
         self.status().error().cloned()
     }
+}
+
+/// Intern borrowed values at their original producer, including every triple
+/// component. Temporary walk arrays die before their original admission shrinks.
+///
+/// # Errors
+/// Returns physical layout, admission or allocator refusal.
+pub fn intern_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    builder: &mut RdfDatasetBuilder,
+    value: &TermValue,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<TermId, purrdf_lex::allocation::StorageError> {
+    enum Step<'a> {
+        Enter(&'a TermValue),
+        Assemble,
+    }
+    let mut steps = Vec::new();
+    let mut answers = Vec::new();
+    memory.push(&mut steps, Step::Enter(value))?;
+    while let Some(step) = steps.pop() {
+        let answer = match step {
+            Step::Enter(TermValue::Triple { s, p, o }) => {
+                for next in [
+                    Step::Assemble,
+                    Step::Enter(o),
+                    Step::Enter(p),
+                    Step::Enter(s),
+                ] {
+                    memory.push(&mut steps, next)?;
+                }
+                continue;
+            }
+            Step::Enter(TermValue::Iri(iri)) => builder.intern_iri_with_memory(iri, memory)?,
+            Step::Enter(TermValue::Blank { label, scope }) => {
+                builder.intern_blank_with_memory(label, *scope, memory)?
+            }
+            Step::Enter(TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            }) => builder.intern_literal_parts_with_memory(
+                lexical_form,
+                Some(datatype),
+                language.as_deref(),
+                *direction,
+                memory,
+            )?,
+            Step::Assemble => {
+                let o = answers.pop().expect("the object has been interned");
+                let p = answers.pop().expect("the predicate has been interned");
+                let s = answers.pop().expect("the subject has been interned");
+                builder.intern_triple_with_memory(s, p, o, memory)?
+            }
+        };
+        memory.push(&mut answers, answer)?;
+    }
+    let output = answers.pop().expect("the root has been interned");
+    memory.release_vec(answers)?;
+    memory.release_vec(steps)?;
+    Ok(output)
 }
 
 #[cfg(test)]

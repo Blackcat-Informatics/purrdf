@@ -96,15 +96,39 @@ impl LineIndex {
     /// feed found by [`purrdf_lex::scan::find_byte`].
     #[must_use]
     pub fn new(src: &str) -> Self {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        Self::new_with_memory(src, &mut memory).expect("resident source positions")
+    }
+
+    /// Build the same newline table under original physical admission.
+    ///
+    /// # Errors
+    /// Returns checked storage overflow, admission refusal or allocator refusal.
+    pub fn new_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        src: &str,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
         let bytes = src.as_bytes();
-        let mut line_starts = Vec::with_capacity(bytes.len() / 32 + 1);
-        line_starts.push(0);
+        let mut line_starts = Vec::new();
+        memory.push(&mut line_starts, 0)?;
         let mut at = 0;
         while let Some(offset) = purrdf_lex::scan::find_byte(&bytes[at..], b'\n') {
             at += offset + 1;
-            line_starts.push(at);
+            memory.push(&mut line_starts, at)?;
         }
-        Self { line_starts }
+        Ok(Self { line_starts })
+    }
+
+    /// Destroy the newline table before releasing its original physical owner.
+    ///
+    /// # Errors
+    /// Returns an accounting invariant or shrink refusal.
+    pub fn release_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        memory.release_vec(self.line_starts)
     }
 
     /// Resolve `byte_offset` to a 1-based [`Position`].

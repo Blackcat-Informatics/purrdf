@@ -275,6 +275,57 @@ fn an_assigned_blank_node_is_fresh_per_solution() {
     );
 }
 
+/// Independent positive components remain a multiplicity barrier for opaque
+/// minting guards. Both kinds of blank mint run once per logical solution, even
+/// when a head mentions only one component; an empty component mints nothing.
+#[test]
+fn independent_guarded_components_preserve_both_blank_mints() {
+    let rule =
+        "RULE { _:h :of ?s ; :assigned ?b } WHERE { ?s :p ?o . ?x :q ?y SET(?b := BNODE()) }";
+    for independent in [":c :q 3 . :d :q 4 .", ""] {
+        let inferred =
+            infer(rule, &format!(":a :p 1 . :b :p 2 . {independent}")).expect("evaluates");
+        let expected = if independent.is_empty() { 0 } else { 4 };
+        let of: Vec<_> = inferred
+            .iter()
+            .filter(|[_, p, _]| *p == iri("of"))
+            .collect();
+        let assigned: Vec<_> = inferred
+            .iter()
+            .filter(|[_, p, _]| *p == iri("assigned"))
+            .collect();
+        assert_eq!(of.len(), expected, "{inferred:?}");
+        assert_eq!(assigned.len(), expected, "{inferred:?}");
+        let heads: std::collections::BTreeSet<_> =
+            of.iter().map(|triple| triple[0].to_string()).collect();
+        let minted: std::collections::BTreeSet<_> = assigned
+            .iter()
+            .map(|triple| triple[2].to_string())
+            .collect();
+        assert_eq!(heads.len(), expected);
+        assert_eq!(minted.len(), expected);
+        assert!(
+            heads.is_disjoint(&minted),
+            "FreshBlank and Assign share mint state without collisions"
+        );
+        for triple in assigned {
+            assert!(heads.contains(&triple[0].to_string()));
+        }
+    }
+}
+
+/// An assignment creates a surface absent from the model; negation must probe
+/// that computed value, not an unbound variable or an interned-only shortcut.
+#[test]
+fn computed_assignment_values_reach_negative_patterns() {
+    let inferred = infer(
+        "RULE { ?s :allowed ?n } WHERE { ?s :p ?o SET(?n := ?o + 1) NOT { ?s :blocked ?n } }",
+        ":a :p 1 ; :blocked 2 . :b :p 2 ; :blocked 99 .",
+    )
+    .expect("computed negative probes evaluate");
+    assert_eq!(inferred, [[iri("b"), iri("allowed"), int(3)]]);
+}
+
 /// A data block's blank node is not the base graph's blank node of the same label.
 #[test]
 fn data_block_blank_nodes_are_standardized_apart() {

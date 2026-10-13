@@ -380,21 +380,44 @@ pub fn walk_rdf_list<Id: Copy + Eq>(
     first: impl FnMut(Id) -> SoleObject<Id>,
     rest: impl FnMut(Id) -> SoleObject<Id>,
 ) -> Result<Vec<Id>, ListError<Id>> {
+    walk_rdf_list_with_memory(
+        head,
+        nil,
+        first,
+        rest,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident RDF list collection")
+}
+
+/// Collect the same strict iterator with before-growth physical admission.
+/// Its returned members, including a malformed prefix, remain in the original
+/// memory until the caller destroys them.
+///
+/// # Errors
+/// Returns native storage refusal separately from malformed collection input.
+pub fn walk_rdf_list_with_memory<Id: Copy + Eq, S: purrdf_lex::allocation::Admission + ?Sized>(
+    head: Id,
+    nil: Option<Id>,
+    first: impl FnMut(Id) -> SoleObject<Id>,
+    rest: impl FnMut(Id) -> SoleObject<Id>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<Result<Vec<Id>, ListError<Id>>, purrdf_lex::allocation::StorageError> {
     let mut members = Vec::new();
     for item in RdfListWalk::new(head, nil, first, rest) {
         match item {
-            Ok(member) => members.push(member),
+            Ok(member) => memory.push(&mut members, member)?,
             Err(fault) => {
                 members.truncate(fault.members);
-                return Err(ListError {
+                return Ok(Err(ListError {
                     kind: fault.kind,
                     members,
                     node: fault.node,
-                });
+                }));
             }
         }
     }
-    Ok(members)
+    Ok(Ok(members))
 }
 
 /// Where a cycle of length `length` on the `rdf:rest` chain from `head`
@@ -525,29 +548,48 @@ where
 pub fn try_build_rdf_list<T, I, E>(
     members: I,
     vocab: &ListVocab<T>,
-    mut cell: impl FnMut(usize) -> Result<T, E>,
-    mut emit: impl FnMut(T, T, T) -> Result<(), E>,
+    cell: impl FnMut(usize) -> Result<T, E>,
+    emit: impl FnMut(T, T, T) -> Result<(), E>,
 ) -> Result<T, E>
 where
     T: Clone,
     I: IntoIterator<Item = T>,
 {
+    try_build_rdf_list_with_copy(members, vocab, cell, |value| Ok(value.clone()), emit)
+}
+
+/// Build through the original cell/emission order with a fallible owned copy.
+/// Native callers supply their retained payload factory for every copied cell,
+/// predicate and nil term; the resident wrapper supplies Clone.
+///
+/// # Errors
+/// Returns the first cell, copy or emission error.
+pub fn try_build_rdf_list_with_copy<T, I, E>(
+    members: I,
+    vocab: &ListVocab<T>,
+    mut cell: impl FnMut(usize) -> Result<T, E>,
+    mut copy: impl FnMut(&T) -> Result<T, E>,
+    mut emit: impl FnMut(T, T, T) -> Result<(), E>,
+) -> Result<T, E>
+where
+    I: IntoIterator<Item = T>,
+{
     let mut members = members.into_iter().peekable();
     if members.peek().is_none() {
-        return Ok(vocab.nil.clone());
+        return copy(&vocab.nil);
     }
     let head = cell(0)?;
-    let mut current = head.clone();
+    let mut current = copy(&head)?;
     let mut index = 0;
     while let Some(member) = members.next() {
-        emit(current.clone(), vocab.first.clone(), member)?;
+        emit(copy(&current)?, copy(&vocab.first)?, member)?;
         let next = if members.peek().is_some() {
             index += 1;
             cell(index)?
         } else {
-            vocab.nil.clone()
+            copy(&vocab.nil)?
         };
-        emit(current, vocab.rest.clone(), next.clone())?;
+        emit(current, copy(&vocab.rest)?, copy(&next)?)?;
         current = next;
     }
     Ok(head)
@@ -1452,5 +1494,83 @@ mod tests {
         );
         let mut walk = RdfListWalk::new(0_u32, Some(3), first, rest);
         assert_eq!(walk.next(), Some(Ok(100)));
+    }
+
+    #[test]
+    fn native_list_collection_reuses_strict_iterator_and_releases_original_buffer() {
+        struct Storage {
+            live: usize,
+        }
+        impl purrdf_lex::allocation::Admission for Storage {
+            fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+                self.live = live;
+                Ok(())
+            }
+        }
+        let mut storage = Storage { live: 0 };
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+        let members = walk_rdf_list_with_memory(
+            0_u32,
+            Some(128),
+            |cell| {
+                if cell < 128 {
+                    SoleObject::One(cell + 1000)
+                } else {
+                    SoleObject::None
+                }
+            },
+            |cell| {
+                if cell < 128 {
+                    SoleObject::One(cell + 1)
+                } else {
+                    SoleObject::None
+                }
+            },
+            &mut memory,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(members, (1000..1128).collect::<Vec<_>>());
+        assert!(memory.admitted_bytes() > 0);
+        memory.release_vec(members).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(storage.live, 0);
+    }
+
+    #[test]
+    fn native_list_collection_reports_physical_refusal_separately_from_malformed_input() {
+        struct Refuse;
+        impl purrdf_lex::allocation::Admission for Refuse {
+            fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+                if live == 0 {
+                    Ok(())
+                } else {
+                    Err(purrdf_lex::allocation::StorageError::AdmissionFailed)
+                }
+            }
+        }
+        let result = walk_rdf_list_with_memory(
+            0_u32,
+            Some(2),
+            |cell| {
+                if cell < 2 {
+                    SoleObject::One(cell + 100)
+                } else {
+                    SoleObject::None
+                }
+            },
+            |cell| {
+                if cell < 2 {
+                    SoleObject::One(cell + 1)
+                } else {
+                    SoleObject::None
+                }
+            },
+            &mut purrdf_lex::allocation::Memory::new(&mut Refuse),
+        );
+        assert!(matches!(
+            result,
+            Err(purrdf_lex::allocation::StorageError::AdmissionFailed)
+        ));
     }
 }

@@ -29,9 +29,10 @@
 //!   and `x` inert. The old inline-`(?ismx)` wrap around a `regex::escape`d
 //!   body let `x` delete literal spaces from a `q`-literal pattern.
 //!
-//! Backreferences remain unsupported, now by explicit documented design
-//! rather than by accident: the shared compiler translates onto the `regex`
-//! crate's DFA engine, which cannot backtrack.
+//! The unselected compatibility path keeps that compiler and its cache. The
+//! explicitly selected native path uses [`xpath::PatternCache`] and current
+//! finite limits; it supports backreferences under either dated grammar and
+//! preserves operational refusals separately from facet findings.
 //!
 //! # Reachability
 //!
@@ -44,7 +45,9 @@
 use std::sync::Arc;
 
 use purrdf_core::FastMap;
-use purrdf_core::xsd_regex::CompiledPattern;
+use purrdf_core::xsd_regex::{CompiledPattern, xpath};
+
+use super::error::CheckError;
 
 /// One memoized `PATTERN` compile: the shared compiled regex, or the shared
 /// facet-violation message for a pattern or flag string that does not compile.
@@ -79,12 +82,37 @@ type FlagsCache = FastMap<String, CachedPattern>;
 /// The cached error is an `Arc<str>`, so a failed probe clones a refcount
 /// exactly as a successful probe clones the compiled regex's `Arc` — neither
 /// probe allocates inside the cache.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct PatternCache {
     by_pattern: FastMap<String, FlagsCache>,
+    selected: Option<(xpath::Profile, xpath::Limits)>,
+    native: xpath::PatternCache,
 }
 
 impl PatternCache {
+    pub(super) fn select(&mut self, profile: xpath::Profile, limits: xpath::Limits) {
+        self.selected = Some((profile, limits));
+    }
+
+    pub(super) fn is_match(
+        &mut self,
+        pattern: &str,
+        flags: Option<&str>,
+        text: &str,
+    ) -> Result<bool, CheckError> {
+        let Some((profile, limits)) = self.selected else {
+            return self
+                .compiled(pattern, flags)
+                .map(|program| program.is_match(text))
+                .map_err(|error| CheckError::Violation(error.to_string()));
+        };
+        let flags = flags.unwrap_or("");
+        self.native
+            .compiled(profile, pattern, flags, limits)
+            .and_then(|program| program.is_match(text, limits))
+            .map_err(|error| CheckError::pattern(error, pattern, flags))
+    }
+
     /// The compiled regex for `(pattern, flags)`, compiling on first use.
     ///
     /// # Errors

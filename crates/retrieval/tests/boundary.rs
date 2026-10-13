@@ -366,6 +366,7 @@ fn start_at_compile_hand_built_plan() {
     // Built by hand, never through the planner. It is still a plan, so admission
     // covers it on exactly the same terms as planner origin.
     let hand_built = Plan {
+        constraints: Vec::new(),
         version: Plan::VERSION,
         request_terms: vec![lexical_term()],
         read_bound: ReadBound::Complete,
@@ -1029,7 +1030,12 @@ fn start_at_fuse_hand_built_streams() {
     // for a caller that assembled its rows by hand. `Exact` here is the narrow
     // claim it always is: no stratum declared itself short.
     assert_eq!(
-        result.trailer.attestations,
+        result
+            .trailer
+            .attestations
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
             (stratum("s1"), PfAttestation::UNDECLARED),
             (stratum("s2"), PfAttestation::UNDECLARED),
@@ -1511,7 +1517,7 @@ fn prefix_reader_incomplete_evidence() {
         ),
     ];
 
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion = FusionStream::new(streams, profile).expect("fixture streams admitted");
     let first = block_on(fusion.next())
         .expect("fusion pulls")
         .expect("a certified row");

@@ -18,7 +18,7 @@
 
 mod support;
 
-use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{ResourceDimension, SparqlRequest, SparqlResult, TermValue, TrippedGovernor};
 use purrdf_sparql_eval::{
     AggregateRegistry, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, QueryGovernors,
@@ -116,6 +116,92 @@ fn long_fraction(zeros: usize, last: char) -> String {
     format!("1.{}{last}", "0".repeat(zeros))
 }
 
+#[test]
+fn temporal_exact_seconds_charge_real_query_fuel() {
+    let fraction = "1".repeat(2000);
+    let wide = format!("\"2024-01-02T12:34:56.{fraction}Z\"^^xsd:dateTime");
+    let tiny = "\"2024-01-02T12:34:56.1Z\"^^xsd:dateTime";
+    let duration = "\"PT1S\"^^xsd:dayTimeDuration";
+    let timezone = "\"PT1H\"^^xsd:dayTimeDuration";
+    for (wide_query, tiny_query) in [
+        (
+            format!("SELECT ({wide} + {duration} AS ?y) WHERE {{}}"),
+            format!("SELECT ({tiny} + {duration} AS ?y) WHERE {{}}"),
+        ),
+        (
+            format!("SELECT ({wide} - {tiny} AS ?y) WHERE {{}}"),
+            format!("SELECT ({tiny} - {tiny} AS ?y) WHERE {{}}"),
+        ),
+        (
+            format!("SELECT (ADJUST({wide}, {timezone}) AS ?y) WHERE {{}}"),
+            format!("SELECT (ADJUST({tiny}, {timezone}) AS ?y) WHERE {{}}"),
+        ),
+    ] {
+        let answer = refused_beside(
+            &wide_query,
+            &tiny_query,
+            QueryOptions::EMPTY,
+            ResourceDimension::Fuel,
+        );
+        assert_ne!(answer, "-", "the bounded neighbour must bind its result");
+    }
+
+    // Both queries parse the same wide source and render a wide result. Only
+    // the shift performs exact day-split arithmetic; removing the timezone
+    // copies the seconds without that computation.
+    let shifted = format!("SELECT (ADJUST({wide}, {timezone}) AS ?y) WHERE {{}}");
+    let retagged = format!("SELECT (ADJUST({wide}, \"\") AS ?y) WHERE {{}}");
+    let answer = refused_beside(
+        &shifted,
+        &retagged,
+        QueryOptions::EMPTY,
+        ResourceDimension::Fuel,
+    );
+    assert_ne!(answer, "-");
+    // Final ScratchBytes evidence is the retained balance, not the maximum
+    // transient request. Find the actual admitted ceiling for each same-input
+    // query instead of using the final balance as though it were a peak.
+    let minimum_accepted = |query: &str| {
+        let mut refused = 0_u64;
+        let mut accepted = 1_u64 << 20;
+        assert!(matches!(
+            governed(
+                query,
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(accepted)
+            ),
+            GovernedOutcome::Complete { .. }
+        ));
+        while refused + 1 < accepted {
+            let middle = refused + (accepted - refused) / 2;
+            let outcome = governed(
+                query,
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(middle),
+            );
+            if matches!(outcome, GovernedOutcome::Complete { .. }) {
+                accepted = middle;
+            } else {
+                assert!(
+                    matches!(outcome, GovernedOutcome::BudgetExhausted(ref exhausted)
+                    if matches!(exhausted.tripped, TrippedGovernor::Budget {
+                        dimension: ResourceDimension::ScratchBytes, ..
+                    })),
+                    "{outcome:?}"
+                );
+                refused = middle;
+            }
+        }
+        accepted
+    };
+    let retag_bytes = minimum_accepted(&retagged);
+    let shift_bytes = minimum_accepted(&shifted);
+    assert!(
+        shift_bytes > retag_bytes,
+        "same-source shift requires {shift_bytes} scratch bytes vs retag {retag_bytes}"
+    );
+}
+
 /// Squaring `0.1` doubles its scale at every step while its coefficient stays one
 /// digit: the product's rendering is what grows, and it is charged. Squaring `1` in
 /// the same chain stays a machine word.
@@ -150,7 +236,10 @@ fn a_products_growing_scale_is_charged_for_memory_before_it_allocates() {
     );
     // Thirty-two squarings would render 0.1^(2^32): four billion digits.
     let ceiling = QueryGovernors::UNBOUNDED.with_max_scratch_bytes(8 << 20);
-    let window = WholeProcessWindow::open();
+    // Empty WHERE supplies one row through every BIND and the projection. The
+    // production parallel gate rejects these singleton bags and exact XSD math is
+    // synchronous, so count this caller's allocations without sibling-test traffic.
+    let window = CurrentThreadWindow::open();
     let outcome = governed(&squaring("0.1", 32), QueryOptions::EMPTY, &ceiling);
     let measured = window.close();
     assert!(
@@ -261,6 +350,56 @@ fn sum_and_avg_are_charged_for_their_chain() {
             ResourceDimension::Fuel,
         );
     }
+}
+
+/// A long column of big integers sums at a cost linear in its length: the running
+/// total's shape is bounded by the longest value plus the digits of the row count,
+/// not grown a digit per row, so twice the rows cost about twice the fuel. 100,000
+/// forty-digit integers answer exactly under a 50,000,000-fuel ceiling, beside the
+/// same column behind one value of vast scale, which every addend must align to and
+/// which the same ceiling refuses.
+#[test]
+fn a_long_column_of_big_integers_sums_at_a_linear_cost() {
+    let column = |rows: usize| -> String {
+        (0..rows)
+            .map(|i| format!("1{i:039}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let sum = |values: &str| format!("SELECT (SUM(?v) AS ?y) WHERE {{ VALUES ?v {{ {values} }} }}");
+    let spent = |rows: usize| {
+        governed(
+            &sum(&column(rows)),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .evidence()
+        .consumed_in(ResourceDimension::Fuel)
+    };
+    let (single, double) = (spent(10_000), spent(20_000));
+    assert!(
+        double < single.saturating_mul(9) / 4,
+        "twice the rows cost {double} fuel against {single}: the charge is not linear"
+    );
+
+    let rows = 100_000_usize;
+    let ceiling = QueryGovernors::UNBOUNDED.with_fuel(50_000_000);
+    let answered = governed(&sum(&column(rows)), QueryOptions::EMPTY, &ceiling);
+    // Σ (10^39 + i) for i < n = n·10^39 + n(n − 1)/2.
+    let expected = format!("{rows}{:039}", rows * (rows - 1) / 2);
+    assert_eq!(first_cell(&answered), expected);
+
+    let vast = decimal(&format!("0.{}1", "0".repeat(100_000)));
+    let refused = governed(
+        &sum(&format!("{vast} {}", column(rows))),
+        QueryOptions::EMPTY,
+        &ceiling,
+    );
+    assert!(
+        matches!(&refused, GovernedOutcome::BudgetExhausted(exhausted)
+            if matches!(exhausted.tripped, TrippedGovernor::Budget { dimension: ResourceDimension::Fuel, .. })),
+        "{refused:.300?}"
+    );
 }
 
 /// `MIN`/`MAX` and `ORDER BY` compare: long values of one leading position align,

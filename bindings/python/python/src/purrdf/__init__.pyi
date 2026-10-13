@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import CapsuleType
 from typing import IO, Any, Callable, Required, TypeAlias, TypedDict, overload
 
@@ -21,6 +21,9 @@ from typing import IO, Any, Callable, Required, TypeAlias, TypedDict, overload
 # class in `_Term` to `typing.Literal` and demands type parameters for it. Same
 # reason `builtins` is imported qualified above.
 from typing import Literal as TypingLiteral
+from . import geo as geo
+
+type GeoConfiguration = geo.GeoProfile | geo.GeoSession | str | None
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -31,6 +34,22 @@ def rdf_gts_loss_matrix_json() -> str: ...
 def canonicalize_turtle(
     turtle_bytes: bytes, extra_prefixes: list[tuple[str, str]] = ...
 ) -> bytes: ...
+
+# ── Dated XPath regular-expression laws (bindings/python/src/xpath_regex.rs) ────
+#
+# The stable names the `xpath_regex` keyword accepts, oldest first:
+# ("xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21") — XPath F&O 2.0 Second Edition and
+# XPath F&O 3.1. Every entry point that evaluates a SPARQL REGEX/REPLACE, a SHACL
+# sh:pattern or a ShEx pattern facet takes `xpath_regex: str | None`: a name here
+# selects that law (under finite production bounds), any other value raises
+# ValueError listing these, and None (the default) keeps the compatibility pattern
+# behaviour. Names match exactly: no case folding, abbreviation or undated alias.
+# A native resource refusal under a selected law raises ValueError identified by the
+# resource's code (`xpath-pattern-bytes`, `xpath-match-steps`, …) on every door alike —
+# SPARQL, SHACL (validation, rules, entailment, node expressions) and ShEx: the code is
+# the exception's `message_id`, and its `presentation` is
+# {"message_id": code, "parameters": {}, "detail": None}.
+XPATH_REGEX_PROFILES: tuple[str, ...]
 
 # ── Deterministic graph/tabular/research-object projection carriers ────────────
 
@@ -387,8 +406,19 @@ _PathRelation = (
 
 # ── Query results ───────────────────────────────────────────────────────────────
 
+# A SELECT row retains every projected cell in order, including unbound None.
+# Integer positions use tuple-style negative indexing and IndexError at either end;
+# named access uses the first matching projection, raising KeyError if absent.
 class QuerySolution:
     def __getitem__(self, key: str | Variable | int) -> _Term | None: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[_Term | None]: ...
+
+# Private return-only implementation type; not a module-level constructor.
+class _QuerySolutionIterator:
+    def __iter__(self) -> _QuerySolutionIterator: ...
+    def __next__(self) -> _Term | None: ...
+    def __length_hint__(self) -> int: ...
 
 class QuerySolutions:
     @property
@@ -651,6 +681,11 @@ class _QuadStore:
     # capsule surface the two share. The extension does not export it by name; it is
     # reachable only as the base of those two classes.
     def __iter__(self) -> QuadIter: ...
+    # CREATE semantics under the constructor's graph-existence mode; SILENT only
+    # suppresses an existing remembered slot. Invalid graph names still fail.
+    def add_graph(self, graph: NamedNode | BlankNode, *, silent: bool = False) -> None: ...
+    # Effective named slots, including declared empty graphs; excludes the default.
+    def named_graphs(self) -> list[NamedNode | BlankNode]: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
     # by default), `property_fn_namespaces` does the same for property-function
@@ -697,12 +732,20 @@ class _QuadStore:
     # data-only reduction the way a property-function relation does — and this binding
     # exposes no surface for it, not even a namespace-only one.
     #
+    # `xpath_regex` selects the dated native XPath law REGEX and REPLACE evaluate
+    # under, by one of the `XPATH_REGEX_PROFILES` names; None keeps the compatibility
+    # pattern behaviour. Every query and update method here, and `Store.prepare`, take
+    # it. Under a selected law a pattern or flag the law refuses is an expression error
+    # (a FILTER drops the row), and a native resource refusal (an `xpath-*` code)
+    # raises ValueError rather than answering empty or false.
+    #
     # `division` is the precision of every `xsd:integer`/`xsd:decimal` quotient
     # (`/` and `AVG`), in the one text form every PurRDF surface reads: `"exact"`,
-    # `"N"` (N fractional digits, truncated toward zero) or `"N:ROUNDING"` (ROUNDING one
-    # of `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
+    # `"N"` (N fractional digits, truncated toward zero), `"N:ROUNDING"`,
+    # `"exact-or-N"`, or `"exact-or-N:ROUNDING"` (ROUNDING one of `toward-zero`,
+    # `away-from-zero`, `floor`, `ceiling`, `half-even`,
     # `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`). Unset is
-    # `"18:toward-zero"`. Under `"exact"` a quotient with no finite decimal expansion
+    # `"exact-or-18:half-even"`. Under `"exact"` a quotient with no finite decimal expansion
     # raises the query's `ValueError`, naming `err:FOAR0002`. An unreadable policy
     # raises `ValueError` before anything is evaluated. Every query, UPDATE, governed,
     # entailment and prepared entry point takes it.
@@ -718,7 +761,28 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
+    def query_rdflib(
+        self,
+        query: str,
+        *,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
+        aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
+        division: str | None = ...,
+        named_graphs: bool = ...,
+        default_graph: NamedNode | BlankNode | None = ...,
+        default_union: bool = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
@@ -737,6 +801,8 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -779,6 +845,8 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -803,6 +871,8 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
@@ -818,6 +888,8 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
@@ -843,7 +915,7 @@ class _QuadStore:
     def _store_capsule(self) -> CapsuleType: ...
 
 class Store(_QuadStore):
-    def __init__(self) -> None: ...
+    def __init__(self, *, remember_empty_graphs: bool = False) -> None: ...
     # Returns the document's prefix map from the same parse: the `@prefix` / `PREFIX`
     # bindings a Turtle or TriG document left in force at its end, as
     # `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
@@ -924,6 +996,8 @@ class Store(_QuadStore):
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        geo: GeoConfiguration = ...,
         division: str | None = ...,
     ) -> PreparedQuery: ...
     # `base` is the document base the dump is WRITTEN under — the egress mirror of
@@ -959,7 +1033,7 @@ class Store(_QuadStore):
     ) -> bytes: ...
 
 class MutableDataset(_QuadStore):
-    def __init__(self) -> None: ...
+    def __init__(self, *, remember_empty_graphs: bool = False) -> None: ...
     # Returns the document's prefix map exactly as `Store.load` does.
     def load(
         self,
@@ -1500,7 +1574,10 @@ class shex:
     # shape label, or the literal string "START" for the schema's start shape.
     # `schema_format` is "shexc" (default) or "shexj"; `data_format` is "turtle"
     # (default), "ntriples", or "nquads"; `base` resolves relative IRIs in the
-    # schema and data. Typed engine errors raise ValueError.
+    # schema and data. Typed engine errors raise ValueError. `xpath_regex` selects
+    # the dated XPath law pattern facets match under (see `XPATH_REGEX_PROFILES`):
+    # a pattern the law refuses makes its entry nonconformant, and a native resource
+    # refusal raises ValueError for the whole map.
     @staticmethod
     def validate(
         schema: str,
@@ -1510,6 +1587,7 @@ class shex:
         schema_format: str = ...,
         data_format: str = ...,
         base: str | None = ...,
+        xpath_regex: str | None = ...,
     ) -> list[ShexResultEntry]: ...
     # Parse a ShEx schema ("shexc" or "shexj") and return its canonical ShExJ
     # JSON text, for schema tooling and cross-syntax round-trips.
@@ -1578,14 +1656,21 @@ class _Shapes:
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
     ) -> None: ...
-    def validate_nt(self, data_nt: str) -> _ValidationReport: ...
+    # `xpath_regex` (here, on `validate_store`, on `PreparedShapes.validate_nt` and
+    # `validate_store_changes`, and on `shapes.validate`) selects the dated XPath law sh:pattern and every SHACL-SPARQL
+    # REGEX evaluate under — see `XPATH_REGEX_PROFILES`.
+    def validate_nt(
+        self, data_nt: str, *, xpath_regex: str | None = None
+    ) -> _ValidationReport: ...
     # Either quad container, validated through the native snapshot seam: both hold
     # a frozen dataset behind their copy-on-write overlay, so neither is serialized
     # to N-Triples and parsed back to be validated. The report is a statement about
     # the data as it was — a later mutation moves the next report, not this one.
     # Anything that cannot hand over such a snapshot raises `TypeError` naming the
     # type that arrived and what is accepted; text belongs in `validate_nt`.
-    def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
+    def validate_store(
+        self, data: Store | MutableDataset, *, xpath_regex: str | None = None
+    ) -> _ValidationReport: ...
     # Analyze the shape tree once; the step a prepared PRODUCT is written from.
     def prepare(self) -> _PreparedShapes: ...
     # What the environment these declarations describe would make of every SPARQL
@@ -1658,7 +1743,9 @@ class _PreparedShapes:
     # `restored-admitted <identity_digest>` or `restored-rebuilt <identity_digest>`.
     # Total — there is always an answer, and none of them means "unknown".
     def provenance(self) -> str: ...
-    def validate_nt(self, data_nt: str) -> _ValidationReport: ...
+    def validate_nt(
+        self, data_nt: str, *, xpath_regex: str | None = None
+    ) -> _ValidationReport: ...
     # THE INCREMENTAL LANE: validate only what `store`'s PENDING CHANGE can move,
     # rather than the whole graph. A `Store` records its mutations as a copy-on-write
     # delta over a frozen base, so a mutated store already holds the one thing
@@ -1674,7 +1761,11 @@ class _PreparedShapes:
     # different questions. Raises `ValueError` when the store cannot be snapshotted,
     # when the snapshot exceeds the view's retention limits, or when constraint
     # evaluation hard-fails.
-    def validate_store_changes(self, store: Store) -> _ChangeValidation: ...
+    # `xpath_regex` runs the expansion and both re-validation arms under the selected
+    # dated XPath law (see `XPATH_REGEX_PROFILES`).
+    def validate_store_changes(
+        self, store: Store, *, xpath_regex: str | None = None
+    ) -> _ChangeValidation: ...
 
 class _ChangeValidation:
     """The outcome of `PreparedShapes.validate_store_changes`: the report, plus the
@@ -1811,6 +1902,13 @@ class shapes:
     # shnex:instancesOf). False, the default, is the specification's default: the data
     # graph alone. Only class membership changes; rdf:type triples are always read from
     # the data graph.
+    #
+    # `xpath_regex` selects the dated native XPath law (one of `XPATH_REGEX_PROFILES`)
+    # sh:pattern, nested shapes, SPARQL targets and constraints and SHACL-AF SPARQL
+    # functions evaluate patterns under; None keeps the compatibility behaviour. A
+    # pattern or flag the law refuses is reported as the ordinary sh:pattern result;
+    # a native resource refusal raises ValueError carrying its `xpath-*` code and no
+    # partial report.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1821,6 +1919,7 @@ class shapes:
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
@@ -1838,6 +1937,10 @@ class shapes:
     # `max_join_steps` are the four rule-evaluation limits apply_rules takes, with the
     # same defaults; a run past one raises ValueError naming the limit, the numbers
     # and the keyword argument that raises it (`entail(max_stored_facts=...)`, ...).
+    # `xpath_regex` (one of purrdf.XPATH_REGEX_PROFILES, or None for the compatibility
+    # law) decides every REGEX/REPLACE a rule, function or node expression evaluates and
+    # every sh:pattern a rule condition decides; a native resource refusal raises
+    # ValueError carrying its xpath-* code and returns no dataset.
     @staticmethod
     def entail(
         shapes_ttl: str,
@@ -1850,6 +1953,7 @@ class shapes:
         max_generated_terms: int | None = None,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
@@ -1881,6 +1985,11 @@ class shapes:
     # is pre-bound to it and GRAPH $shapesGraph { ... } reads the shapes graph. A
     # relative one resolves against `shapes_base`; None leaves $shapesGraph an
     # ordinary variable. Naming one beside `srl` raises ValueError.
+    #
+    # `xpath_regex` (one of purrdf.XPATH_REGEX_PROFILES, or None for the compatibility
+    # law) decides every REGEX/REPLACE a SHACL rule, function, node expression or SPARQL
+    # 1.2 RL filter or assignment evaluates, and every sh:pattern a rule condition
+    # decides; a native resource refusal raises ValueError carrying its xpath-* code.
     @staticmethod
     def apply_rules(
         data_nt: str,
@@ -1896,6 +2005,7 @@ class shapes:
         max_join_steps: int | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the IMPORTS
     # closure resolved from `imports`, well-formedness and stratification — every
@@ -1928,7 +2038,11 @@ class shapes:
     # IRI or an N-Triples term; `scope` maps each shnex:var name to its node. None or
     # several selectors, a walk step reaching no value or several, an inline document
     # without exactly one root, the name "focusNode", an unknown label and any parse
-    # or evaluation failure raise ValueError.
+    # or evaluation failure raise ValueError. `xpath_regex` (one of
+    # purrdf.XPATH_REGEX_PROFILES, or None for the compatibility law) decides every
+    # sh:pattern a filter shape decides and every REGEX/REPLACE a function call or
+    # SPARQL-based expression evaluates; a native resource refusal raises ValueError
+    # carrying its xpath-* code.
     @staticmethod
     def eval_node_expr(
         shapes_ttl: str,
@@ -1942,6 +2056,7 @@ class shapes:
         scope: Mapping[str, str] | None = None,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
     # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the

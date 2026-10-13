@@ -855,6 +855,39 @@ const EXTENSION_AND_CERTIFICATE: &[&str] = &[
     "  exactly the two triples named above (106 -> 108).",
 ];
 
+/// The observed contract/work transition for connected plans and admitted identity rows.
+const CONNECTED_RULE_EVALUATION: &[&str] = &[
+    "CURRENT CONNECTED RULE EVALUATION TRANSITION — calculus v2.",
+    "The authored clause programs are unchanged. Every input, closure, witness, rule",
+    "tally, stored-facts and term-arena-bytes field in this 142-fixture transition is",
+    "byte-identical. Contract hashes and charged candidate work move deliberately.",
+    "",
+    "All five lanes' contract hashes include the shared evaluator calculus version.",
+    "Version v2 covers connectivity-first ordering, canonical confirmation preference,",
+    "empty initial OldOnly-suffix elimination and admission before owned expansion.",
+    "An old cached report cannot claim this",
+    "new evaluation contract even where this fixture's facts already agreed.",
+    "",
+    "A premise-free clause now admits its one identity substitution before expansion.",
+    "D therefore charges 32 dt-type1 substitutions per evaluation graph. OWL-RL charges",
+    "43: those 32, nine prp-ap clauses and cls-thing/cls-nothing1. Named graph fixtures",
+    "evaluate two or three graphs, with the corresponding multiple of these credits.",
+    "The first-round-only no-positive-body scheduling remains unchanged.",
+    "",
+    "When delta covers the entire frozen store, every initial anchor before the",
+    "last requires an empty OldOnly suffix. Both binary and hybrid joins skip those",
+    "impossible variants without scanning prefixes. Partial deltas keep all anchors.",
+    "This removes 15 D and 1733 OWL-RL credits from the intermediate v2 transition.",
+    "That intermediate transition had isolated connectivity savings of 39/40",
+    "credits in four collection fixtures with a priority-only control. The final",
+    "counts below additionally include the provably empty suffix elimination.",
+    "",
+    "Across these 142 fixtures, D work moves 402 -> 5059 and OWL-RL 243810 -> 248198.",
+    "RDF remains 4911, RDFS 1282254 and Simple zero. These are observed candidate",
+    "counts, not latency, allocations or an assertion that logical work increased.",
+    "END CONNECTED RULE EVALUATION TRANSITION.",
+];
+
 /// What moved when the stored-fact and join-step limits became the caller's, with native
 /// defaults above the `wasm32` ones, and the semi-naive evaluator stopped enumerating a
 /// decomposition whose delta atom had gained no row.
@@ -5920,6 +5953,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, EXTENSION_AND_CERTIFICATE);
     out.push_str("#\n");
     write_comment_block(&mut out, CAPACITY_LIMITS);
+    out.push_str("#\n");
+    write_comment_block(&mut out, CONNECTED_RULE_EVALUATION);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));

@@ -32,6 +32,8 @@ use crate::{
 ///
 /// The query, UPDATE, iteration and validation-capsule surface is the
 /// [`PyQuadStore`] base class's, shared with `Store`.
+/// The keyword-only `remember_empty_graphs=True` selects native remembered
+/// graph slots; the 3.x default is false. Compaction and UPDATE retain the choice.
 #[pyclass(name = "MutableDataset", extends = PyQuadStore)]
 #[derive(Debug)]
 pub struct PyMutableDataset {
@@ -41,11 +43,14 @@ pub struct PyMutableDataset {
 #[pymethods]
 impl PyMutableDataset {
     #[new]
-    fn new() -> PyResult<PyClassInitializer<Self>> {
+    #[pyo3(signature = (*, remember_empty_graphs=false))]
+    fn new(remember_empty_graphs: bool) -> PyResult<PyClassInitializer<Self>> {
         Ok(
-            PyClassInitializer::from(PyQuadStore::empty()?).add_subclass(Self {
-                next_blank_scope: 1,
-            }),
+            PyClassInitializer::from(PyQuadStore::empty(remember_empty_graphs)?).add_subclass(
+                Self {
+                    next_blank_scope: 1,
+                },
+            ),
         )
     }
 
@@ -245,7 +250,8 @@ impl PyMutableDataset {
         let frozen = py
             .detach(|| store.inner.freeze())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        store.inner = MutableDataset::new(frozen);
+        store.inner =
+            MutableDataset::new_with_graph_existence(frozen, store.inner.graph_existence());
         Ok(())
     }
 }

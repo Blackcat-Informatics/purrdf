@@ -52,6 +52,21 @@ pub fn code_point_literal(point: u32) -> String {
     format!("0x{:04X}_{:04X}", point >> 16, point & 0xFFFF)
 }
 
+/// The XML Schema block-escape name of a verbatim UCD block name.
+///
+/// XML Schema Part 2 Appendix G.4.2.3 removes whitespace and underbars,
+/// preserving hyphens and case, then prefixes the name with `Is`.
+#[must_use]
+pub fn xsd_block_escape_name(ucd_name: &str) -> String {
+    let mut escape_name = String::from("Is");
+    escape_name.extend(
+        ucd_name
+            .chars()
+            .filter(|&ch| !ch.is_whitespace() && ch != '_'),
+    );
+    escape_name
+}
+
 /// Every assigned code point of a `UnicodeData.txt` text and its `;`-separated
 /// fields, with the `<…, First>`/`<…, Last>` ranges expanded.
 ///
@@ -85,7 +100,23 @@ pub fn unicode_data(text: &str) -> BTreeMap<u32, Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{code_point, sequence, unicode_data};
+    use super::{code_point, sequence, unicode_data, xsd_block_escape_name};
+
+    #[test]
+    fn block_escape_names_preserve_hyphens_and_case() {
+        assert_eq!(
+            xsd_block_escape_name("Latin-1 Supplement"),
+            "IsLatin-1Supplement"
+        );
+        assert_eq!(
+            xsd_block_escape_name("Latin_Extended-A"),
+            "IsLatinExtended-A"
+        );
+        assert_eq!(
+            xsd_block_escape_name("Greek and Coptic"),
+            "IsGreekandCoptic"
+        );
+    }
 
     #[test]
     fn fields_and_ranges_read_as_the_database_spells_them() {

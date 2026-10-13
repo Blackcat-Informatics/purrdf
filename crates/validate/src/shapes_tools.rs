@@ -59,6 +59,7 @@ use purrdf_shapes::{RuleSource, run_rules};
 
 use crate::ShapesImportList;
 use crate::expr_selector::ExprSelector;
+use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 
 /// One rules run across the host boundary: the data graph and exactly ONE rule source —
 /// a SHACL shapes graph's rules, or a SPARQL 1.2 RL rule set.
@@ -218,7 +219,46 @@ pub struct RulesOutcome {
 /// passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
-    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    apply_rules_with(request, |source, data, limits, knobs| {
+        run_rules(source, data, limits, knobs).map_err(ShapesError::from)
+    })
+}
+
+/// [`apply_rules_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the
+/// production bounds ([`Limits::new`]), for either rule source: every `REGEX`/`REPLACE`
+/// a SHACL rule, function, node expression or SPARQL 1.2 RL filter or assignment
+/// evaluates, and every `sh:pattern` a rule condition decides, compiles and matches under
+/// it ([`purrdf_shapes::xpath::run_rules`]). `None` is [`apply_rules_to_ntriples`]'s exact
+/// outcome.
+///
+/// # Errors
+///
+/// Everything [`apply_rules_to_ntriples`] refuses, as [`XPathValidationError::Shapes`]; a
+/// native pattern refusal as [`XPathValidationError::Pattern`], and a rule query's
+/// operational diagnostic as [`XPathValidationError::Query`]. No inference is returned.
+pub fn apply_rules_to_ntriples_with_xpath_regex(
+    request: &RulesRequest<'_>,
+    xpath_regex: Option<Profile>,
+) -> Result<RulesOutcome, XPathValidationError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(apply_rules_to_ntriples(request)?);
+    };
+    apply_rules_with(request, |source, data, limits, knobs| {
+        purrdf_shapes::xpath::run_rules(source, data, limits, knobs, profile, Limits::new())
+    })
+}
+
+/// The one rules body under either law: `run` is the rules dispatch it runs.
+fn apply_rules_with<E: From<ShapesError>>(
+    request: &RulesRequest<'_>,
+    run: impl FnOnce(
+        RuleSource<'_>,
+        &purrdf_core::RdfDataset,
+        &RuleLimits,
+        LimitKnobs,
+    ) -> Result<srl::Inference, E>,
+) -> Result<RulesOutcome, E> {
+    let (data, rules) = rule_inputs(request)?;
     let limits = RuleLimits {
         max_term_generating_rounds: request.max_term_generating_rounds,
         max_generated_terms: request.max_generated_terms,
@@ -226,18 +266,43 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
         max_join_steps: request.max_join_steps,
     };
     let knobs = request.host.limit_knobs();
-    let (inference, diagnostics) = match (request.shapes_ttl, request.srl) {
-        (Some(shapes_ttl), None) => {
-            let shapes = engine::parse_shapes_with_graph(
-                shapes_ttl,
-                request.shapes_base,
-                None,
-                request.shapes_graph,
-                &ShapesImports::from_turtle(request.imports)?,
-            )?;
-            let inference = run_rules(RuleSource::Shapes(&shapes), data.as_ref(), &limits, knobs)?;
-            (inference, shapes.mandatory_diagnostics().to_vec())
-        }
+    let (inference, diagnostics) = match &rules {
+        RuleInput::Shapes(shapes) => (
+            run(RuleSource::Shapes(shapes), data.as_ref(), &limits, knobs)?,
+            shapes.mandatory_diagnostics().to_vec(),
+        ),
+        RuleInput::Srl(document) => (
+            run(RuleSource::Srl(document), data.as_ref(), &limits, knobs)?,
+            Vec::new(),
+        ),
+    };
+    Ok(RulesOutcome {
+        inferred_ntriples: inference.inferred_ntriples(),
+        proof: request.explain.then(|| inference.proof_text()),
+        diagnostics,
+    })
+}
+
+/// The one rule source a [`RulesRequest`] names, parsed and checked.
+enum RuleInput {
+    Shapes(Box<purrdf_shapes::shapes::Shapes>),
+    Srl(srl::RuleSetDocument),
+}
+
+/// The data graph and the rule source of `request`, parsed and checked: everything a
+/// rules run refuses before a rule runs.
+fn rule_inputs(
+    request: &RulesRequest<'_>,
+) -> Result<(std::sync::Arc<purrdf_core::RdfDataset>, RuleInput), ShapesError> {
+    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    let rules = match (request.shapes_ttl, request.srl) {
+        (Some(shapes_ttl), None) => RuleInput::Shapes(Box::new(engine::parse_shapes_with_graph(
+            shapes_ttl,
+            request.shapes_base,
+            None,
+            request.shapes_graph,
+            &ShapesImports::from_turtle(request.imports)?,
+        )?)),
         (None, Some(_)) if request.shapes_graph.is_some() => {
             return Err(ShapesError::Invalid(
                 "a shapes-graph IRI names the graph a SHACL shapes graph's rules see the shapes \
@@ -246,17 +311,15 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
                     .to_owned(),
             ));
         }
-        (None, Some(text)) => {
-            let document = check_rules(
+        (None, Some(text)) => RuleInput::Srl(
+            check_rules(
                 text,
                 request.srl_base,
                 request.imports,
                 srl::CheckLevel::Stratified,
             )?
-            .into_document();
-            let inference = run_rules(RuleSource::Srl(&document), data.as_ref(), &limits, knobs)?;
-            (inference, Vec::new())
-        }
+            .into_document(),
+        ),
         (None, None) => {
             return Err(ShapesError::Invalid(
                 "no rule source: name a SHACL shapes graph or a SPARQL 1.2 RL rule set".to_owned(),
@@ -270,11 +333,7 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
             ));
         }
     };
-    Ok(RulesOutcome {
-        inferred_ntriples: inference.inferred_ntriples(),
-        proof: request.explain.then(|| inference.proof_text()),
-        diagnostics,
-    })
+    Ok((data, rules))
 }
 
 /// Check a SPARQL 1.2 RL rule set without evaluating it: [`srl::check`] up to `level`
@@ -369,40 +428,98 @@ pub struct NodeExprOutcome {
 /// expression without exactly one root), and anything else [`free_expression::evaluate`]
 /// refuses.
 pub fn eval_node_expr(request: &NodeExprRequest<'_>) -> Result<NodeExprOutcome, ShapesError> {
-    let imports = ShapesImports::from_turtle(request.imports)?;
-    let shapes = parse_turtle_document(request.shapes_ttl, request.shapes_base)
-        .map_err(|errors| errors.join("\n"))?;
-    let imports = read_under(imports, request.shapes_base, shapes.base.as_deref());
-    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
-    let selector = request.expr.parse()?;
-    let focus = free_expression::parse_term(request.focus).map_err(|e| format!("focus: {e}"))?;
-    let scope = request
-        .scope
-        .iter()
-        .map(|(name, term)| {
-            free_expression::parse_term(term)
-                .map(|term| ((*name).to_owned(), term))
-                .map_err(|e| format!("scope {name}: {e}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let selected = selector.select(
-        &shapes.dataset,
-        &shapes.prefixes,
-        shapes.base.as_deref().or(request.shapes_base),
-    )?;
-    let outputs = free_expression::evaluate(&FreeExpression {
-        shapes: &selected.shapes,
-        prefixes: &shapes.prefixes,
-        root: &selected.root,
-        data: data.as_ref(),
-        focus: &focus,
-        scope: &scope,
-        imports: &imports,
+    eval_node_expr_with(request, free_expression::evaluate)
+}
+
+/// [`eval_node_expr`] under the dated XPath law `xpath_regex` selects, with the
+/// production bounds ([`Limits::new`]): a `sh:pattern` a filter shape decides, and a
+/// `REGEX`/`REPLACE` a function call or SPARQL-based expression evaluates, compile and
+/// match under it ([`purrdf_shapes::xpath::evaluate_free_expression`]). `None` is
+/// [`eval_node_expr`]'s exact outcome.
+///
+/// # Errors
+///
+/// Everything [`eval_node_expr`] refuses, as [`XPathValidationError::Shapes`]; a native
+/// pattern refusal as [`XPathValidationError::Pattern`], and a query's operational
+/// diagnostic as [`XPathValidationError::Query`]. No output is returned.
+pub fn eval_node_expr_with_xpath_regex(
+    request: &NodeExprRequest<'_>,
+    xpath_regex: Option<Profile>,
+) -> Result<NodeExprOutcome, XPathValidationError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(eval_node_expr(request)?);
+    };
+    eval_node_expr_with(request, |expression| {
+        purrdf_shapes::xpath::evaluate_free_expression(expression, profile, Limits::new())
+    })
+}
+
+/// The one node-expression body under either law: `evaluate` is the evaluation it runs.
+fn eval_node_expr_with<E: From<ShapesError>>(
+    request: &NodeExprRequest<'_>,
+    evaluate: impl FnOnce(&FreeExpression<'_>) -> Result<free_expression::NodeExprEvaluation, E>,
+) -> Result<NodeExprOutcome, E> {
+    let inputs = NodeExprInputs::parse(request)?;
+    let outputs = evaluate(&FreeExpression {
+        shapes: &inputs.selected.shapes,
+        prefixes: &inputs.document.prefixes,
+        root: &inputs.selected.root,
+        data: inputs.data.as_ref(),
+        focus: &inputs.focus,
+        scope: &inputs.scope,
+        imports: &inputs.imports,
     })?;
     Ok(NodeExprOutcome {
         outputs: outputs.outputs.iter().map(ToString::to_string).collect(),
         diagnostics: outputs.diagnostics,
     })
+}
+
+/// Everything one node-expression evaluation reads, parsed: everything it refuses
+/// before evaluation begins.
+struct NodeExprInputs {
+    document: purrdf_shapes::text_ingest::TurtleDocument,
+    imports: ShapesImports,
+    data: std::sync::Arc<purrdf_core::RdfDataset>,
+    focus: purrdf_shapes::term::Term,
+    scope: Vec<(String, purrdf_shapes::term::Term)>,
+    selected: crate::SelectedExpression,
+}
+
+impl NodeExprInputs {
+    fn parse(request: &NodeExprRequest<'_>) -> Result<Self, ShapesError> {
+        let imports = ShapesImports::from_turtle(request.imports)?;
+        let document = parse_turtle_document(request.shapes_ttl, request.shapes_base)
+            .map_err(|errors| errors.join("\n"))?;
+        let imports = read_under(imports, request.shapes_base, document.base.as_deref());
+        let data =
+            parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+        let selector = request.expr.parse()?;
+        let focus =
+            free_expression::parse_term(request.focus).map_err(|e| format!("focus: {e}"))?;
+        let scope = request
+            .scope
+            .iter()
+            .map(|(name, term)| {
+                free_expression::parse_term(term)
+                    .map(|term| ((*name).to_owned(), term))
+                    .map_err(|e| format!("scope {name}: {e}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let selected = selector.select(
+            &document.dataset,
+            &document.prefixes,
+            document.base.as_deref().or(request.shapes_base),
+        )?;
+        Ok(Self {
+            document,
+            imports,
+            data,
+            focus,
+            scope,
+            selected,
+        })
+    }
 }
 
 /// Split one `NAME=TERM` scope binding at its first `=` — the spelling the CLI's
