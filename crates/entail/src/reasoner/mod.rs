@@ -143,13 +143,13 @@ use realize::is_instance;
 /// use purrdf_entail::reasoner::{DlAxiom, Reasoner, Verdict};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let tom = b.intern_iri("http://example.org/tom");
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// b.push_quad(cat, sub, animal, None);
-/// b.push_quad(tom, ty, cat, None);
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let tom = b.intern_iri("http://example.org/tom")?;
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// b.push_quad(cat, sub, animal, None)?;
+/// b.push_quad(tom, ty, cat, None)?;
 /// let dataset = b.freeze().expect("freeze");
 ///
 /// let mut reasoner = Reasoner::new(&dataset).expect("reverse-map the ontology");
@@ -173,6 +173,7 @@ use realize::is_instance;
 ///     class: purrdf_core::TermValue::iri("http://example.org/Animal"),
 /// };
 /// assert_eq!(*reasoner.entails(&derived).expect("consistent").answer(), Verdict::True);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub struct Reasoner {
     /// The reverse-mapped knowledge base.
@@ -457,10 +458,10 @@ impl Reasoner {
     /// use purrdf_entail::reasoner::{DlAxiom, Question, Reasoner};
     ///
     /// let mut b = RdfDatasetBuilder::new();
-    /// let cat = b.intern_iri("http://example.org/Cat");
-    /// let animal = b.intern_iri("http://example.org/Animal");
-    /// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-    /// b.push_quad(cat, sub, animal, None);
+    /// let cat = b.intern_iri("http://example.org/Cat")?;
+    /// let animal = b.intern_iri("http://example.org/Animal")?;
+    /// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+    /// b.push_quad(cat, sub, animal, None)?;
     /// let ds = b.freeze().expect("freeze");
     ///
     /// let axiom = DlAxiom::SubClassOf {
@@ -488,6 +489,7 @@ impl Reasoner {
     /// // …and the cheap reasoner says so rather than pretending.
     /// let plain = Reasoner::new(&ds).expect("reverse-map");
     /// assert!(plain.proof_context().is_err());
+    /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
     /// ```
     ///
     /// # Errors

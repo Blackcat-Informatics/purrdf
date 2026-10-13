@@ -626,13 +626,13 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 /// use purrdf_entail::{ImportMap, QNode, QTriple, Regime, certain_answers};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let tom = b.intern_iri("http://example.org/tom");
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// b.push_quad(cat, sub, animal, None);
-/// b.push_quad(tom, ty, cat, None);
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let tom = b.intern_iri("http://example.org/tom")?;
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// b.push_quad(cat, sub, animal, None)?;
+/// b.push_quad(tom, ty, cat, None)?;
 /// let premise = b.freeze().expect("freeze");
 ///
 /// // `?c` ranges over the ENTAILED types of `tom`, not the asserted one.
@@ -645,6 +645,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 ///     .expect("a consistent premise");
 /// assert_eq!(answers.vars(), ["c"]);
 /// assert!(answers.rows().iter().any(|row| row == &[TermValue::iri("http://example.org/Animal")]));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn certain_answers(
     premise: &RdfDataset,
@@ -1059,23 +1060,23 @@ fn decide(
 /// use purrdf_entail::{EntailmentMechanism, EntailmentOutcome, ImportMap, Regime, entails};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let p = b.intern_iri("http://example.org/p");
-/// let x = b.intern_iri("http://example.org/x");
-/// let y = b.intern_iri("http://example.org/y");
-/// let z = b.intern_iri("http://example.org/z");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let transitive = b.intern_iri("http://www.w3.org/2002/07/owl#TransitiveProperty");
-/// b.push_quad(p, ty, transitive, None);
-/// b.push_quad(x, p, y, None);
-/// b.push_quad(y, p, z, None);
+/// let p = b.intern_iri("http://example.org/p")?;
+/// let x = b.intern_iri("http://example.org/x")?;
+/// let y = b.intern_iri("http://example.org/y")?;
+/// let z = b.intern_iri("http://example.org/z")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let transitive = b.intern_iri("http://www.w3.org/2002/07/owl#TransitiveProperty")?;
+/// b.push_quad(p, ty, transitive, None)?;
+/// b.push_quad(x, p, y, None)?;
+/// b.push_quad(y, p, z, None)?;
 /// let premise = b.freeze().expect("freeze");
 ///
 /// // `x p z` follows by `prp-trp` and is not asserted.
 /// let mut c = RdfDatasetBuilder::new();
-/// let x = c.intern_iri("http://example.org/x");
-/// let p = c.intern_iri("http://example.org/p");
-/// let z = c.intern_iri("http://example.org/z");
-/// c.push_quad(x, p, z, None);
+/// let x = c.intern_iri("http://example.org/x")?;
+/// let p = c.intern_iri("http://example.org/p")?;
+/// let z = c.intern_iri("http://example.org/z")?;
+/// c.push_quad(x, p, z, None)?;
 /// let conclusion = c.freeze().expect("freeze");
 ///
 /// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
@@ -1086,6 +1087,7 @@ fn decide(
 /// assert_eq!(certificate.regime(), Regime::OwlRl);
 /// assert!(!certificate.is_budget_exhausted());
 /// assert!(certificate.report().rules_fired().iter().any(|&(rule, _)| rule.as_str() == "prp-trp"));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn entails(
     premise: &RdfDataset,

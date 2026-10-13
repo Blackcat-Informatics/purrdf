@@ -808,13 +808,13 @@ impl std::error::Error for EntailError {
 /// use purrdf_core::RdfDatasetBuilder;
 ///
 /// let mut builder = RdfDatasetBuilder::new();
-/// let cat = builder.intern_iri("http://example.org/Cat");
-/// let animal = builder.intern_iri("http://example.org/Animal");
-/// let tom = builder.intern_iri("http://example.org/tom");
-/// let sub = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// builder.push_quad(cat, sub, animal, None);
-/// builder.push_quad(tom, ty, cat, None);
+/// let cat = builder.intern_iri("http://example.org/Cat")?;
+/// let animal = builder.intern_iri("http://example.org/Animal")?;
+/// let tom = builder.intern_iri("http://example.org/tom")?;
+/// let sub = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// builder.push_quad(cat, sub, animal, None)?;
+/// builder.push_quad(tom, ty, cat, None)?;
 /// let dataset = builder.freeze().expect("freeze");
 ///
 /// // rdfs9 re-types the instance — `tom` is an `Animal` as well as a `Cat`.
@@ -841,6 +841,7 @@ impl std::error::Error for EntailError {
 /// // function, once that input is in the parameter.
 /// let (_, dl) = materialize(&dataset, Materialization::OwlDirect(&[])).expect("owl-direct");
 /// assert_eq!(dl.regime(), Regime::OwlDirect);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn materialize<D: DatasetView>(
     ds: &D,

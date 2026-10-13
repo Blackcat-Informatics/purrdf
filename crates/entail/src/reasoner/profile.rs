@@ -224,16 +224,17 @@ impl ProfileCertificate {
 /// use purrdf_entail::reasoner::{OwlProfile, profile};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// b.push_quad(cat, sub, animal, None);
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// b.push_quad(cat, sub, animal, None)?;
 /// let dataset = b.freeze().expect("freeze");
 ///
 /// // A bare sub-class axiom is in every profile.
 /// let certificate = profile(&dataset);
 /// assert_eq!(certificate.certified(), OwlProfile::ALL.to_vec());
 /// assert!(certificate.violations().is_empty());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn profile(ds: &RdfDataset) -> ProfileCertificate {

@@ -118,10 +118,10 @@ pub use purrdf_core::imports::{
 /// use purrdf_entail::{EntailError, ImportMap, RifImport, rif_resolver};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let s = b.intern_iri("http://example.org/s");
-/// let p = b.intern_iri("http://example.org/p");
-/// let o = b.intern_iri("http://example.org/o");
-/// b.push_quad(s, p, o, None);
+/// let s = b.intern_iri("http://example.org/s")?;
+/// let p = b.intern_iri("http://example.org/p")?;
+/// let o = b.intern_iri("http://example.org/o")?;
+/// b.push_quad(s, p, o, None)?;
 /// let document = b.freeze().expect("freeze");
 ///
 /// let mut map = ImportMap::default();
@@ -135,6 +135,7 @@ pub use purrdf_core::imports::{
 ///     resolve(&unknown),
 ///     Err(EntailError::UnresolvedImport(ref iri)) if iri == "http://example.org/other"
 /// ));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn rif_resolver(
     map: &ImportMap,

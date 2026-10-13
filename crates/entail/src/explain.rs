@@ -556,6 +556,7 @@ fn confirm_backward(
 /// assert!(proof.rules().contains(&RuleId::CaxSco));
 /// // …and the proof re-derives, from the clauses rather than from its own claim.
 /// assert!(proof.check().is_ok());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn explain_conclusion(
     ds: &RdfDataset,
@@ -820,6 +821,7 @@ impl Justification {
 /// assert_eq!(justification.axioms(), 2);
 /// assert!(justification.is_sufficient().expect("well formed"));
 /// assert!(justification.is_minimal().expect("well formed"));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn justify(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Justification, ExplainError> {
     match entails(ds, axiom)? {
