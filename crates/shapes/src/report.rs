@@ -1798,8 +1798,8 @@ impl ValidationReport {
     /// ```no_run
     /// # use purrdf_shapes::report::ValidationReport;
     /// # use purrdf_rdf::{SerializeGraph, serialize_dataset};
-    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, purrdf_rdf::RdfDiagnostic> {
-    /// serialize_dataset(&report.to_dataset()?, "text/turtle", SerializeGraph::DefaultGraph)
+    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    /// Ok(serialize_dataset(&report.to_dataset()?, "text/turtle", SerializeGraph::DefaultGraph)?)
     /// # }
     /// ```
     ///

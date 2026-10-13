@@ -2347,18 +2347,18 @@ impl PreparedShapes {
 /// use purrdf_shapes::engine::{PreparedValidator, parse_shapes};
 /// use purrdf_shapes::term::NamedNode;
 ///
-/// # fn main() -> Result<(), String> {
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut builder = RdfDatasetBuilder::new();
 /// let rdf_type = builder.intern_iri(
 ///     "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
-/// );
-/// let person = builder.intern_iri("https://example.org/Person");
-/// let required = builder.intern_iri("https://example.org/required");
-/// let alice = builder.intern_iri("https://example.org/alice");
-/// let present = builder.intern_iri("https://example.org/present");
-/// builder.push_quad(alice, rdf_type, person, None);
-/// builder.push_quad(alice, required, present, None);
-/// let dataset = Arc::new(builder.freeze().map_err(|error| error.to_string())?);
+/// )?;
+/// let person = builder.intern_iri("https://example.org/Person")?;
+/// let required = builder.intern_iri("https://example.org/required")?;
+/// let alice = builder.intern_iri("https://example.org/alice")?;
+/// let present = builder.intern_iri("https://example.org/present")?;
+/// builder.push_quad(alice, rdf_type, person, None)?;
+/// builder.push_quad(alice, required, present, None)?;
+/// let dataset = Arc::new(builder.freeze()?);
 ///
 /// let shapes = Arc::new(parse_shapes(
 ///     r#"

@@ -155,12 +155,12 @@
 //!
 //! // 1. The data: a three-edge chain.
 //! let mut builder = RdfDatasetBuilder::new();
-//! let a = builder.intern_iri("http://example.org/a");
-//! let b = builder.intern_iri("http://example.org/b");
-//! let c = builder.intern_iri("http://example.org/c");
-//! let p = builder.intern_iri("http://example.org/p");
-//! builder.push_quad(a, p, b, None);
-//! builder.push_quad(b, p, c, None);
+//! let a = builder.intern_iri("http://example.org/a")?;
+//! let b = builder.intern_iri("http://example.org/b")?;
+//! let c = builder.intern_iri("http://example.org/c")?;
+//! let p = builder.intern_iri("http://example.org/p")?;
+//! builder.push_quad(a, p, b, None)?;
+//! builder.push_quad(b, p, c, None)?;
 //! let dataset = builder.freeze()?;
 //!
 //! // 2. The step, and the snapshot of it over THIS dataset (see the precondition above).

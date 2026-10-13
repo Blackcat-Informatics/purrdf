@@ -1595,11 +1595,12 @@ pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
 /// use purrdf_datalog::term::TermDag;
 ///
 /// let mut dag = TermDag::default();
-/// let goal = dag.intern_leaf("fact");
+/// let goal = dag.intern_leaf("fact")?;
 /// let proof = FolProof::Assert { rule: 0, rule_identity: "rule-id".to_owned(), goal };
 /// let id = derivation_id(&dag, &proof);
 /// assert_eq!(id.len(), 40);
 /// assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
