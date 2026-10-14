@@ -37,12 +37,16 @@
 //!   `tests/vectors/exact_numeric_vectors.txt`, generated from the exact rational
 //!   oracle, replayed through the `XsdValue` operators (`+ − ×`, both division
 //!   policies, comparison, the conversions to `f64`/`f32` and canonical forms).
+//! * `large_decimal_group_parse_replays_on_this_target`: long decimal input
+//!   around the balanced-reader crossover and at 40,000 digits, checked
+//!   against the independent decimal renderer on the actual target.
 
 use std::fmt::Write as _;
 use std::str::FromStr;
 
 use purrdf_testkit::harness::assert_transcript_digest;
 use purrdf_testkit::rng::splitmix64_next;
+use purrdf_xsd::bigint::BigInt;
 use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rational, Rounding};
 
 /// The transcript's FNV-1a digest, as both targets compute it.
@@ -266,8 +270,23 @@ fn the_oracle_vectors_replay_on_this_target() {
     assert!(replayed > 7_000, "{replayed} records");
 }
 
+fn large_decimal_group_parse_replays_on_this_target() {
+    for digits in [4_000, 4_882, 4_883, 4_884, 40_000] {
+        let mut lexical = String::with_capacity(digits);
+        lexical.push('7');
+        for at in 1..digits {
+            lexical.push(char::from(b'0' + (at % 10) as u8));
+        }
+        let parsed = BigInt::try_from_decimal_bytes(lexical.bytes(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.to_string(), lexical, "{digits} digits");
+    }
+}
+
 purrdf_testkit::harness_main!(
     the_hand_values_are_reproduced_on_this_target,
     the_transcript_digest_is_reproduced_on_this_target,
     the_oracle_vectors_replay_on_this_target,
+    large_decimal_group_parse_replays_on_this_target,
 );

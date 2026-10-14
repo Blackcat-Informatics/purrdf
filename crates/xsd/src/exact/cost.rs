@@ -531,8 +531,11 @@ fn invalid_parse_layout(error_code: Option<crate::ErrorCode>) -> NumericParseLay
     }
 }
 
-/// The two native decimal-chunk destinations. Each asks for previous len + 1;
-/// original and replacement buffers coexist. Three-limb magnitudes stay inline.
+/// The two native decimal-chunk destinations coexist on the Horner path.
+/// Beyond 256 complete 19-digit groups, the balanced reader also retains
+/// cached decimal powers, occupied blocks and recursive multiplication scratch;
+/// 32 times the checked result size bounds those simultaneous owners.
+/// Three-limb magnitudes stay inline.
 fn magnitude_parse_layout(
     digits: usize,
 ) -> Result<NumericParseLayout, crate::bigint::LimbScratchError> {
@@ -547,8 +550,9 @@ fn magnitude_parse_layout(
         .checked_add(1)
         .ok_or(SizeOverflow)?;
     let retained_bytes = words.checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
+    let peak_factor = if digits >= 257 * 19 { 32 } else { 2 };
     let peak_bytes = retained_bytes
-        .checked_add(retained_bytes)
+        .checked_mul(peak_factor)
         .ok_or(SizeOverflow)?;
     Ok(NumericParseLayout {
         peak_bytes,
