@@ -330,6 +330,47 @@ fn large_binary_products_match_the_schoolbook_oracle() {
     assert_transcript_digest("exact-large-products", &transcript, 0x6017_91f9_7aa1_152f);
 }
 
+/// Exact shift equations cover block boundaries without using multiplication
+/// to construct the dividend or derive the expected quotient/remainder.
+fn large_binary_division_replays_exact_shift_equations() {
+    for limbs in [2_047, 2_048, 2_049, 4_097, 34_944] {
+        let width = 64 * limbs;
+        let power = BigInt::one().shl(width);
+        let divisor = power.sub(&BigInt::one());
+        let dividend = BigInt::one().shl(2 * width).sub(&BigInt::one());
+        let (quotient, remainder) = dividend.div_rem(&divisor).unwrap();
+        assert_eq!(quotient, power.add(&BigInt::one()), "{limbs} limbs");
+        assert!(remainder.is_zero());
+
+        let adjacent = dividend.sub(&BigInt::one());
+        let (quotient, remainder) = adjacent.div_rem(&divisor).unwrap();
+        assert_eq!(quotient, power, "adjacent {limbs} limbs");
+        assert_eq!(remainder, divisor.sub(&BigInt::one()));
+        let (quotient, remainder) = adjacent.negated().div_rem(&divisor).unwrap();
+        assert_eq!(quotient, power.negated());
+        assert_eq!(remainder, divisor.sub(&BigInt::one()).negated());
+
+        let scratch = purrdf_xsd::bigint::LimbScratch::new(128, dividend.limb_len() + 256)
+            .expect("admitted recursive division arena");
+        let actual = adjacent
+            .div_rem_in(&divisor, &scratch)
+            .expect("bounded recursive division")
+            .expect("nonzero divisor");
+        assert_eq!(actual, (power, divisor.sub(&BigInt::one())));
+        assert_eq!(
+            scratch.available(),
+            126,
+            "both exact results retain their slots"
+        );
+        drop(actual);
+        assert_eq!(
+            scratch.available(),
+            128,
+            "all temporary and result slots return"
+        );
+    }
+}
+
 fn wide_gap_gcd_replays_on_this_target() {
     let mut common = BigInt::from_i128(1);
     for word in 1..17_u64 {
@@ -349,5 +390,6 @@ purrdf_testkit::harness_main!(
     the_oracle_vectors_replay_on_this_target,
     large_decimal_group_parse_replays_on_this_target,
     large_binary_products_match_the_schoolbook_oracle,
+    large_binary_division_replays_exact_shift_equations,
     wide_gap_gcd_replays_on_this_target,
 );

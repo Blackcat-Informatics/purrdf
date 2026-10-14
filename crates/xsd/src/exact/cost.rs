@@ -227,32 +227,62 @@ pub(crate) fn live_integer_bytes(
     })
 }
 
-fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
-    values.iter().try_fold(0_u64, |sum, value| {
-        sum.checked_add(*value)
-            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)
-    })
+const fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
+    let mut sum = 0_u64;
+    let mut at = 0;
+    while at < values.len() {
+        let Some(next) = sum.checked_add(values[at]) else {
+            return Err(crate::bigint::LimbScratchError::SizeOverflow);
+        };
+        sum = next;
+        at += 1;
+    }
+    Ok(sum)
 }
 
-fn owned_words(limbs: u64) -> u64 {
+const fn owned_words(limbs: u64) -> u64 {
     if limbs <= 3 { 0 } else { limbs }
 }
 
 // Mirrors the actual destination families of mag_div_rem, not saturated fuel.
 // The <=8-limb normalized branch uses stack scratch; larger division retains
 // normalized numerator/divisor and quotient before returning its remainder.
-fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScratchError> {
+const fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScratchError> {
+    if lb >= crate::bigint::DIVISION_BLOCK_THRESHOLD as u64
+        && la.saturating_sub(lb).saturating_add(1) >= lb
+    {
+        use crate::bigint::LimbScratchError::SizeOverflow;
+        let Some(n) = crate::bigint::normalized_divisor_limbs(lb) else {
+            return Err(SizeOverflow);
+        };
+        let Some(padded) = la.checked_add(n - lb) else {
+            return Err(SizeOverflow);
+        };
+        let Some(normalized) = padded.checked_add(1) else {
+            return Err(SizeOverflow);
+        };
+        let quotient = la - lb + 1;
+        // The top level retains normalized operands, the final quotient and
+        // one 2n block. D2n1n's maximum is 25n/2 further live words: D3n2n
+        // holds one h-word estimate, a 3h-word assembled dividend, one h-word
+        // copied low divisor and the existing multiplication's 16h-word peak;
+        // D2n1n's second D3n2n retains its h-word first quotient and 3h-word
+        // second dividend. Recursive halves have a strictly smaller peak.
+        let Some(inner) = (n / 2).checked_mul(25) else {
+            return Err(SizeOverflow);
+        };
+        let Some(block) = n.checked_mul(2) else {
+            return Err(SizeOverflow);
+        };
+        return checked_sum_words(&[normalized, n, quotient, block, inner]);
+    }
     if la <= 8 {
-        checked_sum_words(&[owned_words(la), owned_words(la.min(lb))])
+        checked_sum_words(&[owned_words(la), owned_words(if la < lb { la } else { lb })])
     } else {
-        checked_sum_words(&[
-            owned_words(
-                la.checked_add(1)
-                    .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?,
-            ),
-            owned_words(lb),
-            owned_words(la),
-        ])
+        let Some(normalized) = la.checked_add(1) else {
+            return Err(crate::bigint::LimbScratchError::SizeOverflow);
+        };
+        checked_sum_words(&[owned_words(normalized), owned_words(lb), owned_words(la)])
     }
 }
 
@@ -798,13 +828,22 @@ pub(crate) const fn div(la: u64, lb: u64) -> Cost {
         .saturating_add(1);
     // Normalized division retains the dividend-sized remainder allocation
     // beside the quotient and normalized divisor, even after zero trimming.
+    let ordinary_bytes = limb_bytes(
+        la.saturating_mul(2)
+            .saturating_add(lb.saturating_mul(2))
+            .saturating_add(4),
+    );
+    let native_bytes = match division_words(la, lb) {
+        Ok(words) => limb_bytes(words),
+        Err(_) => u64::MAX,
+    };
     Cost::new(
         work,
-        limb_bytes(
-            la.saturating_mul(2)
-                .saturating_add(lb.saturating_mul(2))
-                .saturating_add(4),
-        ),
+        if native_bytes > ordinary_bytes {
+            native_bytes
+        } else {
+            ordinary_bytes
+        },
     )
 }
 

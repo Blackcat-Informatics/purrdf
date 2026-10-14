@@ -9,8 +9,10 @@
 
 use core::{cmp::Ordering, fmt};
 mod compat;
+mod division;
 pub use compat::KARATSUBA_THRESHOLD;
 pub(crate) use compat::TOOM3_THRESHOLD;
+pub(crate) use division::{DIVISION_BLOCK_THRESHOLD, normalized_divisor_limbs};
 #[cfg(test)]
 mod arithmetic_tests;
 pub(crate) mod scratch;
@@ -482,6 +484,9 @@ fn mag_div_rem(
         mag_trim(&mut remainder);
         mag_shr_in_place(&mut remainder, u64::from(shift));
         return Ok((quotient, remainder));
+    }
+    if division::use_block_division(a.len(), b.len()) {
+        return division::divide_blocks(a, b, storage);
     }
     let length = a
         .len()

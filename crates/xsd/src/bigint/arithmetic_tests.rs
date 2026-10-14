@@ -55,6 +55,150 @@ mod tests {
     }
 
     #[test]
+    fn block_division_reconstructs_threshold_product_and_remainder() {
+        let mut state = 0x0042_4C4F_434B_u64;
+        for divisor_limbs in [2_047, 2_048, 2_049] {
+            let divisor = random(&mut state, divisor_limbs, false);
+            for quotient_limbs in [1, 2_047, 2_048, 4_097] {
+                let expected_quotient = random(&mut state, quotient_limbs, false);
+                let dividend = divisor.mul_fast(&expected_quotient).add(&BigInt::one());
+                let layout = crate::exact::cost::integer_division_layout(
+                    dividend.limb_len() as u64,
+                    divisor.limb_len() as u64,
+                )
+                .expect("addressable division layout");
+                let cost =
+                    crate::exact::cost::div(dividend.limb_len() as u64, divisor.limb_len() as u64);
+                for (negative_dividend, negative_divisor) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    let signed_dividend = if negative_dividend {
+                        dividend.negated()
+                    } else {
+                        dividend.clone()
+                    };
+                    let signed_divisor = if negative_divisor {
+                        divisor.negated()
+                    } else {
+                        divisor.clone()
+                    };
+                    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                    let (quotient, remainder) = signed_dividend
+                        .div_rem(&signed_divisor)
+                        .expect("nonzero divisor");
+                    let measurement = window.close();
+                    assert!(measurement.allocations > 0, "live allocation counter");
+                    assert!(
+                        usize::try_from(measurement.peak_working_bytes).unwrap()
+                            <= layout.required_bytes(),
+                        "{divisor_limbs}/{quotient_limbs}: {measurement:?} exceeds {layout:?}"
+                    );
+                    assert!(
+                        u64::try_from(measurement.peak_working_bytes).unwrap() <= cost.bytes(),
+                        "division governor peak: {measurement:?} exceeds {cost:?}"
+                    );
+                    let expected = if negative_dividend != negative_divisor {
+                        expected_quotient.negated()
+                    } else {
+                        expected_quotient.clone()
+                    };
+                    assert_eq!(quotient, expected);
+                    assert_eq!(
+                        remainder,
+                        BigInt::from_i64(if negative_dividend { -1 } else { 1 })
+                    );
+                    assert_eq!(&(&quotient * &signed_divisor) + &remainder, signed_dividend);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn block_division_handles_normalization_shifts_and_largest_remainders() {
+        let mut state = 0x0042_4C4F_434B_5348_u64;
+        for leading_zeros in [0_u32, 1, 31, 63] {
+            let divisor = BigInt::one()
+                .shl(64 * 2_047 + 63 - leading_zeros)
+                .add(&random(&mut state, 2_047, false));
+            let expected_quotient = random(&mut state, 2_048, false);
+            let expected_remainder = divisor.sub(&BigInt::one());
+            let dividend = divisor
+                .mul_fast(&expected_quotient)
+                .add(&expected_remainder);
+            let (quotient, remainder) = dividend.div_rem(&divisor).expect("nonzero divisor");
+            assert_eq!(quotient, expected_quotient, "shift {leading_zeros}");
+            assert_eq!(remainder, expected_remainder, "shift {leading_zeros}");
+
+            let capacity = dividend.limb_len() + 256;
+            let scratch = LimbScratch::new(128, capacity).expect("admitted recursive destinations");
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let actual = dividend
+                .div_rem_in(&divisor, &scratch)
+                .expect("recursive division fits the admitted arena")
+                .expect("nonzero divisor");
+            assert_eq!(window.close().allocations, 0, "no fallback allocations");
+            assert_eq!(actual, (expected_quotient, expected_remainder));
+            assert_eq!(scratch.available(), 126, "only the two results remain held");
+            let retained = actual.0.clone();
+            drop(actual);
+            assert_eq!(
+                scratch.available(),
+                127,
+                "the clone retains its destination"
+            );
+            drop(retained);
+            assert_eq!(
+                scratch.available(),
+                128,
+                "last-owner release returns the slot"
+            );
+
+            let insufficient = LimbScratch::new(3, capacity).expect("ordinary division arena");
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let refusal = dividend.div_rem_in(&divisor, &insufficient);
+            assert_eq!(
+                window.close().allocations,
+                0,
+                "refusal has no heap fallback"
+            );
+            assert!(matches!(
+                refusal,
+                Err(LimbScratchError::Exhausted { destinations: 3 })
+            ));
+            assert_eq!(insufficient.available(), 3, "refusal releases partial work");
+            assert_eq!(
+                BigInt::from_u64(65).div_rem_in(&BigInt::from_u64(7), &insufficient),
+                Ok(Some((BigInt::from_u64(9), BigInt::from_u64(2))))
+            );
+        }
+        for limbs in [34_943, 34_944, 34_945] {
+            let width = 64 * limbs;
+            let power = BigInt::one().shl(width);
+            let divisor = power.sub(&BigInt::one());
+            let dividend = BigInt::one().shl(2 * width).sub(&BigInt::from_u64(2));
+            let layout = crate::exact::cost::integer_division_layout(
+                dividend.limb_len() as u64,
+                divisor.limb_len() as u64,
+            )
+            .expect("addressable deep normalization layout");
+            let cost =
+                crate::exact::cost::div(dividend.limb_len() as u64, divisor.limb_len() as u64);
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let actual = dividend.div_rem(&divisor).expect("nonzero divisor");
+            let measurement = window.close();
+            assert!(
+                measurement.allocations > 0,
+                "live deep normalization counter"
+            );
+            assert!(
+                usize::try_from(measurement.peak_working_bytes).unwrap() <= layout.required_bytes()
+            );
+            assert!(u64::try_from(measurement.peak_working_bytes).unwrap() <= cost.bytes());
+            assert_eq!(actual, (power, divisor.sub(&BigInt::one())));
+        }
+    }
+
+    #[test]
     fn decimal_render_reuses_one_quotient_destination() {
         let digits = "12345678901234567890".repeat(20);
         let value = BigInt::from_digits(&digits).expect("valid decimal digits");
