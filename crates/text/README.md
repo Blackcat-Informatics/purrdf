@@ -91,9 +91,10 @@ selector. The separate `purrdf-text/triples/source/v1` identity covers the sourc
 triples and remains unchanged when surface indexing is omitted.
 
 Ranking uses one fielded BM25F path, including the single-field case. The
-immutable `RankingProfile` binds up to sixteen named fields, each field's
-weight and length normalization, total predicate routing, exact arithmetic,
-query aggregation, input bounds and the score bound into a fingerprint.
+immutable `RankingProfile` binds caller-named fields, each field's weight and
+length normalization, total predicate routing and the field-population law into
+a fingerprint. `PreparedQuery` separately carries the query's certified score
+bound from its corpus statistics.
 `k1 = 1.2` is fixed. `RankingProfile::single_field()` explicitly routes every
 selected predicate to one field with weight one and `b = 0.75`.
 
