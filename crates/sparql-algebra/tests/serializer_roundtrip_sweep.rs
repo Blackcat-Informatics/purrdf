@@ -363,6 +363,17 @@ fn normalize_join_assoc(p: &GraphPattern, aliases: &BTreeMap<Variable, Variable>
                 .map(|v| alpha_variable(v, aliases))
                 .collect(),
         },
+        GraphPattern::ProjectStar { inner, variables } => {
+            assert!(
+                variables
+                    .iter()
+                    .all(|variable| !aliases.contains_key(variable))
+            );
+            GraphPattern::ProjectStar {
+                inner: Child::new(normalize_join_assoc(inner, aliases)),
+                variables: variables.clone(),
+            }
+        }
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
             inner: Child::new(normalize_join_assoc(inner, aliases)),
         },
@@ -598,7 +609,10 @@ fn roundtrip(original: &Query) -> Result<(), String> {
     else {
         panic!("pattern_to_select_query's own contract is a re-parseable SELECT; got {reparsed:?}");
     };
-    let reparsed_body = if matches!(body, GraphPattern::Project { .. }) {
+    let reparsed_body = if matches!(
+        body,
+        GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. }
+    ) {
         reparsed_pattern.clone()
     } else {
         where_body(reparsed_pattern)
@@ -606,7 +620,12 @@ fn roundtrip(original: &Query) -> Result<(), String> {
     let original_norm = normalize_join_assoc(&body, &BTreeMap::new());
     let reparsed_norm = normalize_join_assoc(&reparsed_body, &BTreeMap::new());
     let aliases = hidden_aliases(&original_norm, &reparsed_norm, &BTreeSet::new())?;
-    if !aliases.is_empty() && !matches!(body, GraphPattern::Project { .. }) {
+    if !aliases.is_empty()
+        && !matches!(
+            body,
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. }
+        )
+    {
         let GraphPattern::Project { variables, .. } = reparsed_pattern else {
             return Err("the hidden carrier lacks its visible projection".to_owned());
         };

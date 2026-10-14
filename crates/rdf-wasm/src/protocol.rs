@@ -893,6 +893,17 @@ mod tests {
         assert_eq!(evaluation.status(), 500);
         assert!(!evaluation.internal());
         assert_eq!(body(&evaluation, None)["code"], "native-sparql-query-eval");
+        let stack = FailureProblem::new(
+            Some(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
+            "error native-sparql-evaluation-stack-exhausted: query evaluation needs more stack",
+            false,
+        );
+        assert_eq!(stack.status(), 400);
+        assert!(!stack.internal());
+        assert_eq!(
+            body(&stack, None)["code"],
+            purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+        );
     }
 
     /// A host fault — an exception with no code, or a job's latched fault — never shows

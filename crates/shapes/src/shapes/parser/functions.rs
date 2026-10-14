@@ -838,6 +838,7 @@ fn projected_variables(pattern: &purrdf_sparql_algebra::GraphPattern) -> Option<
             | GraphPattern::Reduced { inner }
             | GraphPattern::OrderBy { inner, .. } => node = inner,
             GraphPattern::Project { variables, .. } => return Some(variables.len()),
+            GraphPattern::ProjectStar { variables, .. } => return Some(variables.len()),
             _ => return None,
         }
     }

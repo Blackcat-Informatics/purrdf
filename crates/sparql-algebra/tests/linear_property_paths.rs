@@ -36,13 +36,17 @@ fn projected(text: &str) -> (Vec<String>, GraphPattern) {
     else {
         panic!("a SELECT query");
     };
-    let GraphPattern::Project { variables, inner } = pattern else {
-        panic!("a SELECT has a projection");
+    let variables = pattern
+        .projected_names()
+        .expect("a SELECT has a projection")
+        .iter()
+        .map(|v| v.as_str().to_owned())
+        .collect();
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        unreachable!("a SELECT has a projection")
     };
-    (
-        variables.iter().map(|v| v.as_str().to_owned()).collect(),
-        inner.into_inner(),
-    )
+    (variables, inner.into_inner())
 }
 
 #[test]

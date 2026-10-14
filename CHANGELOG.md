@@ -24,6 +24,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Rust query-algebra projections:** parsed `SELECT *` can now produce
+  `GraphPattern::ProjectStar`, whose ordered `ProjectionVars` shares earlier
+  projection snapshots. Explicit `Project` retains its `Vec<Variable>`.
+  Downstream exhaustive matches must handle the new variant; code that reads
+  either projection's names can use `GraphPattern::projected_names()`.
+  This source break requires the 4.0 major release and must not ship as a 3.x
+  patch. See the [4.0 migration guide](docs/MIGRATION-4.0.md).
+
 - **Remembered empty named graphs are the default:** Rust `GraphExistenceMode`,
   `MutableDataset::new` and `QueryOptions`, Python `Store`/`MutableDataset`, WASM
   `Dataset` and `purrdf update` now retain named graphs after last-row removal or

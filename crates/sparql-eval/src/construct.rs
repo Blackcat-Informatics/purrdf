@@ -1081,6 +1081,7 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -2803,6 +2804,7 @@ mod where_walk_tests {
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }

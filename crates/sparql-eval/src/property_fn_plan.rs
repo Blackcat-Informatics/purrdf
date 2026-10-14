@@ -1701,7 +1701,8 @@ impl<'a> Planner<'a, '_, '_, '_> {
             // for exactly the projected variables — so the correlation set is narrowed
             // to them on the way in. A prepared execution's parameters are written past
             // the projection, so the promise passes unchanged.
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = node.projected_names().expect("projection names");
                 let narrowed =
                     narrowed_to_admitted(scope.get(&self.scopes), variables, &self.workspace)?;
                 let narrowed = self.own(narrowed)?;
@@ -2111,6 +2112,10 @@ impl<'a> Planner<'a, '_, '_, '_> {
             GraphPattern::Project { variables, .. } => GraphPattern::Project {
                 inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
                 variables: self.memory.collect(variables.iter().cloned())?,
+            },
+            GraphPattern::ProjectStar { variables, .. } => GraphPattern::ProjectStar {
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+                variables: variables.clone(),
             },
             GraphPattern::Distinct { .. } => GraphPattern::Distinct {
                 inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
@@ -2777,7 +2782,9 @@ pub(crate) fn collect_bound_admitted(
                     // The context reaches a sub-`SELECT`'s inner pattern only through the
                     // variables the projection names; what the SHACL pre-binding rewrite
                     // writes is written past the projection too.
-                    GraphPattern::Project { inner, variables } => {
+                    GraphPattern::Project { inner, .. }
+                    | GraphPattern::ProjectStar { inner, .. } => {
+                        let variables = node.projected_names().expect("projection names");
                         let narrowed = narrowed_to_admitted(
                             resolve(ctx, context, &arena),
                             variables,
@@ -2955,7 +2962,8 @@ pub(crate) fn collect_bound_admitted(
                     }
                     // Only what the projection keeps escapes, and only if the inner
                     // pattern bound it certainly.
-                    GraphPattern::Project { variables, .. } => {
+                    GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                        let variables = node.projected_names().expect("projection names");
                         let inner_bound = values.pop().expect("the inner pattern is bound");
                         VarSchema::from_vars_admitted(
                             variables
@@ -3098,7 +3106,10 @@ fn aggregate_certainly_binds_admitted(
 /// pattern: an enclosing binding is substituted into it only for a variable it
 /// projects.
 #[cfg(test)]
-fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+fn narrowed_to(
+    context: &DetHashSet<Variable>,
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
+) -> DetHashSet<Variable> {
     let workspace = WorkspaceCapability::default();
     let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
         .expect("resident projected certainty context");
@@ -3112,7 +3123,7 @@ fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHas
 
 fn narrowed_to_admitted(
     context: &VarSchema,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     workspace: &WorkspaceCapability,
 ) -> Result<VarSchema, EvalError> {
     VarSchema::from_vars_admitted(
@@ -3130,7 +3141,11 @@ fn intersection_admitted(
     right: &VarSchema,
     workspace: &WorkspaceCapability,
 ) -> Result<VarSchema, EvalError> {
-    narrowed_to_admitted(left, right.vars(), workspace)
+    narrowed_to_admitted(
+        left,
+        purrdf_sparql_algebra::ProjectionNames::Explicit(right.vars()),
+        workspace,
+    )
 }
 
 /// Whether `expr` can be left without a value only by the data it reads — never
@@ -4812,6 +4827,7 @@ mod pushdown_reach_tests {
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -4838,7 +4854,8 @@ mod pushdown_reach_tests {
             }
         }
         fn strip(pattern: &mut GraphPattern) -> usize {
-            if let GraphPattern::Project { inner, .. } = pattern
+            if let GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } =
+                pattern
                 && over_group(inner)
             {
                 let inner = std::mem::replace(
@@ -4863,6 +4880,7 @@ mod pushdown_reach_tests {
                 | GraphPattern::Unfold { inner, .. }
                 | GraphPattern::OrderBy { inner, .. }
                 | GraphPattern::Project { inner, .. }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::Slice { inner, .. }
@@ -5623,7 +5641,25 @@ mod iterative_walk_tests {
             // restricting the inner rows restricts the output the same way. A parameter it
             // does not project is a different variable inside, and nothing is promised for it.
             GraphPattern::Project { inner, variables } => GraphPattern::Project {
-                inner: recurse(inner, &narrowed_to(outer, variables), promise)?,
+                inner: recurse(
+                    inner,
+                    &narrowed_to(
+                        outer,
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+                    ),
+                    promise,
+                )?,
+                variables: variables.clone(),
+            },
+            GraphPattern::ProjectStar { inner, variables } => GraphPattern::ProjectStar {
+                inner: recurse(
+                    inner,
+                    &narrowed_to(
+                        outer,
+                        purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                    ),
+                    promise,
+                )?,
                 variables: variables.clone(),
             },
             // Row-for-row wrappers the pushdown enters beneath the core as well as above it.
@@ -6003,7 +6039,8 @@ mod iterative_walk_tests {
             // it certainly. The context reaches the inner pattern only through the
             // variables the projection names; what the SHACL pre-binding rewrite writes is
             // written past the projection too.
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let inner_context = narrowed_to(context, variables);
                 let mut inner_bound = DetHashSet::default();
                 reference_collect_bound(inner, &inner_context, written, &mut inner_bound);

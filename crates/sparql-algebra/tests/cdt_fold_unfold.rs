@@ -428,9 +428,7 @@ fn unfold_accepts_an_arbitrary_expression_operand() {
 fn unfold_targets_are_visible_to_select_star() {
     let pattern =
         select_pattern("SELECT * WHERE { BIND(\"{1 : 2}\"^^cdt:Map AS ?m) UNFOLD(?m AS ?k, ?v) }");
-    let GraphPattern::Project { variables, .. } = &pattern else {
-        panic!("expected a projection");
-    };
+    let variables = pattern.projected_names().expect("expected a projection");
     for name in ["m", "k", "v"] {
         assert!(
             variables.contains(&Variable::new(name)),

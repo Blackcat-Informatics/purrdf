@@ -406,7 +406,7 @@ enum Val {
     Group(GroupValue),
     /// A `SELECT`, and whether it holds a fresh binding [`find_scope_conflict`] could
     /// report.
-    Query(Box<Query>, bool),
+    Query(Box<Query>, bool, Option<VarScope>),
     /// A solution-modifier list and the query's aggregates, its own appended.
     Modifiers(Modifiers, Vec<Lifted>),
 }
@@ -494,6 +494,7 @@ struct SelectState {
     /// The enclosing parse's deferred-`EXISTS` window, restored once this `SELECT`
     /// ends (see [`Parser::projection_scope_pending`]).
     saved_pending: bool,
+    saved_last_exists_token: Option<usize>,
     saved_in_aggregate: bool,
     saved_seen: Vec<Variable>,
     saved_checks: Vec<PendingExistsScopeCheck>,
@@ -503,7 +504,7 @@ struct SelectState {
     aggregates: Vec<Lifted>,
     dataset: QueryDataset,
     /// The `WHERE` pattern and its `intro`, once read.
-    where_pattern: Option<(GraphPattern, bool)>,
+    where_pattern: Option<(GraphPattern, bool, VarScope)>,
 }
 
 /// A `SELECT`'s `DISTINCT` or `REDUCED`.
@@ -569,9 +570,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
 
     /// Read a whole query's `SELECT`.
     pub(super) fn parse_select(&mut self, base_iri: Option<NamedNode>) -> Result<Query> {
-        let step = self.start_select(base_iri, SelectPosition::Query)?;
+        let step = self.start_select(base_iri, SelectPosition::Query, None)?;
         match self.run(step)? {
-            Val::Query(query, _) => {
+            Val::Query(query, _, scope) => {
+                if let Some(scope) = scope {
+                    scope.release(self.memory)?;
+                }
                 let query = *query;
                 self.memory.release_bytes(size_of::<Query>())?;
                 Ok(query)
@@ -763,14 +767,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 Ok(Step::Return(Val::Expr(expr, lifted)))
             }
             Ctl::SubSelectGroup => {
-                let Val::Query(sub, intro) = val else {
+                let Val::Query(sub, intro, scope) = val else {
                     unreachable!("a sub-SELECT returns a query")
                 };
                 self.expect(&Token::RBrace)?;
                 Ok(Step::Return(Val::Group({
                     let sub = *sub;
                     self.memory.release_bytes(size_of::<Query>())?;
-                    self.sub_select_group(sub, intro)?
+                    self.sub_select_group(sub, intro, scope)?
                 })))
             }
             Ctl::Element(element) => self.resume_element(element, val),
@@ -1688,13 +1692,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
     /// A group graph pattern, at its `{`: a sub-`SELECT`, or a group whose elements are
     /// read next.
     fn start_group(&mut self) -> Result<Step> {
+        let open = self.pos;
         self.expect(&Token::LBrace)?;
         if self.peek_kw("SELECT") {
             {
                 let native_value = Ctl::SubSelectGroup;
                 self.memory.push(&mut self.machine.ctl, native_value)?;
             };
-            return self.start_select(None, SelectPosition::SubSelect);
+            return self.start_select(None, SelectPosition::SubSelect, Some(open));
         }
         {
             let native_value = GroupState::new();
@@ -1704,7 +1709,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
     }
 
     /// `{ SELECT … }`, read: its pattern, and the variables its projection puts in scope.
-    fn sub_select_group(&mut self, sub: Query, intro: bool) -> Result<GroupValue> {
+    fn sub_select_group(
+        &mut self,
+        sub: Query,
+        intro: bool,
+        inherited_scope: Option<VarScope>,
+    ) -> Result<GroupValue> {
         // Destructured field by field rather than through `..`: a sub-select keeps only
         // the pattern, and the other three have to be accounted for HERE, where the
         // `Query` is discarded, or a field added to `Query::Select` later would start
@@ -1741,8 +1751,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 if let Some(crate::SparqlVersion::Other(text)) = version {
                     self.memory.release_string(text)?;
                 }
-                let mut scope = VarScope::default();
-                collect_vars(&pattern, &mut scope, self.memory)?;
+                let scope = if let Some(scope) = inherited_scope {
+                    scope
+                } else {
+                    let mut scope = VarScope::default();
+                    collect_vars(&pattern, &mut scope, self.memory)?;
+                    scope
+                };
                 Ok(GroupValue {
                     pattern,
                     scope,
@@ -1932,7 +1947,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     None => arm,
                     Some(mut chain) => {
                         for v in arm.scope.as_slice() {
-                            chain.scope.note(v, self.memory)?;
+                            if arm.scope.contains(v) {
+                                chain.scope.note(v, self.memory)?;
+                            } else {
+                                chain.scope.note_contextual(v, self.memory)?;
+                            }
                         }
                         arm.scope.release(self.memory)?;
                         GroupValue {
@@ -1986,20 +2005,33 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // against a fresh walk (the non-counting entry point) under
                 // `debug_assertions` only.
                 self.note_scope_consultation();
+                let contextual_scope = if group.scope.contextual_minus {
+                    Some(self.memory.collect(group.scope.visible_iter().cloned())?)
+                } else {
+                    None
+                };
+                let left_scope = contextual_scope
+                    .as_deref()
+                    .unwrap_or_else(|| group.scope.as_slice());
                 #[cfg(debug_assertions)]
                 {
                     let checked = compute_lateral_left_scope(&group.g, self.memory)?;
                     debug_assert_eq!(
-                        group.scope.as_slice(),
+                        left_scope,
                         checked.as_slice(),
                         "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
                     );
                     self.memory.release_vec(checked)?;
                 }
-                if right.intro
-                    && let Some((var, intro)) =
-                        find_scope_conflict(group.scope.as_slice(), &right.pattern, self.memory)?
-                {
+                let conflict = if right.intro {
+                    find_scope_conflict(left_scope, &right.pattern, self.memory)
+                } else {
+                    Ok(None)
+                };
+                if let Some(contextual_scope) = contextual_scope {
+                    self.memory.release_vec(contextual_scope)?;
+                }
+                if let Some((var, intro)) = conflict? {
                     return Err(super::native_syntax(
                         &format_args!(
                             "{} ?{} inside {} is already in scope on {}",
@@ -2021,6 +2053,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             }
             Element::Minus => {
                 let right = val.group();
+                if RDFLIB {
+                    for variable in right.scope.as_slice() {
+                        group.scope.note_contextual(variable, self.memory)?;
+                    }
+                }
                 right.scope.release(self.memory)?;
                 self.pop_exists_scope_boundary();
                 // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING to the
@@ -2089,7 +2126,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // with the group's element count). The equivalence check still runs,
                 // through the free-function (non-counting) `visible_variables`.
                 #[cfg(debug_assertions)]
-                {
+                if group.scope.star_snapshot.is_empty() {
                     let checked = visible_variables_with_memory(&group.g, self.memory)?;
                     debug_assert_eq!(
                         group.scope.contains(&variable),
@@ -2130,7 +2167,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // `BIND`'s §19.6 scope rule, verbatim, on BOTH targets.
                 for variable in std::iter::once(&element).chain(companion.as_ref()) {
                     #[cfg(debug_assertions)]
-                    {
+                    if group.scope.star_snapshot.is_empty() {
                         let checked = visible_variables_with_memory(&group.g, self.memory)?;
                         debug_assert_eq!(
                             group.scope.contains(variable),
@@ -2190,9 +2227,21 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
     /// into the group's set and into the innermost `EXISTS` in-scope frame, exactly as a
     /// walk of the element's pattern would.
     fn note_element_vars(&mut self, scope: &mut VarScope, element: VarScope) -> Result<()> {
+        let future_exists = self.last_exists_token.is_some_and(|at| self.pos <= at);
+        if scope.as_slice().is_empty() && !future_exists {
+            *scope = element;
+            return Ok(());
+        }
+        scope.contextual_minus |= element.contextual_minus;
         for variable in element.as_slice() {
-            scope.note(variable, self.memory)?;
-            self.note_exists_scope_var(variable)?;
+            if element.contains(variable) {
+                scope.note(variable, self.memory)?;
+                if future_exists {
+                    self.note_exists_scope_var(variable)?;
+                }
+            } else {
+                scope.note_contextual(variable, self.memory)?;
+            }
         }
         element.release(self.memory)?;
         Ok(())
@@ -2205,6 +2254,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
         &mut self,
         base_iri: Option<NamedNode>,
         position: SelectPosition,
+        enclosing_brace: Option<usize>,
     ) -> Result<Step> {
         self.expect_kw("SELECT")?;
         let dedup = if self.eat_kw("DISTINCT") {
@@ -2222,6 +2272,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
         // query). Stays open through `WHERE` and the solution modifiers, and is popped
         // once the SELECT is built.
         self.push_exists_scope_boundary()?;
+        let saved_last_exists_token = self.last_exists_token;
+        if let Some(open) = enclosing_brace {
+            self.last_exists_token = self
+                .brace_last_exists
+                .get(open)
+                .copied()
+                .filter(|&site| site != usize::MAX);
+        }
 
         // This SELECT's OWN deferred-EXISTS-scope window (SEP-0007 Part 3's
         // projection-list position — see `Parser::projection_scope_pending`'s doc):
@@ -2235,6 +2293,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             base_iri,
             dedup,
             saved_pending: self.projection_scope_pending,
+            saved_last_exists_token,
             saved_in_aggregate: self.in_aggregate_argument,
             saved_seen: std::mem::take(&mut self.projection_seen_targets),
             saved_checks: std::mem::take(&mut self.pending_exists_scope_checks),
@@ -2407,12 +2466,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // The WHERE pattern's scope mirrored into this SELECT's own frame, so the
                 // solution modifiers see it whatever built it — a group's elements, or a
                 // WHERE clause that IS just `{ SELECT ... }`.
-                for v in scope.as_slice() {
-                    self.note_exists_scope_var(v)?;
+                if self.last_exists_token.is_some_and(|at| self.pos <= at) {
+                    for v in scope.visible_iter() {
+                        self.note_exists_scope_var(v)?;
+                    }
                 }
-                scope.release(self.memory)?;
                 let state = self.machine.selects.last_mut().expect("active SELECT");
-                state.where_pattern = Some((pattern, intro));
+                state.where_pattern = Some((pattern, intro, scope));
                 let aggregates = std::mem::take(&mut state.aggregates);
                 {
                     let native_value = Ctl::Select(SelectStage::Modifiers);
@@ -2446,6 +2506,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             base_iri,
             dedup,
             saved_pending,
+            saved_last_exists_token,
             saved_in_aggregate,
             saved_seen,
             saved_checks,
@@ -2456,7 +2517,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             where_pattern,
             ..
         } = state;
-        let (where_pat, where_intro) =
+        let (where_pat, where_intro, mut where_scope) =
             where_pattern.expect("a SELECT's modifiers follow its WHERE group");
 
         // A `GROUP BY (expr AS ?v)` target must be fresh too — not in scope in the
@@ -2699,14 +2760,20 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
         let trailing_values = self.peek_kw("VALUES");
         let where_pat = if trailing_values {
             let values = self.parse_inline_data()?;
+            if let GraphPattern::Values { variables, .. } = &values {
+                for variable in variables {
+                    where_scope.note(variable, self.memory)?;
+                }
+            }
             self.group_join(where_pat, values)?
         } else {
             where_pat
         };
 
         let has_group = !modifiers.group_by.is_empty() || !aggregates.is_empty();
+        let persistent_star = star && !has_group && select_exprs.is_empty();
         let intro = where_intro || has_group || !select_exprs.is_empty() || trailing_values;
-        let contextual_star = if RDFLIB && star {
+        let contextual_star = if RDFLIB && star && !persistent_star {
             Some(super::contextual_visible_variables(
                 &where_pat,
                 self.memory,
@@ -2820,22 +2887,35 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 expression: modifiers.order_by,
             };
         }
-        let variables = if star {
-            // A PRODUCTION consultation of the whole (modifier-wrapped) query pattern's
-            // scope — once per `SELECT *`, never once per element of the WHERE pattern
-            // it wraps.
+        let outgoing_scope = if persistent_star {
             self.note_scope_consultation();
-            if RDFLIB {
-                contextual_star.expect("a contextual star captured its source projection")
-            } else {
-                visible_variables_with_memory(&p, self.memory)?
-            }
+            let variables = where_scope.star_snapshot(self.memory)?;
+            where_scope.publish_contextual()?;
+            p = GraphPattern::ProjectStar {
+                inner: Child::try_new(p, self.memory)?,
+                variables,
+            };
+            Some(where_scope)
         } else {
-            projected
-        };
-        p = GraphPattern::Project {
-            inner: Child::try_new(p, self.memory)?,
-            variables,
+            let variables = if star {
+                // A PRODUCTION consultation of the whole (modifier-wrapped) query pattern's
+                // scope — once per `SELECT *`, never once per element of the WHERE pattern
+                // it wraps.
+                self.note_scope_consultation();
+                if RDFLIB {
+                    contextual_star.expect("a contextual star captured its source projection")
+                } else {
+                    visible_variables_with_memory(&p, self.memory)?
+                }
+            } else {
+                projected
+            };
+            p = GraphPattern::Project {
+                inner: Child::try_new(p, self.memory)?,
+                variables,
+            };
+            where_scope.release(self.memory)?;
+            None
         };
         match dedup {
             Dedup::Distinct => {
@@ -2871,6 +2951,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
         );
         // Restore the enclosing parse's own deferred-EXISTS-scope window.
         self.projection_scope_pending = saved_pending;
+        self.last_exists_token = saved_last_exists_token;
         self.in_aggregate_argument = saved_in_aggregate;
         self.projection_seen_targets = saved_seen;
         self.pending_exists_scope_checks = saved_checks;
@@ -2887,6 +2968,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 version,
             })?,
             intro,
+            outgoing_scope,
         )))
     }
 

@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 
-const describe = (error) => ({ name: error?.name, message: error?.message });
+const describe = (error) => ({ name: error?.name, message: error?.message, ...(error?.code === undefined ? {} : { code: error.code }) });
 const subjects = (result) =>
   result.rows
     .toArray()
@@ -93,7 +93,7 @@ export const rejectedAtGate = { settled: "rejected", name: "RuntimeError", messa
  * empty.
  */
 export function assertSurfacePoisoned(surface, packageRoot, message) {
-  const rejected = { settled: "rejected", name: "Error", message };
+  const rejected = { settled: "rejected", name: "Error", message, code: "purrdf-wasm-poisoned" };
   for (const [name, outcome] of Object.entries(surface)) {
     if (outcome.name === "RuntimeError") assert.deepEqual(outcome, rejectedAtGate, name);
     else assert.deepEqual(outcome, rejected, name);

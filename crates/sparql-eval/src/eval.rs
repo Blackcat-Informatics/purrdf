@@ -4598,7 +4598,7 @@ const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
         GraphPattern::Minus { .. } => "MINUS",
         GraphPattern::Values { .. } => "VALUES",
         GraphPattern::OrderBy { .. } => "ORDER BY",
-        GraphPattern::Project { .. } => "SELECT",
+        GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => "SELECT",
         GraphPattern::Distinct { .. } => "DISTINCT",
         GraphPattern::Reduced { .. } => "REDUCED",
         GraphPattern::Slice { .. } => "LIMIT/OFFSET",
@@ -5021,6 +5021,7 @@ fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
                 | GraphPattern::Minus { .. }
                 | GraphPattern::Extend { .. }
                 | GraphPattern::Project { .. }
+                | GraphPattern::ProjectStar { .. }
                 | GraphPattern::Apply { .. }
                 | GraphPattern::Union { .. }
                 | GraphPattern::Distinct { .. }
@@ -5133,9 +5134,20 @@ fn dispatch_node<D: DatasetView + Sync, M: RowDelivery<D>>(
             companion.as_ref(),
             ctx,
         ),
-        GraphPattern::Project { inner, variables } => {
-            crate::modifier::eval_project_with(pattern, inner, variables, delivery.reborrow(), ctx)
-        }
+        GraphPattern::Project { inner, variables } => crate::modifier::eval_project_with(
+            pattern,
+            inner,
+            purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+            delivery.reborrow(),
+            ctx,
+        ),
+        GraphPattern::ProjectStar { inner, variables } => crate::modifier::eval_project_with(
+            pattern,
+            inner,
+            purrdf_sparql_algebra::ProjectionNames::Star(variables),
+            delivery.reborrow(),
+            ctx,
+        ),
         GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
             crate::modifier::eval_dedup_delivered::<D, false, _>(
                 pattern,
@@ -5421,6 +5433,13 @@ pub(crate) fn syntactic_schema_admitted(
                     inner: _,
                     variables,
                 } => {
+                    let mut schema = SchemaBuilder::new(workspace);
+                    for variable in variables {
+                        schema.push(variable.clone())?;
+                    }
+                    schemas.push(schema)?;
+                }
+                GraphPattern::ProjectStar { variables, .. } => {
                     let mut schema = SchemaBuilder::new(workspace);
                     for variable in variables {
                         schema.push(variable.clone())?;
@@ -8120,6 +8139,9 @@ mod syntactic_schema_tests {
                 schema
             }
             GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                VarSchema::from_vars(variables.iter().cloned())
+            }
+            GraphPattern::ProjectStar { variables, .. } => {
                 VarSchema::from_vars(variables.iter().cloned())
             }
             GraphPattern::Group {

@@ -28,7 +28,8 @@ fn projectless(text: &str) -> Query {
     let Query::Select { pattern, .. } = &mut query else {
         panic!("SELECT");
     };
-    let GraphPattern::Project { inner, .. } = std::mem::replace(pattern, GraphPattern::empty_bgp())
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+        std::mem::replace(pattern, GraphPattern::empty_bgp())
     else {
         panic!("projection");
     };
@@ -66,7 +67,10 @@ fn compiler_and_rewritten_plans_preserve_source_columns_and_duplicate_bags() {
         panic!("SELECT");
     };
     assert!(
-        !matches!(pattern, GraphPattern::Project { .. }),
+        !matches!(
+            pattern,
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. }
+        ),
         "layout is metadata, not a scope barrier"
     );
     let control = engine.prepare_query(TEXT, None).unwrap();

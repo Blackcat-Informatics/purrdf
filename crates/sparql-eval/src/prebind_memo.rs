@@ -533,6 +533,7 @@ fn visit_own_cells(
         | GraphPattern::Unfold { .. }
         | GraphPattern::OrderBy { .. }
         | GraphPattern::Project { .. }
+        | GraphPattern::ProjectStar { .. }
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
@@ -601,6 +602,7 @@ fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
                 }
             }
             GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => f(Slot::Pattern(inner)),
@@ -1126,6 +1128,7 @@ mod iterative_walk_tests {
                 }
             }
             GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => walk_pattern_ref(inner, index, visit),

@@ -846,7 +846,7 @@ mod tests {
             builder.push_quad(subject, p, value, None);
         }
         let dataset = builder.freeze().expect("independent fixture");
-        let Query::Select { pattern: GraphPattern::Project { inner, .. }, .. } = SparqlParser::new().parse_query(
+        let Query::Select { pattern: GraphPattern::ProjectStar { inner, .. }, .. } = SparqlParser::new().parse_query(
             "PREFIX ex: <http://example.org/> SELECT * WHERE { ?x ex:p ?v . { ?a ex:q ?b } UNION { ?a ex:r ?b } }",
         ).expect("independent query") else { unreachable!() };
         let active = ActiveDataset::store_default();
@@ -923,7 +923,7 @@ mod tests {
             builder.push_quad(subject, p, value, None);
         }
         let dataset = builder.freeze().expect("unit-order fixture");
-        let Query::Select { pattern: GraphPattern::Project { inner, .. }, .. } = SparqlParser::new().parse_query(
+        let Query::Select { pattern: GraphPattern::ProjectStar { inner, .. }, .. } = SparqlParser::new().parse_query(
             "PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ex:p ?v . ?s ex:q ex:target . { ?a ex:r ?b } UNION { ?a ex:t ?b } }",
         ).expect("unit-order query") else { unreachable!() };
         let GraphPattern::Join { left, .. } = &*inner else {
@@ -1040,7 +1040,7 @@ mod tests {
             builder.push_quad(object, r, value, None);
         }
         let dataset = builder.freeze().expect("the fixture is valid");
-        let Query::Select { pattern: GraphPattern::Project { inner, .. }, .. } = SparqlParser::new().parse_query(
+        let Query::Select { pattern: GraphPattern::ProjectStar { inner, .. }, .. } = SparqlParser::new().parse_query(
             "PREFIX ex: <http://example.org/> SELECT * WHERE { ?a ex:p ?b . { ?a ex:q ?c } UNION { ?b ex:r ?d } }",
         ).expect("the source parses") else { panic!("projected SELECT"); };
         let active = ActiveDataset::store_default();

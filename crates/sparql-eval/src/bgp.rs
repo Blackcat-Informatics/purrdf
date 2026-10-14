@@ -3256,6 +3256,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             // which is the direction this survey is documented to fail in.
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -3542,6 +3543,7 @@ fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -6125,6 +6127,7 @@ mod survey_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -6244,6 +6247,7 @@ mod survey_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }

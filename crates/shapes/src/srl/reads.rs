@@ -226,6 +226,7 @@ impl Reads {
             | GraphPattern::Filter { .. }
             | GraphPattern::Graph { .. }
             | GraphPattern::Project { .. }
+            | GraphPattern::ProjectStar { .. }
             | GraphPattern::Distinct { .. }
             | GraphPattern::Reduced { .. }
             | GraphPattern::Extend { .. }

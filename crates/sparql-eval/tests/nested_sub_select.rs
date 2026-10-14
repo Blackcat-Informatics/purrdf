@@ -143,3 +143,32 @@ fn three_directly_nested_sub_selects_answer_exactly() {
         );
     }
 }
+
+#[test]
+fn nested_star_preserves_first_appearance_columns_and_bindings() {
+    let nested = "SELECT * WHERE { { SELECT * WHERE { { SELECT * WHERE { \
+        BIND(0 AS ?v0) } } BIND(1 AS ?v1) } } BIND(2 AS ?v2) }";
+    let flat = "SELECT ?v0 ?v1 ?v2 WHERE { \
+        BIND(0 AS ?v0) BIND(1 AS ?v1) BIND(2 AS ?v2) }";
+    let (
+        SparqlResult::Solutions {
+            variables: nested_columns,
+            rows: nested_rows,
+            ..
+        },
+        SparqlResult::Solutions {
+            variables: flat_columns,
+            rows: flat_rows,
+            ..
+        },
+    ) = (
+        answer(nested).expect("nested wildcard answers"),
+        answer(flat).expect("flat explicit projection answers"),
+    )
+    else {
+        panic!("both SELECT queries answer with solutions");
+    };
+    assert_eq!(nested_columns, ["v0", "v1", "v2"]);
+    assert_eq!(nested_columns, flat_columns);
+    assert_eq!(nested_rows, flat_rows);
+}
