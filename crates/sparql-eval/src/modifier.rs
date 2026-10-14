@@ -494,8 +494,23 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
     length: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
+    let child = eval_evaluated(inner, ctx)?;
+    finish_slice(node, start, length, lift, child, ctx)
+}
+
+/// Complete the original slice after its child returns. The ordinary node
+/// worklist retains `lift` and the local cap while that child is suspended.
+pub(crate) fn finish_slice<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    start: usize,
+    length: Option<usize>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
         return Ok(lift.withheld());
     };
     let mut rows = RowsBuilder::new(&ctx.growth);
@@ -655,8 +670,9 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     }
     let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
     for row in &seq.rows {
-        for key in linked.as_mut_slice() {
-            let term = key.term(row, &schema, ctx)?;
+        for (key, order) in linked.as_mut_slice().iter_mut().zip(exprs) {
+            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+            let term = key.term(Some(expression), row, &schema, ctx)?;
             values.push(
                 term.map(|t| {
                     ctx.scratch
@@ -2904,11 +2920,13 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                                 agg.args().len(),
                                 &ctx.growth.clone(),
                                 |probe| {
-                                    for (slot, link) in probe
+                                    for ((slot, link), expression) in probe
                                         .iter_mut()
                                         .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                        .zip(agg.args())
                                     {
-                                        *slot = link.term(row, &seq.schema, ctx)?;
+                                        *slot =
+                                            link.term(Some(expression), row, &seq.schema, ctx)?;
                                     }
                                     Ok(())
                                 },
@@ -2922,11 +2940,12 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                         identity(row)?
                     } else {
                         RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |terms| {
-                            for (slot, link) in terms
+                            for ((slot, link), expression) in terms
                                 .iter_mut()
                                 .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                .zip(agg.args())
                             {
-                                *slot = link.term(row, &seq.schema, ctx)?;
+                                *slot = link.term(Some(expression), row, &seq.schema, ctx)?;
                             }
                             Ok(())
                         })?
@@ -3470,7 +3489,7 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             ChargePoint::AggregateAccumulation,
         );
         for &i in idxs {
-            let Some(term) = first_arg.term(&rows[i], schema, ctx)? else {
+            let Some(term) = first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)? else {
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
@@ -3833,8 +3852,8 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     for &i in idxs {
         let mut tuple = AggregateSurvivors::new(&ctx.growth);
         let mut every_position_bound = true;
-        for argument in &mut links[..agg.args().len()] {
-            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
+        for (argument, expression) in links[..agg.args().len()].iter_mut().zip(agg.args()) {
+            let Some(term) = argument.term(Some(expression), &rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
             };

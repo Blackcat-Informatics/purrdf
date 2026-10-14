@@ -436,6 +436,7 @@ fn a_document_without_lexical_terms_retains_auxiliary_evidence() {
     );
     let evidence = index
         .surface_index()
+        .expect("default surface index")
         .substring("!!!")
         .expect("selective punctuation fragment");
     assert_eq!(evidence.len(), 1);

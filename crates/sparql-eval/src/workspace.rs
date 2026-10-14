@@ -5,7 +5,10 @@
 
 use std::sync::Mutex;
 
-use purrdf_core::{OwnedWorkspaceReservation, small::Shared};
+use purrdf_core::{
+    OwnedWorkspaceReservation,
+    small::{Shared, SharedView},
+};
 
 use crate::EvalError;
 
@@ -42,6 +45,36 @@ enum SharedWorkspaceStorage<T> {
 #[derive(Debug)]
 pub(crate) struct NativeSharedWorkspace<T>(Shared<SharedWorkspacePayload<T>>);
 
+/// A projected part of an admitted native control. Its shared owner retains
+/// both the payload and the original workspace grant.
+pub(crate) struct ProjectedNative<T, U>(SharedView<SharedWorkspacePayload<T>, U>);
+
+impl<T, U> Clone for ProjectedNative<T, U> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T, U> std::ops::Deref for ProjectedNative<T, U> {
+    type Target = U;
+    fn deref(&self) -> &U {
+        &self.0
+    }
+}
+
+impl<T, U> ProjectedNative<T, U> {
+    pub(crate) fn owner(&self) -> NativeSharedWorkspace<T> {
+        NativeSharedWorkspace(self.0.owner())
+    }
+
+    pub(crate) fn try_project<V>(
+        &self,
+        select: impl for<'a> FnOnce(&'a U) -> Option<&'a V>,
+    ) -> Option<ProjectedNative<T, V>> {
+        self.0.try_project(select).map(ProjectedNative)
+    }
+}
+
 impl<T> Clone for NativeSharedWorkspace<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
@@ -56,6 +89,13 @@ impl<T> std::ops::Deref for NativeSharedWorkspace<T> {
 }
 
 impl<T> NativeSharedWorkspace<T> {
+    pub(crate) fn into_projected<U>(
+        self,
+        select: impl for<'a> FnOnce(&'a T) -> &'a U,
+    ) -> ProjectedNative<T, U> {
+        ProjectedNative(self.0.into_view(|payload| select(&payload.value)))
+    }
+
     pub(crate) fn get_mut(&mut self) -> Option<&mut T> {
         self.0.get_mut().map(|payload| &mut payload.value)
     }
@@ -2365,7 +2405,7 @@ pub(crate) fn render(
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 #[cfg(test)]
-mod owned_row_regressions {
+pub(crate) mod owned_row_regressions {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -2377,15 +2417,15 @@ mod owned_row_regressions {
     use purrdf_core::{TermId, WorkspaceReservation};
 
     #[derive(Debug)]
-    struct Ledger {
-        live: AtomicU64,
-        clones: Arc<AtomicUsize>,
+    pub(crate) struct Ledger {
+        pub(crate) live: AtomicU64,
+        pub(crate) clones: Arc<AtomicUsize>,
         limit: u64,
     }
 
     #[derive(Debug)]
-    struct Refusal {
-        identity: u64,
+    pub(crate) struct Refusal {
+        pub(crate) identity: u64,
         clones: Arc<AtomicUsize>,
     }
     impl Clone for Refusal {
@@ -2427,7 +2467,7 @@ mod owned_row_regressions {
         }
     }
 
-    fn account(limit: u64) -> (QueryWorkspace<Refusal>, Arc<Ledger>, u64) {
+    pub(crate) fn account(limit: u64) -> (QueryWorkspace<Refusal>, Arc<Ledger>, u64) {
         let base = QueryWorkspace::<Refusal>::control_bytes().expect("concrete account layout");
         assert!(base <= limit);
         let ledger = Arc::new(Ledger {

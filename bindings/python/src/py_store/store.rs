@@ -40,7 +40,8 @@ use crate::{
 /// The query, UPDATE, iteration and validation-capsule surface is the
 /// [`PyQuadStore`] base class's, shared with `MutableDataset`.
 /// The keyword-only `remember_empty_graphs=True` selects native remembered
-/// graph slots; the 3.x default is false. Checkpoint and UPDATE retain the choice.
+/// graph slots by default; false selects row-driven lifetime. Checkpoint and
+/// UPDATE retain the choice.
 #[pyclass(name = "Store", extends = PyQuadStore)]
 #[derive(Debug)]
 pub struct PyStore {
@@ -52,7 +53,7 @@ pub struct PyStore {
 #[pymethods]
 impl PyStore {
     #[new]
-    #[pyo3(signature = (*, remember_empty_graphs=false))]
+    #[pyo3(signature = (*, remember_empty_graphs=true))]
     fn new(remember_empty_graphs: bool) -> PyResult<PyClassInitializer<Self>> {
         Ok(
             PyClassInitializer::from(PyQuadStore::empty(remember_empty_graphs)?)

@@ -1149,14 +1149,15 @@ fn two_independently_built_indexes_rank_identically() {
 /// control protection is part of analyzer identity. Ranking v2 changes the index
 /// identity because its canonical profile binds exact promotion and the actual
 /// query-bound law. The RDF source, analyzer, term-sequence and score lexical
-/// identities remain frozen across that ranking migration.
+/// identities remain frozen across that ranking migration. Index v4 additionally
+/// binds surface presence; only the index fingerprint changes for that migration.
 #[test]
 fn the_published_text_identities_are_frozen() {
     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "106fef6680a6be9aac5508747e74af3e28699ca24326095fd444d05f8ae8adcd",
+        "573a3db7a8a89832030eb4224ee172804b7dd05531173bbde521acaf1ffd79dd",
         "the index fingerprint"
     );
     assert_eq!(

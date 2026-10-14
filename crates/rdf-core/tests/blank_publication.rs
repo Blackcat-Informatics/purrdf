@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use purrdf_core::{
-    BlankScope, DatasetMut, MutableDataset, QuadValues, RdfDatasetBuilder, RdfLiteral, TermBox,
-    TermValue,
+    BlankScope, DatasetMut, GraphExistenceMode, MutableDataset, QuadValues, RdfDatasetBuilder,
+    RdfLiteral, TermBox, TermValue,
 };
 
 const EX: &str = "http://example.org/";
@@ -215,59 +215,73 @@ fn a_declared_blank_graph_name_is_a_retained_identity_fresh_blanks_avoid() {
 
 #[test]
 fn declarations_add_only_their_blank_names_to_the_base_and_delta_visit() {
-    let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_blank("base", BlankScope(5)).unwrap();
-    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
-    let object = builder.intern_blank("object", BlankScope::DEFAULT).unwrap();
-    builder.push_quad(subject, predicate, object, None).unwrap();
-    let mut mutable = MutableDataset::new(builder.freeze().expect("visitor base"));
-    mutable
-        .insert(QuadValues::quad(
-            TermValue::blank("delta"),
-            TermValue::iri(format!("{EX}p")),
-            TermValue::iri(format!("{EX}o")),
-            TermValue::blank("delta-graph"),
-        ))
-        .expect("delta row");
-    let visit = |mutable: &MutableDataset| {
-        let mut seen = Vec::new();
-        let complete: ControlFlow<()> = mutable.visit_blank_identities(|label, scope| {
-            seen.push((label.to_owned(), scope));
-            ControlFlow::Continue(())
-        });
-        assert_eq!(complete, ControlFlow::Continue(()));
-        seen
-    };
-    let before = visit(&mutable);
-    let expected: Vec<_> = [
-        ("base", BlankScope(5)),
-        ("object", BlankScope::DEFAULT),
-        ("delta", BlankScope::DEFAULT),
-        ("delta-graph", BlankScope::DEFAULT),
-    ]
-    .into_iter()
-    .map(|(label, scope)| (label.to_owned(), scope))
-    .collect();
-    assert_eq!(before, expected, "base terms, then delta values, in order");
-    // A base or delta blank still answers the allocator exactly as before.
-    assert_eq!(first_fresh_label(&mutable), "append0_c1");
+    for mode in [
+        GraphExistenceMode::Implicit,
+        GraphExistenceMode::RememberEmpty,
+    ] {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_blank("base", BlankScope(5)).unwrap();
+        let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let object = builder.intern_blank("object", BlankScope::DEFAULT).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let mut mutable =
+            MutableDataset::new_with_graph_existence(builder.freeze().expect("visitor base"), mode);
+        mutable
+            .insert(QuadValues::quad(
+                TermValue::blank("delta"),
+                TermValue::iri(format!("{EX}p")),
+                TermValue::iri(format!("{EX}o")),
+                TermValue::blank("delta-graph"),
+            ))
+            .expect("delta row");
+        let visit = |mutable: &MutableDataset| {
+            let mut seen = Vec::new();
+            let complete: ControlFlow<()> = mutable.visit_blank_identities(|label, scope| {
+                seen.push((label.to_owned(), scope));
+                ControlFlow::Continue(())
+            });
+            assert_eq!(complete, ControlFlow::Continue(()));
+            seen
+        };
+        let before = visit(&mutable);
+        let mut expected: Vec<_> = [
+            ("base", BlankScope(5)),
+            ("object", BlankScope::DEFAULT),
+            ("delta", BlankScope::DEFAULT),
+            ("delta-graph", BlankScope::DEFAULT),
+        ]
+        .into_iter()
+        .map(|(label, scope)| (label.to_owned(), scope))
+        .collect();
+        if mode == GraphExistenceMode::RememberEmpty {
+            // The inserted graph is also retained as a declaration. The visitor
+            // reports owned occurrences and explicitly permits repeated identities.
+            expected.push(("delta-graph".to_owned(), BlankScope::DEFAULT));
+        }
+        assert_eq!(
+            before, expected,
+            "base, delta, then declarations in {mode:?}"
+        );
+        // A base or delta blank still answers the allocator exactly as before.
+        assert_eq!(first_fresh_label(&mutable), "append0_c1");
 
-    // An IRI-named declaration adds no identity.
-    assert_eq!(
-        mutable.declare_named_graph(TermValue::iri(format!("{EX}empty"))),
-        Ok(true)
-    );
-    assert_eq!(visit(&mutable), before);
+        // An IRI-named declaration adds no identity.
+        assert_eq!(
+            mutable.declare_named_graph(TermValue::iri(format!("{EX}empty"))),
+            Ok(true)
+        );
+        assert_eq!(visit(&mutable), before);
 
-    // A blank-named declaration adds exactly its own name, after the delta, in its
-    // own scope.
-    let scoped = TermValue::Blank {
-        label: "declared".into(),
-        scope: BlankScope(9),
-    };
-    assert_eq!(mutable.declare_named_graph(scoped), Ok(true));
-    let mut extended = before;
-    extended.push(("declared".to_owned(), BlankScope(9)));
-    assert_eq!(visit(&mutable), extended);
-    assert_eq!(first_fresh_label(&mutable), "append0_c1");
+        // A blank-named declaration adds exactly its own name, after the delta, in its
+        // own scope.
+        let scoped = TermValue::Blank {
+            label: "declared".into(),
+            scope: BlankScope(9),
+        };
+        assert_eq!(mutable.declare_named_graph(scoped), Ok(true));
+        let mut extended = before;
+        extended.push(("declared".to_owned(), BlankScope(9)));
+        assert_eq!(visit(&mutable), extended);
+        assert_eq!(first_fresh_label(&mutable), "append0_c1");
+    }
 }

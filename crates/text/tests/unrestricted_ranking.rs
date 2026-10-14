@@ -144,12 +144,17 @@ fn actual_two_to_the_twenty_fifth_token_field_builds_and_scores() {
     assert!(
         index
             .surface_index()
+            .expect("default surface index")
             .words()
             .iter()
             .any(|term| term.text() == "a")
     );
     assert_eq!(
-        index.surface_index().spans().len(),
+        index
+            .surface_index()
+            .expect("default surface index")
+            .spans()
+            .len(),
         1,
         "the bounded span spelling is shared without suppressing the surface projection"
     );

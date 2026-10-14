@@ -4192,7 +4192,7 @@ impl CallCursor {
                             )?);
                         }
                         let linked = link.as_mut().expect("the admitted link was initialized");
-                        if linked.ebv(&row, schema, ctx)? != Some(true) {
+                        if linked.ebv(None, &row, schema, ctx)? != Some(true) {
                             continue 'pull;
                         }
                     }

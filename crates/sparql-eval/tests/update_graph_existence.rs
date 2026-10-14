@@ -3,7 +3,7 @@
 
 //! Named-graph existence across SPARQL **UPDATE**.
 //!
-//! The update engine's store model is that a named graph exists iff it holds a quad,
+//! Explicit implicit mode makes a named graph exist iff it holds a quad,
 //! with one carve-out: a graph the INPUT declared empty (a TriG `GRAPH <g> {}`) keeps
 //! existing until an operation removes it. These tests pin both halves through the
 //! public engine, at the three places a graph is observable: the frozen dataset's
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 const EX: &str = "http://example.org/";
 
@@ -77,7 +77,13 @@ fn graphs_after(update: &str) -> Vec<String> {
     let engine = NativeSparqlEngine::new();
     let mut ds = fixture();
     let text = format!("PREFIX ex: <{EX}>\n{update}");
-    engine.update(&mut ds, request(&text)).expect("update");
+    engine
+        .update_with_options(
+            &mut ds,
+            request(&text),
+            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+        )
+        .expect("update");
     let mut frozen: Vec<String> = ds
         .named_graphs()
         .map(|g| name(&RdfDataset::term_value(&ds, g)))
@@ -93,7 +99,13 @@ fn graphs_after(update: &str) -> Vec<String> {
         "PREFIX ex: <{EX}>\n{update} ;\n\
          INSERT {{ GRAPH ex:log {{ ex:log ex:saw ?g }} }} WHERE {{ GRAPH ?g {{}} }}"
     );
-    engine.update(&mut within, request(&text)).expect("update");
+    engine
+        .update_with_options(
+            &mut within,
+            request(&text),
+            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+        )
+        .expect("update");
     let seen = select_names(
         &engine,
         &within,
@@ -114,7 +126,11 @@ fn graphs_after(update: &str) -> Vec<String> {
         .expect("writing to a String cannot fail");
     }
     engine
-        .update(&mut constant, request(&text))
+        .update_with_options(
+            &mut constant,
+            request(&text),
+            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+        )
         .expect("update");
     let hits = select_names(
         &engine,
@@ -140,7 +156,13 @@ fn default_quads_after(update: &str) -> usize {
     let engine = NativeSparqlEngine::new();
     let mut ds = fixture();
     let text = format!("PREFIX ex: <{EX}>\n{update}");
-    engine.update(&mut ds, request(&text)).expect("update");
+    engine
+        .update_with_options(
+            &mut ds,
+            request(&text),
+            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+        )
+        .expect("update");
     ds.quads().filter(|q| q.g.is_none()).count()
 }
 

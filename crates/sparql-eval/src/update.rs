@@ -10,7 +10,7 @@
 //!
 //! # Doctrine / boundary decisions
 //!
-//! - **Selected graph existence.** The default [`GraphExistenceMode::Implicit`]
+//! - **Selected graph existence.** Explicit [`GraphExistenceMode::Implicit`]
 //!   keeps the existing row-driven policy: `CREATE GRAPH` is a no-op success and
 //!   `CLEAR` ≡ `DROP`. Missing inputs do not fail under this policy. The one carve-out
 //!   is a graph the INPUT declared empty (a TriG `GRAPH <g> {}`): it keeps existing,
@@ -19,7 +19,7 @@
 //!   onto it from an empty source, or the removal of the last quad it was given.
 //!   Every such graph, like every graph whose last quad an operation removes, is then
 //!   gone from the request's snapshots, from `GRAPH ?g`, and from the frozen result.
-//!   [`GraphExistenceMode::RememberEmpty`] uses the same registry to retain an empty
+//!   The default [`GraphExistenceMode::RememberEmpty`] uses the same registry to retain an empty
 //!   slot after `CLEAR` or last-row removal. `CREATE` registers a slot and refuses a
 //!   duplicate; `DROP` and a `MOVE` source withdraw it. An admitted transfer or a
 //!   successful `LOAD` establishes its named destination even when empty. Missing

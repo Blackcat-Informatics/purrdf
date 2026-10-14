@@ -26,6 +26,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use purrdf::ir::GraphExistenceMode;
 use purrdf::xsd::exact::DivisionPolicy;
 use purrdf::{
     ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
@@ -544,6 +545,8 @@ pub(crate) struct OperationInput<'a> {
     pub(crate) xpath_regex: Option<Profile>,
     /// The precision of every `xsd:integer`/`xsd:decimal` quotient the operation forms.
     pub(crate) division: DivisionPolicy,
+    /// The dataset policy captured before freezing, retained through UPDATE execution.
+    pub(crate) graph_existence: GraphExistenceMode,
     /// The immutable profile captured when this operation starts.
     pub(crate) geo: purrdf_validate::geo::GeoProfileSnapshot,
 }
@@ -574,6 +577,7 @@ impl<'a> OperationInput<'a> {
             accept: None,
             xpath_regex: None,
             division: DivisionPolicy::xsd_default(),
+            graph_existence: GraphExistenceMode::default(),
             geo: purrdf_validate::geo::GeoSession::default().profile_snapshot(),
         }
     }
@@ -653,6 +657,7 @@ impl OperationInput<'_> {
             accept,
             xpath_regex,
             division,
+            graph_existence,
             geo,
         } = self;
         let base = base.as_deref();
@@ -853,7 +858,8 @@ impl OperationInput<'_> {
                                 division,
                                 xpath_regex,
                                 &geo,
-                            ),
+                            )
+                            .with_graph_existence(graph_existence),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -869,7 +875,8 @@ impl OperationInput<'_> {
                                 division,
                                 xpath_regex,
                                 &geo,
-                            ),
+                            )
+                            .with_graph_existence(graph_existence),
                             &governors,
                         )
                     })
@@ -899,7 +906,8 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.selected_options(&env, division, xpath_regex, &geo),
+                            run.selected_options(&env, division, xpath_regex, &geo)
+                                .with_graph_existence(graph_existence),
                             &governors,
                         )
                     })
@@ -1061,6 +1069,7 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "ntriples",
             None,
+            None,
         )
         .expect("parses")
         .view()
@@ -1192,6 +1201,7 @@ mod tests {
         let frozen = crate::dataset::Dataset::parse(
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "ntriples",
+            None,
             None,
         )
         .expect("parses")

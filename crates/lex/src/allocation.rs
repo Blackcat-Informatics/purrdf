@@ -15,7 +15,7 @@ mod boxed;
 #[allow(unsafe_code)]
 pub mod shared;
 pub use boxed::{try_boxed, try_boxed_one};
-pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText};
+pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText, SharedView};
 mod text;
 pub use text::OwnedText;
 mod ordered;
