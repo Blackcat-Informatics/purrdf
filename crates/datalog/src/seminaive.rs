@@ -4397,7 +4397,7 @@ where
         // Every entry was gated on absence from the store when it was created, and the
         // entries are unique by head fact, so this projection is exact rather than an
         // over-estimate: the limit is decided before a single surface is materialised.
-        let projected = self.rel.row_count().saturating_add(round.entries.len());
+        let projected = self.rel.retained_rows().saturating_add(round.entries.len());
         if u64::try_from(projected).unwrap_or(u64::MAX) > self.limits.stored_facts {
             return Err(EvalError::BudgetExhausted {
                 resource: BudgetResource::StoredFacts,

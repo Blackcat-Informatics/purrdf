@@ -1303,8 +1303,8 @@ where
 
     /// Every derived fact, in commit order.
     ///
-    /// The order is round by round and, within a round, total lexical
-    /// `(subject, predicate, object, graph)` order — so it is byte-deterministic while still
+    /// The order is round by round and, within a round, total lexical order
+    /// of each fact's terms — so it is byte-deterministic while still
     /// showing which layer of the fixpoint produced each fact. It is NOT globally sorted,
     /// because flattening the layers would discard that.
     pub fn derived(&self) -> &[ShapeFact<N>] {
@@ -1313,14 +1313,14 @@ where
 
     /// Every derived fact with the clause that concluded it, in commit order.
     ///
-    /// `Position<N>` `i` here is position `i` of [`Self::derived`] — the same facts, in the same
+    /// Entry `i` here is entry `i` of [`Self::derived`] — the same facts, in the same
     /// order, with the attribution attached.
     ///
     /// **Which clause gets the credit.** Exactly one derivation per COMMITTED fact, and the
     /// credit goes to the FIRST commit: a fact a later round re-derives is already in the
     /// store and never enters the vector again, so it keeps the attribution it entered the
     /// closure with. Within a single round the round's candidates are accumulated in a
-    /// `BTreeMap` keyed by the fact's four lexical surfaces and attributed by the LOWEST
+    /// `BTreeMap` keyed by the fact's lexical surfaces and attributed by the LOWEST
     /// authored clause index that produced them, so "first" is decided by the program and
     /// the data — never by which clause the loop happened to reach first, and never by the
     /// order the join enumerated rows in.

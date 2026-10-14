@@ -736,9 +736,9 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
     use purrdf_datalog::guard::{CallbackError, Negation, NoGuards};
     use purrdf_datalog::proof::{EvaluationProofs, ProofContext};
     use purrdf_datalog::schedule::{
-        Layer, LayerHooks, Schedule, compile_scheduled, evaluate_scheduled, stratify_rules,
+        Layer, LayerHooks, NoHooks, Schedule, compile_scheduled, evaluate_scheduled, stratify_rules,
     };
-    use purrdf_datalog::seminaive::EvalError;
+    use purrdf_datalog::seminaive::{BudgetResource, EvalError};
     use purrdf_datalog::store::{Fact, TermInterner};
 
     struct WithdrawOriginal;
@@ -823,6 +823,47 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
         Layer::new(vec![vec![1, 2, 3, 4]], Vec::new()),
     ]);
     let program = compile_scheduled(rules.clone(), schedule).unwrap();
+    let budget_program = compile_scheduled(
+        vec![rules[0].clone()],
+        Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
+    )
+    .unwrap();
+    let initial_term_bytes = input.interner().byte_len() + missing_base.interner().byte_len();
+    assert!(input.interner().lookup("e").is_none());
+    let refused = evaluate_scheduled(
+        &budget_program,
+        input.clone(),
+        &NoGuards,
+        &mut NoHooks,
+        &EvalOptions::default().with_max_stored_facts(3),
+        None,
+    );
+    let Err(EvalError::BudgetExhausted {
+        resource: BudgetResource::StoredFacts,
+        report,
+    }) = refused
+    else {
+        panic!("the retained base and projected fact exceed the limit");
+    };
+    assert_eq!(report.stored_facts(), 4);
+    assert_eq!(
+        report.generated_terms(),
+        0,
+        "refusal precedes sink interning"
+    );
+    assert_eq!(report.term_arena_bytes(), initial_term_bytes);
+    let admitted = evaluate_scheduled(
+        &budget_program,
+        input.clone(),
+        &NoGuards,
+        &mut NoHooks,
+        &EvalOptions::default().with_max_stored_facts(4),
+        None,
+    )
+    .expect("the exact retained-row boundary admits the fact");
+    assert_eq!(admitted.budget().stored_facts(), 4);
+    assert_eq!(admitted.budget().generated_terms(), 1);
+    assert!(admitted.facts().contains_row(["b", "p", "e"]));
     assert!(matches!(
         evaluate_scheduled(
             &program,
