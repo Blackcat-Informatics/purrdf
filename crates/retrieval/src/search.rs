@@ -65,7 +65,7 @@
 //! read it back off the answer, which is what happens here —
 //! [`execute`](crate::execute) tags each stream with the plan its unit was
 //! compiled from, the bridge below keeps
-//! the tag, and [`fuse`] names it in the trailer only when every stream still
+//! the tag, and [`crate::fuse`] names it in the trailer only when every stream still
 //! agrees on it.
 //!
 //! `search` therefore takes [`SearchResult::plan_id`] from the trailer and
@@ -179,7 +179,7 @@
 //! nothing. That is [`FusionError::UnknownStratum`], naming the first executed
 //! stratum the profile does not weight.
 //!
-//! [`fuse`] itself keeps refusing an unweighted stratum outright, and that is
+//! [`crate::fuse`] itself keeps refusing an unweighted stratum outright, and that is
 //! not a contradiction: its caller hands it `(stratum, stream)` pairs directly
 //! and thereby asserts that each one belongs in this fusion. `search` makes no
 //! such assertion on the caller's behalf — it decides which streams to hand over
