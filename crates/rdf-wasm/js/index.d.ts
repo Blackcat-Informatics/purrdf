@@ -686,8 +686,11 @@ export class DataFactory {
 }
 
 export class Dataset implements Iterable<Quad> {
-  constructor();
-  static parse(input: string, format: string, base?: string | null): Dataset;
+  /** Omitted or true remembers empty named graphs; false selects row-driven existence. */
+  constructor(rememberEmptyGraphs?: boolean);
+  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean): Dataset;
+  /** The policy retained by snapshots, matches and applied synchronous/asynchronous UPDATEs. */
+  readonly rememberEmptyGraphs: boolean;
   static from(quads?: Iterable<Quad> | null): Dataset;
   readonly size: number;
   add(quad: Quad): this;
