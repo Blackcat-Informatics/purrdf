@@ -48,6 +48,25 @@ pub enum NodeRef<'a> {
 }
 
 impl NodeRef<'_> {
+    /// Resolve one admitted structural path using this walk's child order.
+    /// Owners of copied trees retain the root while a movable continuation
+    /// stores only ordinals, never a borrowed pointer into that owner.
+    pub fn at_path(self, steps: &[usize]) -> Option<Self> {
+        let mut node = self;
+        for &index in steps {
+            let mut at = 0usize;
+            let mut child = None;
+            node.for_each_child(|next| {
+                if at == index {
+                    child = Some(next);
+                }
+                at += 1;
+            });
+            node = child?;
+        }
+        Some(node)
+    }
+
     /// Visit the variable leaves this node owns directly. Recursive children are
     /// visited separately by the shared walk, so a complete variable census stays
     /// stack safe and includes bindings, graph names and expression-only references.
@@ -91,6 +110,9 @@ impl NodeRef<'_> {
                 }
                 GraphPattern::Values { variables, .. }
                 | GraphPattern::Project { variables, .. } => {
+                    variables.iter().for_each(&mut visit);
+                }
+                GraphPattern::ProjectStar { variables, .. } => {
                     variables.iter().for_each(&mut visit);
                 }
                 GraphPattern::Group {
@@ -227,6 +249,7 @@ impl NodeRef<'_> {
                 G::Graph { inner, .. }
                 | G::Service { inner, .. }
                 | G::Project { inner, .. }
+                | G::ProjectStar { inner, .. }
                 | G::Distinct { inner }
                 | G::Reduced { inner }
                 | G::Slice { inner, .. } => visit(Self::Pattern(inner)),

@@ -476,6 +476,7 @@ fn pattern_cause<'a>(
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::Project { inner, .. } => pending.push(Reach::Pattern(inner)),
+        GraphPattern::ProjectStar { inner, .. } => pending.push(Reach::Pattern(inner)),
         GraphPattern::Filter { expr, inner } => {
             pending.extend([Reach::Expr(expr), Reach::Pattern(inner)]);
         }

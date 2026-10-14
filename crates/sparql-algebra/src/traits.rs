@@ -41,6 +41,7 @@ type Tokens<'a> = WorkList<Tok<'a>, 48>;
 enum Leaf<'a> {
     Var(&'a Variable),
     Vars(&'a [Variable]),
+    Projection(&'a crate::ProjectionVars),
     OptVar(&'a Option<Variable>),
     Named(&'a NamedNode),
     OptNamed(&'a Option<NamedNode>),
@@ -67,6 +68,7 @@ macro_rules! each_leaf {
         match $leaf {
             Leaf::Var($x) => $body,
             Leaf::Vars($x) => $body,
+            Leaf::Projection($x) => $body,
             Leaf::VarPairs($x) => $body,
             Leaf::OptVar($x) => $body,
             Leaf::Named($x) => $body,
@@ -93,7 +95,7 @@ impl Leaf<'_> {
     const fn tag(self) -> u8 {
         match self {
             Self::Var(_) => 0,
-            Self::Vars(_) => 1,
+            Self::Vars(_) | Self::Projection(_) => 1,
             Self::OptVar(_) => 2,
             Self::Named(_) => 3,
             Self::OptNamed(_) => 4,
@@ -119,6 +121,10 @@ impl Leaf<'_> {
         match (self, other) {
             (Self::Var(a), Self::Var(b)) => a == b,
             (Self::Vars(a), Self::Vars(b)) => a == b,
+            (Self::Projection(a), Self::Projection(b)) => a == b,
+            (Self::Vars(a), Self::Projection(b)) | (Self::Projection(b), Self::Vars(a)) => {
+                a.iter().eq(b.iter())
+            }
             (Self::VarPairs(a), Self::VarPairs(b)) => a == b,
             (Self::OptVar(a), Self::OptVar(b)) => a == b,
             (Self::Named(a), Self::Named(b)) => a == b,
@@ -450,6 +456,10 @@ impl<'a> Script<'_, 'a> {
             G::Project { inner, variables } => self.strukt("Project", |s| {
                 s.field("inner").node(NodeRef::Pattern(inner));
                 s.field("variables").leaf(Leaf::Vars(variables));
+            }),
+            G::ProjectStar { inner, variables } => self.strukt("Project", |s| {
+                s.field("inner").node(NodeRef::Pattern(inner));
+                s.field("variables").leaf(Leaf::Projection(variables));
             }),
             G::Distinct { inner } => inner_only(self, "Distinct", inner),
             G::Reduced { inner } => inner_only(self, "Reduced", inner),

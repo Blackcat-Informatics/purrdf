@@ -58,7 +58,7 @@ test("a panic in a synchronous call poisons every entry point, and typed errors 
   const POISON =
     `the wasm instance trapped (${match[1]}) and cannot be used again; ` +
     "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
-  const REJECTED = { settled: "rejected", name: "Error", message: POISON };
+  const REJECTED = { settled: "rejected", name: "Error", message: POISON, code: "purrdf-wasm-poisoned" };
 
   // The panicking call itself throws the trap that follows the hook; the hook has already
   // set the gate's flag by then, with the panicking entry still counted as active.

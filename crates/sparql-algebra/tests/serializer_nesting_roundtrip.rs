@@ -38,7 +38,9 @@ fn try_select(query: &str) -> Result<GraphPattern, String> {
 /// The WHERE body under the `SELECT` scaffold — the shape a `SERVICE` forwards.
 fn unproject(p: GraphPattern) -> GraphPattern {
     match p {
-        GraphPattern::Project { inner, .. } => inner.into_inner(),
+        GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+            inner.into_inner()
+        }
         other => other,
     }
 }

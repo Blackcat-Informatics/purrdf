@@ -716,7 +716,8 @@ impl<const SINGLE_GRAPH: bool> Compiler<SINGLE_GRAPH> {
                     mapping: canonical,
                 }
             }
-            G::Project { inner, variables } => {
+            G::Project { inner, .. } | G::ProjectStar { inner, .. } => {
+                let variables = source.projected_names().expect("projection names");
                 let compiled = self.take(inner);
                 let mapping = variables
                     .iter()
@@ -1064,6 +1065,9 @@ pub(crate) fn compile<const SINGLE_GRAPH: bool>(
     let output_columns = loop {
         match head {
             GraphPattern::Project { variables, .. } => break variables.clone(),
+            GraphPattern::ProjectStar { variables, .. } => {
+                break variables.iter().cloned().collect();
+            }
             GraphPattern::Slice { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }

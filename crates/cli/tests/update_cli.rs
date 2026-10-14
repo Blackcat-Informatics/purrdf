@@ -61,7 +61,16 @@ fn update_trig(document: &str, update: &str) -> String {
     let path = dir.path().join("input.trig");
     std::fs::write(&path, document).expect("write fixture");
     let input = path.to_str().expect("UTF-8 path");
-    let output = run(&["update", "--data", input, "--to", "trig", update]);
+    let output = run(&[
+        "update",
+        "--graph-existence",
+        "implicit",
+        "--data",
+        input,
+        "--to",
+        "trig",
+        update,
+    ]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     String::from_utf8(output.stdout).expect("UTF-8 output")
 }
@@ -170,4 +179,94 @@ fn a_graph_emptied_by_delete_is_not_addressed_by_constant() {
         ),
     );
     assert!(body.contains("repopulated-hit"), "{body}");
+}
+
+#[test]
+fn graph_lifetime_default_and_explicit_modes_reach_the_update_engine() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = fixture(dir.path());
+    let request = "CREATE GRAPH <http://example.org/g>; COPY GRAPH <http://example.org/g> TO GRAPH <http://example.org/h>; CLEAR GRAPH <http://example.org/g>";
+    for (mode, governed) in [None, Some("remember-empty"), Some("implicit")]
+        .into_iter()
+        .flat_map(|mode| [false, true].map(|governed| (mode, governed)))
+    {
+        let mut args = vec!["update", "--data", &input, "--to", "trig"];
+        if let Some(mode) = mode {
+            args.extend(["--graph-existence", mode]);
+        }
+        if governed {
+            args.extend(["--fuel", "0"]);
+        }
+        args.push(request);
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let body = String::from_utf8(output.stdout).expect("UTF-8 output");
+        for graph in ["g", "h"] {
+            assert_eq!(
+                body.contains(&format!("<http://example.org/{graph}> {{}}")),
+                mode != Some("implicit"),
+                "{mode:?}: {body}"
+            );
+        }
+        let last = args.len() - 1;
+        args[last] = "CREATE GRAPH <http://example.org/g>; DROP GRAPH <http://example.org/g>";
+        let dropped = run(&args);
+        assert_eq!(dropped.status.code(), Some(0), "{dropped:?}");
+        assert!(
+            !String::from_utf8(dropped.stdout)
+                .expect("UTF-8")
+                .contains("<http://example.org/g>")
+        );
+    }
+}
+
+#[test]
+fn invalid_graph_lifetime_and_governor_refusal_preserve_input_and_output() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = fixture(dir.path());
+    let before = std::fs::read(&input).expect("input bytes");
+    let target = dir.path().join("output.trig");
+    std::fs::write(&target, b"unchanged output").expect("output preimage");
+    let target = target.to_str().expect("UTF-8 target");
+    let invalid = run(&[
+        "update",
+        "--data",
+        &input,
+        "--output",
+        target,
+        "--to",
+        "trig",
+        "--graph-existence",
+        "invalid",
+        INSERT,
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(
+        String::from_utf8(invalid.stderr)
+            .expect("error text")
+            .contains("remember-empty or implicit")
+    );
+    for mode in ["remember-empty", "implicit"] {
+        let refused = run(&[
+            "update",
+            "--data",
+            &input,
+            "--output",
+            target,
+            "--to",
+            "trig",
+            "--graph-existence",
+            mode,
+            "--fuel",
+            "0",
+            "CREATE GRAPH <http://example.org/g>; INSERT DATA { <http://example.org/new> <http://example.org/p> <http://example.org/value> }",
+        ]);
+        assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+        assert_eq!(refused.stdout, [] as [u8; 0]);
+        assert_eq!(
+            std::fs::read(target).expect("output unchanged"),
+            b"unchanged output"
+        );
+        assert_eq!(std::fs::read(&input).expect("input unchanged"), before);
+    }
 }

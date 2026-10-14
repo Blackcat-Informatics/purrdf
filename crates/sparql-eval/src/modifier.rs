@@ -271,7 +271,7 @@ macro_rules! eval_project_sequence {
 pub(crate) fn eval_project<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let workspace = ctx.growth.clone();
@@ -280,7 +280,14 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
             VarSchema::from_vars_admitted(variables.iter().cloned(), &workspace)?
                 .shared_admitted(&workspace)
         } else {
-            Ok(VarSchema::interned(variables))
+            Ok(match variables {
+                purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
+                    VarSchema::interned(names)
+                }
+                purrdf_sparql_algebra::ProjectionNames::Star(names) => {
+                    VarSchema::from_vars(names.iter().cloned()).shared_resident()
+                }
+            })
         }
     };
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
@@ -300,7 +307,7 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     node: &GraphPattern,
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -310,11 +317,18 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
             inner,
             delivery,
             |seq, ctx| {
-                let out = if ctx.dataset.storage_live_budget().is_some() {
+                let out = if ctx.growth.is_bounded() {
                     VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
                         .shared_admitted(&ctx.growth)?
                 } else {
-                    VarSchema::interned(variables)
+                    match variables {
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
+                            VarSchema::interned(names)
+                        }
+                        purrdf_sparql_algebra::ProjectionNames::Star(names) => {
+                            VarSchema::from_vars(names.iter().cloned()).shared_resident()
+                        }
+                    }
                 };
                 let lift = Lift::at_admitted(node, &ctx.growth)?;
                 let projected =
@@ -494,8 +508,23 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
     length: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
+    let child = eval_evaluated(inner, ctx)?;
+    finish_slice(node, start, length, lift, child, ctx)
+}
+
+/// Complete the original slice after its child returns. The ordinary node
+/// worklist retains `lift` and the local cap while that child is suspended.
+pub(crate) fn finish_slice<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    start: usize,
+    length: Option<usize>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
         return Ok(lift.withheld());
     };
     let mut rows = RowsBuilder::new(&ctx.growth);
@@ -655,8 +684,9 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     }
     let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
     for row in &seq.rows {
-        for key in linked.as_mut_slice() {
-            let term = key.term(row, &schema, ctx)?;
+        for (key, order) in linked.as_mut_slice().iter_mut().zip(exprs) {
+            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+            let term = key.term(Some(expression), row, &schema, ctx)?;
             values.push(
                 term.map(|t| {
                     ctx.scratch
@@ -1032,6 +1062,7 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
                     inner,
                     variables: _,
                 }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::OrderBy {
@@ -2904,11 +2935,13 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                                 agg.args().len(),
                                 &ctx.growth.clone(),
                                 |probe| {
-                                    for (slot, link) in probe
+                                    for ((slot, link), expression) in probe
                                         .iter_mut()
                                         .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                        .zip(agg.args())
                                     {
-                                        *slot = link.term(row, &seq.schema, ctx)?;
+                                        *slot =
+                                            link.term(Some(expression), row, &seq.schema, ctx)?;
                                     }
                                     Ok(())
                                 },
@@ -2922,11 +2955,12 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                         identity(row)?
                     } else {
                         RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |terms| {
-                            for (slot, link) in terms
+                            for ((slot, link), expression) in terms
                                 .iter_mut()
                                 .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                .zip(agg.args())
                             {
-                                *slot = link.term(row, &seq.schema, ctx)?;
+                                *slot = link.term(Some(expression), row, &seq.schema, ctx)?;
                             }
                             Ok(())
                         })?
@@ -3470,7 +3504,7 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             ChargePoint::AggregateAccumulation,
         );
         for &i in idxs {
-            let Some(term) = first_arg.term(&rows[i], schema, ctx)? else {
+            let Some(term) = first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)? else {
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
@@ -3832,8 +3866,8 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     for &i in idxs {
         let mut tuple = AggregateSurvivors::new(&ctx.growth);
         let mut every_position_bound = true;
-        for argument in &mut links[..agg.args().len()] {
-            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
+        for (argument, expression) in links[..agg.args().len()].iter_mut().zip(agg.args()) {
+            let Some(term) = argument.term(Some(expression), &rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
             };
@@ -5426,6 +5460,59 @@ mod tests {
             },
             ctx,
         )
+    }
+
+    #[test]
+    fn streamed_star_schema_retains_its_query_workspace_grant() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let names = (0..256)
+            .map(|index| format!("?v{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ VALUES ({names}) {{}} }}"))
+            .expect("valid wide star projection");
+        let GraphPattern::ProjectStar { variables, .. } = query.pattern() else {
+            panic!("star query retains its shared projection");
+        };
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        assert!(dataset.storage_live_budget().is_none());
+        let (workspace, ledger, base) = account(1 << 20);
+        let mut ctx = EvalCtx::new(dataset.as_ref());
+        ctx.growth = workspace.capability();
+        let inner = GraphPattern::empty_bgp();
+        let node = GraphPattern::ProjectStar {
+            inner: Child::new(inner.clone()),
+            variables: variables.clone(),
+        };
+        let mut delivered = 0;
+        let mut consume = |rows: &SolutionSeq, _: &mut EvalCtx<'_, RdfDataset>| {
+            delivered += 1;
+            assert_eq!(rows.schema.len(), 256);
+            assert_eq!(rows.rows.len(), 1);
+            assert!(
+                ledger.live.load(Ordering::Relaxed)
+                    >= base + u64::try_from(rows.schema.retained_size_bytes()).unwrap(),
+                "the delivered schema remains covered by the query reservation"
+            );
+            Ok(std::ops::ControlFlow::Continue(()))
+        };
+        let outcome = eval_project_with(
+            &node,
+            &inner,
+            purrdf_sparql_algebra::ProjectionNames::Star(variables),
+            &mut crate::eval::RowConsumer::new(&mut consume),
+            &mut ctx,
+        )
+        .expect("streamed projection fits its workspace");
+        assert_eq!(delivered, 1);
+        drop(outcome);
+        drop(ctx);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     fn eval_slice<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
@@ -9130,6 +9217,7 @@ mod emptiness_proof_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::OrderBy { inner, .. }

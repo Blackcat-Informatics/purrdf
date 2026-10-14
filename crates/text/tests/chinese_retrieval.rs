@@ -374,6 +374,7 @@ fn supplementary_han_and_unknown_units_remain_searchable() {
     let fragment = "𠀀\u{31350}";
     let evidence = index
         .surface_index()
+        .expect("default surface index")
         .substring(fragment)
         .expect("one fragment");
     assert_eq!(evidence.len(), 1);
@@ -384,7 +385,11 @@ fn supplementary_han_and_unknown_units_remain_searchable() {
         fragment
     );
     assert!(
-        index.surface_index().phonetic("𠮷田").is_err(),
+        index
+            .surface_index()
+            .expect("default surface index")
+            .phonetic("𠮷田")
+            .is_err(),
         "Latin phonetic codes are not Chinese pronunciation evidence"
     );
 }

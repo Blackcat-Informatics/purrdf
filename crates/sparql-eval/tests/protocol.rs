@@ -1092,6 +1092,14 @@ fn a_parse_refusal_is_a_400_and_an_evaluation_failure_is_a_500() {
     assert_eq!(problem_for(unknown).status, 500);
     assert_eq!(problem_for(unknown).detail, ProblemDetail::Message);
 
+    let stack = FailureCode::from(&EvalError::StackExhausted {
+        construct: "query evaluation",
+    });
+    assert_eq!(stack, FailureCode::EvaluationStackExhausted);
+    assert_eq!(problem_for(stack).status, 400);
+    assert_eq!(problem_for(stack).detail, ProblemDetail::Message);
+    assert_eq!(problem_for(stack).code, EvalError::STACK_EXHAUSTED_CODE);
+
     // The valid neighbour answers.
     assert!(
         NativeSparqlEngine::new()

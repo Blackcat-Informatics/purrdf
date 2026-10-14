@@ -350,7 +350,9 @@ fn check_query_body(
                 }
                 node = inner;
             }
-            GraphPattern::Project { inner, .. } => return check_pattern(inner, prebound, rules),
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                return check_pattern(inner, prebound, rules);
+            }
             other => return check_pattern(other, prebound, rules),
         }
     }
@@ -540,12 +542,13 @@ fn check_pattern_node<'a>(
         // algebra) to the body's in-scope variables — a FILTER-only body
         // exposes nothing, so `$this` is NOT projected and the query must be
         // rejected (W3C pre-binding-006).
-        GraphPattern::Project { inner, .. }
+        GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }
             if matches!(rules, Rules::AppendixA | Rules::ServiceOnly) =>
         {
             pending.push(Pending::Pattern(inner));
         }
-        GraphPattern::Project { inner, variables } => {
+        GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+            let variables = pattern.projected_names().expect("projection names");
             let required = match rules {
                 Rules::Recommendation {
                     required_projection,

@@ -1009,10 +1009,12 @@ function poison(reason) {
 }
 
 function poisonError() {
-  return new Error(
+  const error = new Error(
     `the wasm instance trapped (${poisonReason}) and cannot be used again; ` +
       "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)",
   );
+  error.code = "purrdf-wasm-poisoned";
+  return error;
 }
 
 /**

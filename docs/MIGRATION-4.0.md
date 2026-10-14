@@ -1,0 +1,44 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Migrating to PurRDF 4.0
+
+The breaking Rust API changes below belong to the 4.0 major release. Upgrade
+the PurRDF crates together when adopting them.
+
+## Query-algebra projections
+
+Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`
+retains an immutable, ordered snapshot of the visible variables, allowing nested
+wildcard projections to share earlier names. `GraphPattern::Project` continues
+to hold an explicit `Vec<Variable>`.
+
+`GraphPattern` is an exhaustive public enum, so downstream exhaustive matches
+must add the `ProjectStar` arm. To visit a projection's inner pattern, match both
+forms when obtaining that child:
+
+```rust,ignore
+let projection_inner = match pattern {
+    GraphPattern::Project { inner, .. }
+    | GraphPattern::ProjectStar { inner, .. } => Some(inner),
+    _ => None,
+};
+```
+
+For code that reads column names from a `&GraphPattern`, use the shared ordered
+view instead of assuming every parsed projection holds a vector:
+
+```rust,ignore
+if let Some(names) = pattern.projected_names() {
+    for variable in names.iter() {
+        println!("{}", variable.as_str());
+    }
+}
+```
+
+`projected_names()` returns `None` for other pattern variants. Its iterator
+borrows the projection's names and preserves their visible order. Keep explicit
+`Project` construction when a rewrite deliberately chooses an owned variable
+list. A consumer that needs such a list can clone the shared view's names at
+that boundary; expanding every nested wildcard snapshot recreates the repeated
+prefix work the compact representation avoids.

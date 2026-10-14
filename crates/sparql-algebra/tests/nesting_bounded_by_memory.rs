@@ -610,8 +610,10 @@ fn linear_paths_a_hundred_thousand_deep_lower_on_a_small_stack() {
             else {
                 panic!("a SELECT");
             };
-            let GraphPattern::Project { inner, .. } = pattern else {
-                panic!("the projection");
+            let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+                pattern
+            else {
+                panic!("the projection")
             };
             let GraphPattern::Bgp { patterns } = inner.into_inner() else {
                 panic!("inversions lower into one data triple");
@@ -632,10 +634,11 @@ fn linear_paths_a_hundred_thousand_deep_lower_on_a_small_stack() {
         else {
             panic!("a SELECT");
         };
-        let GraphPattern::Project { inner, variables } = pattern else {
-            panic!("the projection");
+        assert_eq!(pattern.projected_names().expect("projection").len(), 2, "every join point stays hidden");
+        let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+        else {
+            panic!("the projection")
         };
-        assert_eq!(variables.len(), 2, "every join point stays hidden");
         let GraphPattern::Bgp { patterns } = inner.into_inner() else {
             panic!("the entire sequence is one BGP");
         };
@@ -669,10 +672,16 @@ fn a_linear_sequence_a_hundred_thousand_levels_deep_stays_connected() {
         else {
             panic!("a SELECT");
         };
-        let GraphPattern::Project { inner, variables } = pattern else {
-            panic!("the projection");
+        assert_eq!(
+            pattern.projected_names().expect("projection").len(),
+            2,
+            "every join point stays hidden"
+        );
+        let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+            pattern
+        else {
+            panic!("the projection")
         };
-        assert_eq!(variables.len(), 2, "every join point stays hidden");
         let GraphPattern::Bgp { patterns } = inner.into_inner() else {
             panic!("the entire nested sequence is one BGP");
         };
@@ -838,8 +847,10 @@ fn brackets_a_hundred_thousand_deep_build_no_node() {
         else {
             panic!("a SELECT");
         };
-        let GraphPattern::Project { inner, .. } = pattern else {
-            panic!("the projection");
+        let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+            pattern
+        else {
+            panic!("the projection")
         };
         let GraphPattern::Filter { expr, .. } = inner.into_inner() else {
             panic!("the FILTER");

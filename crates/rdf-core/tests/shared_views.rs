@@ -10,14 +10,14 @@ use std::sync::Arc;
 
 use purrdf_core::{
     BlankScope, CanonHash, CompositeDatasetView, CompositeSource, ContentDigest, DatasetMut,
-    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, GraphMatchValue,
-    GraphPlacement, InMemoryPageProvider, MutableDataset, OwnerMutability, PagedDataset,
-    PagedQueryLimits, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger, RetentionSnapshot, ScopeBinding,
-    TermRef, TermValue, ViewAccountingReport, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
-    blank_count_view, canonicalize, canonicalize_graph_view, canonicalize_view,
-    check_admissible_view, datasets_isomorphic, graph_digest_view, try_canonicalize_flat_view,
-    try_canonicalize_view, try_graph_digest_view,
+    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphExistenceMode, GraphMatch,
+    GraphMatchValue, GraphPlacement, InMemoryPageProvider, MutableDataset, OwnerMutability,
+    PagedDataset, PagedQueryLimits, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger,
+    RetentionSnapshot, ScopeBinding, TermRef, TermValue, ViewAccountingReport, ViewLimits,
+    ViewOperationStatus, ViewStats, ViewWork, blank_count_view, canonicalize,
+    canonicalize_graph_view, canonicalize_view, check_admissible_view, datasets_isomorphic,
+    graph_digest_view, try_canonicalize_flat_view, try_canonicalize_view, try_graph_digest_view,
 };
 
 const P: &str = "http://example.org/p";
@@ -502,6 +502,180 @@ fn statement_rows_remove_and_reinsert_without_resurrection_or_duplicates() {
         0,
         "later reinsertion cannot mutate a snapshot"
     );
+}
+
+#[test]
+fn mutable_freeze_obeys_caller_limits_and_preserves_the_effective_rdf() {
+    let source = complete_source();
+    let mut mutable =
+        MutableDataset::new_with_graph_existence(source.clone(), GraphExistenceMode::RememberEmpty);
+    let mut annotation = metadata_row(&source, source.annotation_quads().next().unwrap());
+    assert!(mutable.remove(&annotation));
+    annotation.o = TermValue::simple_literal("updated");
+    assert!(mutable.insert(annotation).unwrap());
+    let added = QuadValues::triple(
+        iri("added"),
+        TermValue::iri(P),
+        TermValue::simple_literal("delta"),
+    );
+    assert!(mutable.insert(added.clone()).unwrap());
+    let snapshot = mutable.snapshot_view().unwrap();
+    let stats = snapshot.stats();
+    let exact = ViewLimits {
+        max_sources: stats.retained_sources,
+        max_terms: stats.retained_terms,
+        max_rows: stats.retained_rows,
+        max_payload_bytes: stats.retained_payload_bytes,
+        max_auxiliary_bytes: stats.auxiliary_bytes,
+    };
+    for (name, limits) in [
+        (
+            "sources",
+            ViewLimits {
+                max_sources: exact.max_sources - 1,
+                ..exact
+            },
+        ),
+        (
+            "terms",
+            ViewLimits {
+                max_terms: exact.max_terms - 1,
+                ..exact
+            },
+        ),
+        (
+            "rows",
+            ViewLimits {
+                max_rows: exact.max_rows - 1,
+                ..exact
+            },
+        ),
+        (
+            "payload bytes",
+            ViewLimits {
+                max_payload_bytes: exact.max_payload_bytes - 1,
+                ..exact
+            },
+        ),
+        (
+            "auxiliary bytes",
+            ViewLimits {
+                max_auxiliary_bytes: exact.max_auxiliary_bytes - 1,
+                ..exact
+            },
+        ),
+    ] {
+        let before = mutable.work_stats();
+        let refused = mutable.freeze_with_limits(limits).unwrap_err();
+        assert_eq!(refused.code, "view-retention-limit");
+        assert!(refused.message.contains(name), "{refused:?}");
+        assert_eq!(mutable.work_stats(), before, "{name}: refused publication");
+        let compacted = mutable.freeze_with_limits(exact).unwrap();
+        assert_eq!(surface(&compacted), surface(&snapshot));
+        assert_eq!(
+            compacted.named_graphs().count(),
+            snapshot.named_graphs().count()
+        );
+        assert_eq!(
+            mutable.work_stats().materializations,
+            before.materializations + 1
+        );
+    }
+    let default = mutable.freeze().unwrap();
+    let explicit_default = mutable.freeze_with_limits(ViewLimits::default()).unwrap();
+    assert_eq!(surface(&default), surface(&explicit_default));
+    assert_eq!(surface(&default), surface(&snapshot));
+    assert!(mutable.remove(&added));
+    assert_eq!(snapshot.quads().count(), default.quad_count());
+    assert_eq!(
+        mutable.freeze_with_limits(exact).unwrap().quad_count() + 1,
+        default.quad_count()
+    );
+}
+
+#[test]
+#[ignore = "large native compaction acceptance; run explicitly with a memory ceiling"]
+fn large_mutable_claims_freeze_with_the_snapshot_limits() {
+    let claims = 950_000;
+    let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+    let predicate = TermValue::iri(P);
+    let reifies = TermValue::iri(REIFIES);
+    let annotation_predicates = [iri("annotation/one"), iri("annotation/two")];
+    for index in 0..claims {
+        let subject = iri(&format!("subject/{index}"));
+        let object = TermValue::simple_literal(index.to_string());
+        let reifier = iri(&format!("claim/{index}"));
+        let triple = TermValue::Triple {
+            s: TermBox::new(subject.clone()),
+            p: TermBox::new(predicate.clone()),
+            o: TermBox::new(object.clone()),
+        };
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    subject,
+                    predicate.clone(),
+                    object.clone()
+                ))
+                .unwrap()
+        );
+        assert!(
+            mutable
+                .insert(QuadValues::triple(reifier.clone(), reifies.clone(), triple))
+                .unwrap()
+        );
+        for annotation in &annotation_predicates {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(
+                        reifier.clone(),
+                        annotation.clone(),
+                        object.clone()
+                    ))
+                    .unwrap()
+            );
+        }
+    }
+    let limits = ViewLimits {
+        max_auxiliary_bytes: 1_073_741_824,
+        ..ViewLimits::default()
+    };
+    let snapshot = mutable.snapshot_view_with_limits(limits).unwrap();
+    let stats = snapshot.stats();
+    eprintln!(
+        "claims={claims} rows={} auxiliary_bytes={}",
+        stats.retained_rows, stats.auxiliary_bytes
+    );
+    assert!(stats.auxiliary_bytes > ViewLimits::default().max_auxiliary_bytes);
+    let refused = mutable.freeze().unwrap_err();
+    assert_eq!(refused.code, "view-retention-limit");
+    assert!(refused.message.contains("auxiliary bytes"));
+    let compacted = mutable.freeze_with_limits(limits).unwrap();
+    assert_eq!(compacted.quad_count(), claims);
+    assert_eq!(compacted.reifiers().count(), claims);
+    assert_eq!(compacted.annotations().count(), 2 * claims);
+    assert_eq!(compacted.rdf_row_count(), stats.retained_rows);
+    // Full table populations establish scale; the small fixture above compares
+    // every RDF value. Probe boundary/interior identities here without retaining
+    // two further whole-corpus copies in the comparison oracle.
+    for index in [0, claims / 2, claims - 1] {
+        let subject = DatasetView::term_id_by_value(&*compacted, &iri(&format!("subject/{index}")))
+            .unwrap()
+            .unwrap();
+        let quad = compacted
+            .quads_for_pattern(Some(subject), None, None, GraphMatch::Default)
+            .next()
+            .unwrap();
+        assert_eq!(
+            owned(&compacted, quad.o),
+            TermValue::simple_literal(index.to_string())
+        );
+        let reifier = DatasetView::term_id_by_value(&*compacted, &iri(&format!("claim/{index}")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(compacted.reifier_quads_of(reifier).count(), 1);
+        assert_eq!(compacted.annotations_of_with_graph(reifier).count(), 2);
+    }
 }
 
 #[test]
@@ -1080,7 +1254,10 @@ fn every_term_shape_is_charged_as_the_freeze_interns_it() {
     // declared graph that also names a row.
     let base = complete_source();
     let build = || {
-        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let mut mutable = MutableDataset::new_with_graph_existence(
+            Arc::clone(&base),
+            GraphExistenceMode::Implicit,
+        );
         let same = TermValue::blank("same");
         let p = TermValue::iri(P);
         let inner = TermValue::Triple {

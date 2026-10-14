@@ -26,6 +26,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use purrdf::ir::GraphExistenceMode;
 use purrdf::xsd::exact::DivisionPolicy;
 use purrdf::{
     ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
@@ -229,6 +230,22 @@ impl JobError {
 
     /// The message a JavaScript caller reads.
     pub(crate) fn rendered(&self) -> String {
+        if cfg!(target_arch = "wasm32")
+            && self.text == ErrorText::Diagnostic
+            && self.code() == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+        {
+            // The evaluator retains the exact frame in its native diagnostic, but
+            // two equivalent wasm runs can discover the low stack in adjacent frames.
+            // The package reports one position-independent statement on both lanes.
+            return RdfDiagnostic::error(
+                self.code(),
+                purrdf_sparql_eval::EvalError::StackExhausted {
+                    construct: "query evaluation",
+                }
+                .to_string(),
+            )
+            .to_string();
+        }
         match self.text {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),
@@ -526,6 +543,8 @@ pub(crate) struct OperationInput<'a> {
     pub(crate) xpath_regex: Option<Profile>,
     /// The precision of every `xsd:integer`/`xsd:decimal` quotient the operation forms.
     pub(crate) division: DivisionPolicy,
+    /// The dataset policy captured before freezing, retained through UPDATE execution.
+    pub(crate) graph_existence: GraphExistenceMode,
     /// The immutable profile captured when this operation starts.
     pub(crate) geo: purrdf_validate::geo::GeoProfileSnapshot,
 }
@@ -556,6 +575,7 @@ impl<'a> OperationInput<'a> {
             accept: None,
             xpath_regex: None,
             division: DivisionPolicy::xsd_default(),
+            graph_existence: GraphExistenceMode::default(),
             geo: purrdf_validate::geo::GeoSession::default().profile_snapshot(),
         }
     }
@@ -635,6 +655,7 @@ impl OperationInput<'_> {
             accept,
             xpath_regex,
             division,
+            graph_existence,
             geo,
         } = self;
         let base = base.as_deref();
@@ -836,7 +857,8 @@ impl OperationInput<'_> {
                                 division,
                                 xpath_regex,
                                 &geo,
-                            ),
+                            )
+                            .with_graph_existence(graph_existence),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -852,7 +874,8 @@ impl OperationInput<'_> {
                                 division,
                                 xpath_regex,
                                 &geo,
-                            ),
+                            )
+                            .with_graph_existence(graph_existence),
                             &governors,
                         )
                     })
@@ -882,7 +905,8 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.selected_options(&env, division, xpath_regex, &geo),
+                            run.selected_options(&env, division, xpath_regex, &geo)
+                                .with_graph_existence(graph_existence),
                             &governors,
                         )
                     })
@@ -1013,6 +1037,7 @@ mod tests {
         let frozen = crate::dataset::Dataset::parse(
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "ntriples",
+            None,
             None,
         )
         .expect("parses")
@@ -1145,6 +1170,7 @@ mod tests {
         let frozen = crate::dataset::Dataset::parse(
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "ntriples",
+            None,
             None,
         )
         .expect("parses")

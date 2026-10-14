@@ -1941,6 +1941,7 @@ impl QueryEngine {
         let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
         input.xpath_regex = xpath_regex;
         input.division = self.division();
+        input.graph_existence = dataset.graph_existence();
         input.geo = self.geo_profile();
         Ok(input)
     }
@@ -2475,6 +2476,92 @@ mod tests {
     use super::*;
     use crate::term::TermInner;
 
+    /// Ordinary and governed UPDATEs retain the selected native graph lifetime,
+    /// including after a snapshot or a match reconstructs the dataset.
+    #[test]
+    fn updates_keep_the_datasets_graph_existence() {
+        let graph = purrdf::TermValue::iri("https://example.org/g");
+        let trig = "<https://example.org/g> { <https://example.org/s> <https://example.org/p> <https://example.org/o> }";
+        let engine = QueryEngine::new();
+        for remember in [None, Some(true), Some(false)] {
+            let kept = remember != Some(false);
+            for governed in [false, true] {
+                let mut dataset = Dataset::parse(trig, "trig", None, remember).expect("TriG");
+                assert_eq!(dataset.remember_empty_graphs(), kept);
+                let mut matched = dataset
+                    .match_pattern(None, None, None, None)
+                    .expect("match");
+                assert_eq!(matched.remember_empty_graphs(), kept);
+                let quad = matched.quads().expect("quads").pop().expect("one quad");
+                assert!(matched.delete(&quad).expect("delete"));
+                assert_eq!(matched.view().has_named_graph(&graph), kept);
+                let update = "CLEAR GRAPH <https://example.org/g>";
+                if governed {
+                    let outcome = engine
+                        .update_governed(
+                            &mut dataset,
+                            update,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some(true),
+                            None,
+                        )
+                        .expect("governed CLEAR");
+                    assert!(outcome.is_applied());
+                } else {
+                    engine
+                        .update(&mut dataset, update, None, None)
+                        .expect("CLEAR");
+                }
+                assert_eq!(dataset.size(), 0);
+                assert_eq!(dataset.view().has_named_graph(&graph), kept);
+                assert_eq!(dataset.remember_empty_graphs(), kept);
+                let mut snapshot = dataset.snapshot().expect("snapshot");
+                assert_ne!(snapshot.identity(), dataset.identity());
+                assert_eq!(snapshot.current_generation(), 0);
+                assert_eq!(snapshot.remember_empty_graphs(), kept);
+                engine
+                    .update(
+                        &mut snapshot,
+                        "CREATE GRAPH <https://example.org/h>",
+                        None,
+                        None,
+                    )
+                    .expect("CREATE");
+                assert_eq!(
+                    snapshot
+                        .view()
+                        .has_named_graph(&purrdf::TermValue::iri("https://example.org/h")),
+                    kept
+                );
+                assert!(
+                    !dataset
+                        .view()
+                        .has_named_graph(&purrdf::TermValue::iri("https://example.org/h"))
+                );
+            }
+            let empty = Dataset::new(remember).expect("empty");
+            assert_eq!(empty.remember_empty_graphs(), kept);
+            let native = purrdf::ir::MutableDataset::new_with_graph_existence(
+                empty.view().freeze().expect("freeze"),
+                empty.graph_existence(),
+            );
+            assert_eq!(
+                Dataset::from_mutable(native)
+                    .expect("native owner")
+                    .remember_empty_graphs(),
+                kept
+            );
+        }
+    }
+
     #[test]
     fn select_rows_are_moved_once_and_share_variables() {
         let rows = vec![
@@ -2691,6 +2778,7 @@ mod tests {
             "<https://example.org/s> <https://example.org/p> <https://example.org/o> .",
             "ntriples",
             None,
+            None,
         )
         .expect("seed dataset parses");
         let constructed = QueryEngine::new()
@@ -2718,7 +2806,7 @@ mod tests {
     const PLAIN_CONSTRUCT: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 
     fn seed() -> Dataset {
-        Dataset::parse(SEED_NT, "ntriples", None).expect("seed dataset parses")
+        Dataset::parse(SEED_NT, "ntriples", None, None).expect("seed dataset parses")
     }
 
     /// The DEFAULT entry point never answers a graph-carrying result with nothing.
@@ -2855,7 +2943,7 @@ mod tests {
     /// carries named graphs even though no `DESCRIBE` ever names one.
     #[test]
     fn a_describe_carries_its_graphs_and_refuses_a_single_graph_format() {
-        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None).expect("TriG parses");
+        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None, None).expect("TriG parses");
         let described = QueryEngine::new()
             .describe(&source, "DESCRIBE <https://example.org/s>", None, None)
             .expect("DESCRIBE evaluates");

@@ -8,11 +8,15 @@
 //! graph/file frame families plus transformed, encrypted, and signed payloads.
 //! Deterministic CBOR and BLAKE3 self-hashes are handled by [`crate::wire`].
 
+use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::mem::{size_of, size_of_val};
 
 use purrdf_lex::cbor::Value;
 
+use crate::FastMap;
 use crate::codec::{Codec, CodecError, EncodeOptions, encode_chain_with_options};
 use crate::model::{
     AnnotationRow, Graph, Quad, ReifierRow, Suppression, Term, TermKind, is_literal_direction,
@@ -1520,10 +1524,21 @@ pub struct TermRemap {
 ///
 /// The walk runs over a work list: a quoted triple's subject, predicate and object
 /// are each walked fully, in that order, with the triple on `stack` while they are.
+#[cfg(test)]
 fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usize {
+    let mut active = vec![false; graph.terms.len()];
+    term_nesting_depth_marked(graph, tid, stack, &mut active)
+}
+
+fn term_nesting_depth_marked(
+    graph: &Graph,
+    tid: usize,
+    stack: &mut Vec<usize>,
+    active: &mut [bool],
+) -> usize {
     /// The depth of `tid` if it has no components to walk, or its components.
-    fn enter(graph: &Graph, tid: usize, stack: &[usize]) -> Result<usize, [usize; 3]> {
-        if stack.contains(&tid) {
+    fn enter(graph: &Graph, tid: usize, active: &[bool]) -> Result<usize, [usize; 3]> {
+        if active.get(tid).copied().unwrap_or(false) {
             return Ok(0);
         }
         let Some(term) = graph.terms.get(tid) else {
@@ -1543,10 +1558,11 @@ fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usiz
         entered: usize,
         deepest: usize,
     }
-    let components = match enter(graph, tid, stack) {
+    let components = match enter(graph, tid, active) {
         Ok(depth) => return depth,
         Err(components) => components,
     };
+    active[tid] = true;
     stack.push(tid);
     let mut frames = vec![Frame {
         components,
@@ -1558,9 +1574,10 @@ fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usiz
         if frame.entered < 3 {
             let component = frame.components[frame.entered];
             frame.entered += 1;
-            match enter(graph, component, stack) {
+            match enter(graph, component, active) {
                 Ok(depth) => frame.deepest = frame.deepest.max(depth),
                 Err(components) => {
+                    active[component] = true;
                     stack.push(component);
                     frames.push(Frame {
                         components,
@@ -1573,7 +1590,8 @@ fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usiz
         }
         let depth = frame.deepest + 1;
         frames.pop();
-        stack.pop();
+        let finished = stack.pop().expect("the active triple is on the path");
+        active[finished] = false;
         match frames.last_mut() {
             Some(parent) => parent.deepest = parent.deepest.max(depth),
             None => return depth,
@@ -1583,31 +1601,310 @@ fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usiz
 
 /// Return the deterministic term-id remapping used by canonical graph writers.
 pub fn deterministic_term_remap(graph: &Graph) -> TermRemap {
+    remap_with_identity_work(graph).0
+}
+
+/// Work and retained identity bytes of one remap. The ordinary writer discards
+/// this record; scaling controls read the same production traversal's counts.
+#[derive(Default)]
+struct IdentityWork {
+    source_terms: usize,
+    source_edges: usize,
+    compared_nodes: usize,
+    interned_nodes: usize,
+    interned_edges: usize,
+    flat_identity_bytes: usize,
+    path_membership_probes: usize,
+    peak_identity_bytes: usize,
+}
+
+fn remap_with_identity_work(graph: &Graph) -> (TermRemap, IdentityWork) {
+    let mut work = IdentityWork::default();
     let mut old_by_new: Vec<usize> = (0..graph.terms.len()).collect();
-    // One path stack shared by every term: both walkers push/pop in
-    // balance on every return path, so the stack is empty at each entry and a
-    // fresh `Vec` per term (two per term, here) bought nothing.
-    let mut stack: Vec<usize> = Vec::new();
-    let keys: Vec<(usize, Vec<u8>)> = old_by_new
-        .iter()
-        .map(|&tid| {
-            (
-                term_nesting_depth(graph, tid, &mut stack),
-                term_identity_key(graph, tid, &mut stack),
-            )
-        })
-        .collect();
-    // `then_with(a.cmp(b))` over distinct indices is a total order, so the
-    // unstable sort produces the identical permutation without a scratch buffer.
-    old_by_new.sort_unstable_by(|a, b| keys[*a].cmp(&keys[*b]).then_with(|| a.cmp(b)));
+    let mut stack = Vec::new();
+    let mut active = vec![false; graph.terms.len()];
+    if let Some(depths) = acyclic_term_depths(graph, &mut work) {
+        // A triple identity is a canonical CBOR array of three child identities.
+        // Keep the one flat encoding per leaf; the child edges already in `Graph`
+        // share the nested identity. No expanded key is retained per ancestor.
+        let flat_keys: Vec<Option<Vec<u8>>> = graph
+            .terms
+            .iter()
+            .enumerate()
+            .map(|(tid, term)| {
+                (term.kind != TermKind::Triple || graph.term_triple(term).is_none())
+                    .then(|| term_identity_key_marked(graph, tid, &mut stack, &mut active))
+            })
+            .collect();
+        work.flat_identity_bytes = flat_keys
+            .iter()
+            .filter_map(Option::as_ref)
+            .map(Vec::len)
+            .sum();
+        work.path_membership_probes = flat_keys.iter().filter(|key| key.is_some()).count();
+        let retained = flat_keys.capacity() * size_of::<Option<Vec<u8>>>()
+            + flat_keys
+                .iter()
+                .filter_map(Option::as_ref)
+                .map(Vec::capacity)
+                .sum::<usize>()
+            + depths.capacity() * size_of::<usize>()
+            + active.capacity();
+        work.peak_identity_bytes = work.peak_identity_bytes.max(retained);
+        let classes = acyclic_identity_classes(graph, &depths, &flat_keys, &mut work);
+        let mut compared_pairs: FastMap<(usize, usize), Ordering> = FastMap::default();
+        old_by_new.sort_unstable_by(|&a, &b| {
+            depths[a]
+                .cmp(&depths[b])
+                .then_with(|| {
+                    compare_acyclic_identity(
+                        graph,
+                        &flat_keys,
+                        &classes,
+                        &mut compared_pairs,
+                        a,
+                        b,
+                        &mut work,
+                    )
+                })
+                .then_with(|| a.cmp(&b))
+        });
+        work.peak_identity_bytes +=
+            compared_pairs.capacity() * (size_of::<((usize, usize), Ordering)>() + 1);
+    } else {
+        // A cyclic term's identity contains a path-relative ["cycle", id]
+        // marker. Preserve that established malformed-input law exactly.
+        let keys: Vec<(usize, Vec<u8>)> = old_by_new
+            .iter()
+            .map(|&tid| {
+                (
+                    term_nesting_depth_marked(graph, tid, &mut stack, &mut active),
+                    term_identity_key_marked(graph, tid, &mut stack, &mut active),
+                )
+            })
+            .collect();
+        old_by_new.sort_unstable_by(|a, b| keys[*a].cmp(&keys[*b]).then_with(|| a.cmp(b)));
+    }
     let mut old_to_new = vec![0; graph.terms.len()];
     for (new, old) in old_by_new.iter().enumerate() {
         old_to_new[*old] = new;
     }
-    TermRemap {
-        old_to_new,
-        old_by_new,
+    (
+        TermRemap {
+            old_to_new,
+            old_by_new,
+        },
+        work,
+    )
+}
+
+/// Depths of all terms in one pass over an acyclic component graph. A missing
+/// component is a flat marker of depth zero; a cycle selects the path-sensitive
+/// fallback above instead of silently inventing a depth for it.
+fn acyclic_term_depths(graph: &Graph, work: &mut IdentityWork) -> Option<Vec<usize>> {
+    let count = graph.terms.len();
+    work.source_terms = count;
+    let mut parents = vec![Vec::new(); count];
+    let mut pending = vec![0_usize; count];
+    let mut depths = vec![0_usize; count];
+    for (tid, term) in graph.terms.iter().enumerate() {
+        if term.kind != TermKind::Triple {
+            continue;
+        }
+        depths[tid] = 1;
+        if let Some(components) = graph.term_triple(term) {
+            for child in <[usize; 3]>::from(components) {
+                if child < count {
+                    work.source_edges += 1;
+                    parents[child].push(tid);
+                    pending[tid] += 1;
+                }
+            }
+        }
     }
+    let mut ready: Vec<usize> = (0..count).filter(|&tid| pending[tid] == 0).collect();
+    let mut finished = 0;
+    while let Some(child) = ready.pop() {
+        finished += 1;
+        for &parent in &parents[child] {
+            depths[parent] = depths[parent].max(depths[child] + 1);
+            pending[parent] -= 1;
+            if pending[parent] == 0 {
+                ready.push(parent);
+            }
+        }
+    }
+    work.peak_identity_bytes = parents.capacity() * size_of::<Vec<usize>>()
+        + parents
+            .iter()
+            .map(|parents| parents.capacity() * size_of::<usize>())
+            .sum::<usize>()
+        + pending.capacity() * size_of::<usize>()
+        + depths.capacity() * size_of::<usize>()
+        + ready.capacity() * size_of::<usize>();
+    (finished == count).then_some(depths)
+}
+
+/// Intern exact structural identities bottom-up. Class numbers are equality
+/// tokens only: canonical CBOR byte ordering remains in the comparator below.
+/// Borrowing flat keys avoids a second retained copy of every lexical value.
+fn acyclic_identity_classes(
+    graph: &Graph,
+    depths: &[usize],
+    flat_keys: &[Option<Vec<u8>>],
+    work: &mut IdentityWork,
+) -> Vec<usize> {
+    let mut flat_classes: FastMap<&[u8], usize> = FastMap::default();
+    let mut missing_classes: FastMap<usize, usize> = FastMap::default();
+    let mut triple_classes: FastMap<[usize; 3], usize> = FastMap::default();
+    let mut classes = vec![0; graph.terms.len()];
+    let mut next_class = 0;
+    let mut ordered: Vec<usize> = (0..graph.terms.len()).collect();
+    ordered.sort_unstable_by_key(|&tid| depths[tid]);
+    for &tid in &ordered {
+        work.interned_nodes += 1;
+        if let Some(key) = flat_keys[tid].as_deref() {
+            classes[tid] = *flat_classes.entry(key).or_insert_with(|| {
+                let class = next_class;
+                next_class += 1;
+                class
+            });
+            continue;
+        }
+        let components: [usize; 3] = graph.triple_of(tid).expect("nested triple").into();
+        let children = components.map(|child| {
+            work.interned_edges += 1;
+            if child < classes.len() {
+                classes[child]
+            } else {
+                *missing_classes.entry(child).or_insert_with(|| {
+                    let class = next_class;
+                    next_class += 1;
+                    class
+                })
+            }
+        });
+        classes[tid] = *triple_classes.entry(children).or_insert_with(|| {
+            let class = next_class;
+            next_class += 1;
+            class
+        });
+    }
+    let retained = classes.capacity() * size_of::<usize>()
+        + ordered.capacity() * size_of::<usize>()
+        + flat_classes.capacity() * size_of::<(&[u8], usize)>()
+        + missing_classes.capacity() * size_of::<(usize, usize)>()
+        + triple_classes.capacity() * size_of::<([usize; 3], usize)>();
+    work.peak_identity_bytes = work.peak_identity_bytes.max(
+        retained
+            + size_of_val(flat_keys)
+            + flat_keys
+                .iter()
+                .filter_map(Option::as_ref)
+                .map(Vec::capacity)
+                .sum::<usize>()
+            + size_of_val(depths),
+    );
+    classes
+}
+
+/// Compare canonical CBOR identities without expanding quoted terms. Every
+/// complete CBOR child value is self-delimiting, so the lexicographic byte
+/// comparison of two four-element triple arrays is the comparison of their
+/// first differing child identity. The work list keeps deep chains off the
+/// native stack. Equal structural classes need no repeated walk, and bounded
+/// pair-order memory avoids revisiting unequal child chains at each ancestor.
+fn compare_acyclic_identity(
+    graph: &Graph,
+    flat_keys: &[Option<Vec<u8>>],
+    classes: &[usize],
+    compared_pairs: &mut FastMap<(usize, usize), Ordering>,
+    left: usize,
+    right: usize,
+    work: &mut IdentityWork,
+) -> Ordering {
+    fn flat(flat_keys: &[Option<Vec<u8>>], tid: usize) -> Option<Cow<'_, [u8]>> {
+        match flat_keys.get(tid) {
+            Some(Some(key)) => Some(Cow::Borrowed(key)),
+            Some(None) => None,
+            None => Some(Cow::Owned(canonical(&Value::Array(vec![
+                "missing".into(),
+                Value::from(tid as u64),
+            ])))),
+        }
+    }
+    if matches!((classes.get(left), classes.get(right)), (Some(a), Some(b)) if a == b) {
+        work.compared_nodes += 1;
+        return Ordering::Equal;
+    }
+    // Most real term tables are flat. Their keys were encoded once above, so a
+    // sort comparison must not allocate a work list for this common case.
+    match (flat(flat_keys, left), flat(flat_keys, right)) {
+        (Some(a), Some(b)) => {
+            work.compared_nodes += 1;
+            return a.cmp(&b);
+        }
+        (Some(a), None) => {
+            work.compared_nodes += 1;
+            return a[0].cmp(&0x84);
+        }
+        (None, Some(b)) => {
+            work.compared_nodes += 1;
+            return 0x84.cmp(&b[0]);
+        }
+        (None, None) => {}
+    }
+    let pair_key = (left.min(right), left.max(right));
+    if let Some(&known) = compared_pairs.get(&pair_key) {
+        work.compared_nodes += 1;
+        return if left < right { known } else { known.reverse() };
+    }
+    let mut pending = vec![(left, right)];
+    let order = loop {
+        let Some((left, right)) = pending.pop() else {
+            break Ordering::Equal;
+        };
+        work.compared_nodes += 1;
+        if left == right {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (classes.get(left), classes.get(right))
+            && a == b
+        {
+            continue;
+        }
+        if let Some(&known) = compared_pairs.get(&(left.min(right), left.max(right))) {
+            let known = if left < right { known } else { known.reverse() };
+            if known != Ordering::Equal {
+                break known;
+            }
+            continue;
+        }
+        match (flat(flat_keys, left), flat(flat_keys, right)) {
+            (Some(a), Some(b)) => {
+                let order = a.cmp(&b);
+                if order != Ordering::Equal {
+                    break order;
+                }
+            }
+            (Some(a), None) => break a[0].cmp(&0x84),
+            (None, Some(b)) => break 0x84.cmp(&b[0]),
+            (None, None) => {
+                let a = graph.triple_of(left).expect("nested left triple");
+                let b = graph.triple_of(right).expect("nested right triple");
+                let a: [usize; 3] = a.into();
+                let b: [usize; 3] = b.into();
+                for index in (0..3).rev() {
+                    pending.push((a[index], b[index]));
+                }
+            }
+        }
+    };
+    if compared_pairs.len() >= graph.terms.len().saturating_mul(4) {
+        compared_pairs.clear();
+    }
+    compared_pairs.insert(pair_key, if left < right { order } else { order.reverse() });
+    order
 }
 
 impl Graph {
@@ -1749,15 +2046,26 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
 ///
 /// The walk runs over a work list: each component is written fully, in order, with
 /// the triple on `stack` — the path from the term the walk started at — while it is.
+#[cfg(test)]
 fn term_identity_key(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Vec<u8> {
+    let mut active = vec![false; graph.terms.len()];
+    term_identity_key_marked(graph, tid, stack, &mut active)
+}
+
+fn term_identity_key_marked(
+    graph: &Graph,
+    tid: usize,
+    stack: &mut Vec<usize>,
+    active: &mut [bool],
+) -> Vec<u8> {
     /// A quoted triple being written: its components and how many have begun.
     struct Frame {
         components: [usize; 3],
         entered: usize,
     }
     /// Write `tid`'s identity if it is flat, or open its array and return its frame.
-    fn enter(graph: &Graph, tid: usize, stack: &[usize], out: &mut Vec<u8>) -> Option<Frame> {
-        let flat = if stack.contains(&tid) {
+    fn enter(graph: &Graph, tid: usize, active: &[bool], out: &mut Vec<u8>) -> Option<Frame> {
+        let flat = if active.get(tid).copied().unwrap_or(false) {
             Value::Array(vec!["cycle".into(), Value::from(tid as u64)])
         } else {
             match graph.terms.get(tid) {
@@ -1805,20 +2113,23 @@ fn term_identity_key(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Vec<u
         None
     }
     let mut out = Vec::new();
-    let Some(root) = enter(graph, tid, stack, &mut out) else {
+    let Some(root) = enter(graph, tid, active, &mut out) else {
         return out;
     };
+    active[tid] = true;
     stack.push(tid);
     let mut frames = vec![root];
     while let Some(frame) = frames.last_mut() {
         if frame.entered == 3 {
             frames.pop();
-            stack.pop();
+            let finished = stack.pop().expect("the active triple is on the path");
+            active[finished] = false;
             continue;
         }
         let component = frame.components[frame.entered];
         frame.entered += 1;
-        if let Some(inner) = enter(graph, component, stack, &mut out) {
+        if let Some(inner) = enter(graph, component, active, &mut out) {
+            active[component] = true;
             stack.push(component);
             frames.push(inner);
         }
@@ -1971,8 +2282,14 @@ mod term_walk_tests {
 
     use purrdf_lex::cbor::Value;
 
-    use super::{canonical, term_identity_key, term_nesting_depth, text_or_null};
+    use super::{
+        IdentityWork, Writer, canonical, compare_acyclic_identity, deterministic_term_remap,
+        remap_with_identity_work, term_identity_key, term_nesting_depth, text_or_null,
+    };
     use crate::model::{Graph, Term, TermKind};
+
+    #[global_allocator]
+    static ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
     /// The recursive reference of [`term_nesting_depth`].
     fn reference_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usize {
@@ -2081,6 +2398,313 @@ mod term_walk_tests {
         graph
     }
 
+    fn acyclic(seed: u64, count: usize) -> Graph {
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+        let mut graph = Graph::default();
+        for tid in 0..count {
+            let mut entry = match rng.below(5) {
+                0 => term(TermKind::Iri, Some("http://example.org/shared")),
+                1 => term(TermKind::Bnode, None),
+                2 => term(TermKind::Literal, Some("same")),
+                _ => term(TermKind::Triple, None),
+            };
+            if entry.kind == TermKind::Triple && rng.below(7) != 0 {
+                let child = |rng: &mut purrdf_testkit::rng::SplitMix64| {
+                    if tid == 0 || rng.below(11) == 0 {
+                        count + 3
+                    } else {
+                        usize::try_from(rng.below(tid as u64)).expect("bounded child")
+                    }
+                };
+                let first = child(&mut rng);
+                entry.triple = Some(if rng.below(4) == 0 {
+                    (first, first, first)
+                } else {
+                    (first, child(&mut rng), child(&mut rng))
+                });
+            }
+            graph.terms.push(entry);
+        }
+        graph
+    }
+
+    fn reference_remap(graph: &Graph) -> Vec<usize> {
+        let mut stack = Vec::new();
+        let keys: Vec<_> = (0..graph.terms.len())
+            .map(|tid| {
+                (
+                    term_nesting_depth(graph, tid, &mut stack),
+                    term_identity_key(graph, tid, &mut stack),
+                )
+            })
+            .collect();
+        let mut ids: Vec<_> = (0..graph.terms.len()).collect();
+        ids.sort_unstable_by(|&a, &b| keys[a].cmp(&keys[b]).then_with(|| a.cmp(&b)));
+        ids
+    }
+
+    #[test]
+    fn shared_identity_order_matches_expanded_cbor_on_acyclic_dags_and_malformed_tables() {
+        for seed in 0..500 {
+            let graph = acyclic(seed, 3 + usize::try_from(seed % 53).expect("small count"));
+            assert_eq!(
+                deterministic_term_remap(&graph).old_by_new,
+                reference_remap(&graph),
+                "acyclic seed {seed}"
+            );
+            let malformed = generated(seed);
+            assert_eq!(
+                deterministic_term_remap(&malformed).old_by_new,
+                reference_remap(&malformed),
+                "malformed seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn flat_identity_comparisons_allocate_nothing() {
+        let mut graph = Graph::default();
+        for index in 0..1024 {
+            graph
+                .terms
+                .push(Term::iri(format!("http://example.org/{index:08}")));
+        }
+        let keys: Vec<_> = (0..graph.terms.len())
+            .map(|tid| Some(term_identity_key(&graph, tid, &mut Vec::new())))
+            .collect();
+        let classes: Vec<_> = (0..graph.terms.len()).collect();
+        let mut work = IdentityWork::default();
+        let mut compared_pairs = crate::FastMap::default();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let mut ordered = 0;
+        for tid in 0..graph.terms.len() - 1 {
+            ordered += usize::from(
+                compare_acyclic_identity(
+                    &graph,
+                    &keys,
+                    &classes,
+                    &mut compared_pairs,
+                    tid,
+                    tid + 1,
+                    &mut work,
+                ) == std::cmp::Ordering::Less,
+            );
+        }
+        let measured = window.close();
+        assert_eq!(ordered, 1023);
+        assert_eq!(work.compared_nodes, 1023);
+        assert_eq!(measured.allocations, 0, "{measured:?}");
+        assert_eq!(measured.requested_bytes, 0, "{measured:?}");
+    }
+
+    fn chain(levels: usize) -> Graph {
+        let mut graph = Graph::default();
+        graph
+            .terms
+            .push(term(TermKind::Iri, Some("http://example.org/s")));
+        graph
+            .terms
+            .push(term(TermKind::Iri, Some("http://example.org/p")));
+        graph
+            .terms
+            .push(term(TermKind::Iri, Some("http://example.org/o")));
+        let mut below = 2;
+        for _ in 0..levels {
+            let mut triple = term(TermKind::Triple, None);
+            triple.triple = Some((0, 1, below));
+            graph.terms.push(triple);
+            below = graph.terms.len() - 1;
+        }
+        graph
+    }
+
+    fn disjoint_chains(levels: usize, equal_leaves: bool) -> Graph {
+        let mut graph = Graph::default();
+        for side in 0..2 {
+            let leaf = graph.terms.len();
+            graph.terms.push(term(
+                TermKind::Iri,
+                Some(if equal_leaves || side == 0 {
+                    "http://example.org/leaf"
+                } else {
+                    "http://example.org/leaf-different"
+                }),
+            ));
+            let predicate = graph.terms.len();
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/p")));
+            let mut below = leaf;
+            for _ in 0..levels {
+                let mut triple = term(TermKind::Triple, None);
+                triple.triple = Some((leaf, predicate, below));
+                graph.terms.push(triple);
+                below = graph.terms.len() - 1;
+            }
+            assert_eq!(side * (levels + 2) + levels + 1, below);
+        }
+        graph
+    }
+
+    fn round_trip_snapshot(graph: &Graph) {
+        let mut writer = Writer::new("purrdf-test");
+        writer.add_frame("snapshot", Some(graph.snapshot_payload()), None, None, None);
+        let folded = crate::reader::read(&writer.into_bytes(), true, None);
+        assert!(folded.diagnostics.is_empty(), "{:?}", folded.diagnostics);
+        assert_eq!(folded.terms.len(), graph.terms.len());
+    }
+
+    #[test]
+    fn shared_identity_work_and_retained_bytes_scale_on_chains_and_wide_dags() {
+        let mut previous_chain = None;
+        let mut previous_old = None;
+        for levels in [128, 256, 512, 1024] {
+            let graph = chain(levels);
+            let (remap, work) = remap_with_identity_work(&graph);
+            round_trip_snapshot(&graph);
+            assert_eq!(remap.old_by_new.len(), graph.terms.len());
+            assert_eq!(work.source_terms, levels + 3);
+            assert_eq!(work.source_edges, levels * 3);
+            let new_work = work.source_terms
+                + work.source_edges
+                + work.interned_nodes
+                + work.interned_edges
+                + work.compared_nodes
+                + work.path_membership_probes;
+            let old_bytes: usize = (0..graph.terms.len())
+                .map(|tid| term_identity_key(&graph, tid, &mut Vec::new()).len())
+                .sum();
+            eprintln!(
+                "identity chain levels={levels} visits={new_work} source_terms={} source_edges={} compared_nodes={} path_probes={} flat_bytes={} peak_state_bytes={} old_expanded_bytes={old_bytes}",
+                work.source_terms,
+                work.source_edges,
+                work.compared_nodes,
+                work.path_membership_probes,
+                work.flat_identity_bytes,
+                work.peak_identity_bytes,
+            );
+            if let Some(previous) = previous_chain {
+                assert!(
+                    new_work < previous * 3,
+                    "chain {levels}: {new_work} vs {previous}"
+                );
+            }
+            if let Some(previous) = previous_old {
+                assert!(
+                    old_bytes > previous * 3,
+                    "old expanded keys remain quadratic"
+                );
+            }
+            assert!(work.flat_identity_bytes < graph.terms.len() * 128);
+            assert!(work.peak_identity_bytes < graph.terms.len() * 128);
+            previous_chain = Some(new_work);
+            previous_old = Some(old_bytes);
+        }
+
+        let mut previous = None;
+        let mut previous_peak = None;
+        for width in [64, 128, 256, 512] {
+            let mut graph = chain(32);
+            let shared = graph.terms.len() - 1;
+            for index in 0..width {
+                let leaf = graph.terms.len();
+                let mut name = term(TermKind::Iri, None);
+                name.value = Some(format!("http://example.org/{index:08}"));
+                graph.terms.push(name);
+                let mut triple = term(TermKind::Triple, None);
+                triple.triple = Some((leaf, 1, shared));
+                graph.terms.push(triple);
+            }
+            let (remap, work) = remap_with_identity_work(&graph);
+            round_trip_snapshot(&graph);
+            assert_eq!(remap.old_by_new, reference_remap(&graph));
+            let visits = work.source_terms
+                + work.source_edges
+                + work.interned_nodes
+                + work.interned_edges
+                + work.compared_nodes
+                + work.path_membership_probes;
+            eprintln!(
+                "identity wide width={width} visits={visits} source_terms={} source_edges={} compared_nodes={} path_probes={} flat_bytes={} peak_state_bytes={}",
+                work.source_terms,
+                work.source_edges,
+                work.compared_nodes,
+                work.path_membership_probes,
+                work.flat_identity_bytes,
+                work.peak_identity_bytes,
+            );
+            if let Some(prior) = previous {
+                assert!(visits < prior * 3, "width {width}: {visits} vs {prior}");
+            }
+            if let Some(prior) = previous_peak {
+                assert!(
+                    work.peak_identity_bytes < prior * 3,
+                    "width {width}: {} vs {prior}",
+                    work.peak_identity_bytes,
+                );
+            }
+            assert!(work.flat_identity_bytes < graph.terms.len() * 128);
+            previous = Some(visits);
+            previous_peak = Some(work.peak_identity_bytes);
+        }
+    }
+
+    #[test]
+    fn disjoint_chains_keep_comparison_work_and_state_linear() {
+        for equal_leaves in [true, false] {
+            let mut previous_visits = None;
+            let mut previous_state = None;
+            for levels in [128, 256, 512, 1024] {
+                let graph = disjoint_chains(levels, equal_leaves);
+                let (remap, work) = remap_with_identity_work(&graph);
+                round_trip_snapshot(&graph);
+                assert_eq!(remap.old_by_new.len(), graph.terms.len());
+                if levels <= 256 {
+                    assert_eq!(remap.old_by_new, reference_remap(&graph));
+                }
+                let visits = work.source_terms
+                    + work.source_edges
+                    + work.interned_nodes
+                    + work.interned_edges
+                    + work.compared_nodes
+                    + work.path_membership_probes;
+                eprintln!(
+                    "identity disjoint-chain equal_leaves={equal_leaves} levels={levels} visits={visits} compared_nodes={} peak_state_bytes={}",
+                    work.compared_nodes, work.peak_identity_bytes,
+                );
+                if let Some(previous) = previous_visits {
+                    assert!(
+                        visits < previous * 3,
+                        "levels {levels}: {visits} vs {previous}"
+                    );
+                }
+                if let Some(previous) = previous_state {
+                    assert!(
+                        work.peak_identity_bytes < previous * 3,
+                        "levels {levels}: {} vs {previous}",
+                        work.peak_identity_bytes,
+                    );
+                }
+                previous_visits = Some(visits);
+                previous_state = Some(work.peak_identity_bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn shared_identity_snapshot_writer_reads_back_the_same_canonical_graph() {
+        let mut graph = chain(96);
+        graph.quads.push((graph.terms.len() - 1, 1, 2, None));
+        let expected = canonical(&graph.snapshot_payload());
+        let mut writer = Writer::new("purrdf-test");
+        writer.add_frame("snapshot", Some(graph.snapshot_payload()), None, None, None);
+        let folded = crate::reader::read(&writer.into_bytes(), true, None);
+        assert!(folded.diagnostics.is_empty(), "{:?}", folded.diagnostics);
+        assert_eq!(folded.terms.len(), graph.terms.len());
+        assert_eq!(folded.quads.len(), 1);
+        assert_eq!(canonical(&folded.snapshot_payload()), expected);
+    }
+
     /// Both work-list walks answer every term of every generated table exactly as their
     /// recursive references do, and leave the shared path stack empty.
     #[test]
@@ -2114,8 +2738,8 @@ mod term_walk_tests {
 
     /// A chain several thousand triple terms deep is measured and keyed on a thread
     /// whose whole stack is 128 KiB — a recursion that deep would need several times
-    /// that. The walks' path check is linear in the path, so the chain is kept to a
-    /// few thousand levels.
+    /// that. The legacy expanded-key reference is limited to a few thousand levels;
+    /// production remapping reuses flat identities and checks path membership in O(1).
     #[test]
     fn a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread() {
         const LEVELS: usize = 3_000;

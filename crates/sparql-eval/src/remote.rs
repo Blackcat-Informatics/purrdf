@@ -984,6 +984,7 @@ fn nth_child_pattern(node: &GraphPattern, index: usize) -> Option<&GraphPattern>
         | GraphPattern::Service { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
@@ -1137,6 +1138,10 @@ fn rebuild_sanitized_with_memory(
         GraphPattern::Project { variables, .. } => GraphPattern::Project {
             inner: service_child(next(), memory)?,
             variables: clone_service_slice(variables, memory, |v, _| Ok(v.clone()))?,
+        },
+        GraphPattern::ProjectStar { variables, .. } => GraphPattern::ProjectStar {
+            inner: service_child(next(), memory)?,
+            variables: variables.clone(),
         },
         GraphPattern::Distinct { .. } => GraphPattern::Distinct {
             inner: service_child(next(), memory)?,
@@ -4059,7 +4064,7 @@ mod tests {
             .parse_query(&format!("SELECT * WHERE {{ {body} }}"))
             .expect("the source body is admitted");
         let purrdf_sparql_algebra::Query::Select {
-            pattern: GraphPattern::Project { inner, .. },
+            pattern: GraphPattern::ProjectStar { inner, .. },
             ..
         } = query
         else {
@@ -4331,6 +4336,10 @@ mod body_walk_tests {
                 expression: expression.clone(),
             },
             GraphPattern::Project { inner, variables } => GraphPattern::Project {
+                inner: Child::new(reference_sanitize(inner)),
+                variables: variables.clone(),
+            },
+            GraphPattern::ProjectStar { inner, variables } => GraphPattern::ProjectStar {
                 inner: Child::new(reference_sanitize(inner)),
                 variables: variables.clone(),
             },

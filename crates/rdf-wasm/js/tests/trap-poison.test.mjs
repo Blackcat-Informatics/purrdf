@@ -76,7 +76,7 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
   // The runtime learns of the trap at the next call it takes part in, from the gate's
   // globals: that call, the job that was in flight and every later asynchronous call —
   // `ready()` included — reject with the poison error naming the gate.
-  const REJECTED = { settled: "rejected", name: "Error", message: poisonMessage(GATE_CLOSED_REASON) };
+  const REJECTED = { settled: "rejected", name: "Error", message: poisonMessage(GATE_CLOSED_REASON), code: "purrdf-wasm-poisoned" };
   for (const name of ["asyncAfter", "inFlight", "readyAfter"]) {
     assert.deepEqual(report[name], REJECTED, name);
   }
@@ -222,12 +222,12 @@ test("installAsync requires every linker global by name, and the runtime reads t
   // traps on.
   exports.purrdf_active.value = 1;
   const POISON = poisonMessage(GATE_CLOSED_REASON);
-  assert.throws(() => runtime.assertNotPoisoned(), { constructor: Error, message: POISON });
+  assert.throws(() => runtime.assertNotPoisoned(), { constructor: Error, message: POISON, code: "purrdf-wasm-poisoned" });
   assert.equal(exports.purrdf_poisoned.value, 1, "the runtime wrote the poisoned flag");
   // Poisoning is permanent: counters put back in balance change nothing.
   exports.purrdf_active.value = 0;
-  assert.throws(() => runtime.assertNotPoisoned(), { message: POISON });
-  assert.throws(() => runtime.assertAsyncQueries(), { message: POISON });
+  assert.throws(() => runtime.assertNotPoisoned(), { message: POISON, code: "purrdf-wasm-poisoned" });
+  assert.throws(() => runtime.assertAsyncQueries(), { message: POISON, code: "purrdf-wasm-poisoned" });
 
   // A second instance of the runtime over a module the gate already marked: the flag
   // alone, with balanced counters, is the poisoning.
@@ -236,7 +236,7 @@ test("installAsync requires every linker global by name, and the runtime reads t
   marked.installAsync(markedExports, PROTOCOL);
   assert.doesNotThrow(() => marked.assertNotPoisoned());
   markedExports.purrdf_poisoned.value = 1;
-  assert.throws(() => marked.assertNotPoisoned(), { message: POISON });
+  assert.throws(() => marked.assertNotPoisoned(), { message: POISON, code: "purrdf-wasm-poisoned" });
 });
 
 // A module whose shadow stack is not laid out as the asynchronous lane assumes reports so

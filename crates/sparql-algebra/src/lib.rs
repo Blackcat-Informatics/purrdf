@@ -79,6 +79,7 @@ pub mod error;
 pub mod lexer;
 mod owned;
 pub mod parser;
+mod projection;
 mod retained_size;
 pub mod scope;
 pub mod serialize;
@@ -105,6 +106,7 @@ pub use parser::{
     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
     builtin_function_keyword,
 };
+pub use projection::{ProjectionIter, ProjectionNames, ProjectionNamesIter, ProjectionVars};
 pub use scope::{
     ObserverRole, ScopeError, ScopeHazard, ScopeRegion, ScopeSite, ScopeValidationError,
 };

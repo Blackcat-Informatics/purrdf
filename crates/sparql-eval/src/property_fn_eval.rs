@@ -2180,7 +2180,7 @@ impl<'q> CallReadShape<'q> {
                 if read
                     .operators
                     .iter()
-                    .any(|operator| matches!(operator, GraphPattern::Project { .. }))
+                    .any(|operator| operator.projected_names().is_some())
                 {
                     Ok(read)
                 } else {
@@ -2763,7 +2763,8 @@ impl<'q> ShapeWalk<'q> {
                     }),
                 ));
             }
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 // A sub-`SELECT` is its own scope: the frames around it inject into it
                 // only the variables it projects, which is how the planner reads it
                 // too. Those it carries in from the scope around, which a call inside
@@ -3215,7 +3216,7 @@ enum WalkFrame<'q> {
 enum Resume<'q> {
     Project {
         pattern: &'q GraphPattern,
-        variables: &'q [Variable],
+        variables: purrdf_sparql_algebra::ProjectionNames<'q>,
         outer: CallContext<'q>,
         outer_frame: usize,
         outer_graphs: Vec<NamedNodePattern>,
@@ -3774,9 +3775,10 @@ pub(crate) fn open_call_cursor(
                 let slot = lookup(&visible, source);
                 call_push(&mut visible, (variable, slot), &mut memory)?;
             }
-            GraphPattern::Project { variables, .. } => {
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                let variables = operator.projected_names().expect("projection names");
                 projection.clear();
-                for variable in variables {
+                for variable in variables.iter() {
                     call_push(
                         &mut projection,
                         (variable, lookup(&visible, variable)),
@@ -3969,7 +3971,7 @@ impl CallCursor {
     }
 
     /// The work the relation has reported so far, summed over every pull
-    /// ([`PfCursor::take_work`]).
+    /// ([`crate::property_fn::PfCursor::take_work`]).
     #[must_use]
     pub const fn work(&self) -> u64 {
         self.work
@@ -4191,7 +4193,7 @@ impl CallCursor {
                             )?);
                         }
                         let linked = link.as_mut().expect("the admitted link was initialized");
-                        if linked.ebv(&row, schema, ctx)? != Some(true) {
+                        if linked.ebv(None, &row, schema, ctx)? != Some(true) {
                             continue 'pull;
                         }
                     }
@@ -6761,7 +6763,8 @@ mod walk_tests {
                         }),
                     )
                 }
-                GraphPattern::Project { inner, variables } => {
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    let variables = pattern.projected_names().expect("projection names");
                     let mut carried: Vec<Variable> = Vec::new();
                     for name in self
                         .context

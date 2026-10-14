@@ -521,6 +521,7 @@ fn needs_with_memory(root: Node<'_>, memory: &mut Memory<'_, LexicalFrame>) -> P
                 }
                 GraphPattern::Graph { inner, .. }
                 | GraphPattern::Project { inner, .. }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::Slice { inner, .. } => { pending.try_push_admitted(Node::Pattern(inner), memory)?; },
@@ -683,6 +684,7 @@ pub(crate) fn for_each_child_mut<'a>(
         }
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => visit(ChildMut::Pattern(inner)),
@@ -1433,6 +1435,7 @@ mod walk_tests {
             } => reference_expression_needs(expression) || reference_pattern_needs(inner),
             GraphPattern::Graph { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => reference_pattern_needs(inner),
@@ -1594,6 +1597,7 @@ mod walk_tests {
             }
             GraphPattern::Graph { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => reference_rewrite_pattern(inner, next_spine),

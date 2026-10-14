@@ -245,7 +245,7 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 /// else {
 ///     panic!("a SELECT query parses to `Query::Select`");
 /// };
-/// let GraphPattern::Project { inner, .. } = pattern else {
+/// let GraphPattern::ProjectStar { inner, .. } = pattern else {
 ///     panic!("the projection wraps the root pattern");
 /// };
 ///
@@ -397,6 +397,29 @@ fn validate_carrier_pattern_with_memory<S: Admission + ?Sized>(
     crate::walk::walk_pre_post_with_memory(
         NodeRef::Pattern(pattern),
         |visit, node, memory| {
+            if visit == Visit::Enter
+                && let NodeRef::Pattern(
+                    projection @ (GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. }),
+                ) = node
+                && projection
+                    .projected_names()
+                    .is_some_and(crate::ProjectionNames::is_empty)
+            {
+                let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+                    projection
+                else {
+                    unreachable!("checked projection variants")
+                };
+                let visible = crate::parser::visible_variables_with_memory(inner, memory)?;
+                let has_visible_inner = !visible.is_empty();
+                memory.release_vec(visible)?;
+                if has_visible_inner {
+                    error = Some(crate::ParseError::Unsupported(memory.string(
+                        "a zero-column projection over visible bindings has no exact SPARQL query-text representation",
+                    )?));
+                    return Ok::<_, StorageError>(Flow::Stop);
+                }
+            }
             if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Apply { .. }))
             {
                 error = Some(crate::ParseError::Unsupported(memory.string(
@@ -569,55 +592,109 @@ impl<'a> RawBlankScopes<'a> {
 #[derive(Default)]
 struct VariableNames {
     variables: ScopeTable<Variable, String>,
+    projection_positions: ScopeTable<Variable, usize>,
+    outer_projection: Option<crate::ProjectionVars>,
     blanks: ScopeTable<*const TermPattern, usize>,
     blank_aliases: Vec<BlankName>,
     unit: Option<String>,
 }
 impl VariableNames {
+    fn shared_star_covers(&self, node: NodeRef<'_>) -> bool {
+        matches!(
+            node,
+            NodeRef::Pattern(GraphPattern::ProjectStar { variables, .. })
+                if self.outer_projection.as_ref().is_some_and(|outer| outer.has_prefix(variables))
+        )
+    }
+
     fn for_pattern<S: Admission + ?Sized>(
         pattern: &GraphPattern,
         reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
-        let needs_names = !crate::walk::walk_pre_post_with_memory(
-            NodeRef::Pattern(pattern),
-            |visit, node, _| {
-                if visit == Visit::Enter {
-                    let mut found = matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
-                    node.for_each_variable(|variable| found |= variable.is_hidden());
-                    if found {
-                        return Ok::<_, StorageError>(Flow::Stop);
+        let mut names = Self::default();
+        let mut cursor = pattern;
+        loop {
+            match cursor {
+                GraphPattern::ProjectStar { variables, .. } => {
+                    for (index, variable) in variables.iter().enumerate() {
+                        names
+                            .projection_positions
+                            .insert(variable.clone(), index, memory)?;
                     }
+                    names.outer_projection = Some(variables.clone());
+                    break;
                 }
-                Ok(Flow::Descend)
-            },
-            memory,
-        )?;
+                GraphPattern::Slice { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::OrderBy { inner, .. } => cursor = inner,
+                _ => break,
+            }
+        }
+        let outer_hidden = names.outer_projection.as_ref().is_some_and(|outer| {
+            outer.iter().any(|variable| {
+                #[cfg(test)]
+                crate::projection::record_variable_work();
+                variable.is_hidden()
+            })
+        });
+        let needs_names = outer_hidden
+            || !crate::walk::walk_pre_post_with_memory(
+                NodeRef::Pattern(pattern),
+                |visit, node, _| {
+                    if visit == Visit::Enter {
+                        let mut found = matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
+                        if !names.shared_star_covers(node) {
+                            node.for_each_variable(|variable| {
+                                #[cfg(test)]
+                                crate::projection::record_variable_work();
+                                found |= variable.is_hidden();
+                            });
+                        }
+                        if found {
+                            return Ok::<_, StorageError>(Flow::Stop);
+                        }
+                    }
+                    Ok(Flow::Descend)
+                },
+                memory,
+            )?;
         if !needs_names {
-            return Ok(Self::default());
+            return Ok(names);
         }
         let mut ordinary: ScopeTable<String, ()> = ScopeTable::default();
         let mut hidden: ScopeTable<Variable, ()> = ScopeTable::default();
         let mut has_raw = false;
+        let mut note_variable = |variable: &Variable, memory: &mut Memory<'_, S>| {
+            #[cfg(test)]
+            crate::projection::record_variable_work();
+            if variable.is_hidden() {
+                hidden.insert(variable.clone(), (), memory).map(|_| ())
+            } else {
+                reserve_name(&mut ordinary, variable.as_str(), memory)
+            }
+        };
+        if let Some(outer) = names.outer_projection.as_ref() {
+            for variable in outer {
+                note_variable(variable, memory)?;
+            }
+        }
         crate::walk::walk_pre_post_with_memory(
             NodeRef::Pattern(pattern),
             |visit, node, memory| {
                 let mut failure = None;
                 if visit == Visit::Enter {
                     has_raw |= matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
-                    node.for_each_variable(|variable| {
-                        if failure.is_some() {
-                            return;
-                        }
-                        let answer = if variable.is_hidden() {
-                            hidden.insert(variable.clone(), (), memory).map(|_| ())
-                        } else {
-                            reserve_name(&mut ordinary, variable.as_str(), memory)
-                        };
-                        if let Err(error) = answer {
-                            failure = Some(error);
-                        }
-                    });
+                    if !names.shared_star_covers(node) {
+                        node.for_each_variable(|variable| {
+                            if failure.is_none()
+                                && let Err(error) = note_variable(variable, memory)
+                            {
+                                failure = Some(error);
+                            }
+                        });
+                    }
                 }
                 failure.map_or(Ok(Flow::Descend), Err)
             },
@@ -637,7 +714,6 @@ impl VariableNames {
             &ordinary.iter().map(|(name, ())| name.as_str()),
             memory,
         )?;
-        let mut names = Self::default();
         let mut ordered = memory.collect(hidden.iter().map(|(variable, ())| variable.clone()))?;
         ordered.sort_unstable();
         for (index, variable) in ordered.iter().enumerate() {
@@ -841,7 +917,11 @@ fn select_query_with_memory<S: Admission + ?Sized>(
         text: &mut text,
         storage: &storage,
     };
-    if matches!(inner, GraphPattern::Project { .. }) || needs_subselect_reconstruction(inner) {
+    if matches!(
+        inner,
+        GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. }
+    ) || needs_subselect_reconstruction(inner)
+    {
         // A root Project carries its own explicit SELECT. Otherwise `inner` is a
         // bare modifier chain (no Project above it) —
         // a `SELECT`-expression/`HAVING` chain reaching a `Group`, OR a
@@ -961,6 +1041,7 @@ fn is_subselect_node(p: &GraphPattern) -> bool {
     matches!(
         p,
         GraphPattern::Project { .. }
+            | GraphPattern::ProjectStar { .. }
             | GraphPattern::Distinct { .. }
             | GraphPattern::Reduced { .. }
             | GraphPattern::Slice { .. }
@@ -1139,6 +1220,7 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
         | GraphPattern::Values { .. }
         | GraphPattern::OrderBy { .. }
         | GraphPattern::Project { .. }
+        | GraphPattern::ProjectStar { .. }
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
@@ -1735,6 +1817,7 @@ fn group_body<'a, S: Admission + ?Sized>(
         } => values(s, variables, bindings, next, names),
         // Sub-select nodes are rendered by the `is_subselect_node` branch above.
         GraphPattern::Project { .. }
+        | GraphPattern::ProjectStar { .. }
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
@@ -1827,7 +1910,7 @@ fn subselect<'a, S: Admission + ?Sized>(
     let mut distinct = false;
     let mut reduced = false;
     let mut slice: Option<(usize, Option<usize>)> = None;
-    let mut project: Option<&[Variable]> = None;
+    let mut project: Option<crate::ProjectionNames<'a>> = None;
     let mut order: Option<&[OrderExpression]> = None;
     // SELECT-expression binds (Extend nodes sitting above the Group/body).
     let mut select_exprs: Vec<(&Variable, &Expression)> = Vec::new();
@@ -1853,12 +1936,25 @@ fn subselect<'a, S: Admission + ?Sized>(
                 cur = inner;
             }
             GraphPattern::Project { inner, variables } => {
-                project = Some(variables);
+                project = Some(crate::ProjectionNames::Explicit(variables));
+                cur = inner;
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
+                project = Some(crate::ProjectionNames::Star(variables));
                 cur = inner;
             }
             GraphPattern::OrderBy { inner, expression } => {
                 order = Some(expression);
                 cur = inner;
+            }
+            GraphPattern::Extend { .. }
+                if matches!(project, Some(crate::ProjectionNames::Star(_))) =>
+            {
+                // A persistent wildcard comes from `SELECT *`, which cannot
+                // contain a SELECT-expression target. Its Extend is a WHERE
+                // `BIND`; keep it in the body so the wildcard stays compact
+                // across nested subqueries.
+                break;
             }
             GraphPattern::Extend {
                 inner,
@@ -1972,20 +2068,131 @@ fn subselect<'a, S: Admission + ?Sized>(
             .storage
             .run(|memory| as_targets.insert(*variable, (), memory));
     }
-    let emit_filtered_vars = |s: &mut Surface<'_, '_, '_, S>, vars: &[Variable]| -> bool {
-        let mut emitted = false;
-        for v in vars {
-            if as_targets.get(&v).is_some() {
-                continue;
+    let emit_filtered_vars =
+        |s: &mut Surface<'_, '_, '_, S>, vars: crate::ProjectionNames<'_>| -> bool {
+            let mut emitted = false;
+            for index in 0..vars.len() {
+                let v = vars.get(index).expect("projection index is in range");
+                if as_targets.get(&v).is_some() {
+                    continue;
+                }
+                if emitted {
+                    s.push(' ');
+                }
+                s.push('?');
+                s.push_str(names.name(v));
+                emitted = true;
             }
-            if emitted {
-                s.push(' ');
-            }
-            s.push('?');
-            s.push_str(names.name(v));
-            emitted = true;
+            emitted
+        };
+    let star_matches_inner = match project {
+        Some(crate::ProjectionNames::Star(variables)) => {
+            let shared_prefix =
+                if let GraphPattern::Extend {
+                    inner, variable, ..
+                } = cur
+                    && let GraphPattern::ProjectStar {
+                        variables: prefix, ..
+                    } = &**inner
+                {
+                    // The parser's nested one-child wildcard adds just this BIND.
+                    // Shared trie branches make the prefix check logarithmic even
+                    // at thousands of nested SELECT levels.
+                    Some(variables.is_appended_to(prefix, std::iter::once(variable)))
+                } else if let GraphPattern::Join { left, right } = cur
+                    && let GraphPattern::Values {
+                        variables: values, ..
+                    } = &**right
+                {
+                    match &**left {
+                        GraphPattern::Extend {
+                            inner, variable, ..
+                        } => {
+                            if let GraphPattern::ProjectStar {
+                                variables: prefix, ..
+                            } = &**inner
+                            {
+                                Some(variables.is_appended_to(
+                                    prefix,
+                                    std::iter::once(variable).chain(values),
+                                ))
+                            } else {
+                                None
+                            }
+                        }
+                        GraphPattern::ProjectStar {
+                            variables: prefix, ..
+                        } => Some(variables.is_appended_to(prefix, values)),
+                        _ => None,
+                    }
+                } else if let GraphPattern::Minus { left, right } = cur {
+                    let prefix = match &**left {
+                        GraphPattern::Extend {
+                            inner, variable, ..
+                        } => match &**inner {
+                            GraphPattern::ProjectStar {
+                                variables: prefix, ..
+                            } => Some((prefix, Some(variable))),
+                            _ => None,
+                        },
+                        GraphPattern::ProjectStar {
+                            variables: prefix, ..
+                        } => Some((prefix, None)),
+                        _ => None,
+                    };
+                    prefix.map(|(prefix, bound)| {
+                        // RDFLib's contextual wildcard includes the MINUS-right
+                        // names. The outer snapshot's first-position table lets
+                        // us skip names already in the shared prefix without
+                        // scanning that prefix at each nested SELECT level.
+                        if !names
+                            .outer_projection
+                            .as_ref()
+                            .is_some_and(|outer| outer.has_prefix(variables))
+                        {
+                            return false;
+                        }
+                        s.storage
+                            .run(|memory| {
+                                let right_names =
+                                    crate::parser::contextual_visible_variables(right, memory)?;
+                                let matches = variables.is_appended_to(
+                                    prefix,
+                                    bound.into_iter().chain(right_names.iter().filter(
+                                        |variable| {
+                                            bound != Some(*variable)
+                                                && names
+                                                    .projection_positions
+                                                    .get(variable)
+                                                    .is_none_or(|index| *index >= prefix.len())
+                                        },
+                                    )),
+                                );
+                                memory.release_vec(right_names)?;
+                                Ok(matches)
+                            })
+                            .unwrap_or(false)
+                    })
+                } else {
+                    None
+                };
+            shared_prefix.unwrap_or_else(|| {
+                // A public AST rewrite can change the inner scope without
+                // changing the saved ProjectStar snapshot. Inspect its real
+                // visible names before deciding whether lexical `*` would
+                // still denote the same columns on reparse.
+                s.storage
+                    .run(|memory| {
+                        let visible = crate::parser::visible_variables_with_memory(cur, memory)?;
+                        let matches =
+                            visible.len() == variables.len() && visible.iter().eq(variables.iter());
+                        memory.release_vec(visible)?;
+                        Ok(matches)
+                    })
+                    .unwrap_or(false)
+            })
         }
-        emitted
+        _ => false,
     };
     let plain_emitted = match project {
         None => match &no_project_vars {
@@ -1993,7 +2200,7 @@ fn subselect<'a, S: Admission + ?Sized>(
                 let _ = write!(s, "(1 AS ?{})", names.unit_name());
                 false
             }
-            Some(vars) => emit_filtered_vars(s, vars),
+            Some(vars) => emit_filtered_vars(s, crate::ProjectionNames::Explicit(vars)),
             // `no_project_vars` is `None` in two shapes: an ordinary,
             // non-aggregating body with no `Extend` chain at all (`*` is
             // exactly right), OR an implicit whole-table group with nothing
@@ -2007,6 +2214,17 @@ fn subselect<'a, S: Admission + ?Sized>(
             }
             None => false,
         },
+        // A parser-built persistent star is exactly the lexical wildcard. Keep
+        // it compact at every nested level; an explicit list would recreate
+        // the quadratic bytes this representation removed. Hidden serializer
+        // witnesses still require the filtered list below so they cannot
+        // escape as user-visible columns.
+        Some(crate::ProjectionNames::Star(_))
+            if star_matches_inner && select_exprs.is_empty() && !names.has_witnesses() =>
+        {
+            s.push('*');
+            false
+        }
         Some(vars) if vars.is_empty() && select_exprs.is_empty() => {
             if !names.has_witnesses() {
                 s.push('*');
@@ -2670,6 +2888,59 @@ mod tests {
     use crate::Query;
     use crate::tree::{Chain, Child};
 
+    #[test]
+    fn nested_contextual_star_carrier_visits_saved_names_linearly() {
+        use core::fmt::Write as _;
+
+        let mut work = Vec::new();
+        let mut bytes = Vec::new();
+        for depth in [2_000, 4_000, 8_000] {
+            let mut source = String::new();
+            for _ in 1..depth {
+                source.push_str("SELECT * WHERE { { ");
+            }
+            source.push_str(
+                "SELECT * WHERE { BIND(0 AS ?v0) MINUS { ?v0 <http://example.org/p> ?n0 } }",
+            );
+            for level in 1..depth {
+                write!(
+                    source,
+                    " }} BIND({level} AS ?v{level}) MINUS {{ ?v{level} <http://example.org/p> ?n{level} }} }}"
+                )
+                .expect("String write");
+            }
+            let parser = SparqlParser::new();
+            let parsed = parser
+                .parse_rdflib_query_with(&source, &ParserOptions::default())
+                .expect("contextual source parses");
+            let Query::Select { pattern, .. } = parsed else {
+                panic!("SELECT query");
+            };
+            let _ = crate::projection::take_variable_work();
+            let rendered = try_pattern_to_select_query(&pattern).expect("carrier renders");
+            work.push(crate::projection::take_variable_work());
+            bytes.push(rendered.len());
+            assert!(rendered.matches("SELECT *").count() >= depth - 1);
+            let Query::Select { pattern, .. } = parser
+                .parse_rdflib_query_with(&rendered, &ParserOptions::default())
+                .expect("carrier reparses")
+            else {
+                panic!("rendered SELECT query");
+            };
+            assert_eq!(
+                pattern.projected_names().map(crate::ProjectionNames::len),
+                Some(depth * 2)
+            );
+        }
+        eprintln!("contextual current-BIND serializer variable work: {work:?}; bytes: {bytes:?}");
+        for pair in work.windows(2) {
+            assert!(pair[1] < pair[0] * 3, "serializer variable work: {work:?}");
+        }
+        for pair in bytes.windows(2) {
+            assert!(pair[1] < pair[0] * 3, "serializer source bytes: {bytes:?}");
+        }
+    }
+
     /// Render one aggregate call on its own.
     fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
         let mut resident = Resident;
@@ -2704,11 +2975,13 @@ mod tests {
 
     /// Strip exactly one outer `Project` (the `SELECT …` scaffold) to recover the
     /// WHERE body — the shape a SERVICE node forwards and
-    /// `pattern_to_select_query` consumes. The parser expands `SELECT *` to an
-    /// explicit variable list, so the strip is unconditional.
+    /// `pattern_to_select_query` consumes. Both explicit and persistent star
+    /// projections are the outer SELECT scaffold.
     fn where_body(p: &GraphPattern) -> GraphPattern {
         match p {
-            GraphPattern::Project { inner, .. } => (**inner).clone(),
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                (**inner).clone()
+            }
             other => other.clone(),
         }
     }
@@ -2726,7 +2999,10 @@ mod tests {
             Query::Select { pattern, .. } => pattern,
             other => panic!("expected SELECT, got {other:?}"),
         };
-        let reparsed_body = if matches!(body, GraphPattern::Project { .. }) {
+        let reparsed_body = if matches!(
+            body,
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. }
+        ) {
             reparsed
         } else {
             where_body(&reparsed)
@@ -3079,7 +3355,7 @@ mod tests {
     fn produces_complete_select() {
         let p = pattern_of("SELECT * WHERE { ?s <http://ex/p> ?o }");
         let text = pattern_to_select_query(&p);
-        assert!(text.starts_with("SELECT ?s ?o WHERE {"), "got: {text}");
+        assert!(text.starts_with("SELECT * WHERE {"), "got: {text}");
         assert!(text.contains("<http://ex/p>"), "got: {text}");
     }
 
@@ -3684,6 +3960,10 @@ mod tests {
                 expression: expression.clone(),
             },
             GraphPattern::Project { inner, variables } => GraphPattern::Project {
+                inner: Child::new(normalize(inner)),
+                variables: variables.clone(),
+            },
+            GraphPattern::ProjectStar { inner, variables } => GraphPattern::ProjectStar {
                 inner: Child::new(normalize(inner)),
                 variables: variables.clone(),
             },

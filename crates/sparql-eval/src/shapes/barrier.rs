@@ -534,7 +534,7 @@ pub(crate) fn inner<D: DatasetView + Sync>(
             }),
             &growth,
         )?;
-        if linked.ebv(&probe, &combined, ctx)? == Some(true) {
+        if linked.ebv(Some(expr), &probe, &combined, ctx)? == Some(true) {
             rows.push_row(original.clone_admitted(&growth)?)?;
         }
     }

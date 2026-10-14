@@ -408,9 +408,9 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
     for &i in idxs {
         let row = &rows[i];
-        let first = first_arg.term(row, schema, ctx)?;
+        let first = first_arg.term(Some(&agg.args()[0]), row, schema, ctx)?;
         let second = match second_arg.as_mut() {
-            Some(expression) => expression.term(row, schema, ctx)?,
+            Some(link) => link.term(Some(&agg.args()[1]), row, schema, ctx)?,
             None => None,
         };
         // Charged for every row `FOLD` inspects, whether or not `DISTINCT` keeps
@@ -451,8 +451,9 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
 
         // Only a SURVIVOR's sort key is ever needed: `DISTINCT` keeps each value's
         // first occurrence, so that row's own key is the one the element sorts by.
-        for key_link in keys.iter_mut() {
-            let key = key_link.term(row, schema, ctx)?;
+        for (key_link, order) in keys.iter_mut().zip(order_by) {
+            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+            let key = key_link.term(Some(expression), row, schema, ctx)?;
             let key = key
                 .map(|term| crate::expr::owned_value_of(ctx, term))
                 .transpose()?;

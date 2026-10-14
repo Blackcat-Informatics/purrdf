@@ -201,14 +201,15 @@ fn serialized_queries_keep_distinctness_and_stable_projection_names() {
 #[test]
 fn raw_distinct_and_reduced_carriers_hide_witnesses_before_deduplication() {
     let dataset = branching_dataset();
-    let Query::Select {
-        pattern: GraphPattern::Project { inner, .. },
-        ..
-    } = SparqlParser::new()
+    let Query::Select { pattern, .. } = SparqlParser::new()
         .parse_query(&format!(
             "{PREFIX}SELECT * WHERE {{ ?s (ex:p|ex:q)/(ex:r|ex:t) ?o }}"
         ))
         .expect("translated body")
+    else {
+        panic!("SELECT");
+    };
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
     else {
         panic!("projection");
     };

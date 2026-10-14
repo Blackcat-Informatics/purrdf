@@ -186,7 +186,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
         // expression is evaluated against, and it advances once per input row
         // however many output rows that row expands to.
         ctx.current_row = idx as u64;
-        let Some(value) = composite_of(&mut linked, mu, &seq.schema, ctx)? else {
+        let Some(value) = composite_of(&mut linked, expression, mu, &seq.schema, ctx)? else {
             // SEP-0009 §12.3, both definitions, verbatim: "If var ∉ dom(μ) and
             // expr(μ) is an error or an RDF term that is neither a well-formed
             // cdt:List literal nor a well-formed cdt:Map literal, then
@@ -296,12 +296,13 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
 ///
 /// Any hard failure `expression` itself raises.
 fn composite_of<D: DatasetView + Sync>(
-    expression: &mut crate::vm::Linked<'_, D::Id>,
+    linked: &mut crate::vm::Linked<'_, D::Id>,
+    expression: &Expression,
     mu: &Solution<D::Id>,
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<crate::composite_value::CompositeValue>, EvalError> {
-    let Some(term) = expression.term(mu, schema, ctx)? else {
+    let Some(term) = linked.term(Some(expression), mu, schema, ctx)? else {
         return Ok(None);
     };
     let value = crate::expr::owned_value_of(ctx, term)?;
