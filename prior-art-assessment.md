@@ -1,0 +1,21 @@
+# Prior-art assessment — #365
+
+Scope: the captured `issue.md`, `prior-art.md`, and `brief.json`, read against the current issue worktree. This is an assessment of existing evidence and code, not a validation run.
+
+## Recurrence and provenance
+
+Stage's last-200-commit trailer census counts 25 `none`, two `semantic-identity-loss`, and two `performance` instances. These are repository-wide classes, **not** 29 prior occurrences of #365 or proof that this issue recurred. Its two-hop issue crawl found no linked issue (despite `#358` in the title) and its title-term forge search found no related item. The captured issue contains one substantive comment, including an unmerged historical patch. Treat issue-specific recurrence as unknown. The patch is prior design evidence, not a current clean change or completed acceptance.
+
+## Reuse and avoidance
+
+- Reuse the current `QuotedTerm` flat `Arc<Vec<QuotedNode>>` representation in `crates/rdf-wasm/src/term.rs`, the `TermValue` ingress/egress, and the 100,000-level Rust and 20,000-level packaged JS `SERVICE` controls (`crates/rdf-wasm/js/tests/async-term-effects.test.mjs`). The issue comment's older `TermInner::Quoted(TermValue)` patch addresses the same recursion but predates this shared-node design. Do not apply it wholesale or reintroduce suffix cloning in getters. Verify current tests against the built package before crediting this subrequirement.
+- Reuse the existing referenced host-effect expiry timer and disposal in `crates/rdf-wasm/js/src/purrdf_jspi.mjs::expiry`, plus `async-term-effects.test.mjs` and its child-process fixture. The current timer is `setTimeoutImpl`, not the issue's old unreferenced `AbortSignal.timeout`. Its hung `SERVICE`/`LOAD`, success, failure, cancellation and sibling controls explicitly assert zero retained timers. Verify runtime acceptance; do not add a second watchdog or process exit.
+- Reuse the stack-budget and refusal fixtures (`tests/fixtures/nesting.mjs`, `async-concurrency.test.mjs`, `query.test.mjs`) for both lanes, but preserve the actual endpoint comparison. Current Cloudflare tests and docs still explicitly map `native-sparql-evaluation-stack-exhausted` to 500 and host-stack refusal to 400. That is an open behavior in the body, regardless of the existing tests.
+- The current GTS `deterministic_term_remap` still invokes `term_identity_key` and `term_nesting_depth` for every term, and both walkers use path membership checks. Keep the canonical key bytes and cycle/missing-ID behavior protected by `crates/gts/src/writer.rs::term_walk_tests`; memoize or otherwise share work without altering ordering or frozen vectors. The comment's suggestion to mirror mapped-term memoization is a direction, not a ready patch.
+- `SELECT *` still materializes explicit `Project { variables }` at nested subselect boundaries (`crates/sparql-algebra/src/parser/machine.rs`, `parser.rs`). The existing memory-bound nesting tests are useful controls; they do not establish linear work for an 8,000-level fresh-variable corpus. Preserve scope, first-appearance order, and typed memory refusal if changing projection representation/admission.
+
+## Still material
+
+`poisonError()` in `crates/rdf-wasm/js/src/purrdf_jspi.mjs` returns an `Error` without `code`. The async test still uses a per-poll `setTimeout(0)` turn; the issue documents about 673,000 polls and a roughly 12-minute test. The current stack endpoint test asserts closeness rather than exact matching and retains lane-specific evaluation wording. The Cloudflare adapter still calls evaluation-stack refusal a 500. These are direct code observations; no test or timing run was performed here.
+
+The main integration risk is mistaking already landed deep-term and deadline fixes for completion of the mixed issue, or mistaking historical test expectations for the desired stack/HTTP contract. A second risk is changing GTS key construction or `SELECT *` representation in a way that preserves shallow answers but changes canonical byte identity, scope, or failure precedence. Run focused native/package reproductions on the final source and a synchronous-path cost control when changing dispatch; do not require exclusive timing, which the user removed from this campaign.

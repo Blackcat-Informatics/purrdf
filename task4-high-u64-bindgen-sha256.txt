@@ -1,0 +1,3 @@
+f96a1f968b7cc6159484be994e1b41e06ac988ecf6eaaa63960ae780457366b8  .stage/post-v3-0-asynchronous-wasm-lane-and/task4-high-u64-fixture/fixture_bg.wasm
+656ffe7a74d4ab3699db971b15b9bccc3e6a7597c6d4303e700c6c4889f9cf93  .stage/post-v3-0-asynchronous-wasm-lane-and/task4-high-u64-fixture/fixture.js
+ba24b2c85219fe4faec8a98928e3131bd0a7ebed880748a4b4b54c3e20e8987e  .stage/post-v3-0-asynchronous-wasm-lane-and/task4-high-u64-fixture/fixture.d.ts

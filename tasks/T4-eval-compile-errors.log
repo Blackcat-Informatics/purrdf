@@ -1,0 +1,20 @@
+error: unused import: `Variable`
+   --> crates/sparql-eval/src/enf.rs:255:60
+    |
+255 | use purrdf_sparql_algebra::{GraphPattern, OrderExpression, Variable};
+    |                                                            ^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0277]: `ProjectionNames<'_>` is not an iterator
+    --> crates/sparql-eval/src/property_fn_eval.rs:3781:33
+     |
+3781 |                 for variable in variables {
+     |                                 ^^^^^^^^^ `ProjectionNames<'_>` is not an iterator
+     |
+     = help: the trait `Iterator` is not implemented for `ProjectionNames<'_>`
+     = note: required for `ProjectionNames<'_>` to implement `IntoIterator`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors

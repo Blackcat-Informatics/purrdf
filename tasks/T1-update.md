@@ -1,0 +1,5 @@
+Task 1 is implemented and pushed as `6c32b615f` on `paudley/365-post-v3-0-asynchronous-wasm-lane-and`. Package poison errors now carry the stable code `purrdf-wasm-poisoned`; panic, synchronous trap, asynchronous trap, in-flight rejection, later asynchronous calls and `ready()` have focused assertions. Raw synchronous gate traps retain their runtime error, and non-poison typed errors keep their own code.
+
+The optimized package rebuilt with the standard host `make wasm-pkg` command (411 gated exports; 415,768 SIMD opcodes). Focused Node checks passed: panic/trap suite 4/4 and selected asynchronous trap 1/1. `git diff --check`, JavaScript syntax checks, independent Task 1 review and the normal commit hook passed. The separate full three-file Node run is still executing deeper nesting cases and is not credited as passed.
+
+This is one task within #365, not issue completion. Stack parity, HTTP classification, nested projection growth, GTS identity, complete host/package qualification and hosted integration remain open. The branch includes tooling prerequisite PR #535, which is still open.

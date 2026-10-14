@@ -1,0 +1,7 @@
+docs(sparql)!: document compact projection migration
+
+Explain how downstream query-algebra readers handle ProjectStar through the
+shared ordered projection view. Classify the public enum addition for the
+4.0 major release and link the migration examples from the changelog.
+
+BREAKING CHANGE: exhaustive GraphPattern matches must handle ProjectStar.

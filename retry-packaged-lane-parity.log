@@ -1,0 +1,18 @@
+✔ a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included (2642.498195ms)
+ℹ deep no-poll-frame proof: 673128 polls, 457 timer yields, 716 ms nonexclusive
+✔ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (322.382141ms)
+✔ six nested shapes have identical answer endpoints and refusal wording on both package lanes (610.210971ms)
+ℹ OPTIONAL: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ EXISTS: 143 answers; 144 refuses with native-sparql-evaluation-stack-exhausted
+ℹ GRAPH: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ MINUS: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ LATERAL: 248 answers; 249 refuses with native-sparql-evaluation-stack-exhausted
+ℹ SERVICE: 141 answers; 142 refuses with native-sparql-host-stack-exhausted
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3841.421522

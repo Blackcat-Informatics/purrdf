@@ -1,0 +1,1 @@
+/opt/.cargo/target/365-post-v3-0-asynchronous-wasm-lane-and-ab56cea7/wasm32-unknown-unknown/release/purrdf_wasm.wasm

@@ -1,0 +1,10 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 04s
+     Running tests/prepared_parameter_mentions.rs (/opt/.cargo/04/d90f27baa85332/debug/build/purrdf-sparql-eval/5985249dc53236d1/out/prepared_parameter_mentions-5985249dc53236d1)
+
+running 1 test
+test a_declared_used_parameter_passes_and_runs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+

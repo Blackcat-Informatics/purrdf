@@ -1,0 +1,33 @@
+# Independent Stage 1 plan review — #365
+
+Reviewed: `/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/.stage/post-v3-0-asynchronous-wasm-lane-and/plan.md`, captured `issue.md`, `issue-analysis.md`, `prior-art-assessment.md`, repository `AGENTS.md`, and the relevant parser, GTS writer, wasm term, JS scheduler, Cloudflare, and test paths. This is a plan audit, not executed acceptance. The captured issue has seven body obligations and one comment obligation. No `.baseline`, `.goals`, constitution, or governing ADR was found in this checkout. The user explicitly removed exclusive timing work.
+
+## Coverage and sound choices
+
+The plan maps all eight obligations to numbered tasks and real shipped entry points. It distinguishes source-present deadline/deep-term repairs from current-artifact qualification, preserves the existing iterative quoted-term owner, gives poison coding one JS home, chooses the issue-authorized HTTP 400 alternative, requires exact cross-lane stack endpoints, and retains real Cloudflare and GTS byte-identity controls. It keeps required hooks, protected main, hosted checks, and `ghprsq` integration. Its nonexclusive cost controls honor the user's timing instruction. There is no detected pre-emptive scope cut or planned-by-refusal substitute.
+
+## Findings
+
+1. **UNFALSIFIABLE CRITERION — nested star work.** The completeness row says: “`bounded work/memory growth and round-trip equivalence`.” Task 4 says: “`measure allocations and work nonexclusively`.” These say to collect numbers but give no criterion that distinguishes a fixed quadratic path from a still-quadratic one. The issue permits an early size refusal, but only *before* the repeated lists are constructed. A typed refusal after an O(depth²) census would still satisfy the current wording. Current `parser/machine.rs` invokes `visible_variables_with_memory` for each star and stores full `Project.variables`, so this is a concrete risk.
+
+   **REWRITE TO:** “For fresh-variable nested `SELECT *` at increasing depths through `SparqlParser::parse_query` and the optimized WASM query entry, record admitted projection allocations/visited-variable work and total peak bytes. On the 8,000-level case, either complete with the correct projected variables and serializer/evaluator parity, or return a typed projected-size refusal *before* the repeated variable-list builds. A refused case must show bounded pre-refusal work against a shallower neighbor and no depth-squared projection allocation. State the chosen cap and observable count/byte bounds in the validation record.” Keep the issue's smaller accepted-neighbor semantics and first-appearance order controls.
+
+2. **UNFALSIFIABLE CRITERION / design risk — GTS identity work.** The completeness row says: “`Real remap/write of chain and shared DAG scale controls, cycle/missing-ID parity, frozen vectors and readback byte-identical`.” Task 5 says: “`Memoize identity/depth results`” and “`Record allocation/work or instruction growth`.” It does not require the growth to improve or the linear path scan to disappear. `deterministic_term_remap` currently stores a full `Vec<u8>` key for every term; caching that same expanded key can preserve O(term count × nesting depth) copied/stored bytes even if it avoids recomputation. `term_identity_key::enter` also uses `stack.contains`, so a key cache alone leaves the path scan. The prescribed mechanism is therefore insufficiently tied to the requested outcome.
+
+   **REWRITE TO:** “Preserve the existing canonical CBOR ordering/bytes, including cycle and missing-ID spellings. Use a shared structural identity representation or other implementation that removes per-term full nested-key expansion and linear path membership on acyclic chains/DAGs. On actual `deterministic_term_remap` and writer calls at several growing depths and shared-DAG widths, demonstrate that the counted component visits, path-membership work, and retained key bytes do not grow as the former repeated expansion did; give the pre/post counts and an explicit pass bound. Run malformed cycles and missing IDs against the existing reference plus frozen vector/readback byte checks.” The design can differ, but the measured old failure must be absent.
+
+3. **Sharper cost criterion recommended for Task 2, not a completion blocker.** The plan says “`materially cheaper`” and records old/new elapsed plus polls. Given the documented roughly 673,000 timer turns, require a stated fixed-work reduction in *yield count* (for example at least an order of magnitude) while retaining the same no-poll-frame and answer assertions. Elapsed time is useful context under nonexclusive conditions, but yield count is the causal measure and avoids a noisy timing claim.
+
+## Stage 1 completion audit
+
+Findings 1 and 2 are under the allowed **unfalsifiable criterion** ground; each quotes the plan and provides a real-entry rewrite. All requirements have contract rows and tasks. There is no detected pre-emptive descope or planned-by-refusal completion claim. The Stage 1 plan need not have passing implementation tests yet; the findings concern whether its future evidence could establish completion.
+
+## Focused recheck of revised plan
+
+- **Finding 1 — DISCHARGED.** The nested-star contract row and Task 4 now name the public native parser and optimized WASM query entry, doubling-depth projection visits/copies and allocated bytes, a below-3× accepted-growth bound, and a typed 8,000-level refusal *before* repeated vectors with an 8×-input-occurrences-plus-documented-setup bound. Accepted neighbors retain order, round trip and evaluator checks. This distinguishes the original quadratic path from completion.
+- **Finding 2 — DISCHARGED.** The GTS row and Task 5 now require shared structural identity or an equivalent representation, no linear path scan on acyclic chains/DAGs, retained state linear in source terms/edges/flat payload, constant membership lookup per visit, and below-3× counted visits/identity-byte growth per doubling. Actual remap/write, prior counts, malformed-cycle/missing-ID parity, frozen bytes and readback remain required. Merely caching complete keys can no longer satisfy the plan.
+- **Optional item 3 — DISCHARGED.** The deep-test row and Task 2 now require at least 10× fewer timer yields on the same no-poll-frame proof and keep nonexclusive elapsed as context.
+
+No new issue was introduced by these targeted revisions. This is the second Stage 1 review pass; unchanged criteria from the first pass were not re-audited. Implementation and runtime qualification remain to be done.
+
+**VERDICT: PASS**

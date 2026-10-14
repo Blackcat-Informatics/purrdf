@@ -1,0 +1,18 @@
+✔ three interleaved async queries resume out of order and all answer correctly (90.652008ms)
+✔ a deep sync query during a suspension is answered (38.574146ms)
+✔ jobs suspended inside a property path's walk scope, interleaved with each other and with synchronous paths, all answer their synchronous baselines (587.245307ms)
+✔ an async job started from inside a sync callback runs and returns (19.778118ms)
+✔ beginAsync beyond maxConcurrentJobs is refused (13.963312ms)
+✔ every results alias has the same bytes through all raw format APIs (61.668775ms)
+✔ every governed twin exposes metered and explicit no-ceiling execution (101.890581ms)
+✔ no-ceiling execution preserves cancellation and refuses ignored options (27.192007ms)
+✔ strict JSON options refuse repeated members and arrays with diagnostic pointers (4.235283ms)
+✔ generated host Reflect.get preserves throwing getter refusal (0.456346ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1389.316776

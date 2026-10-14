@@ -1,0 +1,7 @@
+# Task 4 bounded-admission diagnostic — rejected
+
+The original issue permits early typed projection-size admission, but the accepted Task 4 plan also requires accepted work below 3× per doubling. An initial parser-owned work budget counted scope visits and copies before each growing array, with a cap of eight times lexed variable occurrences plus 256. It was exercised on actual public parse input.
+
+The 4 GiB/no-swap, cargo `-j 1` focused unit command `cargo test --locked -j 1 -p purrdf-sparql-algebra --lib nested_star_projection_admits_work_before_repeated_scope_copies -- --test-threads=4 --nocapture` exited 0. Its accepted 2/4/8-level visit counts were **9/38/156**: **4.22×** and **4.11×**, failing the <3× requirement. Its 8,000-level public parse refused with a typed projection error. The same resource-capped focused integration command for `chain_parse_is_linear::nested_star_refusal_keeps_parse_allocation_input_proportional` exited 0 for rejected 2,000/4,000/8,000 depths, but that cannot repair accepted growth. The fixed +256 allowance was not tied to measured setup work and is not accepted as a qualifying bound.
+
+The exact uncommitted candidate is retained in `T4-failed-admission.patch` for audit. It is being replaced by persistent ordered star projection and parser scope ownership transfer. No Task 4 PASS, commit, publication or issue completion is claimed from these focused results.

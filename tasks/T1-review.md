@@ -1,0 +1,11 @@
+# Task 1 independent review — stable package poison code
+
+Reviewed scope: approved #365 `plan.md` Task 1 and its completeness row; the five dirty JavaScript paths in this worktree (`src/purrdf_jspi.mjs`, `tests/fixtures/poisoned-surface.mjs`, `tests/async-concurrency.test.mjs`, `tests/panic-poison.test.mjs`, `tests/trap-poison.test.mjs`); actual package-root poison callers in `index.mjs`; existing trap/panic child fixtures and native poison-gate behavior. This is a task review, not whole-issue completion. I did not modify production source.
+
+`poisonError()` is the single package error constructor changed. It now assigns stable `error.code = "purrdf-wasm-poisoned"` without changing its message, poison state or rejection path. Both `poison()` for in-flight jobs and `assertNotPoisoned()` for later package calls consume that constructor. The shared test settlement helper now reports `code` when present, so the existing child-process panic, synchronous trap and asynchronous trap reproductions assert the code on the faulting/in-flight and later async/`ready()` errors. Whole-surface enumeration still requires every root export to refuse. Raw synchronous WASM entries continue to trap at the linked poison gate; their `RuntimeError` is correctly kept distinct from a JavaScript package poison error. Typed non-poison neighbor errors retain their separate code. `git diff --check` passed.
+
+Focused package evidence reported by the task owner for this same worktree: `make wasm-pkg` exited 0, reporting 411 exported functions behind the poison gate, 415,768 optimized SIMD opcodes, and successful npm package build. In `crates/rdf-wasm/js`, `node --test tests/panic-poison.test.mjs tests/trap-poison.test.mjs` exited 0 with 4/4 tests passing (448.832 ms). `node --test --test-name-pattern='a trap poisons every entry point' tests/async-concurrency.test.mjs` exited 0 with 1/1 selected test passing (547.370 ms). The separate full three-file run was still executing unrelated deep nesting cases at review time and is **not** counted as passed. No whole-repository gate or hosted CI is credited here.
+
+No material Task 1 source or focused-acceptance finding remains. The uncommitted change still needs the plan's normal hooked commit, push and issue update; later #365 tasks and complete-issue qualification remain separate.
+
+**VERDICT: PASS**

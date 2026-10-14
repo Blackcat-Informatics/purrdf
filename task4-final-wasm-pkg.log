@@ -1,0 +1,74 @@
+Running as unit: run-p233479-i33714163.scope; invocation ID: 6eb369b2968246dbad6e257bedae4946
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/hash)
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/deflate)
+   Compiling rayon-core v1.13.0
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling quote v1.0.46
+   Compiling rustversion v1.0.22
+   Compiling crossbeam-epoch v0.9.18
+   Compiling either v1.16.0
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling bumpalo v3.20.3
+   Compiling digest v0.11.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling syn v2.0.118
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/xsd)
+   Compiling inout v0.2.2
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling rayon v1.12.0
+   Compiling cmov v0.5.4
+   Compiling once_cell v1.21.4
+   Compiling ctutils v0.4.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/stack)
+   Compiling cpubits v0.1.1
+   Compiling cipher v0.5.2
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling aead v0.6.1
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/ed25519)
+   Compiling aes v0.9.3
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling structured-zstd v0.0.49
+   Compiling ctr v0.10.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/cdt)
+   Compiling visual-hashing v1.0.0
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-algebra)
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/gts)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/datalog)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/shex)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/json)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/retrieval)
+make: *** [Makefile:923: wasm-pkg] Terminated

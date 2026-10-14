@@ -1,0 +1,12 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-algebra)
+    Finished `test` profile [optimized] target(s) in 26.73s
+     Running tests/chain_parse_is_linear.rs (/opt/.cargo/04/d90f27baa85332/debug/build/purrdf-sparql-algebra/68c8dfb9ebe2a3ba/out/chain_parse_is_linear-68c8dfb9ebe2a3ba)
+
+running 2 tests
+nested star accepted parse allocations: [Measurement { allocations: 40041, requested_bytes: 18711910, retained_bytes: 2637744, peak_working_bytes: 9108478 }, Measurement { allocations: 84000, requested_bytes: 37622630, retained_bytes: 5467440, peak_working_bytes: 18407678 }, Measurement { allocations: 175911, requested_bytes: 75636070, retained_bytes: 11318832, peak_working_bytes: 37198078 }]
+test nested_star_accepted_parse_storage_grows_below_threefold ... ok
+nested star with EXISTS accepted parse allocations: [Measurement { allocations: 40061, requested_bytes: 18717020, retained_bytes: 2639300, peak_working_bytes: 9112458 }, Measurement { allocations: 84020, requested_bytes: 37627740, retained_bytes: 5468996, peak_working_bytes: 18411658 }, Measurement { allocations: 175931, requested_bytes: 75641180, retained_bytes: 11320388, peak_working_bytes: 37202058 }]
+test nested_star_with_inner_exists_keeps_accepted_scope_work_bounded ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.09s
+

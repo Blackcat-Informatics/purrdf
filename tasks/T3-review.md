@@ -1,0 +1,11 @@
+# Task 3 independent review — HTTP stack refusal
+
+Reviewed the current seven-path Task 3 diff in `crates/sparql-eval/src/protocol.rs`, its protocol test, `crates/rdf-wasm/src/protocol.rs`, package README and Cloudflare declaration/tests, including new `tests/cloudflare-stack.test.mjs`. Checked the real `cloudflare.mjs::failureResponse` → `SparqlProtocolRequest.problemFor` → shared `problem_for` path. Read-only review; no source edit or Rust build by this reviewer.
+
+The production change moves only `FailureCode::EvaluationStackExhausted` from the shared protocol's 500 arm to the 400 `ProblemDetail::Message` arm beside host-stack exhaustion. Its `FailureCode::from_diagnostic_code` matches the stable evaluator code, while ordinary `FailureCode::Evaluation` remains 500. The WASM protocol keeps the engine's exact code and message in the problem body; Cloudflare consumes that shared result without adding a competing classifier. The package README and `cloudflare.d.ts` now describe the same status contract. `git diff --check` passed.
+
+The focused evidence reported for the current optimized package is: normal `make wasm-pkg` exit 0 from HEAD `d0b4092c5` plus Task 3 diff, artifact SHA-256 `5aa6cd3cb0c81653a9070b220ee5acfe0c8eb2e56f8ba7145b79c1ca28dc79ca`; Rust shared-protocol test 1/1 and WASM protocol test 1/1 passed. The new Cloudflare file passed 2/2 and the original first-guard Cloudflare case passed 1/1. The real `handleSparqlRequest(Request)` six-shape control found adjacent last-answer HTTP 200 and first-refusal HTTP 400, preserving typed stack code, detail and no correlation id. Both evaluator-stack and host-stack codes occurred among those shapes. A separate real XPath pattern-byte evaluation failure remained HTTP 500 with code `xpath-pattern-bytes`, and a later shallow request answered 200. This rules out accidentally mapping general evaluation/resource failures to 400. These are focused Task 3 checks; no full Node suite, complete repository gate or hosted check is credited.
+
+No material Task 3 finding remains. The unchanged #531 historical depth-floor failures are separate and are not marked passed by these HTTP controls. Normal hooked commit/push and the remaining #365 issue contract are outside this review.
+
+**VERDICT: PASS**

@@ -1,0 +1,557 @@
+diff --git crates/rdf-wasm/js/README.md crates/rdf-wasm/js/README.md
+index 368c3086e..54af40e74 100644
+--- crates/rdf-wasm/js/README.md
++++ crates/rdf-wasm/js/README.md
+@@ -797,7 +797,11 @@ level. An evaluator-stack refusal has code
+ message names "query evaluation" on both lanes, regardless of the frame that found the
+ stack low. The evaluator checks the stack left above the
+ region's base at every recursive step and refuses while 64 KiB remain. Parsing keeps a
+-request's nesting in linear memory and spends neither stack on it.
++request's nesting in linear memory and spends neither stack on it. Repeated nested
++`SELECT *` scopes are refused before their variable visits and copies exceed eight
++times the input variable occurrences plus 256 fixed setup entries. The parser
++reports `sparql-parse-projection-limit` with the requested and admitted counts on
++both synchronous and asynchronous entries.
+ 
+ A region is the size of the shadow stack in linear memory only. Every wasm call also takes frames
+ on the JavaScript engine's own call stack, which no wasm code can read, and V8 (Node.js,
+diff --git crates/sparql-algebra/src/error.rs crates/sparql-algebra/src/error.rs
+index 85ff648a5..7bc370057 100644
+--- crates/sparql-algebra/src/error.rs
++++ crates/sparql-algebra/src/error.rs
+@@ -18,9 +18,12 @@
+ //!   validation (delegated to `purrdf-iri`).
+ //! * [`ParseError::CdtArity`] — a SEP-0009 composite-datatype function was
+ //!   called with a number of arguments its spec-fixed signature does not admit.
++//! * [`ParseError::ProjectionLimit`] — repeated `SELECT *` scope work would
++//!   exceed its input-proportional admission before the next copy begins.
+ //!
+-//! How deeply a request nests is never a reason: the parser holds what encloses the
+-//! cursor on heap-allocated stacks, so nesting is bounded by memory alone.
++//! The parser holds nesting state on heap-allocated stacks. Repeated nested
++//! `SELECT *` projections also have an input-proportional work limit so their
++//! repeated scope copies are refused before they grow quadratically.
+ 
+ use core::fmt;
+ use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+@@ -80,6 +83,15 @@ pub enum ParseError {
+         /// Byte offset of the offending call (best-effort).
+         at: usize,
+     },
++    /// A nested `SELECT *` would repeat more variable work than its input admits.
++    ProjectionLimit {
++        /// Variable visits/copies the next operation would bring the parse to.
++        requested: usize,
++        /// Maximum admitted variable visits/copies for this query.
++        limit: usize,
++        /// Byte position of the scope/projection operation that was refused.
++        at: usize,
++    },
+ }
+ 
+ purrdf_lex::constructors! {
+@@ -325,6 +337,34 @@ impl ParseError {
+                     memory.collect(native_values)
+                 }?,
+             ),
++            Self::ProjectionLimit {
++                requested,
++                limit,
++                at,
++            } => (
++                "sparql-parse-projection-limit",
++                "SPARQL projection work at byte {at} would visit or copy {requested} variables, above the input-proportional limit of {limit}",
++                {
++                    let native_values = [
++                        DiagnosticParameter::try_new_with_memory(
++                            "at",
++                            Unsigned(*at as u64),
++                            memory,
++                        )?,
++                        DiagnosticParameter::try_new_with_memory(
++                            "requested",
++                            Unsigned(*requested as u64),
++                            memory,
++                        )?,
++                        DiagnosticParameter::try_new_with_memory(
++                            "limit",
++                            Unsigned(*limit as u64),
++                            memory,
++                        )?,
++                    ];
++                    memory.collect(native_values)
++                }?,
++            ),
+         };
+         // Unreachable refusal: `DiagnosticPresentation::new` judges only the identity,
+         // the template and the parameter names, and every one of those is a literal
+@@ -342,7 +382,7 @@ impl ParseError {
+     #[must_use]
+     pub fn owned_text_bytes(&self) -> Option<usize> {
+         match self {
+-            Self::Storage(_) => Some(0),
++            Self::Storage(_) | Self::ProjectionLimit { .. } => Some(0),
+             Self::Lex { reason, .. } | Self::Syntax { reason, .. } | Self::Unsupported(reason) => {
+                 Some(reason.capacity())
+             }
+@@ -358,7 +398,10 @@ impl ParseError {
+     #[must_use]
+     pub fn byte_offset(&self) -> Option<usize> {
+         match self {
+-            Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::CdtArity { at, .. } => Some(*at),
++            Self::Lex { at, .. }
++            | Self::Syntax { at, .. }
++            | Self::CdtArity { at, .. }
++            | Self::ProjectionLimit { at, .. } => Some(*at),
+             Self::Unsupported(_) | Self::Iri { .. } | Self::Storage(_) => None,
+         }
+     }
+@@ -466,6 +509,14 @@ impl fmt::Display for ParseError {
+                 f,
+                 "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}"
+             ),
++            Self::ProjectionLimit {
++                requested,
++                limit,
++                at,
++            } => write!(
++                f,
++                "SPARQL projection work at byte {at} would visit or copy {requested} variables, above the input-proportional limit of {limit}"
++            ),
+         }
+     }
+ }
+@@ -525,6 +576,15 @@ mod tests {
+                 "sparql-parse-cdt-arity",
+                 "SPARQL syntax error at byte 7: <http://example.org/function> takes 2 arguments, not 1",
+             ),
++            (
++                ParseError::ProjectionLimit {
++                    requested: 65,
++                    limit: 64,
++                    at: 7,
++                },
++                "sparql-parse-projection-limit",
++                "SPARQL projection work at byte 7 would visit or copy 65 variables, above the input-proportional limit of 64",
++            ),
+         ];
+         for (error, identity, english) in errors {
+             let presentation = error.presentation();
+@@ -585,6 +645,11 @@ mod tests {
+                 found: usize::MAX,
+                 at: usize::MAX,
+             },
++            ParseError::ProjectionLimit {
++                requested: usize::MAX,
++                limit: usize::MAX - 1,
++                at: usize::MAX,
++            },
+         ];
+         let expected = [
+             format!("SPARQL lex error at byte {}: {hostile}", usize::MAX),
+@@ -598,6 +663,11 @@ mod tests {
+                 "SPARQL syntax error at byte {max}: <{hostile}> takes {hostile}, not {max}",
+                 max = usize::MAX
+             ),
++            format!(
++                "SPARQL projection work at byte {max} would visit or copy {max} variables, above the input-proportional limit of {limit}",
++                max = usize::MAX,
++                limit = usize::MAX - 1
++            ),
+         ];
+         for (error, english) in errors.iter().zip(expected) {
+             assert_eq!(error.presentation().english(), english);
+diff --git crates/sparql-algebra/src/parser.rs crates/sparql-algebra/src/parser.rs
+index b4b10ddc7..548c6eff0 100644
+--- crates/sparql-algebra/src/parser.rs
++++ crates/sparql-algebra/src/parser.rs
+@@ -23,7 +23,9 @@
+ //! heap-allocated stack: groups, sub-`SELECT`s, modifiers and expressions in one
+ //! pushdown machine (`parser/machine.rs`), triples, paths and terms in loops of their
+ //! own (`parser/triples.rs`). How deeply a request nests is therefore bounded by the
+-//! memory those stacks grow into and nothing else, the same on every host and on a
++//! memory those stacks grow into, except that nested `SELECT *` projection work
++//! is refused with a typed input-proportional limit before repeated scope copies
++//! grow without bound. Both limits are the same on every host and on a
+ //! thread of any stack size; the tree it returns is walked, copied and dropped
+ //! without recursion too (see [`crate::walk`]).
+ 
+@@ -654,6 +656,34 @@ impl SparqlParser {
+     ) -> Result<Parser<'a, 'o, 'm, 's, RDFLIB>> {
+         let mut lexemes =
+             tokenize_with_memory(text, crate::lexer::LexerOptions::default(), memory)?;
++        let variable_occurrences = lexemes
++            .iter()
++            .filter(|lexeme| matches!(&lexeme.token, Token::Variable(_)))
++            .count();
++        let star_selects = lexemes
++            .iter()
++            .enumerate()
++            .filter(|(index, lexeme)| {
++                if !matches!(&lexeme.token, Token::Word(word) if word.eq_ignore_ascii_case("SELECT")) {
++                    return false;
++                }
++                let next = lexemes.get(*index + 1).map(|next| &next.token);
++                let star_at = match next {
++                    Some(Token::Word(word))
++                        if word.eq_ignore_ascii_case("DISTINCT")
++                            || word.eq_ignore_ascii_case("REDUCED") => *index + 2,
++                    _ => *index + 1,
++                };
++                matches!(lexemes.get(star_at).map(|next| &next.token), Some(Token::Star))
++            })
++            .count();
++        // A one-star query never repeats a projection. With nested stars, bound
++        // scope handoffs and projection scans by input variable occurrences,
++        // plus a fixed setup allowance for empty or constant graph patterns.
++        let projection_work = (star_selects > 1).then_some(ProjectionWork {
++            used: 0,
++            limit: variable_occurrences.saturating_mul(8).saturating_add(256),
++        });
+         let mut tokens = Vec::new();
+         memory.reserve(&mut tokens, lexemes.len())?;
+         #[expect(
+@@ -685,6 +715,7 @@ impl SparqlParser {
+             in_aggregate_argument: false,
+             projection_seen_targets: Vec::new(),
+             pending_exists_scope_checks: Vec::new(),
++            projection_work,
+             #[cfg(debug_assertions)]
+             scope_consultations: 0,
+             blank_label_bgps: ScopeTable::default(),
+@@ -822,6 +853,9 @@ struct Parser<'a, 'o, 'm, 's, const RDFLIB: bool> {
+     /// pending checks never bleed into the outer `SELECT`'s resolution point
+     /// (or vice versa).
+     pending_exists_scope_checks: Vec<PendingExistsScopeCheck>,
++    /// Admission before each repeated scope/projection scan in a query with
++    /// nested `SELECT *`; no logical depth default is imposed on other shapes.
++    projection_work: Option<ProjectionWork>,
+     /// Debug-only regression counter for the group-loop scope-set quadratic:
+     /// incremented ONLY at the handful of PRODUCTION sites that consult a
+     /// freshly-computed (`visible_variables`-derived) whole-pattern scope
+@@ -892,7 +926,32 @@ struct Parser<'a, 'o, 'm, 's, const RDFLIB: bool> {
+     prebound: Vec<Variable>,
+ }
+ 
++/// Input-proportional work admission for repeated star projection/scope walks.
++/// Parser ownership makes nested SELECTs share one budget.
++#[derive(Clone, Copy)]
++struct ProjectionWork {
++    used: usize,
++    limit: usize,
++}
++
+ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
++    /// Admit a repeated variable scan before it reads or copies any entries.
++    fn admit_projection_work(&mut self, entries: usize) -> Result<()> {
++        let at = self.span();
++        let Some(work) = &mut self.projection_work else {
++            return Ok(());
++        };
++        let requested = work.used.saturating_add(entries);
++        if requested > work.limit {
++            return Err(ParseError::ProjectionLimit {
++                requested,
++                limit: work.limit,
++                at,
++            });
++        }
++        work.used = requested;
++        Ok(())
++    }
+     fn boxed<T>(&mut self, value: T) -> Result<Box<T>> {
+         self.memory
+             .add_bytes(core::alloc::Layout::new::<T>().size())?;
+@@ -1064,6 +1123,7 @@ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
+             in_aggregate_argument: false,
+             projection_seen_targets: Vec::new(),
+             pending_exists_scope_checks: Vec::new(),
++            projection_work: None,
+             #[cfg(debug_assertions)]
+             scope_consultations: self.scope_consultations,
+             // Neither forked production can contain a query form, so neither can
+@@ -6601,6 +6661,78 @@ mod tests {
+         assert_eq!(variables, vec![Variable::new("a"), Variable::new("b")]);
+     }
+ 
++    /// Every nested star republishes its child's visible names. The parser
++    /// refuses the 8,000-level adversary before the repeated copies can become
++    /// quadratic, while accepted neighbors keep first-appearance order.
++    #[test]
++    fn nested_star_projection_admits_work_before_repeated_scope_copies() {
++        fn nested(depth: usize) -> String {
++            use std::fmt::Write;
++            let mut query = String::new();
++            for _ in 1..depth {
++                query.push_str("SELECT * WHERE { { ");
++            }
++            query.push_str("SELECT * WHERE { BIND(0 AS ?v0) }");
++            for level in 1..depth {
++                write!(query, " }} BIND({level} AS ?v{level}) }}").expect("String write");
++            }
++            query
++        }
++        let mut admitted_visits = [0; 3];
++        for (index, depth) in [2, 4, 8].into_iter().enumerate() {
++            let input = nested(depth);
++            let query = SparqlParser::new()
++                .parse_query(&input)
++                .expect("small nested stars retain all visible variables");
++            let Query::Select { pattern, .. } = query else {
++                panic!("SELECT query");
++            };
++            let GraphPattern::Project { variables, .. } = pattern else {
++                panic!("star projection");
++            };
++            assert_eq!(
++                variables,
++                (0..depth)
++                    .map(|level| Variable::new(format!("v{level}")))
++                    .collect::<Vec<_>>()
++            );
++
++            let public = SparqlParser::new();
++            let options = ParserOptions::default();
++            let mut resident = ResidentParserAdmission;
++            let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
++            let mut parser = public
++                .parser_for::<false>(&input, &options, &mut memory)
++                .expect("internal count uses the public parser setup");
++            parser.parse_prologue().expect("prologue");
++            let _query = parser.parse_query_form().expect("accepted query");
++            parser.expect_eof().expect("whole query");
++            admitted_visits[index] = parser.projection_work.expect("nested stars").used;
++        }
++        eprintln!("nested star admitted variable visits: {admitted_visits:?}");
++        let input = nested(8_000);
++        let error = SparqlParser::new()
++            .parse_query(&input)
++            .expect_err("repeated projection is refused before 8,000 growing vectors");
++        let ParseError::ProjectionLimit {
++            requested,
++            limit,
++            at,
++        } = error
++        else {
++            panic!("expected typed projection admission, got {error:?}");
++        };
++        assert!(requested > limit);
++        assert!(limit <= 8 * 8_000 + 256, "input-proportional bound");
++        assert!(at < input.len());
++
++        let with_modifier = input.replace("SELECT *", "SELECT DISTINCT *");
++        assert!(matches!(
++            SparqlParser::new().parse_query(&with_modifier),
++            Err(ParseError::ProjectionLimit { .. })
++        ));
++    }
++
+     #[test]
+     fn from_clause_parses_into_query_dataset() {
+         let q = format!(
+diff --git crates/sparql-algebra/src/parser/machine.rs crates/sparql-algebra/src/parser/machine.rs
+index 0060230e5..a98f5b2de 100644
+--- crates/sparql-algebra/src/parser/machine.rs
++++ crates/sparql-algebra/src/parser/machine.rs
+@@ -503,7 +503,7 @@ struct SelectState {
+     aggregates: Vec<Lifted>,
+     dataset: QueryDataset,
+     /// The `WHERE` pattern and its `intro`, once read.
+-    where_pattern: Option<(GraphPattern, bool)>,
++    where_pattern: Option<(GraphPattern, bool, usize)>,
+ }
+ 
+ /// A `SELECT`'s `DISTINCT` or `REDUCED`.
+@@ -1598,6 +1598,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+             return Ok(body);
+         }
+         if self.projection_scope_pending {
++            self.admit_projection_work(
++                self.exists_scope_stack
++                    .top()
++                    .len()
++                    .saturating_add(self.projection_seen_targets.len()),
++            )?;
+             let mut local_scope = self
+                 .memory
+                 .collect(self.exists_scope_stack.top().iter().cloned())?;
+@@ -1741,6 +1747,17 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+                 if let Some(crate::SparqlVersion::Other(text)) = version {
+                     self.memory.release_string(text)?;
+                 }
++                let mut projected = &pattern;
++                let projected_len = loop {
++                    match projected {
++                        GraphPattern::Project { variables, .. } => break variables.len(),
++                        GraphPattern::Slice { inner, .. }
++                        | GraphPattern::Distinct { inner }
++                        | GraphPattern::Reduced { inner } => projected = inner,
++                        _ => break 0,
++                    }
++                };
++                self.admit_projection_work(projected_len)?;
+                 let mut scope = VarScope::default();
+                 collect_vars(&pattern, &mut scope, self.memory)?;
+                 Ok(GroupValue {
+@@ -1931,6 +1948,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+                 let node = match group.union.take() {
+                     None => arm,
+                     Some(mut chain) => {
++                        self.admit_projection_work(arm.scope.as_slice().len())?;
+                         for v in arm.scope.as_slice() {
+                             chain.scope.note(v, self.memory)?;
+                         }
+@@ -2090,6 +2108,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+                 // through the free-function (non-counting) `visible_variables`.
+                 #[cfg(debug_assertions)]
+                 {
++                    self.admit_projection_work(group.scope.as_slice().len())?;
+                     let checked = visible_variables_with_memory(&group.g, self.memory)?;
+                     debug_assert_eq!(
+                         group.scope.contains(&variable),
+@@ -2131,6 +2150,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+                 for variable in std::iter::once(&element).chain(companion.as_ref()) {
+                     #[cfg(debug_assertions)]
+                     {
++                        self.admit_projection_work(group.scope.as_slice().len())?;
+                         let checked = visible_variables_with_memory(&group.g, self.memory)?;
+                         debug_assert_eq!(
+                             group.scope.contains(variable),
+@@ -2190,6 +2210,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+     /// into the group's set and into the innermost `EXISTS` in-scope frame, exactly as a
+     /// walk of the element's pattern would.
+     fn note_element_vars(&mut self, scope: &mut VarScope, element: VarScope) -> Result<()> {
++        self.admit_projection_work(element.as_slice().len())?;
+         for variable in element.as_slice() {
+             scope.note(variable, self.memory)?;
+             self.note_exists_scope_var(variable)?;
+@@ -2407,12 +2428,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+                 // The WHERE pattern's scope mirrored into this SELECT's own frame, so the
+                 // solution modifiers see it whatever built it — a group's elements, or a
+                 // WHERE clause that IS just `{ SELECT ... }`.
++                let where_scope_len = scope.as_slice().len();
++                self.admit_projection_work(where_scope_len)?;
+                 for v in scope.as_slice() {
+                     self.note_exists_scope_var(v)?;
+                 }
+                 scope.release(self.memory)?;
+                 let state = self.machine.selects.last_mut().expect("active SELECT");
+-                state.where_pattern = Some((pattern, intro));
++                state.where_pattern = Some((pattern, intro, where_scope_len));
+                 let aggregates = std::mem::take(&mut state.aggregates);
+                 {
+                     let native_value = Ctl::Select(SelectStage::Modifiers);
+@@ -2456,7 +2479,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+             where_pattern,
+             ..
+         } = state;
+-        let (where_pat, where_intro) =
++        let (where_pat, where_intro, where_scope_len) =
+             where_pattern.expect("a SELECT's modifiers follow its WHERE group");
+ 
+         // A `GROUP BY (expr AS ?v)` target must be fresh too — not in scope in the
+@@ -2549,6 +2572,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+                             }
+                         }
+                     };
++                    self.admit_projection_work(
++                        pending
++                            .local_scope
++                            .len()
++                            .saturating_add(root.as_slice().len()),
++                    )?;
+                     let mut scope = VarScope::default();
+                     for variable in pending.local_scope.iter().chain(root.as_slice()) {
+                         scope.note(variable, self.memory)?;
+@@ -2697,15 +2726,22 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+         // through — an empty WHERE clause (`{}`) plus a trailing `VALUES` must reach the
+         // SAME `Values { .. }` node an in-body `{ VALUES … }` does.
+         let trailing_values = self.peek_kw("VALUES");
+-        let where_pat = if trailing_values {
++        let (where_pat, trailing_value_vars) = if trailing_values {
+             let values = self.parse_inline_data()?;
+-            self.group_join(where_pat, values)?
++            let count = match &values {
++                GraphPattern::Values { variables, .. } => variables.len(),
++                _ => 0,
++            };
++            (self.group_join(where_pat, values)?, count)
+         } else {
+-            where_pat
++            (where_pat, 0)
+         };
+ 
+         let has_group = !modifiers.group_by.is_empty() || !aggregates.is_empty();
+         let intro = where_intro || has_group || !select_exprs.is_empty() || trailing_values;
++        if RDFLIB && star {
++            self.admit_projection_work(where_scope_len.saturating_add(trailing_value_vars))?;
++        }
+         let contextual_star = if RDFLIB && star {
+             Some(super::contextual_visible_variables(
+                 &where_pat,
+@@ -2825,6 +2861,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
+             // scope — once per `SELECT *`, never once per element of the WHERE pattern
+             // it wraps.
+             self.note_scope_consultation();
++            // Charge the upper bound before `visible_variables_with_memory` walks
++            // an inner projection and publishes another array. A trailing VALUES
++            // block contributes its own named columns; the normal WHERE scope
++            // is already measured at the group handoff.
++            self.admit_projection_work(where_scope_len.saturating_add(trailing_value_vars))?;
+             if RDFLIB {
+                 contextual_star.expect("a contextual star captured its source projection")
+             } else {
+diff --git crates/sparql-algebra/tests/chain_parse_is_linear.rs crates/sparql-algebra/tests/chain_parse_is_linear.rs
+index 8dde588bf..146a60048 100644
+--- crates/sparql-algebra/tests/chain_parse_is_linear.rs
++++ crates/sparql-algebra/tests/chain_parse_is_linear.rs
+@@ -12,7 +12,8 @@
+ //! time, so the verdict is the same on a loaded machine.
+ 
+ use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
+-use purrdf_sparql_algebra::SparqlParser;
++use purrdf_sparql_algebra::{ParseError, SparqlParser};
++use std::fmt::Write as _;
+ 
+ #[global_allocator]
+ static GLOBAL: CountingAllocator = CountingAllocator;
+@@ -118,3 +119,39 @@ fn a_chain_s_parse_costs_the_same_per_term_at_every_length() {
+         );
+     }
+ }
++
++/// Assemble from the outside in without repeatedly copying the test string.
++/// Every sub-SELECT introduces one new visible variable.
++fn nested_stars(depth: usize) -> String {
++    let mut query = String::new();
++    for _ in 1..depth {
++        query.push_str("SELECT * WHERE { { ");
++    }
++    query.push_str("SELECT * WHERE { BIND(0 AS ?v0) }");
++    for level in 1..depth {
++        write!(query, " }} BIND({level} AS ?v{level}) }}").expect("String write");
++    }
++    query
++}
++
++#[test]
++fn nested_star_refusal_keeps_parse_allocation_input_proportional() {
++    let measured = [2_000, 4_000, 8_000].map(|depth| {
++        let input = nested_stars(depth);
++        let window = CurrentThreadWindow::open();
++        let refusal = SparqlParser::new().parse_query(&input);
++        let cost = window.close();
++        assert!(matches!(refusal, Err(ParseError::ProjectionLimit { .. })));
++        cost
++    });
++    for (before, after) in measured.iter().zip(measured.iter().skip(1)) {
++        assert!(
++            after.requested_bytes < before.requested_bytes * 3,
++            "rejected doubling has bounded allocator traffic: {before:?} -> {after:?}"
++        );
++        assert!(
++            after.peak_working_bytes < before.peak_working_bytes * 3,
++            "rejected doubling has bounded working bytes: {before:?} -> {after:?}"
++        );
++    }
++}

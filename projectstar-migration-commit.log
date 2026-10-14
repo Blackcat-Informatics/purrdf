@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 8 changed non-Rust path(s) in the staged index against 5144f5c1a7dc (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/365-post-v3-0-asynchronous-wasm-lane-and be0ab6cfd] docs(sparql)!: document compact projection migration
+ 2 files changed, 52 insertions(+)
+ create mode 100644 docs/MIGRATION-4.0.md

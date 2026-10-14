@@ -1,0 +1,40 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4.49s
+     Running tests/alternative_property_paths.rs (/opt/.cargo/04/d90f27baa85332/debug/build/purrdf-sparql-eval/a0a35288c2ab9d53/out/alternative_property_paths-a0a35288c2ab9d53)
+
+running 10 tests
+test preparing_already_scoped_source_blanks_is_idempotent ... ok
+test public_raw_doors_refuse_hidden_observers_without_restricting_ordinary_names ... ok
+test raw_distinct_and_reduced_carriers_hide_witnesses_before_deduplication ... ok
+test hidden_witnesses_stay_out_of_star_and_distinct_solution_identity ... ok
+test named_graph_and_literal_or_quoted_endpoints_survive_service_roundtrips ... ok
+test alternatives_preserve_each_arm_and_each_sequence_witness ... ok
+test serialized_updates_never_bind_template_only_variables_to_path_witnesses ... ok
+test serialized_queries_keep_distinctness_and_stable_projection_names ... ok
+test source_blank_endpoints_keep_their_bgp_identity_across_filters_and_alternatives ... ok
+test service_carriers_keep_zero_column_bags_and_distinct_star_counts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/property_function_e2e.rs (/opt/.cargo/04/d90f27baa85332/debug/build/purrdf-sparql-eval/9673c855984c097b/out/property_function_e2e-9673c855984c097b)
+
+running 16 tests
+test a_governed_entry_refuses_a_declared_huge_relation_on_a_small_cell_ceiling ... ok
+test a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relation ... ok
+test a_governed_query_answers_from_the_relation_and_charges_it ... ok
+test a_governed_relation_query_trips_one_unit_below_its_metered_spend ... ok
+test an_update_where_call_with_no_registry_hard_errors_precisely ... ok
+test a_governed_update_where_charges_the_relation_and_trips_on_fuel ... ok
+test a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_different_one_with_identical_declarations ... ok
+test a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it ... ok
+test query_with_source_view_dispatches_a_registered_relation_with_options ... ok
+test registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate ... ok
+test the_call_serializes_and_re_parses_byte_exactly ... ok
+test query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers ... ok
+test an_update_where_inserts_exactly_the_relations_rows ... ok
+test the_same_text_without_the_namespace_is_an_ordinary_triple_pattern ... ok
+test the_per_call_and_operation_governed_entries_spend_identically ... ok
+test the_governed_entry_cannot_silently_drop_a_registered_relation ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

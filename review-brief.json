@@ -1,0 +1,123 @@
+{
+  "issue": 365,
+  "branch": "paudley/365-post-v3-0-asynchronous-wasm-lane-and",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "1057a78462844d21e2fda38b8b37144759dea4b3",
+      "subject": "Retain the original synchronous nested-query acceptance floor",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "be0ab6cfd7121886011df572bba5fa1a93520339",
+      "subject": "docs(sparql)!: document compact projection migration",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "a73408ddf0adedddd704bbe989dcb98cfe16d3f2",
+      "subject": "Exercise both projection forms in evaluator integration tests",
+      "date": "2026-10-12"
+    },
+    {
+      "oid": "ae502bfc1440eda04f3d9f2925400103cd8dfa63",
+      "subject": "Keep nested SELECT star projections persistent across consumers",
+      "date": "2026-10-12"
+    },
+    {
+      "oid": "0cbe9b4f460164278a1fa2ade5a302cc0cfe2741",
+      "subject": "Share canonical GTS term identity across nested comparisons",
+      "date": "2026-10-12"
+    },
+    {
+      "oid": "ce2be10582f8173ee4a433576cee56e0d1a0aef2",
+      "subject": "Classify typed evaluator stack refusal as client error",
+      "date": "2026-10-11"
+    },
+    {
+      "oid": "f376bf5f9f8b484b5f916a7a7629830585badc13",
+      "subject": "fix(wasm): align nested stack refusals across query lanes",
+      "date": "2026-10-11"
+    },
+    {
+      "oid": "2d1ee69cbfc88fe650eca698fbbe1819d34178f4",
+      "subject": "Give poisoned WASM package errors a stable code",
+      "date": "2026-10-11"
+    }
+  ],
+  "files": [
+    "CHANGELOG.md",
+    "crates/gts/src/writer.rs",
+    "crates/purrdf/src/reasoning.rs",
+    "crates/rdf-wasm/js/README.md",
+    "crates/rdf-wasm/js/cloudflare.d.ts",
+    "crates/rdf-wasm/js/src/purrdf_jspi.mjs",
+    "crates/rdf-wasm/js/tests/async-concurrency.test.mjs",
+    "crates/rdf-wasm/js/tests/cloudflare-stack.test.mjs",
+    "crates/rdf-wasm/js/tests/cloudflare.test.mjs",
+    "crates/rdf-wasm/js/tests/fixtures/nesting.mjs",
+    "crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs",
+    "crates/rdf-wasm/js/tests/panic-poison.test.mjs",
+    "crates/rdf-wasm/js/tests/stack-lane-parity.test.mjs",
+    "crates/rdf-wasm/js/tests/trap-poison.test.mjs",
+    "crates/rdf-wasm/src/interleaving.rs",
+    "crates/rdf-wasm/src/operation.rs",
+    "crates/rdf-wasm/src/protocol.rs",
+    "crates/rdf/src/projections/dataset_description.rs",
+    "crates/shapes/src/prebinding.rs",
+    "crates/shapes/src/shapes/parser/functions.rs",
+    "crates/shapes/src/shapes/parser/node_expr.rs",
+    "crates/shapes/src/srl/reads.rs",
+    "crates/slice/src/ownership.rs",
+    "crates/sparql-algebra/benches/algebra_walks.rs",
+    "crates/sparql-algebra/src/algebra.rs",
+    "crates/sparql-algebra/src/lib.rs",
+    "crates/sparql-algebra/src/owned.rs",
+    "crates/sparql-algebra/src/parser.rs",
+    "crates/sparql-algebra/src/parser/machine.rs",
+    "crates/sparql-algebra/src/projection.rs",
+    "crates/sparql-algebra/src/retained_size.rs",
+    "crates/sparql-algebra/src/serialize.rs",
+    "crates/sparql-algebra/src/substitute.rs",
+    "crates/sparql-algebra/src/traits.rs",
+    "crates/sparql-algebra/src/validate.rs",
+    "crates/sparql-algebra/src/walk.rs",
+    "crates/sparql-algebra/tests/alternative_property_paths.rs",
+    "crates/sparql-algebra/tests/cdt_fold_unfold.rs",
+    "crates/sparql-algebra/tests/chain_parse_is_linear.rs",
+    "crates/sparql-algebra/tests/iterative_traits.rs",
+    "crates/sparql-algebra/tests/linear_property_paths.rs",
+    "crates/sparql-algebra/tests/nesting_bounded_by_memory.rs",
+    "crates/sparql-algebra/tests/serializer_nesting_roundtrip.rs",
+    "crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs",
+    "crates/sparql-algebra/tests/support/patterns.rs",
+    "crates/sparql-algebra/tests/support/scope_candidates.rs",
+    "crates/sparql-conformance/src/run.rs",
+    "crates/sparql-eval/src/basic_profile.rs",
+    "crates/sparql-eval/src/bgp.rs",
+    "crates/sparql-eval/src/bgp/positive.rs",
+    "crates/sparql-eval/src/blank_scope.rs",
+    "crates/sparql-eval/src/construct.rs",
+    "crates/sparql-eval/src/deferred_exists.rs",
+    "crates/sparql-eval/src/enf.rs",
+    "crates/sparql-eval/src/eval.rs",
+    "crates/sparql-eval/src/expr.rs",
+    "crates/sparql-eval/src/governor/soundness.rs",
+    "crates/sparql-eval/src/modifier.rs",
+    "crates/sparql-eval/src/prebind_memo.rs",
+    "crates/sparql-eval/src/property_fn_eval.rs",
+    "crates/sparql-eval/src/property_fn_plan.rs",
+    "crates/sparql-eval/src/protocol.rs",
+    "crates/sparql-eval/src/rdflib.rs",
+    "crates/sparql-eval/src/remote.rs",
+    "crates/sparql-eval/src/service_endpoints.rs",
+    "crates/sparql-eval/src/substitute.rs",
+    "crates/sparql-eval/tests/alternative_property_paths.rs",
+    "crates/sparql-eval/tests/nested_sub_select.rs",
+    "crates/sparql-eval/tests/property_function_e2e.rs",
+    "crates/sparql-eval/tests/protocol.rs",
+    "crates/sparql-eval/tests/source_header.rs",
+    "crates/sparql-eval/tests/union_join_positions.rs",
+    "docs/MIGRATION-4.0.md"
+  ],
+  "adrs_touched": []
+}

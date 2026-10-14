@@ -1,0 +1,4 @@
+input_bytes=173775
+error_code=native-sparql-evaluation-stack-exhausted error=Error: error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate (query evaluation needs more stack than this thread has left above its 65536-byte reserve)
+healthy_neighbor=ok rows=1
+max_rss_kb=190268

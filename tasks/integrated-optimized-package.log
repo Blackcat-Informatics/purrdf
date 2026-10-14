@@ -1,0 +1,680 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/lex)
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-events)
+   Compiling sha2 v0.11.0
+   Compiling regex-syntax v0.8.11
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/xsd)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling quote v1.0.46
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/cdt)
+   Compiling crossbeam-deque v0.8.6
+   Compiling rustversion v1.0.22
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling syn v2.0.118
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling inout v0.2.2
+   Compiling once_cell v1.21.4
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-algebra)
+   Compiling cpubits v0.1.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/stack)
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling structured-zstd v0.0.49
+   Compiling ghash v0.6.0
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/geo-kernel)
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/gts)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/entail)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/json)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/columnar)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/shex)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/markdown)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/retrieval)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/hnsw)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/purrdf)
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-wasm)
+    Finished `release` profile [optimized] target(s) in 14m 56s
+cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+wasm-opt -Oz \
+	--enable-bulk-memory --enable-nontrapping-float-to-int \
+	--enable-sign-ext --enable-mutable-globals --enable-simd \
+	-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+   Compiling leb128fmt v0.1.0
+   Compiling wasm-encoder v0.259.0
+   Compiling wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/wasm-link)
+    Finished `release` profile [optimized] target(s) in 7.42s
+     Running `/opt/.cargo/target/365-post-v3-0-asynchronous-wasm-lane-and-ab56cea7/release/wasm-link crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`
+OK: wasm-link linked crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: stack pointer is global 0 (exported as purrdf_stack_pointer); purrdf_jspi_suspend is function 28, called only from $suspend (function 18868), which 1 call site(s) reach; 52 other import(s) behind trampolines with 416 reference(s) routed; purrdf_jspi_run wrapped by function 18893 (region top appended as its last parameter); 412 exported function(s) behind the poison gate (367 trapping, 45 inert release function(s); globals idle=3, poisoned=4, active=5, parked=6, outbound=7); validated under ["mutable-globals", "nontrapping-float-to-int", "sign-ext", "bulk-memory", "simd"]
+OK: verified 426535 SIMD opcode(s) present in the optimized wasm artifact
+OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)
+cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
+
+added 3 packages in 444ms
+
+> @blackcatinformatics/purrdf@3.0.1 check
+> npm run typecheck && npm test && npm run smoke:pack
+
+
+> @blackcatinformatics/purrdf@3.0.1 typecheck
+> tsc -p tsconfig.types.json
+
+
+> @blackcatinformatics/purrdf@3.0.1 test
+> node --test tests/*.test.mjs
+
+✔ queryGoverned computes MEDIAN through aggregateNamespace (189.327075ms)
+✔ omitting aggregateNamespace leaves the ten names unregistered, with the existing typed error (7.271948ms)
+✔ updateGoverned reaches MEDIAN from a DELETE/INSERT WHERE nested SELECT (71.990197ms)
+✔ an ungoverned entry refuses aggregateNamespace rather than ignoring it (2.350362ms)
+✔ queryEntailmentGoverned computes MEDIAN through aggregateNamespace over an entailed closure (163.957873ms)
+✔ omitting aggregateNamespace leaves queryEntailmentGoverned's statistical set unregistered (1.906265ms)
+✔ three interleaved async queries resume out of order and all answer correctly (441.412435ms)
+✔ a deep sync query during a suspension is answered (111.376262ms)
+✔ jobs suspended inside a property path's walk scope, interleaved with each other and with synchronous paths, all answer their synchronous baselines (1219.747642ms)
+✔ an async job started from inside a sync callback runs and returns (22.305572ms)
+✔ a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included (3344.479092ms)
+ℹ deep no-poll-frame proof: 673128 polls, 457 timer yields, 818 ms nonexclusive
+✔ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (866.562533ms)
+ℹ admitted nesting endpoints: {"synchronous":282,"job":282}
+✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, on both lanes (9.127025ms)
+✔ nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is the synchronous lane's refusal past that (436.702933ms)
+✔ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (416.110862ms)
+✔ beginAsync beyond maxConcurrentJobs is refused (16.189209ms)
+✔ every sync-suite query answers identically through queryAsync, eight at a time, yielding at every poll (4865.309669ms)
+✔ every corpus query's asynchronous job stays inside the top quarter of its stack region (27.978317ms)
+✔ explainQueryAsync on a SERVICE-free query is byte-identical to explainQuery (187.187177ms)
+✔ explainQueryAsync explains a SERVICE join over the host's answer; the synchronous twin refuses it (93.760124ms)
+✔ SERVICE SILENT under explainQueryAsync: a failing resolver is the join identity, as on queryAsync (39.714085ms)
+✔ a CPU-heavy explainQueryAsync yields to the event loop; the synchronous twin does not (4480.41669ms)
+✔ an AbortSignal aborted mid-explain rejects with the abort reason (50.56209ms)
+✔ a deadline stops explainQueryAsync as it stops the other ungoverned twins (48.598487ms)
+✔ a parse error rejects with the synchronous twin's words (2.983634ms)
+✔ async SHACL twins return exactly their synchronous twins' results on core and SHACL-SPARQL fixtures, conforming and not (902.481167ms)
+✔ the change, entailment and product twins return their synchronous twins' values (317.466968ms)
+✔ a refused product rejects with the synchronous twin's ShaclProductRefusal, dimension and all (9.704308ms)
+✔ a SERVICE in a SHACL-SPARQL target is refused on both lanes and no host handler is asked; the local target answers (12.111198ms)
+✔ the shapes-graph arguments reach the job exactly as they reach the synchronous twin (43.372859ms)
+✔ a heavy validation with no SPARQL in it yields to the event loop; the synchronous twin does not (1142.897417ms)
+✔ a signal stops a SHACL validation: its reason, a timeout, and an already-aborted signal (935.991753ms)
+✔ concurrent SHACL validations suspended at every poll, interleaved with synchronous validations, all answer their synchronous baselines (2424.176762ms)
+✔ two concurrent jobs issuing the same request without deadlines share one host call (102.788131ms)
+✔ a job stopped while it waits abandons only itself; the host's signal waits for the other job (11.333181ms)
+✔ the host's signal aborts once every job waiting on the call has been stopped (3.420091ms)
+✔ the same request under SERVICE and SERVICE SILENT is two host calls, each told its own silent (4.293775ms)
+✔ a different cell ceiling is its own host call; the same ceiling is shared (19.034367ms)
+✔ a job whose deadline is later than the in-flight call's is its own call; an earlier one shares it (14.291525ms)
+✔ a job without a deadline never joins a call bounded by one; a job with one joins an unbounded call (7.111373ms)
+✔ a short-deadline job's timed-out call is never a SILENT failure for a job with a longer deadline (22.650711ms)
+✔ one job asks the host once for a request it repeats; sequential jobs each ask (29.675527ms)
+✔ jobs sharing a call each abandon it at their request's timeout, and the call aborts when the last leaves (38.828782ms)
+✔ host-effect deadlines settle in otherwise idle Node, with every timer released (3219.758756ms)
+✔ a 20,000-level SERVICE term can be walked, cloned, compared and dropped without poisoning (479.658903ms)
+✔ queryAsync joins remote bindings with local rows (326.868485ms)
+✔ a delayed promise is awaited, not raced (55.937494ms)
+✔ a transport failure is a thrown error without SILENT (25.306494ms)
+✔ a transport failure is the join identity under SILENT (18.769144ms)
+✔ a resolver that throws fails its invocation: the join identity under SILENT, recorded as a fault; native-sparql-host-fault without (64.625571ms)
+✔ a host denial with no catalog installed fails the query, is the identity under SILENT, and never invents a catalog cause (34.03581ms)
+✔ a catalog denies an endpoint it does not list, before any host call (54.828176ms)
+✔ SERVICE SILENT with a resolver still forwards the request (7.264609ms)
+✔ a variable endpoint bound by VALUES resolves per row (46.240245ms)
+✔ an endpoint variable nothing binds is refused, under SILENT too (70.888349ms)
+✔ SERVICE SILENT with no source, or with an endpoint that is not an IRI, is the join identity on both lanes (74.804065ms)
+✔ a group join binding the endpoint on its right answers as the left-bound form (43.205854ms)
+✔ a variable endpoint some solution cannot name refuses the query before any request, in either row order (46.43824ms)
+✔ a variable endpoint bound by an OPTIONAL, group join or MINUS left side is asked once per endpoint (39.833092ms)
+✔ SILENT swallows one variable endpoint's failure for that endpoint only (40.59204ms)
+✔ a nested SERVICE is forwarded inside the outer request text (4.044633ms)
+✔ queryAsync without resolveService fails like the sync path (11.159416ms)
+✔ synchronous query methods are unchanged (68.059521ms)
+✔ every async twin evaluates (307.037062ms)
+✔ a yielding job lets a setTimeout(…, 0) timer another party scheduled fire between its turns; a job that never yields does not (416.484639ms)
+✔ AbortSignal cancels a running query (64.379128ms)
+✔ a resolver that ignores ctx.signal still cancels promptly (524.818869ms)
+✔ deadlineMs spans the awaited SERVICE time (124.050633ms)
+✔ maxRemoteRequests governs async SERVICE dispatch (2.527057ms)
+✔ maxIntermediateCells bounds the decoded remote answer (5.996446ms)
+✔ an unconfigured cell ceiling never reaches the resolver as the metering sentinel (2.375571ms)
+✔ LOAD resolves through resolveLoad (9.459175ms)
+✔ LOAD without resolveLoad fails unless SILENT (1.182526ms)
+✔ LOAD: a host policy denial reads distinctly from a catalog capability denial, and LOAD SILENT loads nothing over either (1.375631ms)
+✔ LOAD redirect: every hop is resolved and authorized in Rust, with its own profile's headers (2.116338ms)
+✔ a LOAD parse error is the LOAD's decode failure (0.948242ms)
+✔ INSERT WHERE federates through resolveService (7.525921ms)
+✔ dataset mutation during an async update is refused (2.437409ms)
+✔ commitUpdate refuses a different dataset (0.757158ms)
+✔ queries see a snapshot; mutation during a query is allowed (1.38624ms)
+✔ refusal pair: an update begun while another update of the dataset is in flight is refused; a sequential one applies (2.168417ms)
+✔ hasAsyncQueries reports JSPI (0.122286ms)
+✔ async methods hard-fail without JSPI (205.923242ms)
+✔ governor vectors: service transport cases certify identically on the async lane (7.955969ms)
+✔ refusal pair: yieldEveryPolls -1 is refused, 0 yields at every poll (9.933871ms)
+✔ a job's stack region is the size of the module's own shadow stack (1.289483ms)
+✔ refusal pair: a failure kind "nope" is a host fault the request reports, "denied" is a denial; SILENT answers both with the join identity (3.875697ms)
+✔ refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads (0.939772ms)
+✔ refusal pair: the cancel option is refused, signal is accepted (1.136157ms)
+✔ refusal pair: a localServices value that is not a Dataset is refused; a Dataset serves, and stays the caller's (2.039731ms)
+✔ refusal pair: a catalog that is not a ServiceCatalog is refused; a ServiceCatalog governs, and stays usable (2.886947ms)
+✔ refusal pair: a profile timeout no JavaScript timer can honour is refused; the longest one is accepted (0.290921ms)
+✔ a job's memo keeps rows only: a repeated request whose first answer failed asks again (4.385713ms)
+✔ a fresh engine keeps scope: two same-label blanks in different scopes stay distinct (135.923378ms)
+✔ blankScope = "merge" drops the scope: the same blanks become one node (4.46972ms)
+✔ the mode is per engine, and can be set back to keep (10.708309ms)
+✔ a value that is not a mode throws with the options code and leaves the mode alone (3.065781ms)
+✔ an unscoped blank and an IRI are the same under both modes (6.20905ms)
+✔ the dataset's own quads are not affected by the option (3.326863ms)
+✔ an asynchronous job takes the mode in force when it begins (20.771496ms)
+✔ typed scoped blanks retain identity through insertion, serialization and parsing (32.182414ms)
+✔ Cloudflare fetch maps both stack guards to 400 at every nested shape's first refusal (1946.966286ms)
+ℹ OPTIONAL: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ EXISTS: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ GRAPH: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ MINUS: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ LATERAL: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ SERVICE SILENT: 141 answers; 142 refuses with native-sparql-host-stack-exhausted
+✔ Cloudflare fetch still answers a genuine XPath evaluation resource failure as 500 (4.670864ms)
+✔ SparqlProtocolRequest reads an operation and its dataset parameters (77.299822ms)
+✔ SparqlProtocolRequest reads an update's USING and USING NAMED parameters in request order (3.129239ms)
+✔ refusal pair: a protocol refusal is a typed Error with name, status and parameter (0.799297ms)
+✔ refusal pair: effectiveText refuses a malformed operation, not a well-formed one (0.596923ms)
+✔ the negotiated twin serializes by Accept and names the formats a dataset needs (112.592866ms)
+✔ refusal pair: accept is refused by every twin but the negotiated one (19.544231ms)
+✔ refusal pair: the service resolver refuses an option it would ignore; its own options build (6.269117ms)
+✔ refusal pair: cache options are all-or-nothing (2.550736ms)
+✔ refusal pair: a bindings key must be an origin (0.545314ms)
+✔ a request to a bound origin goes through its binding; any other through fetch (14.177758ms)
+✔ headers are sent protocol first, then the profile's, then the credential (5.270977ms)
+✔ the effect's headers are the catalog profile's, then its credential, end to end (26.009973ms)
+✔ a request is abandoned when the query abandons it: at its profile's timeout, a transport failure SILENT absorbs; the prompt neighbour answers (81.783702ms)
+✔ a non-2xx answer is a transport failure and its body is cancelled, unread (5.067393ms)
+✔ a transport failure fails a query, and SERVICE SILENT swallows it (32.513195ms)
+✔ SERVICE redirect: a 302 to an unlisted origin is a transport failure, never fetched; SILENT matches the endpoint being down (28.242349ms)
+✔ SERVICE redirect: a 307 is never followed — no body or header ever reaches the Location (12.327132ms)
+✔ SERVICE redirect: an opaque-redirect response is also a transport failure, its Location withheld (0.404868ms)
+✔ the cache answers a repeated cacheable request, and a different request is a miss (88.511396ms)
+✔ refusal pair: a request the job marks not cacheable never touches the cache; a cacheable one is cached (9.818015ms)
+✔ the job marks a request carrying a credential not cacheable, end to end (19.995918ms)
+✔ refusal pair: a cache whose match or put rejects fails the request as a transport failure; a healthy cache answers (2.611114ms)
+✔ a failed cache call fails a plain SERVICE and is the join identity under SERVICE SILENT, recorded (5.791022ms)
+✔ refusal pair: the load resolver refuses an option it would ignore; its own options build (0.500756ms)
+✔ one LOAD hop sends the job's Accept, User-Agent and headers, and answers the document (4.081101ms)
+✔ refusal pair: a LOAD the catalog does not authorize is denied before any fetch; an authorized one is fetched with its profile (25.725082ms)
+✔ a LOAD response without a Content-Type is a transport failure; with one it loads (8.683787ms)
+✔ a redirect is handed back to the job, never followed; an opaque one withholds its Location (0.739819ms)
+✔ LOAD redirect: a redirect to an unlisted origin is denied, and the unlisted origin is never fetched (4.442171ms)
+✔ LOAD redirect: the valid neighbour — a redirect to a listed origin loads, and a relative IRI resolves against the final URL (4.895128ms)
+✔ LOAD redirect: a redirect loop fails as typed transport after exactly five hops; four hops load (3.372742ms)
+✔ LOAD redirect: the redirected origin's own profile headers are sent, never the source's (1.305752ms)
+✔ refusal pair: handleSparqlRequest requires governors with deadlineMs (3.220156ms)
+✔ every request form answers (9.063307ms)
+✔ each Accept is answered in its format, byte for byte what queryRaw writes (146.371794ms)
+✔ refusal pair: 406 before evaluation, and after it for named graphs (70.526209ms)
+✔ refusal pair: protocol refusals are 400/405/415 problems; the valid neighbour is 200 (44.864356ms)
+✔ dataset parameters are honoured, and without them the query's own dataset answers (108.728109ms)
+✔ the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters (24.295144ms)
+✔ refusal pair: maxRequestBytes must be a positive integer when given; without it, 1 MiB is the default (7.548281ms)
+✔ refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit (16.466981ms)
+✔ a deterministic ceiling is a 422 carrying its dimension; the unbounded neighbour is 200 (7.437423ms)
+✔ a deadline or a cancelled request is a 503 without Retry-After, not a 422 (56.516357ms)
+✔ refusal pair: a SERVICE no resolver reaches is a 500 with its engine code and a correlation id; with a resolver it answers 200 (33.342191ms)
+✔ refusal pair: an unbound SERVICE ?e is a 400 with the engine's refusal; a host fault stays a sanitized 500 (27.136581ms)
+✔ refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it (26.905898ms)
+✔ SERVICE SILENT over a resolveService bug is the join identity, a 200 whose body never carries the bug's words, and the bug still reaches onInternalError under a correlation id; the neighbour is a genuine typed transport failure, which never touches the hook (28.369185ms)
+✔ the default onInternalError hook writes one console.error line carrying the original error and the correlation id (9.29245ms)
+✔ an onInternalError that throws synchronously still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (15.539288ms)
+✔ an onInternalError that returns a rejecting promise still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (15.274556ms)
+✔ valid neighbour: a non-throwing onInternalError (sync, and async-resolving) is called exactly once and console.error is never called (16.089202ms)
+✔ an unexpected exception anywhere else in the adapter is also a 500 with a correlation id, never a bare rejection (10.30971ms)
+✔ the catalog denies an unlisted endpoint before any fetch; a listed one is fetched (13.716281ms)
+✔ refusal pair: a SERVICE the catalog denies is a 403 with its engine code and none of the catalog's configuration; an endpoint the same catalog allows answers 200 (23.110198ms)
+✔ refusal pair: a SERVICE the resolver's own policy denies is a 403 with its engine code and none of the resolver's words; a request it allows answers 200 (7.92066ms)
+✔ refusal pair: a SERVICE endpoint that answers an HTTP error is a 502 with its engine code and none of its words; an allowed endpoint that answers is 200 (16.582758ms)
+✔ refusal pair: a SERVICE whose transport throws is a 502 with its engine code and none of the exception's words; an allowed endpoint that answers is 200 (14.401551ms)
+✔ refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails a 502, each with its engine code and none of its words; an allowed, answering source is 204 (6.563429ms)
+✔ refusal pair: an operation this endpoint misconfigured is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200 (2.74512ms)
+✔ refusal pair: the first stack guard keeps its code and words under 400; the shallow neighbour answers 200 (952.002668ms)
+✔ a federated query runs end to end through a service binding (6.705385ms)
+✔ CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without (3.132719ms)
+✔ a poisoned instance still answers every request with the sanitized 500 and a correlation id (246.296648ms)
+✔ an engine starts at eighteen digits truncated toward zero (96.457246ms)
+✔ exact answers a terminating quotient and leaves a non-terminating one unbound (14.507858ms)
+✔ a rounded policy rounds in its named direction (1.768358ms)
+✔ an unreadable policy is refused and the previous one stays in force (6.569949ms)
+✔ the policy reaches the governed, update and entailment entries (313.528643ms)
+✔ governed evidence counts each absorbed expression error by its F&O code (14.361483ms)
+✔ an asynchronous job takes the policy and reports its expression errors (51.500952ms)
+✔ the README and the book say the remote endpoint's CORS policy governs a browser host (7.482533ms)
+✔ the book's recipes are the README's, byte for byte (0.965021ms)
+✔ the resolveService recipe joins the remote rows, and reports a network failure as transport (687.697553ms)
+✔ the Worker recipe answers a SPARQL Protocol request with the joined results (317.471728ms)
+✔ parse resolves a relative IRI against the supplied base (10.601062ms)
+✔ parse without a base refuses a relative IRI with the shared code (1.751539ms)
+✔ parse rejects a base that is not an absolute IRI (0.362249ms)
+✔ an in-document base wins over the supplied one (0.627502ms)
+✔ serializeConfigured carries the document base into JSON-LD (18.627388ms)
+✔ serializeWithContext carries the same document base (6.943478ms)
+✔ serializeConfigured rejects a base that is not an absolute IRI (0.468976ms)
+✔ omitting the egress base leaves the document absolute (1.104548ms)
+✔ serialize emits the base declaration, with a no-base control (0.998231ms)
+✔ serialize to a base-incapable format stays absolute rather than throwing (0.360449ms)
+✔ serialize rejects a base that is not an absolute IRI (0.276182ms)
+✔ serialize without a base is byte-identical to omitting the argument (0.237843ms)
+✔ serialize keeps the RDF 1.2 statement layer under a base (6.463242ms)
+✔ a format with no triple-term surface fails closed rather than dropping rows (1.103518ms)
+✔ entailCheckProofGoldenVectors runs the committed proof artifact ON WASM (132.856397ms)
+✔ an answer nobody recorded is never presented as verified ON WASM (10.791686ms)
+✔ the session records proofs only when asked ON WASM (2.657143ms)
+✔ entailCheckGoldenVectors runs the committed tri-host artifact ON WASM (195.70214ms)
+✔ an inconsistent input is refused WITH its certificate ON WASM (21.799396ms)
+✔ every golden case is byte-identical across the wasm/JS boundary (256.851651ms)
+✔ entailMaterialize's evaluation limits refuse naming this host's arguments (131.204065ms)
+✔ entailMaterialize and entailConsistency close over the import table (96.410367ms)
+✔ the conclusion-directed services take the evaluation limits, naming this host's argument (122.940046ms)
+✔ entailMaterialize closes under rdfs and always returns a report (36.365763ms)
+✔ entailMaterialize under simple is the identity closure (6.53637ms)
+✔ entailMaterialize is byte-stable across repeated calls (97.194773ms)
+✔ entailMaterialize rejects an unknown regime, naming the accepted set (0.33057ms)
+✔ entailMaterialize materializes every regime spelling (46.699552ms)
+✔ a rule document belongs to rif alone and is refused elsewhere (4.402112ms)
+✔ entailMaterialize rejects a malformed document (never a silent empty closure) (1.140226ms)
+✔ entailMaterialize throws on a reserved-vocabulary closure, naming it (2.342752ms)
+✔ entailMaterialize still closes an ordinary document neighbouring the reserved one (0.312281ms)
+✔ the rule inventories are the specification tables, and the gap is measurable (27.17225ms)
+✔ the rule inventories reject an unknown regime, naming the accepted set (0.560524ms)
+✔ entailExtensions names what this build adds beyond the specification table (23.200566ms)
+✔ entailConsistency decides consistency ON WASM, with its certificate (1.331911ms)
+✔ entailClassify reaches the full subsumption hierarchy ON WASM (0.768477ms)
+✔ entailRealize reaches the individuals' entailed types ON WASM (0.546404ms)
+✔ entailInstances retrieves instances for a class the schema never asserts them of ON WASM (0.520995ms)
+✔ entailEntails decides an axiom entailed nowhere by assertion ON WASM (0.504296ms)
+✔ entailEntails answers unknown (never false) on an exhausted budget ON WASM (0.399738ms)
+✔ entailProfile certifies the most restrictive profile first ON WASM (1.990612ms)
+✔ entailExtractModule extracts a locality module as canonical N-Quads ON WASM (0.388149ms)
+✔ entailExtractModule rejects an unknown method, naming the accepted set (0.203324ms)
+✔ entailJustify finds a minimal entailing subset ON WASM (1.73524ms)
+✔ entailExplainConclusion derives a chase conclusion never asserted ON WASM (10.767687ms)
+✔ the existential refusal is per conclusion, not per regime ON WASM (3.137669ms)
+✔ every DL reasoning service is reachable from the package root, not only ./pkg/ (0.198555ms)
+✔ every conclusion-directed entailment service is reachable from the package root (17.86865ms)
+✔ a variable in PREDICATE position is projected like any other (5.752023ms)
+✔ a conclusion nothing derives has no warrant, and says so (5.620497ms)
+✔ the two regimes defined by a missing input are refused by name (0.68517ms)
+✔ webont-imports-011 answers from its own premise, owl:imports intact (73.996259ms)
+✔ an unsupplied import throws by name rather than reasoning without it (3.159408ms)
+✔ the import arrays are parallel, and a length mismatch is refused (4.403502ms)
+✔ a malformed import table is refused by entry (5.296896ms)
+✔ wasm_entail_premise_iris: the three services honour premiseIris (3.738251ms)
+✔ literal(value, { language, direction }) builds an RDF 1.2 directional literal (9.137495ms)
+✔ Dataset.from and DataFactory.dataset build chainable datasets from quads (11.70383ms)
+✔ Dataset#toStream is the instance form of datasetToStream (2.343392ms)
+✔ native geographic response and strict semantic refusal cross the package root (57.808229ms)
+✔ an original work refusal throws instead of allocating a partial JSON response (10.724048ms)
+✔ point buckets and their profile outlive the creating session (45.918425ms)
+✔ explicit axes reach sync queries and an already started async profile snapshot (82.990117ms)
+✔ an ungoverned query is unchanged: same rows, and no governor vocabulary reaches it (198.548437ms)
+✔ an ungoverned entry refuses a governor option rather than ignoring it (2.807768ms)
+✔ queryGoverned with no ceiling completes and still hands back a receipt (6.295047ms)
+✔ queryEntailmentGoverned carries the query outcome and closure report together (104.505281ms)
+✔ queryEntailmentGoverned closes over the dataset's owl:imports table (95.595ms)
+✔ queryEntailmentGoverned takes the closure's evaluation limits, naming its own option (113.13347ms)
+✔ queryEntailmentGoverned exposes a closure stop without an answer or report (8.202651ms)
+✔ the evidence maps are keyed by the engine's own dimension vocabulary (9.036917ms)
+✔ the answer cap is inclusive: cap == answer size completes (12.589354ms)
+✔ the answer cap is inclusive: cap == answer size - 1 exhausts and certifies what it reached (12.020311ms)
+✔ a zero fuel ceiling trips on the first charged unit of work (7.018886ms)
+✔ a fuel ceiling large enough to cover the query completes it (25.535607ms)
+✔ a zero wall deadline trips on the first stop poll inside the real wasm module (9.437555ms)
+✔ a non-zero wall deadline trips a query it cannot cover, so the wasm clock advances (88.158966ms)
+✔ the same query completes when the wall deadline is not the binding constraint (6.648947ms)
+✔ a cancelled token stops the query as an outcome and survives the call (5.379193ms)
+✔ an uncancelled token leaves the query complete (14.613895ms)
+✔ cancellation outranks a deadline when both fire at the same point (1.087838ms)
+✔ every governor trip is a returned outcome, not a throw (27.034374ms)
+✔ a ceiling the planner's estimate already exceeds is REFUSED, and reports an estimate rather than a measurement (2.993202ms)
+✔ the scratch ceiling binds a value-constructing query and leaves a plain one alone (9.550373ms)
+✔ a genuine query error still throws — a trip is not the only outcome shape (20.045877ms)
+✔ a negative ceiling is refused rather than wrapping into an unreachable one (10.30335ms)
+✔ the answer cap counts RDF 1.2 triple-term solutions like any other (18.955849ms)
+✔ the answer cap counts RDF 1.2 reifier statements in a CONSTRUCT answer sequence (14.162558ms)
+✔ a governed UPDATE that fits its budget applies and reports a receipt (29.058895ms)
+✔ a tripped UPDATE applies NOTHING and leaves the dataset byte-identical (13.943804ms)
+✔ a cancelled token stops an UPDATE as an outcome (10.786237ms)
+✔ updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set (0.68243ms)
+✔ explainQuery renders the charge ledger a budget is sized from (8.347097ms)
+✔ graph lifetime undefined survives reconstruction and synchronous UPDATE (122.786759ms)
+✔ graph lifetime undefined survives actual async UPDATE and cancellation (20.257021ms)
+✔ graph lifetime true survives reconstruction and synchronous UPDATE (30.421165ms)
+✔ graph lifetime true survives actual async UPDATE and cancellation (39.54216ms)
+✔ graph lifetime false survives reconstruction and synchronous UPDATE (35.888466ms)
+✔ graph lifetime false survives actual async UPDATE and cancellation (48.595497ms)
+✔ dataset identities and mutation generations use exact bigint transport (42.454755ms)
+✔ isomorphic() is true for the same graph under blank-node relabeling (6.656976ms)
+✔ isomorphic() is false for a structurally different graph (0.406388ms)
+✔ canonicalize() is stable and identifies isomorphic graphs byte-for-byte (0.570213ms)
+✔ canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting (0.812136ms)
+✔ an ordinary IRI neighbouring the reserved namespace still canonicalizes (0.217434ms)
+✔ configured Dataset serialization reuses compiled contexts (73.349887ms)
+✔ configured graph results and YAML schema headers use the same engine (172.023828ms)
+✔ closed options fail before output (10.444636ms)
+✔ frozen lexical capability inventory accounts for every file (1.817817ms)
+✔ every frozen JSON string vector crosses the package decoder (181.361356ms)
+✔ every JSON code unit and surrogate pair matches the frozen answer digest (14267.314415ms)
+✔ every unreserved percent vector crosses SPARQL ENCODE_FOR_URI (9582.870859ms)
+✔ every frozen string escape preserves its consumed-prefix boundary (35.673373ms)
+✔ every UCHAR scalar and refusal matches the frozen answer digests (11695.648819ms)
+✔ parsePackument accepts the npm 11 array response (28.852601ms)
+✔ parsePackument accepts the npm 12 package-name map (0.392409ms)
+✔ parsePackument rejects zero or multiple package records (0.590202ms)
+✔ parsePackument rejects a malformed package record (9.429116ms)
+✔ missingPackedFiles accepts a tarball holding every promised path (0.612472ms)
+✔ missingPackedFiles names a files entry npm silently omitted (0.206434ms)
+✔ missingPackedFiles names an exports target the tarball lacks (0.184865ms)
+✔ missingPackedFiles refuses a pack record without a file list (0.420768ms)
+✔ missingPackedFiles accepts nested contents of an explicit directory promise (0.249312ms)
+✔ missingPackedFiles refuses an empty directory marker (0.227563ms)
+✔ missingPackedFiles refuses a directory prefix lookalike (0.144735ms)
+✔ missingPackedFiles keeps exact file promises strict (0.106727ms)
+✔ missingPackedFiles never turns an export target into a directory promise (0.238814ms)
+✔ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (805.929835ms)
+✔ a refused query carries sparql-parse-lex on both lanes (110.882636ms)
+✔ a refused query carries sparql-parse-syntax on both lanes (29.451123ms)
+✔ a refused query carries sparql-parse-unsupported on both lanes (8.858493ms)
+✔ a refused query carries sparql-parse-iri on both lanes (12.416058ms)
+✔ a refused query carries sparql-parse-cdt-arity on both lanes (6.426304ms)
+✔ a relative IRI without a base names its typed cause (1.167806ms)
+✔ a refused update carries its typed presentation on both lanes (31.374218ms)
+✔ a failure without a typed presentation carries none; the valid neighbour answers (105.429344ms)
+✔ projection archive matches the shared Rust/Python bytes (169.837341ms)
+✔ write-only profiles and mismatched tagged config fail explicitly (8.94552ms)
+✔ all research-object profiles execute through the shared WASM carrier (319.46766ms)
+✔ DCAT RDF executes deterministically and remains write-only through WASM (149.815394ms)
+✔ VoID executes deterministically and remains write-only through WASM (12.790208ms)
+✔ attached RO-Crate matches the cross-host archive through generated WASM (20.314979ms)
+✔ SELECT returns SPARQL Results JSON bindings (106.109115ms)
+✔ SELECT over the default graph does not see named-graph triples (3.161888ms)
+✔ ASK returns a boolean result document (7.732725ms)
+✔ QueryEngine SELECT returns typed package-root bindings (9.127764ms)
+✔ NOW and RAND read the live JavaScript clock and entropy on wasm (13.40762ms)
+✔ QueryEngine SELECT rows are a single-owner stream (1.452188ms)
+✔ QueryEngine query routes ASK and graph results into discriminated objects (9.952631ms)
+✔ QueryEngine raw serialization supports result and graph formats (7.316437ms)
+✔ CONSTRUCT returns Turtle (1.856196ms)
+✔ a malformed query throws, never a silent empty result (4.051582ms)
+✔ a SERVICE clause hard-fails offline (no resolver in the browser) (6.763384ms)
+✔ QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolver (9.64232ms)
+✔ queryRaw provenanceNamespace populates and round-trips through JSON (3.581886ms)
+✔ queryRaw provenanceNamespace populates and round-trips through XML (4.434461ms)
+✔ omitting provenanceNamespace emits pure W3C output (1.107778ms)
+✔ a lone provenanceNamespace half is refused (0.390299ms)
+✔ serialize supports JSON-LD (the docs 'copy as' transcode surface) (6.88656ms)
+✔ the default query() format never returns an empty string for a named-graph CONSTRUCT (2.250844ms)
+✔ the default query() format is still Turtle for a default-graph CONSTRUCT (3.148728ms)
+✔ an explicit single-graph format throws for a named-graph CONSTRUCT (5.794061ms)
+✔ an explicit quad-capable format carries a named-graph CONSTRUCT (0.717889ms)
+✔ an explicit single-graph format still serializes a default-graph CONSTRUCT (0.614172ms)
+✔ the default query() format carries a named-graph DESCRIBE instead of emptying it (3.714892ms)
+✔ an explicit single-graph format throws for a named-graph DESCRIBE (1.169976ms)
+✔ serializeWithLoss reports the named-graph rows a single-graph syntax drops (1.04427ms)
+✔ SERVICE SILENT and LOAD SILENT succeed with nothing fetched (3.577726ms)
+✔ nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that (303.411137ms)
+✔ on the synchronous lane the deepest answer and the first refusal are neighbours (727.143916ms)
+✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, and the engine answers afterwards (5.560189ms)
+✔ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (448.233996ms)
+✔ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (2815.552641ms)
+✔ a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches (5.970686ms)
+✔ inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert (1.201695ms)
+✔ a synchronous failure carries its code; the well-formed neighbour answers (1.343131ms)
+✔ the synchronous and asynchronous lanes answer and refuse identically (9.049317ms)
+✔ a snapshot is an independent dataset with its own identity (0.970242ms)
+✔ every results alias has the same bytes through all raw format APIs (193.215771ms)
+✔ every governed twin exposes metered and explicit no-ceiling execution (453.489223ms)
+✔ no-ceiling execution preserves cancellation and refuses ignored options (101.110479ms)
+✔ strict JSON options refuse repeated members and arrays with diagnostic pointers (14.921186ms)
+✔ generated host Reflect.get preserves throwing getter refusal (6.761484ms)
+✔ version() returns the crate semver (5.466091ms)
+✔ DataFactory builds RDF/JS terms (11.561124ms)
+✔ literal() refuses a non-tag where the caller named it (1.293192ms)
+✔ polymorphic literal(value, datatype) dispatches to a typed literal (0.728318ms)
+✔ parse → serialize → reparse round-trips N-Triples (44.089358ms)
+✔ expanded JSON-LD and YAML-LD wasm bytes are frozen (37.033153ms)
+✔ DatasetCore add/has/delete/match/iterate (15.664244ms)
+✔ DatasetCore.add/delete chain (RDF/JS return-this) (0.469696ms)
+✔ DatasetCore.match treats a Variable as a wildcard (RDF/JS idiom) (2.40305ms)
+✔ RDF-1.2 wedge — directional literal round-trips through N-Quads (9.656369ms)
+✔ RDF-1.2 wedge — quoted-triple term round-trips through N-Quads (5.1597ms)
+✔ Sink streams quads into a dataset (8.93741ms)
+✔ datasetToStream → streamToDataset round-trips via the Sink (3.266615ms)
+✔ an unsupported format is a rejected error (23.03426ms)
+✔ RDF-1.2 — directional literal: .datatype.value derives rdf:dirLangString (0.3424ms)
+✔ RDF-1.2 — directional literal: in-memory add/has without serialize round-trip (0.391019ms)
+✔ RDF-1.2 — directional literal: parse then factory-built has() (cross-path) (3.10818ms)
+✔ Term.equals(null) returns false (RDF/JS spec) (0.181755ms)
+✔ Term.equals(undefined) returns false (RDF/JS spec) (0.092997ms)
+✔ Term.equals sanity: same term is true, different term is false (0.201704ms)
+✔ Quad.equals(null) returns false (RDF/JS spec) (0.100877ms)
+✔ Quad.equals(undefined) returns false (RDF/JS spec) (0.071288ms)
+✔ Quad.equals sanity: same quad is true, different quad is false (0.149486ms)
+✔ Term.equals does not consume its argument (0.394459ms)
+✔ Quad.equals does not consume its argument (2.667362ms)
+✔ serialize refuses what serializeWithLoss projects, for a star-incapable target (27.028504ms)
+✔ serializeWithLoss counts the declared empty graphs a target cannot write (226.003549ms)
+✔ a sink receives the same bytes serialize returns (146.239327ms)
+✔ a sink that throws aborts instead of truncating (38.995386ms)
+✔ an object without write is refused rather than silently producing nothing (1.095168ms)
+✔ SHA-3 built-ins reach their published FIPS 202 digests through the wasm module (122.657854ms)
+✔ SEP-0008's underscored spelling reaches the same digests through the wasm module (5.308056ms)
+✔ SHA-3 digests survive the typed QueryEngine.select surface (8.92994ms)
+✔ the SHA-3 hyphen is part of the name, and a spaced hyphen still subtracts (14.279555ms)
+✔ wasm_shacl_import_unresolved: shaclValidateToSarif rejects an unresolved owl:imports with the typed ShaclImportError (40.831553ms)
+✔ wasm_shacl_import_unresolved: shaclValidateChangesToSarif rejects an unresolved owl:imports with the typed ShaclImportError (9.759556ms)
+✔ wasm_shacl_import_unresolved: shaclEntail rejects an unresolved owl:imports with the typed ShaclImportError (2.412849ms)
+✔ wasm_shacl_import_unresolved: shaclApplyRules rejects an unresolved owl:imports with the typed ShaclImportError (3.46345ms)
+✔ wasm_shacl_import_unresolved: shaclEvalNodeExpr rejects an unresolved owl:imports with the typed ShaclImportError (6.002075ms)
+✔ wasm_shacl_import_unresolved: shaclLintShapes rejects an unresolved owl:imports with the typed ShaclImportError (1.868875ms)
+✔ wasm_shacl_import_unresolved: shaclPackProduct rejects an unresolved owl:imports with the typed ShaclImportError (15.428801ms)
+✔ wasm_shacl_import_supplied: every entry point applies a supplied import (310.114282ms)
+✔ wasm_shacl_import_declared_in_place: an ontology declared in place resolves the import, and its neighbour does not (3.627025ms)
+✔ wasm_shacl_import_unreached_entry: a table entry nothing imports is refused, and a reached one is not (1.480407ms)
+✔ wasm_shacl_import_array_lengths: import arrays of different lengths are refused, never truncated (0.401558ms)
+✔ wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a header import does not (72.136472ms)
+✔ shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME verdict shaclValidateToSarif reaches (188.168178ms)
+✔ shaclProductExplain reports well-formed identity/format fields without admitting the product (5.034904ms)
+✔ shaclProductCertify succeeds on a genuine product (1.463567ms)
+✔ shaclProductValidateToSarifRebuild validates and agrees with the admit path (2.287963ms)
+✔ *Expecting variants accept the product's own identity digest (3.44705ms)
+✔ *Expecting variants refuse a product bound to a DIFFERENT identity digest, with a neighbouring valid case beside it (4.643265ms)
+✔ a corrupted product is refused as a ShaclProductRefusal carrying its dimension label across the boundary, with a valid neighbour beside it (1.631412ms)
+✔ wasm_shacl_shapes_graph: shapesGraph-001 through shaclValidateToSarif (295.151597ms)
+✔ wasm_shacl_shapes_graph: the change path, a packed product and lint carry it (181.515342ms)
+✔ wasm_shacl_shapes_graph: a relative shapes graph with no base is refused (8.677288ms)
+✔ wasm_rules_shapes_graph: shaclApplyRules and shaclEntail pre-bind $shapesGraph (38.709094ms)
+✔ shaclValidateToSarif emits SARIF 2.1.0 with a violation (44.972283ms)
+✔ shaclValidateToSarif rejects malformed shapes (never a silent pass) (4.49772ms)
+✔ wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformanceDisallows (7.691447ms)
+✔ wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed (159.483322ms)
+✔ wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph (2.76029ms)
+✔ wasm_shacl_sparql_expr_declaration: shaclValidateToSarif evaluates sh:sparqlExpr beside its vocabulary declaration (96.609911ms)
+✔ wasm_shacl_message_languages: shaclValidateToSarif carries every message with its language (3.990804ms)
+✔ shaclEntail materializes the inferred triple and keeps the base fact (38.107932ms)
+✔ wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict (23.317382ms)
+✔ shaclValidateChangesToSarif validates the change and reports its scope (26.854749ms)
+✔ shaclValidateChangesToSarif honours the retract half (3.347913ms)
+✔ shaclValidateChangesToSarif reports an unbounded footprint rather than guessing (108.274211ms)
+✔ shaclValidateChangesToSarif rejects a malformed change document (8.014687ms)
+✔ wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit (364.175361ms)
+✔ wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope (9.333478ms)
+✔ shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour (2.134478ms)
+✔ wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle (7.791094ms)
+✔ wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one (156.459241ms)
+✔ wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised (3691.918429ms)
+✔ wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised (10.709448ms)
+✔ wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing (2.06422ms)
+✔ six nested shapes have identical answer endpoints and refusal wording on both package lanes (1300.3175ms)
+ℹ OPTIONAL: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ EXISTS: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ GRAPH: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ MINUS: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ LATERAL: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ SERVICE: 141 answers; 142 refuses with native-sparql-host-stack-exhausted
+✔ a trap that is not a panic, in a synchronous call, poisons every entry point (507.285309ms)
+✔ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (10.283951ms)
+✔ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (4.018763ms)
+✔ visualization APIs preserve RDF 1.2 statement semantics (115.126433ms)
+✔ visualization modes share the same model (12.810507ms)
+✔ cross-graph reifier roles survive graph selection without leaking occurrences (7.90436ms)
+✔ typed refusal and healthy nullable-count neighbor: xpath-2.0-2010-12-14 (399.58871ms)
+✔ large finite REGEX shapes through the optimized package: xpath-2.0-2010-12-14 (2293.123551ms)
+✔ large finite REPLACE retains the last capture: xpath-2.0-2010-12-14 (189.1484ms)
+✔ typed refusal and healthy nullable-count neighbor: xpath-3.1-2017-03-21 (35.571755ms)
+✔ large finite REGEX shapes through the optimized package: xpath-3.1-2017-03-21 (1968.811233ms)
+✔ large finite REPLACE retains the last capture: xpath-3.1-2017-03-21 (187.609715ms)
+✔ an integer past i128 has its exact canonical lexical form (14.81196ms)
+✔ a long decimal has its exact canonical lexical form (4.544608ms)
+✔ a malformed lexical has no canonical form, and its well-formed neighbour does (0.482666ms)
+✔ long integers compare exactly (5.84126ms)
+✔ malformed and incomparable values have no order, and their neighbours do (1.331551ms)
+✔ a SPARQL sum past i128 returns its exact lexical form (122.195507ms)
+ℹ tests 458
+ℹ suites 0
+ℹ pass 458
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 36370.116868
+
+> @blackcatinformatics/purrdf@3.0.1 smoke:pack
+> node tests/pack-smoke.mjs
+
+npm tarball: 11615153 bytes
+npm unpacked: 35312323 bytes
+npm entries: 152
+
+added 1 package in 742ms
+OK: packed tarball smoke passed for blackcatinformatics-purrdf-3.0.1.tgz
+./scripts/check-wasm-dataset-identity.sh
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/lex)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/xsd)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling hashbrown v0.17.1
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling crossbeam-utils v0.8.21
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rustversion v1.0.22
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.118
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/cdt)
+   Compiling either v1.16.0
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling rayon v1.12.0
+   Compiling wasm-bindgen v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling once_cell v1.21.4
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-algebra)
+   Compiling cpubits v0.1.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/stack)
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/geo-kernel)
+   Compiling polyval v0.7.3
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling structured-zstd v0.0.49
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/gts)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-eval)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/markdown)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/mime)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/json)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/shex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/testkit)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/retrieval)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/hnsw)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/purrdf)
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-wasm)
+    Finished `test` profile [optimized] target(s) in 9m 14s
+Dataset wasm getters preserve bigint identities above 2^53 and mutation advances exactly
+Exchange wasm bigint identities settle exactly above 2^53, reject wrapping inputs and refuse exhaustion
+Identity ABI receipt: target/identity-transport-receipts/c86c585ccd7dee3e7b98e1a472a62cd7748c3ccc94ce5431cea9936cfbb17e78.json

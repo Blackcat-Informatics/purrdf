@@ -1,0 +1,40 @@
+✔ host-effect deadlines settle in otherwise idle Node, with every timer released (1568.478402ms)
+✔ a 20,000-level SERVICE term can be walked, cloned, compared and dropped without poisoning (473.793186ms)
+✔ Cloudflare fetch maps both stack guards to 400 at every nested shape's first refusal (691.441481ms)
+ℹ OPTIONAL: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ EXISTS: 143 answers; 144 refuses with native-sparql-evaluation-stack-exhausted
+ℹ GRAPH: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ MINUS: 282 answers; 283 refuses with native-sparql-host-stack-exhausted
+ℹ LATERAL: 248 answers; 249 refuses with native-sparql-evaluation-stack-exhausted
+ℹ SERVICE SILENT: 141 answers; 142 refuses with native-sparql-host-stack-exhausted
+✔ Cloudflare fetch still answers a genuine XPath evaluation resource failure as 500 (4.760857ms)
+✔ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (188.719079ms)
+✔ a trap that is not a panic, in a synchronous call, poisons every entry point (184.897632ms)
+✖ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (12.222103ms)
+✖ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (13.299316ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 6
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3469.888285
+
+✖ failing tests:
+
+test at crates/rdf-wasm/js/tests/trap-poison.test.mjs:186:1
+✖ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (12.222103ms)
+  RangeError [Error]: WebAssembly.Instance(): Out of memory: Cannot allocate Wasm memory for new instance
+      at instantiate (file:///home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-wasm/js/tests/trap-poison.test.mjs:184:34)
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-wasm/js/tests/trap-poison.test.mjs:192:21)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at crates/rdf-wasm/js/tests/trap-poison.test.mjs:246:1
+✖ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (13.299316ms)
+  RangeError [Error]: WebAssembly.Instance(): Out of memory: Cannot allocate Wasm memory for new instance
+      at instantiate (file:///home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-wasm/js/tests/trap-poison.test.mjs:184:34)
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/rdf-wasm/js/tests/trap-poison.test.mjs:269:22)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)

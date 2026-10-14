@@ -1,0 +1,8 @@
+n=10 vars=10 rows=1 first=v0 last=v9
+n=20 vars=20 rows=1 first=v0 last=v19
+n=40 vars=40 rows=1 first=v0 last=v39
+n=80 vars=80 rows=1 first=v0 last=v79
+n=160 error_code=native-sparql-host-stack-exhausted
+n=320 error_code=native-sparql-host-stack-exhausted
+n=640 error_code=native-sparql-host-stack-exhausted
+max_rss_kb=212656

@@ -1,0 +1,34 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/testkit)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/crates/sparql-algebra)
+    Finished `test` profile [optimized] target(s) in 16.93s
+     Running unittests src/lib.rs (/opt/.cargo/04/d90f27baa85332/debug/build/purrdf-sparql-algebra/fe0a497cf858137c/out/purrdf_sparql_algebra-fe0a497cf858137c)
+
+running 19 tests
+test lexer::tests::varname_continues_with_what_it_may_not_start_with ... ok
+test parser::tests::count_distinct_star_still_parses ... ok
+test parser::tests::admitted_nested_star_publishes_its_exact_live_raw_account ... ok
+test parser::tests::count_star_has_empty_args ... ok
+test parser::tests::lateral_rhs_minus_right_bind_under_select_star_is_accepted ... ok
+test parser::tests::select_star_collects_visible_vars ... ok
+test parser::tests::select_star_excludes_minus_right_only_vars ... ok
+test parser::tests::select_star_with_group_by_is_rejected ... ok
+test parser::tests::sequence_path_with_star ... ok
+test parser::tests::sep0006_select_star_subselect_examples_are_accepted ... ok
+test parser::tests::star_is_rejected_for_every_non_count_aggregate ... ok
+test parser::tests::star_over_grouped_sequence_round_trips_with_parens ... ok
+test retained_size::tests::outer_only_star_and_its_clone_keep_the_full_raw_storage_account ... ok
+test serialize::tests::aggregate_renders_count_star ... ok
+test retained_size::tests::nested_star_clone_counts_shared_roots_once ... ok
+test serialize::tests::roundtrip_count_star ... ok
+test parser::tests::nested_star_keeps_order_and_shares_each_prefix ... ok
+nested star projection variable visits/copies leaf=0 trailing=false rdflib=false contextual_minus=false: [6000, 12000, 24000]
+nested star projection variable visits/copies leaf=EXISTS { ?s <http://example.org/p> ?o } trailing=false rdflib=false contextual_minus=false: [6006, 12006, 24006]
+nested star projection variable visits/copies leaf=0 trailing=true rdflib=false contextual_minus=false: [10000, 20000, 40000]
+nested star projection variable visits/copies leaf=0 trailing=false rdflib=true contextual_minus=false: [6000, 12000, 24000]
+contextual current-BIND serializer variable work: [21999, 43999, 87999]; bytes: [281562, 567562, 1139562]
+test serialize::tests::nested_contextual_star_carrier_visits_saved_names_linearly ... ok
+nested star projection variable visits/copies leaf=0 trailing=false rdflib=true contextual_minus=true: [26000, 52000, 104000]
+test parser::tests::nested_star_variable_visits_and_copies_grow_below_threefold ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 457 filtered out; finished in 0.55s
+

@@ -1,0 +1,20 @@
+cargo wrapper: target directory resolves inside the repository: /home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/.stage/post-v3-0-asynchronous-wasm-lane-and/tmp/tmp.TK08CLjRWB/compiler-target-j7a1_4nx
+Traceback (most recent call last):
+  File "/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/scripts/build-private-wasm.py", line 172, in <module>
+    main()
+    ~~~~^^
+  File "/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/scripts/build-private-wasm.py", line 142, in main
+    subprocess.run(
+    ~~~~~~~~~~~~~~^
+        [
+        ^
+    ...<8 lines>...
+        check=True,
+        ^^^^^^^^^^^
+    )
+    ^
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['cargo', 'rustc', '-p', 'purrdf-wasm', '--lib', '--crate-type', 'cdylib', '--target', 'wasm32-unknown-unknown', '--release', '--locked', '--target-dir', '/home/paudley/Active/purrdf/.worktrees/365-post-v3-0-asynchronous-wasm-lane-and/.stage/post-v3-0-asynchronous-wasm-lane-and/tmp/tmp.TK08CLjRWB/compiler-target-j7a1_4nx', '--message-format=json']' returned non-zero exit status 2.
+make: *** [Makefile:923: wasm-pkg] Error 1

@@ -1,0 +1,2 @@
+Dataset wasm getters preserve bigint identities above 2^53 and mutation advances exactly
+Exchange wasm bigint identities settle exactly above 2^53, reject wrapping inputs and refuse exhaustion

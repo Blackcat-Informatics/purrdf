@@ -1,0 +1,21 @@
+{
+  "issue": 365,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Post-v3.0: asynchronous Wasm lane and parse/serialize follow-ups from #358",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [],
+  "defect_classes": {
+    "none": 25,
+    "semantic-identity-loss": 2,
+    "performance": 2
+  },
+  "coverage": [
+    "issue #365 + 1 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Post-v3.0:', 'asynchronous', 'parse/serialize']: 0 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}
