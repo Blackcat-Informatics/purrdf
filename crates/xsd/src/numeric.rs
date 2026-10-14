@@ -2134,7 +2134,7 @@ pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> Option<(i128, i128, u8
 
 /// `op:numeric-add` — the numeric-TIER `+` operator only. Follows the numeric
 /// promotion tower: `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is
-/// exact (`i128`); decimal addition is exact within the representable range;
+/// exact at every magnitude; decimal addition retains the exact coefficient and scale;
 /// float/double are IEEE: the sum correctly rounded once into binary32/binary64 on
 /// every target, the x87 included ([`crate::ieee`]). `numeric_sub`, `numeric_mul`
 /// and `numeric_div` hold the same law.
@@ -2145,8 +2145,7 @@ pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> Option<(i128, i128, u8
 /// call this function directly only where the operands are already known
 /// numeric.
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Returns `Err(TypeMismatch)` if either operand is not numeric.
 ///
 /// # Examples
 ///
@@ -2209,8 +2208,8 @@ fn numeric_add_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
 /// not this function, is the SPARQL-facing entry point for an `XsdValue` of
 /// unknown family.
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Integer and decimal subtraction retain the exact result at every magnitude.
+/// Returns `Err(TypeMismatch)` if either operand is not numeric.
 pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     if a.is_exact_numeric() && b.is_exact_numeric() {
         return exact_path::binop(a, b, exact_path::Op::Sub);
@@ -2252,12 +2251,11 @@ fn numeric_sub_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
 /// unknown family (it also accepts `xsd:duration × xsd:integer|xsd:decimal`,
 /// which this function does not).
 ///
-/// Decimal multiplication: `new_mantissa = a.mantissa × b.mantissa`,
-/// `new_scale = a.scale + b.scale`. If `new_scale > MAX_DECIMAL_SCALE`, the result
-/// is rounded (truncated toward zero) to scale 18. Mantissa overflow → `OutOfRange`.
+/// Decimal multiplication multiplies the exact coefficients and adds their
+/// scales. It introduces no rounding or eighteen-place ceiling. A scale sum
+/// exceeding `u32::MAX` returns `XsdError::Exact(ExactError::ScaleOverflow)`.
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Returns `Err(TypeMismatch)` if either operand is not numeric.
 pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     if a.is_exact_numeric() && b.is_exact_numeric() {
         return exact_path::binop(a, b, exact_path::Op::Mul);
@@ -2465,8 +2463,8 @@ fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> S
 /// unknown family (it also accepts `xsd:duration`, a PurRDF extension this
 /// function does not implement).
 ///
-/// For integers, negation uses checked arithmetic; `i128::MIN` negated overflows →
-/// `Err(OutOfRange)`. For float/double, IEEE negation (−0.0 negates to +0.0 and
+/// Integer and decimal negation are exact, including the negation of values
+/// beyond `i128`. For float/double, IEEE negation (−0.0 negates to +0.0 and
 /// vice-versa; NaN negates to NaN with sign flipped per IEEE 754-2008 §6.3).
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
