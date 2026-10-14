@@ -1,0 +1,46 @@
+✔ nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that (333.984992ms)
+✖ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (865.738655ms)
+✖ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (4116.088856ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5957.658883
+
+✖ failing tests:
+
+test at tests/query.test.mjs:600:1
+✖ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (865.738655ms)
+  AssertionError [ERR_ASSERTION]: 233 levels answer; 282 did on the build measured
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-wasm/js/tests/query.test.mjs:640:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/query.test.mjs:706:1
+✖ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (4116.088856ms)
+  AssertionError [ERR_ASSERTION]: 145 levels answer; 181 did on the smallest build measured
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-wasm/js/tests/query.test.mjs:751:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

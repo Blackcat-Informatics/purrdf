@@ -1,0 +1,1700 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// purrdf — the idiomatic RDF/JS surface over the wasm engine.
+//
+// The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
+// RegimeClosure, ReasoningAnswer, SerializeLoss, ServiceCatalog, ShaclImportError,
+// ShaclProductRefusal, ShaclEntailment, ShaclRulesInference, ShaclRulesCheck,
+// ShaclLintReport, ShaclNodeExprOutcome, ShaclDiagnostic, SparqlProtocolRequest)
+// and the free functions (version,
+// shaclValidateToSarif, shaclValidateChangesToSarif, shaclEntail,
+// shaclApplyRules, shaclCheckRules, shaclEvalNodeExpr, shaclLintShapes,
+// shaclPackProduct, shaclProductExplain,
+// shaclProductCertify, shaclProductValidateToSarif,
+// shaclProductValidateToSarifRebuild, shaclProductValidateToSarifExpecting,
+// shaclProductValidateToSarifRebuildExpecting,
+// entailMaterialize, entailRules,
+// entailImplementedRules, entailCheckGoldenVectors,
+// entailCheckInconsistentRefusal, entailConsistency, entailClassify,
+// entailRealize, entailInstances, entailEntails, entailProfile,
+// entailExtensions, entailExtractModule, entailJustify,
+// entailExplainConclusion, xsdCanonicalLexical, xsdValueCompare) are re-exported
+// as-is — the whole `#[wasm_bindgen]` surface is reachable from the package
+// root, so SHACL validation/entailment, the DL reasoning services, and
+// Dataset.canonicalize()/isomorphic() need no deep `./pkg/` import. This
+// wrapper adds the isomorphic glue that the synchronous wasm boundary cannot
+// express in Rust:
+//   * `ready()` — one-time async wasm instantiation (required for the `web` target).
+//   * the polymorphic RDF/JS `DataFactory.literal(value, languageOrDatatype)` —
+//     dispatching a NamedNode datatype argument to `typedLiteral` and a
+//     `{ language, direction }` argument to `directionalLiteral`.
+//   * `Dataset` iterability (`for (const quad of dataset)`).
+//   * `Dataset.from`, `Dataset#toStream`, and `DataFactory#dataset`.
+//   * `datasetToStream` / `streamToDataset` — the async RDF/JS Stream/Sink primitives
+//     over the synchronous `Dataset.quads()` / `Sink` engine surface.
+//   * the governed-outcome shape normalizers — `queryGoverned`/`updateGoverned` return
+//     wasm-owned objects whose fields have to be MOVED out one at a time; the wrappers
+//     below drain them into ordinary JS objects and free the handles, exactly as
+//     `queryResultToObject` already does for an ungoverned result.
+//   * the asynchronous twins (`queryAsync`, `selectAsync`, …, `updateGovernedAsync`,
+//     `explainQueryAsync`, `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`, and the
+//     SHACL twins `shaclValidateToSarifAsync`, …, `shaclEntailAsync`) — each
+//     begins a job in Rust (`QueryEngine.beginAsync`, `AsyncJob.beginShacl`), hands it
+//     to the scheduler in
+//     `./pkg/purrdf_jspi.mjs` with the host's `SERVICE` and `LOAD` handlers and its
+//     `AbortSignal`, and drains the finished job into the very shape its synchronous
+//     twin returns (the negotiated twin, which has no synchronous twin, into a governed
+//     outcome carrying a document). The scheduler is the same module instance the wasm
+//     glue imports its suspending function from.
+//
+// What this module deliberately does NOT do is decide anything about governors. It sets
+// no default ceiling, applies no fallback, and never converts a trip into a throw: the
+// ceilings it reads off an options object go straight to Rust, which validates them and
+// owns every policy (the metering base, the inclusive boundary, the precedence between
+// two governors that fire at once). The only transformation applied on the way in is a
+// `BigInt` coercion, because the boundary type is a 64-bit integer and JavaScript spells
+// those `bigint` — a shape change, not a decision.
+
+import init, {
+  asyncStackRegionBytes,
+  AsyncJob,
+  AsyncJobOptions,
+  AsyncOperationKind,
+  CancellationToken,
+  CompiledJsonLdContext,
+  DataFactory,
+  Dataset,
+  DeliveryStatus,
+  EffectKind,
+  entailCertainAnswers,
+  entailCheckAbsentProof,
+  entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
+  entailCheckProof,
+  entailCheckProofGoldenVectors,
+  entailClassify,
+  entailConsistency,
+  entailEntails,
+  entailExplainConclusion,
+  entailExtensions,
+  entailExtractModule,
+  entailGraphEntails,
+  entailImplementedRules,
+  entailInstances,
+  entailJustify,
+  entailMaterialize,
+  entailProfile,
+  entailProve,
+  entailRealize,
+  entailRules,
+  entailVerifyEntailment,
+  expressionErrorCodes,
+  GeoPointIndex,
+  GeoSession,
+  governorDimensions,
+  liftProjection,
+  ProjectionLift,
+  ProjectionPackage,
+  provenanceFromJson,
+  provenanceFromXml,
+  Quad,
+  QueryEngine,
+  Reasoner,
+  ReasoningAnswer,
+  RegimeClosure,
+  RunStatus,
+  SerializeLoss,
+  ServiceCatalog,
+  shaclApplyRules,
+  ShaclChangeValidation,
+  shaclCheckRules,
+  ShaclDiagnostic,
+  shaclEntail,
+  ShaclEntailment,
+  shaclEvalNodeExpr,
+  ShaclImportError,
+  ShaclLintReport,
+  shaclLintShapes,
+  shaclPackProduct,
+  shaclProductCertify,
+  shaclProductExplain,
+  ShaclJobRequest,
+  ShaclNodeExprOutcome,
+  ShaclProductRefusal,
+  shaclProductValidateToSarif,
+  shaclProductValidateToSarifExpecting,
+  shaclProductValidateToSarifRebuild,
+  shaclProductValidateToSarifRebuildExpecting,
+  ShaclRulesCheck,
+  ShaclRulesInference,
+  shaclValidateChangesToSarif,
+  shaclValidateToSarif,
+  Sink,
+  SparqlProtocolRequest,
+  SuspendStatus,
+  Term,
+  version,
+  xsdCanonicalLexical,
+  xsdValueCompare,
+} from "./pkg/purrdf_wasm.js";
+import {
+  assertAsyncQueries,
+  assertNotPoisoned,
+  configureAsync as jspiConfigureAsync,
+  hasAsyncQueries as jspiHasAsyncQueries,
+  installAsync,
+  isPoisoned,
+  runJob,
+} from "./pkg/purrdf_jspi.mjs";
+
+let _ready = false;
+
+function isNamedNodeTerm(value) {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    value.termType === "NamedNode"
+  );
+}
+
+function isDirectionalLanguage(value) {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    typeof value.language === "string" &&
+    (value.direction === "ltr" || value.direction === "rtl")
+  );
+}
+
+// A governor ceiling as the wasm boundary spells it: a 64-bit integer, i.e. a JS bigint.
+// `undefined` means the caller declined the dimension and is passed through as such —
+// this function invents no ceiling of its own. A negative value is NOT rejected here:
+// Rust refuses it, so the one refusal message lives with the one owner of the rule.
+function governorCeiling(value, name) {
+  if (value === undefined || value === null) return undefined;
+  const valid =
+    typeof value === "bigint" ||
+    (typeof value === "number" && Number.isSafeInteger(value)) ||
+    (typeof value === "string" && /^[+-]?\d+$/.test(value.trim()));
+  if (!valid) {
+    throw new TypeError(
+      `query option ${name} must be an integer (number, bigint, or integral string)`,
+    );
+  }
+  try {
+    return BigInt(value);
+  } catch {
+    throw new TypeError(
+      `query option ${name} must be an integer (number, bigint, or integral string)`,
+    );
+  }
+}
+
+// The option keys that only the GOVERNED entry points enforce. Rust never sees a JS
+// options object — it receives positional arguments — so an ungoverned call cannot
+// possibly notice one of these and would silently run with no ceiling at all. That is the
+// exact failure a governor must not have, and this is the only layer that can see the key,
+// so the ungoverned normalizer refuses them by name instead of dropping them.
+const GOVERNOR_OPTION_KEYS = [
+  "noCeiling",
+  "fuel",
+  "deadlineMs",
+  "maxAnswers",
+  "maxIntermediateCells",
+  "maxScratchBytes",
+  "maxRemoteRequests",
+  "cancel",
+];
+
+// `aggregateNamespace` registers purrdf's first-party statistical aggregate set
+// (`MEDIAN`, `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
+// `LAST`, `TOPK`) under an IRI namespace, so the query text can call
+// `AGG(<{NAMESPACE}NAME>, args…)`. Like the governor keys above, it is honored ONLY by
+// `queryGoverned`/`updateGoverned`/`queryEntailmentGoverned` (the entry points that accept
+// a `QueryOptions` registry) — an ungoverned call would silently drop it, so that lane
+// refuses it by name instead.
+function normalizeAggregateNamespace(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError("query option aggregateNamespace must be a string when supplied");
+  }
+  return value;
+}
+
+// `xpathRegex` names the dated native XPath law `REGEX`/`REPLACE` evaluate under, by its
+// stable name ("xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21"). Every evaluating entry
+// point honours it, so neither normalizer refuses it; Rust matches the name exactly and
+// refuses one that selects no law. Absent, the compatibility regex is unchanged.
+function normalizeXpathRegex(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError("query option xpathRegex must be a string when supplied");
+  }
+  return value;
+}
+
+// `provenanceNamespace` anchors the additive `purrdf` provenance extension on a
+// SELECT/ASK result serialized to SPARQL-results JSON/XML — honored ONLY by
+// `queryRaw`, the one entry point that serializes to raw text (`select`/`ask`/
+// `construct`/`describe`/`update`/`explainQuery` all return typed objects with no
+// wire-format document to anchor an extension in, exactly like `format` beside them).
+function normalizeProvenanceNamespace(value) {
+  if (value === undefined || value === null) {
+    return { prefix: undefined, iri: undefined };
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(
+      "query option provenanceNamespace must be an object ({ prefix, iri }) when supplied",
+    );
+  }
+  const { prefix, iri } = value;
+  if (typeof prefix !== "string" || typeof iri !== "string") {
+    throw new TypeError(
+      "query option provenanceNamespace must supply both a string `prefix` and a string `iri`",
+    );
+  }
+  return { prefix, iri };
+}
+
+function normalizeQueryOptions(options) {
+  if (options == null) {
+    return {
+      base: undefined,
+      format: undefined,
+      provenancePrefix: undefined,
+      provenanceIri: undefined,
+      xpathRegex: undefined,
+    };
+  }
+  if (typeof options !== "object") {
+    throw new TypeError("query options must be an object when supplied");
+  }
+  for (const key of GOVERNOR_OPTION_KEYS) {
+    if (options[key] != null) {
+      throw new TypeError(
+        `query option ${key} is an execution governor and is enforced only by ` +
+          `queryGoverned/updateGoverned; this call would ignore it entirely`,
+      );
+    }
+  }
+  if (options.aggregateNamespace != null) {
+    throw new TypeError(
+      "query option aggregateNamespace registers the statistical-aggregate registry and " +
+        "is honored only by queryGoverned/updateGoverned; this call would ignore it entirely",
+    );
+  }
+  const { prefix: provenancePrefix, iri: provenanceIri } = normalizeProvenanceNamespace(
+    options.provenanceNamespace,
+  );
+  return {
+    base: options.base ?? undefined,
+    format: options.format ?? undefined,
+    provenancePrefix,
+    provenanceIri,
+    xpathRegex: normalizeXpathRegex(options.xpathRegex),
+  };
+}
+
+function normalizeGovernedOptions(options) {
+  if (options == null) {
+    return { base: undefined, aggregateNamespace: undefined, xpathRegex: undefined };
+  }
+  if (typeof options !== "object") {
+    throw new TypeError("query options must be an object when supplied");
+  }
+  if (options.noCeiling !== undefined && typeof options.noCeiling !== "boolean") {
+    throw new TypeError("query option noCeiling must be a boolean when supplied");
+  }
+  return {
+    noCeiling: options.noCeiling,
+    base: options.base ?? undefined,
+    aggregateNamespace: normalizeAggregateNamespace(options.aggregateNamespace),
+    xpathRegex: normalizeXpathRegex(options.xpathRegex),
+    fuel: governorCeiling(options.fuel, "fuel"),
+    deadlineMs: governorCeiling(options.deadlineMs, "deadlineMs"),
+    maxAnswers: governorCeiling(options.maxAnswers, "maxAnswers"),
+    maxIntermediateCells: governorCeiling(
+      options.maxIntermediateCells,
+      "maxIntermediateCells",
+    ),
+    maxScratchBytes: governorCeiling(options.maxScratchBytes, "maxScratchBytes"),
+    maxRemoteRequests: governorCeiling(options.maxRemoteRequests, "maxRemoteRequests"),
+    // A governed call CONSUMES the token handle it is given (wasm-bindgen moves an owned
+    // exported value), so the engine gets a share and the caller keeps their own token
+    // usable across the whole sequence of calls it governs.
+    cancel: options.cancel == null ? undefined : options.cancel.share(),
+  };
+}
+
+function normalizeEntailmentGovernedOptions(options) {
+  const governed = normalizeGovernedOptions(options);
+  // The entailment-aware query lane now threads a `QueryOptions` registry through both the
+  // closure query's PARSE and its evaluation (see `QueryEngine::query_entailment_governed`
+  // in Rust), exactly as `queryGoverned` does — `aggregateNamespace` is honored, not refused.
+  return {
+    ...governed,
+    program: options?.program ?? undefined,
+    // The dataset's `owl:imports` table. Absent means EMPTY, which is the ordinary
+    // "imports nothing" case: a dataset that does import something is then refused by name
+    // in Rust rather than closed without its imports, so the default can never be a silent
+    // drop.
+    importIris: stringArrayOption(options?.importIris, "importIris"),
+    importDocuments: stringArrayOption(options?.importDocuments, "importDocuments"),
+    premiseIris: stringArrayOption(options?.premiseIris, "premiseIris"),
+    // The closure's evaluation limits, `bigint`s at the binding. A `number` is accepted and
+    // widened exactly; absent is this target's default.
+    maxStoredFacts: limitOption(options?.maxStoredFacts),
+    maxJoinSteps: limitOption(options?.maxJoinSteps),
+  };
+}
+
+function limitOption(value) {
+  if (value == null) return undefined;
+  return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function stringArrayOption(value, name) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${name} must be an array of strings when supplied`);
+  }
+  return value;
+}
+
+function visualizationOptionsJson(options) {
+  if (options == null) return undefined;
+  if (typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("visualization options must be an object when supplied");
+  }
+  return JSON.stringify(options);
+}
+
+function selectResultToObject(raw) {
+  const variables = raw.variables;
+  const length = raw.rowCount;
+  let closed = false;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    raw.free?.();
+  };
+  if (length === 0) close();
+  const materialize = (row) => {
+    try {
+      const out = Object.create(null);
+      for (let index = 0; index < variables.length; index += 1) {
+        const variable = variables[index];
+        const value = row.takeValue(index);
+        if (value !== undefined) out[variable] = value;
+      }
+      return out;
+    } finally {
+      row.free?.();
+      if (raw.remaining === 0) close();
+    }
+  };
+  const rows = {
+    get length() {
+      return length;
+    },
+    get remaining() {
+      return closed ? 0 : raw.remaining;
+    },
+    take(index) {
+      if (closed) return undefined;
+      const row = raw.takeRow(index);
+      return row === undefined ? undefined : materialize(row);
+    },
+    next() {
+      if (closed) return { done: true, value: undefined };
+      const row = raw.nextRow();
+      if (row === undefined) {
+        close();
+        return { done: true, value: undefined };
+      }
+      return { done: false, value: materialize(row) };
+    },
+    return() {
+      close();
+      return { done: true, value: undefined };
+    },
+    toArray() {
+      return Array.from(this);
+    },
+    free: close,
+    [Symbol.iterator]() {
+      return this;
+    },
+  };
+  return { kind: "select", variables, rowCount: length, rows, free: close };
+}
+
+function queryResultToObject(raw) {
+  try {
+    switch (raw.kind) {
+      case "select": {
+        const select = raw.takeSelect();
+        if (select === undefined) throw new Error("SELECT result was already consumed");
+        return selectResultToObject(select);
+      }
+      case "ask":
+        return { kind: "ask", boolean: raw.boolean };
+      case "graph": {
+        const dataset = raw.takeDataset();
+        if (dataset === undefined) throw new Error("graph result was already consumed");
+        return { kind: "graph", dataset };
+      }
+      default:
+        throw new Error(`unknown SPARQL result kind ${raw.kind}`);
+    }
+  } finally {
+    raw.free?.();
+  }
+}
+
+// The kernel's dimension vocabulary, read from the engine once and cached. It is NOT
+// restated here: `governorDimensions()` is the engine's own declaration order, and it is
+// the index order of the evidence vectors below, so a dimension the kernel adds shows up
+// in every caller's evidence map without this file being touched.
+let _governorDimensions;
+
+function governorDimensionLabels() {
+  _governorDimensions ??= governorDimensions();
+  return _governorDimensions;
+}
+
+// The XPath F&O error codes, read from the engine once and cached, for the same reason
+// as the dimensions above: they are the index order of every `expressionErrors` vector.
+let _expressionErrorCodes;
+
+function expressionErrorsToObject(counts) {
+  _expressionErrorCodes ??= expressionErrorCodes();
+  const byCode = Object.create(null);
+  for (let index = 0; index < _expressionErrorCodes.length; index += 1) {
+    byCode[_expressionErrorCodes[index]] = counts[index];
+  }
+  return byCode;
+}
+
+function governorEvidenceToObject(raw) {
+  try {
+    const labels = governorDimensionLabels();
+    const consumed = raw.consumed;
+    const limits = raw.limits;
+    const consumedBy = Object.create(null);
+    const limitsBy = Object.create(null);
+    for (let index = 0; index < labels.length; index += 1) {
+      consumedBy[labels[index]] = consumed[index];
+      limitsBy[labels[index]] = limits[index];
+    }
+    return {
+      isComplete: raw.isComplete,
+      consumed: consumedBy,
+      limits: limitsBy,
+      silenced: silencedToObjects(raw.silenced),
+      expressionErrors: expressionErrorsToObject(raw.expressionErrors),
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+/** Plain objects for the wasm `SilencedInvocation` records, each freed once read. */
+function silencedToObjects(records) {
+  return records.map((record) => {
+    try {
+      const object = {
+        target: record.target,
+        kind: record.kind,
+        message: record.message,
+      };
+      if (object.target === "load") object.iri = record.iri;
+      else object.endpoint = record.endpoint;
+      return object;
+    } finally {
+      record.free?.();
+    }
+  });
+}
+
+function trippedGovernorToObject(raw) {
+  try {
+    return {
+      kind: raw.kind,
+      label: raw.label,
+      dimension: raw.dimension,
+      limit: raw.limit,
+      consumed: raw.consumed,
+      estimate: raw.estimate,
+      cause: raw.cause,
+      message: raw.message,
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function partialAnswersToObject(raw) {
+  try {
+    const certainty = raw.certainty;
+    const isCertain = raw.isCertain;
+    const isPositionalPrefix = raw.isPositionalPrefix;
+    const barrier = raw.barrier;
+    const result = raw.takeResult();
+    return {
+      certainty,
+      isCertain,
+      isPositionalPrefix,
+      barrier,
+      result: result === undefined ? undefined : queryResultToObject(result),
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function queryOutcomeToObject(raw) {
+  let resultRaw;
+  let partialRaw;
+  let trippedRaw;
+  let evidenceRaw;
+  try {
+    // `isComplete` is read before anything is moved out: the discriminator has to survive
+    // the drain, and a trip is an OUTCOME here — nothing on this path throws.
+    const isComplete = raw.isComplete;
+    resultRaw = raw.takeResult();
+    partialRaw = raw.takePartial();
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("governed query outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+
+    if (isComplete) {
+      partialRaw?.free?.();
+      partialRaw = undefined;
+      if (resultRaw === undefined) {
+        throw new Error("complete governed query outcome omitted its result");
+      }
+      const resultHandle = resultRaw;
+      resultRaw = undefined;
+      return {
+        isComplete,
+        result: queryResultToObject(resultHandle),
+        partial: undefined,
+        tripped,
+        evidence,
+      };
+    }
+
+    resultRaw?.free?.();
+    resultRaw = undefined;
+    if (partialRaw === undefined) {
+      throw new Error("exhausted governed query outcome omitted its partial certificate");
+    }
+    const partialHandle = partialRaw;
+    partialRaw = undefined;
+    return {
+      isComplete,
+      result: undefined,
+      partial: partialAnswersToObject(partialHandle),
+      tripped,
+      evidence,
+    };
+  } finally {
+    resultRaw?.free?.();
+    partialRaw?.free?.();
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
+    raw.free?.();
+  }
+}
+
+function negotiatedOutcomeToObject(raw) {
+  let partialRaw;
+  let trippedRaw;
+  let evidenceRaw;
+  try {
+    const isComplete = raw.isComplete;
+    const format = raw.format;
+    const mediaType = raw.mediaType;
+    const bytes = raw.takeBody();
+    partialRaw = raw.takePartial();
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("negotiated query outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+    if (isComplete) {
+      if (bytes === undefined) {
+        throw new Error("complete negotiated query outcome omitted its body");
+      }
+      return {
+        isComplete,
+        body: { bytes, format, mediaType },
+        partial: undefined,
+        tripped,
+        evidence,
+      };
+    }
+    if (partialRaw === undefined) {
+      throw new Error("exhausted negotiated query outcome omitted its partial certificate");
+    }
+    const partialHandle = partialRaw;
+    partialRaw = undefined;
+    return {
+      isComplete,
+      body: undefined,
+      partial: partialAnswersToObject(partialHandle),
+      tripped,
+      evidence,
+    };
+  } finally {
+    partialRaw?.free?.();
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
+    raw.free?.();
+  }
+}
+
+function entailmentQueryOutcomeToObject(raw) {
+  let outcomeRaw;
+  let trippedRaw;
+  try {
+    const isComplete = raw.isComplete;
+    const closureStopped = raw.closureStopped;
+    const report = raw.report;
+    outcomeRaw = raw.takeOutcome();
+    trippedRaw = raw.takeTripped();
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+    if (closureStopped) {
+      outcomeRaw?.free?.();
+      outcomeRaw = undefined;
+      return {
+        phase: "closure-stopped",
+        isComplete,
+        outcome: undefined,
+        report,
+        tripped,
+      };
+    }
+    if (outcomeRaw === undefined) {
+      throw new Error("answered entailment outcome omitted its query outcome");
+    }
+    const outcomeHandle = outcomeRaw;
+    outcomeRaw = undefined;
+    return {
+      phase: "answered",
+      isComplete,
+      outcome: queryOutcomeToObject(outcomeHandle),
+      report,
+      tripped,
+    };
+  } finally {
+    outcomeRaw?.free?.();
+    trippedRaw?.free?.();
+    raw.free?.();
+  }
+}
+
+function updateOutcomeToObject(raw) {
+  let trippedRaw;
+  let evidenceRaw;
+  try {
+    const isApplied = raw.isApplied;
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("governed update outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    return {
+      isApplied,
+      tripped:
+        trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle),
+      evidence,
+    };
+  } finally {
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
+    raw.free?.();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The asynchronous twins
+// ---------------------------------------------------------------------------
+//
+// Every twin runs the same Rust operation its synchronous twin runs, as a job the
+// scheduler drives (see `./pkg/purrdf_jspi.mjs` and the Rust `async_query` module). This
+// layer only translates: it takes the host's handlers and signal off the options object
+// (the one part of it Rust cannot hold), hands Rust the rest to validate against the
+// operation's own table (`AsyncJobOptions.fromJs`), and drains a finished job into the
+// result shape the synchronous twin returns.
+
+// The keys this layer reads itself; every other key is Rust's to validate.
+const PACKAGE_OPTION_KEYS = ["resolveService", "resolveLoad", "signal"];
+
+function isPresent(value) {
+  return value !== undefined && value !== null;
+}
+
+function optionalHandler(value, name) {
+  if (!isPresent(value)) return undefined;
+  if (typeof value !== "function") {
+    throw new TypeError(`query option ${name} must be a function when supplied`);
+  }
+  return value;
+}
+
+function optionalSignal(value) {
+  if (!isPresent(value)) return undefined;
+  if (
+    typeof value !== "object" ||
+    typeof value.aborted !== "boolean" ||
+    typeof value.addEventListener !== "function" ||
+    typeof value.removeEventListener !== "function"
+  ) {
+    throw new TypeError("query option signal must be an AbortSignal when supplied");
+  }
+  return value;
+}
+
+// Each distinct `resolveService` function's identity, as Rust keys a shared host call by
+// it: jobs share a call only through the same handler.
+const serviceHandlerIds = new WeakMap();
+let lastServiceHandlerId = 0;
+
+function serviceHandlerId(resolveService) {
+  if (resolveService === undefined) return undefined;
+  let id = serviceHandlerIds.get(resolveService);
+  if (id === undefined) {
+    lastServiceHandlerId += 1;
+    id = lastServiceHandlerId;
+    serviceHandlerIds.set(resolveService, id);
+  }
+  return id;
+}
+
+/**
+ * Split an asynchronous twin's options into the host's handlers and signal — this
+ * layer's — and everything else, which Rust validates against the operation's table.
+ */
+function splitAsyncOptions(options) {
+  if (!isPresent(options)) return { rest: undefined, host: {}, signal: undefined };
+  if (typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("query options must be an object when supplied");
+  }
+  const rest = {};
+  for (const key of Object.keys(options)) {
+    if (!PACKAGE_OPTION_KEYS.includes(key)) {
+      try {
+        rest[key] = options[key];
+      } catch {
+        const error = new TypeError(`query option ${key} could not be read`);
+        error.code = "purrdf-wasm-options";
+        throw error;
+      }
+    }
+  }
+  const signal = optionalSignal(options.signal);
+  const host = {
+    resolveService: optionalHandler(options.resolveService, "resolveService"),
+    resolveLoad: optionalHandler(options.resolveLoad, "resolveLoad"),
+    signal,
+  };
+  return { rest, host, signal };
+}
+
+function asyncEvidenceToObject(raw) {
+  try {
+    return {
+      polls: raw.polls,
+      yields: raw.yields,
+      serviceEffects: raw.serviceEffects,
+      loadEffects: raw.loadEffects,
+      stackHighWaterBytes: raw.stackHighWaterBytes,
+      serviceWaitMs: raw.serviceWaitMs,
+      loadWaitMs: raw.loadWaitMs,
+      yieldWaitMs: raw.yieldWaitMs,
+      freezeMs: raw.freezeMs,
+      evaluateMs: raw.evaluateMs,
+      serializeMs: raw.serializeMs,
+      silenced: silencedToObjects(raw.silenced),
+      expressionErrors: expressionErrorsToObject(raw.expressionErrors),
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function namedError(message, name) {
+  const error = new Error(message);
+  if (name !== "Error") error.name = name;
+  return error;
+}
+
+/** What a twin rejects with when its signal was already aborted, or aborted the job. */
+function abortRejection(signal, message) {
+  if (signal !== undefined && signal.aborted && signal.reason !== undefined) {
+    return signal.reason;
+  }
+  return namedError(message, "AbortError");
+}
+
+/**
+ * The rejection for a job whose run stored an error: the job's own words and, as
+ * `code`, the stable code Rust reported it under — an `Error` for an ordinary failure or
+ * a fault, the signal's reason (or an `AbortError`) for a cancellation, a `TimeoutError`
+ * for a deadline, a `NotAcceptableError` for a result no acceptable format carries.
+ * Every error this builds carries the job's evidence as `error.evidence.async`.
+ */
+function jobFailure(job, signal) {
+  const kind = job.errorKind;
+  const code = job.errorCode;
+  const message = job.errorMessage ?? `the asynchronous operation failed (${kind})`;
+  const evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
+  let error;
+  switch (kind) {
+    case "cancelled":
+      error = abortRejection(signal, message);
+      if (signal !== undefined && error === signal.reason) return error;
+      break;
+    case "deadline":
+      error = namedError(message, "TimeoutError");
+      break;
+    case "not-acceptable":
+      error = namedError(message, "NotAcceptableError");
+      break;
+    default:
+      error = namedError(message, "Error");
+      break;
+  }
+  error.code = code;
+  const presentation = job.errorPresentation;
+  if (presentation !== undefined) error.presentation = JSON.parse(presentation);
+  error.evidence = evidence;
+  return error;
+}
+
+/**
+ * Validate `options` for operation `kind` (its positional `argument`, when it has one),
+ * begin a job with `begin(jobOptions)`, run it to completion and settle it with
+ * `settle(job)`. The job is always finished and freed, whatever happens.
+ */
+async function driveAsyncJob(kind, options, argument, begin, settle, fail = jobFailure) {
+  const { rest, host, signal } = splitAsyncOptions(options);
+  const jobOptions = AsyncJobOptions.fromJs(
+    kind,
+    rest,
+    serviceHandlerId(host.resolveService),
+    host.resolveLoad !== undefined,
+    argument,
+  );
+  let job;
+  try {
+    if (signal !== undefined && signal.aborted) {
+      throw abortRejection(signal, "the asynchronous operation was cancelled");
+    }
+    job = begin(jobOptions);
+  } finally {
+    jobOptions.free();
+  }
+  try {
+    const status = await runJob(job, host);
+    if (status === RunStatus.Outcome) return settle(job);
+    if (status === RunStatus.Error) throw fail(job, signal);
+    throw new Error(
+      `asynchronous job ${job.id} could not run (scheduler status ${status})`,
+    );
+  } finally {
+    // On a poisoned instance `finish()` traps at the poison gate, and that trap would
+    // replace the poison error the job rejected with; `free()`'s gate is inert there.
+    if (!isPoisoned()) job.finish();
+    job.free();
+  }
+}
+
+function takeAsk(job) {
+  const raw = job.takeQueryResult("ask");
+  try {
+    return raw.boolean;
+  } finally {
+    raw.free?.();
+  }
+}
+
+function takeGraph(job, expect) {
+  const raw = job.takeQueryResult(expect);
+  try {
+    const dataset = raw.takeDataset();
+    if (dataset === undefined) throw new Error("graph result was already consumed");
+    return dataset;
+  } finally {
+    raw.free?.();
+  }
+}
+
+const utf8 = new TextDecoder();
+
+// ---------------------------------------------------------------------------
+// The asynchronous SHACL twins
+// ---------------------------------------------------------------------------
+//
+// Each takes exactly its synchronous twin's arguments, then the host options, and runs
+// its synchronous twin's own Rust body as a job under the job's signal and SERVICE/LOAD
+// sources: the arguments are handed, as they came, to the `ShaclJobRequest` constructor
+// named for the synchronous entry — which declares the same argument list as that entry,
+// from the one declaration in Rust — and the request is the one value the job carries.
+// Each settles into exactly what the synchronous twin returns: the same SARIF text, the
+// same `ShaclChangeValidation`, `ShaclEntailment`, `ShaclRulesInference` or output
+// nodes, and a rejection with the same `ShaclImportError` or `ShaclProductRefusal` the
+// synchronous twin throws.
+
+const takeText = (job) => utf8.decode(job.takeRawBytes());
+
+/**
+ * A SHACL job's rejection: the `ShaclProductRefusal` or `ShaclImportError` its
+ * synchronous twin throws when the job was refused that way (carrying the job's
+ * evidence, as every asynchronous rejection does), and the ordinary asynchronous
+ * rejection otherwise — an engine error, a cancellation, a deadline, a fault.
+ */
+function shaclRefusalFailure(job, signal) {
+  if (job.errorKind === "error") {
+    const refusal = job.takeShaclRefusal() ?? job.takeShaclImportError();
+    if (refusal !== undefined) {
+      refusal.evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
+      return refusal;
+    }
+  }
+  return jobFailure(job, signal);
+}
+
+/**
+ * The asynchronous twin of a SHACL entry: `request` names the `ShaclJobRequest`
+ * constructor that declares the entry's argument list, `settle` drains the finished job
+ * into what the entry returns. The twin's arguments are the constructor's, then the host
+ * options (`resolveService`, `resolveLoad`, `signal`, `yieldEveryPolls`, `catalog`,
+ * `localServices`) and, for every entry that evaluates patterns — each validation,
+ * entailment, rules and node-expression entry — `xpathRegex`: the dated XPath law its
+ * synchronous twin takes as its trailing argument, carried in the options object so the
+ * options keep their position.
+ */
+function shaclTwin(request, settle) {
+  const build = ShaclJobRequest[request];
+  const arity = build.length;
+  return async function (...args) {
+    assertAsyncQueries();
+    return driveAsyncJob(
+      AsyncOperationKind.Shacl,
+      args[arity],
+      undefined,
+      (jobOptions) => AsyncJob.beginShacl(jobOptions, build(...args.slice(0, arity))),
+      settle,
+      shaclRefusalFailure,
+    );
+  };
+}
+
+/** The twin of `shaclValidateToSarif`: resolves to the same SARIF 2.1.0 JSON string. */
+export const shaclValidateToSarifAsync = shaclTwin("validateToSarif", takeText);
+
+/**
+ * The twin of `shaclValidateChangesToSarif`: resolves to the same `ShaclChangeValidation`
+ * (call `.free()` on it).
+ */
+export const shaclValidateChangesToSarifAsync = shaclTwin("validateChangesToSarif", (job) =>
+  job.takeShaclChangeValidation(),
+);
+
+/** The twin of `shaclEntail`: resolves to the same `ShaclEntailment` (call `.free()` on it). */
+export const shaclEntailAsync = shaclTwin("entail", (job) => job.takeShaclEntailment());
+
+/**
+ * The twin of `shaclApplyRules`: resolves to the same `ShaclRulesInference` (call
+ * `.free()` on it).
+ */
+export const shaclApplyRulesAsync = shaclTwin("applyRules", (job) => job.takeShaclRulesInference());
+
+/**
+ * The twin of `shaclEvalNodeExpr`: resolves to the same `ShaclNodeExprOutcome` (call
+ * `.free()` on it).
+ */
+export const shaclEvalNodeExprAsync = shaclTwin("evalNodeExpr", (job) =>
+  job.takeShaclNodeExprOutcome(),
+);
+
+/**
+ * The twin of `shaclProductValidateToSarif`: resolves to the same SARIF string, or
+ * rejects with the same `ShaclProductRefusal`.
+ */
+export const shaclProductValidateToSarifAsync = shaclTwin("productValidateToSarif", takeText);
+
+/** The twin of `shaclProductValidateToSarifRebuild`. */
+export const shaclProductValidateToSarifRebuildAsync = shaclTwin(
+  "productValidateToSarifRebuild",
+  takeText,
+);
+
+/** The twin of `shaclProductValidateToSarifExpecting`. */
+export const shaclProductValidateToSarifExpectingAsync = shaclTwin(
+  "productValidateToSarifExpecting",
+  takeText,
+);
+
+/** The twin of `shaclProductValidateToSarifRebuildExpecting`. */
+export const shaclProductValidateToSarifRebuildExpectingAsync = shaclTwin(
+  "productValidateToSarifRebuildExpecting",
+  takeText,
+);
+
+/**
+ * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`/`clearTimeout`, which every
+ * job yields to the event loop through. Where it is `false`, every asynchronous twin
+ * rejects with the reason before touching wasm, and the synchronous API is unaffected.
+ */
+export function hasAsyncQueries() {
+  assertNotPoisoned();
+  return jspiHasAsyncQueries();
+}
+
+/**
+ * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)
+ * bounds how many asynchronous jobs may be in flight at once; a twin started beyond it
+ * rejects. Unknown keys are refused.
+ */
+export function configureAsync(options) {
+  assertNotPoisoned();
+  jspiConfigureAsync(options);
+}
+
+/**
+ * Instantiate the wasm module. Idempotent. In Node the wasm bytes are read from the
+ * colocated file; in a browser, pass the bytes/URL (or omit to fetch the colocated
+ * `.wasm`); in a Worker, pass the compiled `WebAssembly.Module` its bundler imports from
+ * `@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm`. Must be awaited once before any
+ * other API is used. There is one instance per JavaScript realm: once a trap has poisoned
+ * it, this rejects with the poison error like every asynchronous entry point, and only a fresh
+ * realm (a new page, Worker isolate or process) can load the package again.
+ */
+export async function ready(wasmBytesOrUrl) {
+  assertNotPoisoned();
+  if (_ready) return;
+  let exports;
+  if (wasmBytesOrUrl !== undefined) {
+    exports = await init({ module_or_path: wasmBytesOrUrl });
+  } else if (typeof process !== "undefined" && process.versions?.node) {
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const wasmPath = fileURLToPath(
+      new URL("./pkg/purrdf_wasm_bg.wasm", import.meta.url),
+    );
+    exports = await init({ module_or_path: await readFile(wasmPath) });
+  } else {
+    exports = await init();
+  }
+  installAsync(exports, {
+    AsyncJob,
+    RunStatus,
+    SuspendStatus,
+    DeliveryStatus,
+    EffectKind,
+    asyncStackRegionBytes,
+  });
+
+  // RDF/JS DatasetCore is iterable over its quads.
+  if (!Dataset.prototype[Symbol.iterator]) {
+    Dataset.prototype[Symbol.iterator] = function () {
+      return this.quads()[Symbol.iterator]();
+    };
+  }
+
+  if (!Dataset.from) {
+    Dataset.from = function (quads = []) {
+      const dataset = new Dataset();
+      for (const quad of quads ?? []) dataset.add(quad);
+      return dataset;
+    };
+  }
+
+  if (!Dataset.prototype.toStream) {
+    Dataset.prototype.toStream = function () {
+      return datasetToStream(this);
+    };
+  }
+
+  if (!Dataset.prototype.__purrdfVisualizationApi) {
+    const visualModelJson = Dataset.prototype.visualModelJson;
+    const visualExportJson = Dataset.prototype.visualExportJson;
+    const visualSvgJson = Dataset.prototype.visualSvgJson;
+    Dataset.prototype.visualModel = function (options) {
+      return JSON.parse(visualModelJson.call(this, visualizationOptionsJson(options)));
+    };
+    Dataset.prototype.visualExport = function (options) {
+      return JSON.parse(visualExportJson.call(this, visualizationOptionsJson(options)));
+    };
+    Dataset.prototype.visualSvg = function (options) {
+      return JSON.parse(visualSvgJson.call(this, visualizationOptionsJson(options)));
+    };
+    Dataset.prototype.__purrdfVisualizationApi = true;
+  }
+
+  // RDF/JS DatasetCore.add(quad)/delete(quad) MUST return the dataset instance so calls
+  // chain (`ds.add(q1).add(q2)`). The wasm methods return a bool ("did the effective set
+  // change?"); the spec surface returns `this` (the changed-bit stays observable via
+  // `size`). The guard applied here is the same boundary the equals/literal shims use.
+  for (const method of ["add", "delete"]) {
+    const flag = `__purrdfChaining_${method}`;
+    if (!Dataset.prototype[flag]) {
+      const wasmMutate = Dataset.prototype[method];
+      Dataset.prototype[method] = function (quad) {
+        wasmMutate.call(this, quad);
+        return this;
+      };
+      Dataset.prototype[flag] = true;
+    }
+  }
+
+  // RDF/JS spec: Term.equals(other) / Quad.equals(other) MUST return false when `other`
+  // is null or undefined — "Returns false if other is undefined or null." The wasm
+  // `equals` takes a borrowed `&Term`/`&Quad` (non-consuming — the argument stays usable
+  // afterwards), but wasm-bindgen throws on a null borrow, so the null/undefined guard is
+  // applied here, one layer out (the same boundary where the polymorphic literal() lives).
+  for (const Klass of [Term, Quad]) {
+    if (!Klass.prototype.__purrdfNullSafeEquals) {
+      const wasmEquals = Klass.prototype.equals;
+      Klass.prototype.equals = function (other) {
+        if (other === null || other === undefined) return false;
+        return wasmEquals.call(this, other);
+      };
+      Klass.prototype.__purrdfNullSafeEquals = true;
+    }
+  }
+
+  // Present the RDF/JS-spec polymorphic literal(value, languageOrDatatype). The wasm
+  // method takes `(value, language?)`; a NamedNode second argument is a datatype.
+  // PurRDF also accepts `{ language, direction }` for RDF 1.2 dirLangString literals.
+  if (!DataFactory.prototype.__purrdfPolymorphicLiteral) {
+    const wasmLiteral = DataFactory.prototype.literal;
+    DataFactory.prototype.literal = function (value, languageOrDatatype) {
+      if (isNamedNodeTerm(languageOrDatatype)) {
+        return this.typedLiteral(value, languageOrDatatype);
+      }
+      if (isDirectionalLanguage(languageOrDatatype)) return this.directionalLiteral(value, languageOrDatatype.language, languageOrDatatype.direction);
+      return wasmLiteral.call(this, value, languageOrDatatype ?? undefined);
+    };
+    DataFactory.prototype.__purrdfPolymorphicLiteral = true;
+  }
+
+  if (!DataFactory.prototype.dataset) {
+    DataFactory.prototype.dataset = function (quads = []) {
+      return Dataset.from(quads ?? []);
+    };
+  }
+
+  if (!QueryEngine.prototype.__purrdfPackageRootApi) {
+    const wasmSetGeoSession = QueryEngine.prototype.setGeoSession;
+    const wasmQuery = QueryEngine.prototype.query;
+    const wasmSelect = QueryEngine.prototype.select;
+    const wasmAsk = QueryEngine.prototype.ask;
+    const wasmConstruct = QueryEngine.prototype.construct;
+    const wasmDescribe = QueryEngine.prototype.describe;
+    const wasmUpdate = QueryEngine.prototype.update;
+    const wasmQueryRaw = QueryEngine.prototype.queryRaw;
+    const wasmQueryGoverned = QueryEngine.prototype.queryGoverned;
+    const wasmQueryEntailmentGoverned = QueryEngine.prototype.queryEntailmentGoverned;
+    const wasmUpdateGoverned = QueryEngine.prototype.updateGoverned;
+    const wasmExplainQuery = QueryEngine.prototype.explainQuery;
+
+    QueryEngine.prototype.setGeoSession = function (session) {
+      // The generated class check runs before entering the native poison gate.
+      assertNotPoisoned();
+      wasmSetGeoSession.call(this, session);
+    };
+    QueryEngine.prototype.query = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return queryResultToObject(wasmQuery.call(this, dataset, sparql, base, xpathRegex));
+    };
+    QueryEngine.prototype.select = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return selectResultToObject(wasmSelect.call(this, dataset, sparql, base, xpathRegex));
+    };
+    QueryEngine.prototype.ask = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmAsk.call(this, dataset, sparql, base, xpathRegex);
+    };
+    QueryEngine.prototype.construct = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmConstruct.call(this, dataset, sparql, base, xpathRegex);
+    };
+    QueryEngine.prototype.describe = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmDescribe.call(this, dataset, sparql, base, xpathRegex);
+    };
+    QueryEngine.prototype.update = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      wasmUpdate.call(this, dataset, sparql, base, xpathRegex);
+      return dataset;
+    };
+    QueryEngine.prototype.queryRaw = function (dataset, sparql, options) {
+      const { base, format, provenancePrefix, provenanceIri, xpathRegex } =
+        normalizeQueryOptions(options);
+      return wasmQueryRaw.call(
+        this,
+        dataset,
+        sparql,
+        base,
+        format,
+        provenancePrefix,
+        provenanceIri,
+        xpathRegex,
+      );
+    };
+    QueryEngine.prototype.queryGoverned = function (dataset, sparql, options) {
+      const o = normalizeGovernedOptions(options);
+      return queryOutcomeToObject(
+        wasmQueryGoverned.call(
+          this,
+          dataset,
+          sparql,
+          o.base,
+          o.aggregateNamespace,
+          o.fuel,
+          o.deadlineMs,
+          o.maxAnswers,
+          o.maxIntermediateCells,
+          o.maxScratchBytes,
+          o.maxRemoteRequests,
+          o.cancel,
+          o.noCeiling,
+          o.xpathRegex,
+        ),
+      );
+    };
+    QueryEngine.prototype.queryEntailmentGoverned = function (
+      dataset,
+      sparql,
+      entailment,
+      options,
+    ) {
+      const o = normalizeEntailmentGovernedOptions(options);
+      return entailmentQueryOutcomeToObject(
+        wasmQueryEntailmentGoverned.call(
+          this,
+          dataset,
+          sparql,
+          o.base,
+          entailment,
+          o.program,
+          o.importIris,
+          o.importDocuments,
+          o.premiseIris,
+          o.maxStoredFacts,
+          o.maxJoinSteps,
+          o.aggregateNamespace,
+          o.fuel,
+          o.deadlineMs,
+          o.maxAnswers,
+          o.maxIntermediateCells,
+          o.maxScratchBytes,
+          o.maxRemoteRequests,
+          o.cancel,
+          o.noCeiling,
+          o.xpathRegex,
+        ),
+      );
+    };
+    QueryEngine.prototype.updateGoverned = function (dataset, sparql, options) {
+      // `maxAnswers` is forwarded rather than dropped: an UPDATE has no answer sequence to
+      // bound, and Rust refuses it by name. Silently ignoring it here would be a ceiling
+      // the caller believes they set.
+      const o = normalizeGovernedOptions(options);
+      return updateOutcomeToObject(
+        wasmUpdateGoverned.call(
+          this,
+          dataset,
+          sparql,
+          o.base,
+          o.aggregateNamespace,
+          o.fuel,
+          o.deadlineMs,
+          o.maxAnswers,
+          o.maxIntermediateCells,
+          o.maxScratchBytes,
+          o.maxRemoteRequests,
+          o.cancel,
+          o.noCeiling,
+          o.xpathRegex,
+        ),
+      );
+    };
+    QueryEngine.prototype.explainQuery = function (dataset, sparql, options) {
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmExplainQuery.call(this, dataset, sparql, base, xpathRegex);
+    };
+    QueryEngine.prototype.__purrdfPackageRootApi = true;
+  }
+
+  // The asynchronous twins. Each checks that asynchronous jobs can run here before it
+  // touches wasm, and settles into exactly the shape its synchronous twin returns.
+  if (!QueryEngine.prototype.__purrdfAsyncApi) {
+    const wasmBeginAsync = QueryEngine.prototype.beginAsync;
+    const wasmBeginAsyncWithContext = QueryEngine.prototype.beginAsyncWithContext;
+    const beginWith = (engine, dataset, kind, sparql) => (jobOptions) =>
+      wasmBeginAsync.call(engine, dataset, kind, sparql, jobOptions);
+
+    QueryEngine.prototype.queryAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Query,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => queryResultToObject(job.takeQueryResult(undefined)),
+      );
+    };
+    QueryEngine.prototype.selectAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Query,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => queryResultToObject(job.takeQueryResult("select")),
+      );
+    };
+    QueryEngine.prototype.askAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Query,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        takeAsk,
+      );
+    };
+    QueryEngine.prototype.constructAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Query,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => takeGraph(job, "construct"),
+      );
+    };
+    QueryEngine.prototype.describeAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Query,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Query, sparql),
+        (job) => takeGraph(job, "describe"),
+      );
+    };
+    QueryEngine.prototype.queryRawBytesAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Raw,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Raw, sparql),
+        (job) => job.takeRawBytes(),
+      );
+    };
+    QueryEngine.prototype.queryRawAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Raw,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Raw, sparql),
+        (job) => utf8.decode(job.takeRawBytes()),
+      );
+    };
+    QueryEngine.prototype.queryRawWithContextAsync = async function (
+      dataset,
+      sparql,
+      format,
+      context,
+      options,
+    ) {
+      assertAsyncQueries();
+      if (typeof format !== "string") {
+        throw new TypeError("queryRawWithContextAsync expects a format string");
+      }
+      if (!(context instanceof CompiledJsonLdContext)) {
+        throw new TypeError("queryRawWithContextAsync expects a CompiledJsonLdContext");
+      }
+      return driveAsyncJob(
+        AsyncOperationKind.RawWithContext,
+        options,
+        format,
+        (jobOptions) =>
+          wasmBeginAsyncWithContext.call(
+            this,
+            dataset,
+            AsyncOperationKind.RawWithContext,
+            sparql,
+            jobOptions,
+            context,
+          ),
+        (job) => utf8.decode(job.takeRawBytes()),
+      );
+    };
+    QueryEngine.prototype.queryGovernedAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Governed,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Governed, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = queryOutcomeToObject(job.takeQueryOutcome());
+          outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.queryGovernedNegotiatedAsync = async function (
+      dataset,
+      sparql,
+      options,
+    ) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Negotiated,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Negotiated, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = negotiatedOutcomeToObject(job.takeNegotiatedOutcome());
+          outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.queryEntailmentGovernedAsync = async function (
+      dataset,
+      sparql,
+      entailment,
+      options,
+    ) {
+      assertAsyncQueries();
+      if (typeof entailment !== "string") {
+        throw new TypeError(
+          "queryEntailmentGovernedAsync expects an entailment regime string",
+        );
+      }
+      return driveAsyncJob(
+        AsyncOperationKind.EntailmentGoverned,
+        options,
+        entailment,
+        beginWith(this, dataset, AsyncOperationKind.EntailmentGoverned, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = entailmentQueryOutcomeToObject(job.takeEntailmentOutcome());
+          // The job's evidence covers both phases, so it sits on the two-phase outcome;
+          // an answered query outcome carries the same record, as `queryGovernedAsync`'s
+          // does.
+          outcome.evidence = { async: evidence };
+          if (outcome.outcome !== undefined) outcome.outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.explainQueryAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Explain,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Explain, sparql),
+        (job) => utf8.decode(job.takeRawBytes()),
+      );
+    };
+    // An asynchronous update claims its dataset until it is finished: a second one begun
+    // meanwhile is refused (`native-sparql-update-in-flight`), not queued.
+    QueryEngine.prototype.updateAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      return driveAsyncJob(
+        AsyncOperationKind.Update,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.Update, sparql),
+        (job) => {
+          job.commitUpdate(dataset);
+          return dataset;
+        },
+      );
+    };
+    QueryEngine.prototype.updateGovernedAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      // `maxAnswers` is passed on rather than dropped, exactly as on `updateGoverned`:
+      // Rust refuses it by name.
+      return driveAsyncJob(
+        AsyncOperationKind.UpdateGoverned,
+        options,
+        undefined,
+        beginWith(this, dataset, AsyncOperationKind.UpdateGoverned, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = updateOutcomeToObject(job.takeUpdateOutcome());
+          outcome.evidence.async = evidence;
+          // A tripped request applied nothing and offers nothing to commit.
+          if (outcome.isApplied) job.commitUpdate(dataset);
+          return outcome;
+        },
+      );
+    };
+    QueryEngine.prototype.__purrdfAsyncApi = true;
+  }
+
+  if (!Dataset.prototype.queryAsync) {
+    // The twin of `Dataset#query`: SPARQL Results JSON for SELECT/ASK, Turtle (TriG for
+    // a result carrying a named graph) for CONSTRUCT/DESCRIBE.
+    Dataset.prototype.queryAsync = async function (sparql, options) {
+      assertAsyncQueries();
+      const engine = new QueryEngine();
+      try {
+        return await driveAsyncJob(
+          AsyncOperationKind.Raw,
+          options,
+          undefined,
+          (jobOptions) =>
+            engine.beginAsync(this, AsyncOperationKind.Raw, sparql, jobOptions),
+          (job) => utf8.decode(job.takeRawBytes()),
+        );
+      } finally {
+        engine.free();
+      }
+    };
+  }
+
+  _ready = true;
+}
+
+/**
+ * An RDF/JS Stream of the dataset's quads — an async iterable. (The engine is
+ * synchronous; the async wrapper is the RDF/JS Stream contract.)
+ */
+export function datasetToStream(dataset) {
+  assertNotPoisoned();
+  const quads = dataset.quads();
+  return (async function* () {
+    for (const quad of quads) yield quad;
+  })();
+}
+
+/**
+ * Consume an (async) iterable of quads into a new Dataset, via the engine's streaming
+ * Sink (the purrdf-events ingestion protocol + its finish() resolution).
+ */
+export async function streamToDataset(quadStream) {
+  assertNotPoisoned();
+  const sink = new Sink();
+  for await (const quad of quadStream) sink.push(quad);
+  return sink.finish();
+}
+
+export {
+  asyncStackRegionBytes,
+  CancellationToken,
+  CompiledJsonLdContext,
+  DataFactory,
+  Dataset,
+  entailCertainAnswers,
+  entailCheckAbsentProof,
+  entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
+  entailCheckProof,
+  entailCheckProofGoldenVectors,
+  entailClassify,
+  entailConsistency,
+  entailEntails,
+  entailExplainConclusion,
+  entailExtensions,
+  entailExtractModule,
+  entailGraphEntails,
+  entailImplementedRules,
+  entailInstances,
+  entailJustify,
+  entailMaterialize,
+  entailProfile,
+  entailProve,
+  entailRealize,
+  entailRules,
+  entailVerifyEntailment,
+  expressionErrorCodes,
+  GeoPointIndex,
+  GeoSession,
+  governorDimensions,
+  liftProjection,
+  ProjectionLift,
+  ProjectionPackage,
+  provenanceFromJson,
+  provenanceFromXml,
+  Quad,
+  QueryEngine,
+  Reasoner,
+  ReasoningAnswer,
+  RegimeClosure,
+  SerializeLoss,
+  ServiceCatalog,
+  shaclApplyRules,
+  ShaclChangeValidation,
+  shaclCheckRules,
+  ShaclDiagnostic,
+  shaclEntail,
+  ShaclEntailment,
+  shaclEvalNodeExpr,
+  ShaclImportError,
+  ShaclLintReport,
+  shaclLintShapes,
+  shaclPackProduct,
+  shaclProductCertify,
+  shaclProductExplain,
+  ShaclNodeExprOutcome,
+  ShaclProductRefusal,
+  shaclProductValidateToSarif,
+  shaclProductValidateToSarifExpecting,
+  shaclProductValidateToSarifRebuild,
+  shaclProductValidateToSarifRebuildExpecting,
+  ShaclRulesCheck,
+  ShaclRulesInference,
+  shaclValidateChangesToSarif,
+  shaclValidateToSarif,
+  Sink,
+  SparqlProtocolRequest,
+  Term,
+  version,
+  xsdCanonicalLexical,
+  xsdValueCompare,
+};

@@ -1,0 +1,10 @@
+✔ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (6.538256ms)
+✔ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (3.743562ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 84.133552

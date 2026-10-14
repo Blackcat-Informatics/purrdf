@@ -1,0 +1,27 @@
+✖ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (441.067253ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 588.928233
+
+✖ failing tests:
+
+test at tests/query.test.mjs:600:1
+✖ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (441.067253ms)
+  AssertionError [ERR_ASSERTION]: 249 levels answer; 282 did on the build measured
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-wasm/js/tests/query.test.mjs:640:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

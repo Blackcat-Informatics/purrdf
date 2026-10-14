@@ -1,0 +1,237 @@
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 70078ee95..7478f5fa6 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -2376,109 +2376,7 @@ fn exists_prepared<D: DatasetView + Sync>(
+         schema,
+         &ctx.growth,
+     )? {
+-        // ---- Memoized probe path ----
+-        //
+-        // Evaluate the (ENF-normalized) inner — and build the probe index over it —
+-        // ONCE per site (keyed by normalized-inner address, graph, and outer schema),
+-        // then existence-probe each outer row against the reused index. `pattern`'s
+-        // (hence `normalized`'s) address is a sound cache key only for the static
+-        // query algebra: a doubly-nested EXISTS reached while
+-        // `ctx.in_substituted_exists` is already set means `pattern` is itself part
+-        // of an outer per-row substituted temporary, so skip both the cache get and
+-        // the insert and build the entry fresh, unshared.
+-        let key = (
+-            std::ptr::from_ref::<GraphPattern>(normalized.as_ref()) as usize,
+-            ctx.graph_key(),
+-            crate::eval::schema_fingerprint(schema),
+-        );
+-        let cached = if ctx.options.exists_memo && !ctx.in_substituted_exists {
+-            ctx.exists_inner_cache.get(&key).cloned()
+-        } else {
+-            None
+-        };
+-        let entry = match cached {
+-            Some(entry) => entry,
+-            None => {
+-                // Push this site's ledger-source correspondence around the ONE evaluation
+-                // this arm ever runs, same mechanism and same reason the definition path
+-                // pushes it around its own (per-row) `eval_correlated` call below: without
+-                // it, every node `eval_evaluated` walks below `normalized` resolves to no
+-                // real plan address at all (`normalized` is a fresh ENF clone, never a
+-                // plan node itself), so `EvalCtx::resolve_ledger_ordinal` falls through to
+-                // `None` and every charge folds into the enclosing `FILTER`/`BIND` instead
+-                // of attributing to the inner's own nodes — even though the probe path
+-                // evaluates `normalized` UNSUBSTITUTED (no per-row copy, hence no
+-                // `eval_correlated`/`enter_substituted_exists` push of its own). Gated
+-                // identically to the definition path's push: nothing to resolve against
+-                // without a ledger, and `ledger_source_map` may have declined to track a
+-                // `Project`/`Union`-shaped site (see its doc), leaving nothing to push.
+-                // Popped manually (not via a guard) because the only fallible call in this
+-                // scope is the one line below, and its `?` is applied after the pop — the
+-                // probe runs exactly once per site, so these charges attribute once, which
+-                // is correct: this is scoped to a single evaluation of the definition path,
+-                // not to every outer row the probe later serves.
+-                let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
+-                if track_ledger {
+-                    ctx.correlated_node_maps
+-                        .push(ledger_source.clone(), &ctx.growth)?;
+-                }
+-                let evaluated = eval_evaluated(normalized, ctx);
+-                if track_ledger {
+-                    ctx.correlated_node_maps.pop();
+-                }
+-                let evaluated = evaluated?;
+-                if let Evaluated::Truncated(truncation) = &evaluated {
+-                    ctx.record_barrier(truncation.tripped());
+-                    return Ok(false);
+-                }
+-                if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
+-                    return Ok(false);
+-                }
+-                let inner = crate::workspace::SharedWorkspace::new_admitted(
+-                    evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
+-                        unreachable!("a non-truncated result is complete by construction")
+-                    }),
+-                    &ctx.growth,
+-                )?;
+-                // `shared` is computed against the FULL outer schema (not just the
+-                // row's bound vars), so one index serves every row: an outer var
+-                // unbound in a given row is `None` in the probe and matches anything
+-                // via `compatible`, exactly as the definition path's substitution would.
+-                let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
+-                let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+-                let entry = crate::workspace::SharedWorkspace::new_admitted(
+-                    crate::eval::ExistsInner {
+-                        inner,
+-                        shared,
+-                        keyed,
+-                        wild,
+-                    },
+-                    &ctx.growth,
+-                )?;
+-                if ctx.options.exists_memo && !ctx.in_substituted_exists {
+-                    ctx.exists_inner_cache
+-                        .insert_admitted(key, entry.clone(), &ctx.growth)?;
+-                }
+-                entry
+-            }
+-        };
+-
+-        // Existence-only probe of the full outer row against the reused index.
+-        if evidence.is_some() {
+-            let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
+-            if let Some(output) = evidence {
+-                *output = record;
+-            }
+-            return Ok(found);
+-        }
+-        crate::binop::probe_has_match(
+-            row,
+-            &entry.shared,
+-            &entry.keyed,
+-            &entry.wild,
+-            &entry.inner.rows,
+-            &ctx.growth,
+-        )
++        exists_memoized_probe(normalized, ledger_source, row, schema, ctx, evidence)
+     } else {
+         // ---- Per-row definition path, with the μ-restriction memo ----
+         //
+@@ -2619,6 +2517,121 @@ fn exists_prepared<D: DatasetView + Sync>(
+     }
+ }
+ 
++/// The probe's index and memo owners finish outside the recursive definition frame.
++#[inline(never)]
++fn exists_memoized_probe<D: DatasetView + Sync>(
++    normalized: &PreparedPattern,
++    ledger_source: &crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
++    row: &[Option<SolutionTerm<D::Id>>],
++    schema: &VarSchema,
++    ctx: &mut EvalCtx<'_, D>,
++    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
++) -> Result<bool, EvalError> {
++    // ---- Memoized probe path ----
++    //
++    // Evaluate the (ENF-normalized) inner — and build the probe index over it —
++    // ONCE per site (keyed by normalized-inner address, graph, and outer schema),
++    // then existence-probe each outer row against the reused index. `pattern`'s
++    // (hence `normalized`'s) address is a sound cache key only for the static
++    // query algebra: a doubly-nested EXISTS reached while
++    // `ctx.in_substituted_exists` is already set means `pattern` is itself part
++    // of an outer per-row substituted temporary, so skip both the cache get and
++    // the insert and build the entry fresh, unshared.
++    let key = (
++        std::ptr::from_ref::<GraphPattern>(normalized.as_ref()) as usize,
++        ctx.graph_key(),
++        crate::eval::schema_fingerprint(schema),
++    );
++    let cached = if ctx.options.exists_memo && !ctx.in_substituted_exists {
++        ctx.exists_inner_cache.get(&key).cloned()
++    } else {
++        None
++    };
++    let entry = match cached {
++        Some(entry) => entry,
++        None => {
++            // Push this site's ledger-source correspondence around the ONE evaluation
++            // this arm ever runs, same mechanism and same reason the definition path
++            // pushes it around its own (per-row) `eval_correlated` call below: without
++            // it, every node `eval_evaluated` walks below `normalized` resolves to no
++            // real plan address at all (`normalized` is a fresh ENF clone, never a
++            // plan node itself), so `EvalCtx::resolve_ledger_ordinal` falls through to
++            // `None` and every charge folds into the enclosing `FILTER`/`BIND` instead
++            // of attributing to the inner's own nodes — even though the probe path
++            // evaluates `normalized` UNSUBSTITUTED (no per-row copy, hence no
++            // `eval_correlated`/`enter_substituted_exists` push of its own). Gated
++            // identically to the definition path's push: nothing to resolve against
++            // without a ledger, and `ledger_source_map` may have declined to track a
++            // `Project`/`Union`-shaped site (see its doc), leaving nothing to push.
++            // Popped manually (not via a guard) because the only fallible call in this
++            // scope is the one line below, and its `?` is applied after the pop — the
++            // probe runs exactly once per site, so these charges attribute once, which
++            // is correct: this is scoped to a single evaluation of the definition path,
++            // not to every outer row the probe later serves.
++            let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
++            if track_ledger {
++                ctx.correlated_node_maps
++                    .push(ledger_source.clone(), &ctx.growth)?;
++            }
++            let evaluated = eval_evaluated(normalized, ctx);
++            if track_ledger {
++                ctx.correlated_node_maps.pop();
++            }
++            let evaluated = evaluated?;
++            if let Evaluated::Truncated(truncation) = &evaluated {
++                ctx.record_barrier(truncation.tripped());
++                return Ok(false);
++            }
++            if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
++                return Ok(false);
++            }
++            let inner = crate::workspace::SharedWorkspace::new_admitted(
++                evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
++                    unreachable!("a non-truncated result is complete by construction")
++                }),
++                &ctx.growth,
++            )?;
++            // `shared` is computed against the FULL outer schema (not just the
++            // row's bound vars), so one index serves every row: an outer var
++            // unbound in a given row is `None` in the probe and matches anything
++            // via `compatible`, exactly as the definition path's substitution would.
++            let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
++            let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
++            let entry = crate::workspace::SharedWorkspace::new_admitted(
++                crate::eval::ExistsInner {
++                    inner,
++                    shared,
++                    keyed,
++                    wild,
++                },
++                &ctx.growth,
++            )?;
++            if ctx.options.exists_memo && !ctx.in_substituted_exists {
++                ctx.exists_inner_cache
++                    .insert_admitted(key, entry.clone(), &ctx.growth)?;
++            }
++            entry
++        }
++    };
++
++    // Existence-only probe of the full outer row against the reused index.
++    if evidence.is_some() {
++        let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
++        if let Some(output) = evidence {
++            *output = record;
++        }
++        return Ok(found);
++    }
++    crate::binop::probe_has_match(
++        row,
++        &entry.shared,
++        &entry.keyed,
++        &entry.wild,
++        &entry.inner.rows,
++        &ctx.growth,
++    )
++}
++
+ /// Native restriction of a pure EXISTS relation; `None` keeps the ordinary
+ /// definition/probe strategy for any expression or modifier boundary.
+ #[allow(

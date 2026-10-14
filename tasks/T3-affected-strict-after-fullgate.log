@@ -1,0 +1,104 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/geo-kernel)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/binop.rs:1641:13
+     |
+1641 |     schema: crate::solution::SharedSchema,
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1641 -     schema: crate::solution::SharedSchema,
+1641 +     schema: SharedSchema,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/binop.rs:2373:14
+     |
+2373 |     schema: &crate::solution::SharedSchema,
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2373 -     schema: &crate::solution::SharedSchema,
+2373 +     schema: &SharedSchema,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/binop.rs:2414:14
+     |
+2414 |     schema: &crate::solution::SharedSchema,
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2414 -     schema: &crate::solution::SharedSchema,
+2414 +     schema: &SharedSchema,
+     |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/binop.rs:1195:14
+     |
+1195 |     per_row: crate::AdmittedVec<(RetainedRow<D::Id>, SolutionSeq<D::Id>)>,
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/binop.rs:1193:18
+     |
+1193 |     left_schema: SharedSchema,
+     |                  ^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+1193 |     left_schema: &SharedSchema,
+     |                  +
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/binop.rs:1194:19
+     |
+1194 |     right_schema: VarSchema,
+     |                   ^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+     |
+1194 |     right_schema: &VarSchema,
+     |                   +
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/binop.rs:1195:14
+     |
+1195 |     per_row: crate::AdmittedVec<(RetainedRow<D::Id>, SolutionSeq<D::Id>)>,
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+     |
+1195 |     per_row: &crate::AdmittedVec<(RetainedRow<D::Id>, SolutionSeq<D::Id>)>,
+     |              +
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/binop.rs:1196:10
+     |
+1196 |     ctx: &mut EvalCtx<'_, D>,
+     |          ^----^^^^^^^^^^^^^^
+     |           |
+     |           help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+     = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 8 previous errors

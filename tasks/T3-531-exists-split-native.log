@@ -1,0 +1,190 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 25s
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 8m 46s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 37 tests
+test exists_admission_gate::tests::exists_collision_shape_hard_errors_without_the_parser_fresh_target_control ... ok
+test exists_admission_gate::tests::exists_collision_shape_hard_errors_without_the_parser ... ok
+test exists_admission_gate::tests::exists_collision_shape_hard_errors_without_the_parser_values_twin ... ok
+test exists_admission_gate::tests::exists_definition_path_injects_a_doubly_nested_exists_without_a_false_collision ... ok
+test exists_admission_gate::tests::exists_error_parity_across_strategies ... ok
+test exists_admission_gate::tests::exists_hard_errors_on_extend_collision_regardless_of_strategy ... ok
+test exists_admission_gate::tests::exists_hard_errors_on_values_collision_regardless_of_strategy ... ok
+test exists_admission_gate::tests::exists_hard_errors_on_non_adjacent_group_extend_collision ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_bgp ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_extend_fresh_target ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_distinct ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_graph_iri_name ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_filter_certainly_bound ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_graph_variable_name ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_path ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_join ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_order_by ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_project ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_reduced ... ok
+test exists_admission_gate::tests::exists_silent_service_swallow_point_parity ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_values ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_union ... ok
+test exists_admission_gate::tests::fresh_values_column_inner_probe_admits ... ok
+test exists_admission_gate::tests::nested_exists_definition_path_attributes_depth_two_ledger_charges ... ok
+test exists_admission_gate::tests::fresh_extend_target_inner_probe_admits ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_group ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_lateral ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_minus ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_property_function ... ok
+test exists_admission_gate::tests::nested_exists_with_disjoint_free_vars_probe_admits ... ok
+test exists_admission_gate::tests::service_variable_inner_classifies_inadmissible ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_slice ... ok
+test exists_admission_gate::tests::probe_would_fabricate_on_left_join ... ok
+test exists_admission_gate::tests::stateful_builtin_inner_classifies_inadmissible ... ok
+test exists_admission_gate::tests::stateful_nested_exists_classifies_inadmissible ... ok
+test exists_admission_gate::tests::truncated_correlated_inner_withholds_per_certificate ... ok
+test exists_admission_gate::tests::bounded_exhaustive_exists_shape_generator ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 1576 filtered out; finished in 0.83s
+
+    Finished `test` profile [optimized] target(s) in 0.09s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 6 tests
+test nested_exists_gate::an_explained_nested_exists_substitutes_each_outer_row ... ok
+test nested_exists_gate::disagreeing_layers_answer_as_the_full_substitution_does ... ok
+test nested_exists_gate::deferred_substitution_matches_the_full_substitution ... ok
+test nested_exists_gate::alternating_nested_exists_answers_the_pinned_rows ... ok
+test nested_exists_gate::two_hundred_nested_levels_answer_within_a_governor_bound ... ok
+test nested_exists_gate::nested_exists_per_row_work_is_linear_in_depth ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1607 filtered out; finished in 2.41s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4m 03s
+     Running tests/exists_sep0007.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/b742b0f4958912e3/out/exists_sep0007-b742b0f4958912e3)
+
+running 25 tests
+test exists_bare_values_inner ... ok
+test exists_bind_fresh_variable_evaluates ... ok
+test exists_blank_node_outer_binding_correlates ... ok
+test exists_bare_subselect_inner ... ok
+test exists_graph_iri_name_with_correlated_body ... ok
+test exists_correlated_graph_variable_e2e ... ok
+test exists_having_sees_only_the_subselect_scope ... ok
+test exists_nested_not_exists_correlates ... ok
+test exists_optional_padding_answers_per_spec ... ok
+test exists_optional_beside_a_bgp_answers_per_spec ... ok
+test exists_over_distinct_subselect ... ok
+test exists_over_limit_one_subselect ... ok
+test exists_over_group_by_subselect_correlates ... ok
+test exists_over_order_by_subselect ... ok
+test exists_over_offset_subselect_commits_per_row ... ok
+test exists_sep_disconnected_variable_example ... ok
+test exists_sep_count_example_answers ... ok
+test exists_property_function_inner_sees_outer_binding ... ok
+test exists_quoted_triple_outer_binding_correlates ... ok
+test matrix_is_complete ... ok
+test exists_sep_minus_example_answers ... ok
+test exists_unprojected_outer_variable_stays_unseen ... ok
+test exists_triple_nesting_alternating_polarity ... ok
+test not_exists_optional_padding_does_not_fabricate ... ok
+test not_exists_nested_not_exists_correlates ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 20s
+     Running tests/correlated_owned_admission.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/cfb81cd3759ea577/out/correlated_owned_admission-cfb81cd3759ea577)
+
+running 3 tests
+test http_native_decode_and_blank_ingest_preserve_duplicates_and_physical_refusal_beats_silent ... ok
+test service_public_forms_direct_prepared_and_governed_price_the_real_native_producers ... ok
+test all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4.22s
+     Running tests/correlated_positive_regions.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/b51a0c18910c7f95/out/correlated_positive_regions-b51a0c18910c7f95)
+
+running 3 tests
+test copied_positive_schedule_fuel_cuts_remain_complete_binding_lower_bounds ... ok
+test copied_lateral_union_keeps_native_bindings_and_source_columns ... ok
+test correlated_and_uncorrelated_exists_copies_preserve_their_row_scopes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 14.30s
+     Running tests/evaluation_stack.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/622cd6fbec512942/out/evaluation_stack-622cd6fbec512942)
+
+running 10 tests
+test a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_computation_intact ... ok
+test a_deep_forwarded_body_answers_or_is_the_typed_refusal_under_silent ... ok
+test an_update_on_a_small_stack_applies_whole_or_is_refused_and_applies_nothing ... ok
+test an_in_process_service_on_a_small_stack_answers_or_its_refusal_is_not_silenced ... ok
+test a_deep_request_on_a_small_stack_answers_or_is_the_typed_refusal_and_answers_on_a_large_one ... ok
+test the_small_stack_still_answers_a_shallow_request_after_a_deep_one ... ok
+test the_whole_request_path_answers_or_refuses_a_flat_spine_on_a_small_stack ... ok
+test the_deep_answers_equal_their_shallow_twins ... ok
+test a_thousand_nested_laterals_answer_inside_an_allocation_ceiling ... ok
+test every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_counts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.86s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 16.04s
+     Running tests/lateral_e2e.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/736a0c1c84ccdfa2/out/lateral_e2e-736a0c1c84ccdfa2)
+
+running 20 tests
+test lateral_bnode_bound_variable_in_a_filter ... ok
+test lateral_graph_rhs_is_scoped_per_row ... ok
+test exists_inside_lateral_rhs_correlates ... ok
+test lateral_bind_rhs_shared_var ... ok
+test lateral_literal_bound_variable_is_injected ... ok
+test lateral_minus_rhs_disjoint_domain_not_flipped ... ok
+test lateral_optional_rhs_pads_labelless_subject ... ok
+test lateral_predicate_position_is_injected ... ok
+test lateral_path_rhs_is_correlated ... ok
+test lateral_rhs_schema_union_is_stable ... ok
+test lateral_shared_variable_is_injected_as_constant ... ok
+test lateral_inside_exists_pattern_evaluates ... ok
+test lateral_subselect_nonprojected_var_is_not_correlated ... ok
+test lateral_triple_term_bound_variable_in_a_filter ... ok
+test lateral_subselect_star_is_top_1_per_group ... ok
+test lateral_values_rhs_joins_per_row ... ok
+test nested_lateral_reenters_the_substitution_guard ... ok
+test lateral_union_rhs_substitutes_both_branches ... ok
+test lateral_truncation_commits_per_left_row ... ok
+test lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+    Finished `test` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 22 tests
+test binop::tests::cell_bounded_cross_product_refuses_before_constructing_limit_plus_one ... ok
+test binop::tests::a_truncated_left_arm_reports_the_evaluated_arms_schema ... ok
+test binop::tests::join_on_shared_variable ... ok
+test binop::tests::join_output_reservation_capacity_overflow_is_typed ... ok
+test binop::tests::empty_optional_padding_observes_cells_before_a_zero_limit ... ok
+test binop::tests::join_with_no_overlap_is_empty ... ok
+test binop::tests::join_with_no_shared_vars_is_cross_product ... ok
+test binop::tests::minus_removes_compatible_overlapping_rows ... ok
+test binop::tests::minus_with_disjoint_domains_removes_nothing ... ok
+test binop::tests::optional_keeps_unmatched_left_with_unbound_right ... ok
+test binop::tests::fuel_trip_mid_optional_probe_never_emits_an_unbound_extension ... ok
+test binop::tests::probe_has_match_hits_index_then_scans_wild ... ok
+test binop::tests::optional_inline_filter_excludes_failing_pairings ... ok
+test binop::tests::lateral_over_graph_variable_keeps_column_order ... ok
+test binop::tests::union_concatenates_preserving_multiset ... ok
+test binop::tests::union_filter_true_branch_contributes_unit_solution ... ok
+test binop::tests::ungoverned_evaluation_is_unchanged_and_always_complete ... ok
+test binop::tests::union_of_disjoint_schemas_widens_and_pads ... ok
+test binop::tests::union_filter_unbound_branch_yields_zero_but_query_not_empty ... ok
+test binop::tests::union_three_branches_with_overlapping_and_disjoint_binds_agree ... ok
+test binop::tests::union_truncation_is_identical_under_forced_parallel_and_forced_sequential ... ok
+test binop::tests::sparse_join_capacity_tracks_actual_matches_under_every_cell_allowance ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1591 filtered out; finished in 0.81s
+

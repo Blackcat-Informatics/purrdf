@@ -1,0 +1,131 @@
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 70078ee95..2f701f36f 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -2495,7 +2495,7 @@ fn exists_prepared<D: DatasetView + Sync>(
+         // both the read and the write below are skipped, and the per-row
+         // definition genuinely runs once per row.
+         let use_memo = ctx.options.exists_memo && !ctx.in_substituted_exists && !stateful;
+-        let memo_key = if use_memo {
++        let mut memo_key = if use_memo {
+             let restriction = definition_restriction_key(row, schema, free_vars, &ctx.growth)?;
+             Some((
+                 site.key,
+@@ -2568,57 +2568,69 @@ fn exists_prepared<D: DatasetView + Sync>(
+             ctx.correlated_node_maps.pop();
+         }
+         let inner = inner_result?;
+-        if let Evaluated::Truncated(truncation) = &inner {
+-            ctx.record_barrier(truncation.tripped());
+-            return Ok(false);
+-        }
+-        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
+-            return Ok(false);
+-        }
+-        let consumed = inner.rows().len();
+-        for _ in 0..consumed {
+-            if charge_exists_evidence(
+-                ctx,
+-                crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
+-            ) {
+-                return Ok(false);
+-            }
+-        }
+-        let answer = if evidence.is_some() {
+-            inner
+-                .rows()
+-                .rows
+-                .iter()
+-                .any(|row| !row.evidence().is_undecided())
+-        } else {
+-            !inner.rows().is_empty()
+-        };
+-        if evidence.is_some() {
+-            let record = ctx.existential_evidence(
+-                inner.rows().rows.iter().map(RetainedRow::evidence),
+-                inner.rows().rows.search_evidence(),
+-            )?;
+-            if !record.is_virtual()
+-                && let Some(key) = &memo_key
+-            {
+-                ctx.exists_evidence_memo.insert_admitted(
+-                    (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
+-                    record.clone(),
+-                    &ctx.growth,
+-                )?;
+-            }
+-            if let Some(output) = evidence {
+-                *output = record;
+-            }
+-        }
+-        if let Some(key) = memo_key {
+-            ctx.exists_definition_memo
+-                .insert_admitted(key, answer, &ctx.growth)?;
+-        }
+-        Ok(answer)
++        finish_exists_definition(&mut memo_key, &inner, evidence, ctx)
+     }
+ }
+ 
++/// Finish a definition answer after its recursive correlated evaluation has returned.
++/// Keep evidence joins and memo insertion off the frame that descends to the next level.
++#[inline(never)]
++fn finish_exists_definition<D: DatasetView + Sync>(
++    memo_key: &mut Option<crate::eval::ExistsDefinitionMemoKey<D::Id>>,
++    inner: &Evaluated<D::Id>,
++    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<bool, EvalError> {
++    if let Evaluated::Truncated(truncation) = &inner {
++        ctx.record_barrier(truncation.tripped());
++        return Ok(false);
++    }
++    if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
++        return Ok(false);
++    }
++    let consumed = inner.rows().len();
++    for _ in 0..consumed {
++        if charge_exists_evidence(
++            ctx,
++            crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
++        ) {
++            return Ok(false);
++        }
++    }
++    let answer = if evidence.is_some() {
++        inner
++            .rows()
++            .rows
++            .iter()
++            .any(|row| !row.evidence().is_undecided())
++    } else {
++        !inner.rows().is_empty()
++    };
++    if evidence.is_some() {
++        let record = ctx.existential_evidence(
++            inner.rows().rows.iter().map(RetainedRow::evidence),
++            inner.rows().rows.search_evidence(),
++        )?;
++        if !record.is_virtual()
++            && let Some(key) = memo_key.as_ref()
++        {
++            ctx.exists_evidence_memo.insert_admitted(
++                (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
++                record.clone(),
++                &ctx.growth,
++            )?;
++        }
++        if let Some(output) = evidence {
++            *output = record;
++        }
++    }
++    if let Some(key) = memo_key.take() {
++        ctx.exists_definition_memo
++            .insert_admitted(key, answer, &ctx.growth)?;
++    }
++    Ok(answer)
++}
++
+ /// Native restriction of a pure EXISTS relation; `None` keeps the ordinary
+ /// definition/probe strategy for any expression or modifier boundary.
+ #[allow(

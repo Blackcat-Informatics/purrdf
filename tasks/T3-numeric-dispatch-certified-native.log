@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 26.51s
+     Running tests/certified_numerical.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-xsd/81957a1da0ecbcdc/out/certified_numerical-81957a1da0ecbcdc)
+
+running 1 test
+determinism-digest case=directed_endpoint_product_replay digest=f1508ddac398273b corpus_len=8
+test directed_endpoint_product_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+

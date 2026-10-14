@@ -1,0 +1,92 @@
+Testing xsd_exact_small/integer_add/bounded
+Success
+
+1 benchmark tested; 0 failed
+595023914,,instructions:u,45288090,100.00,,
+Testing xsd_exact_small/integer_mul/bounded
+Success
+
+1 benchmark tested; 0 failed
+595050458,,instructions:u,48042000,100.00,,
+Testing xsd_exact_small/decimal_add/bounded
+Success
+
+1 benchmark tested; 0 failed
+595090643,,instructions:u,53332970,100.00,,
+Testing xsd_exact_small/decimal_mul/bounded
+Success
+
+1 benchmark tested; 0 failed
+595061555,,instructions:u,50749740,100.00,,
+Testing xsd_exact_small/decimal_div/bounded
+Success
+
+1 benchmark tested; 0 failed
+595216290,,instructions:u,50839180,100.00,,
+Testing xsd_exact_small/decimal_parse_canonical/bounded
+Success
+
+1 benchmark tested; 0 failed
+597376377,,instructions:u,51549160,100.00,,
+Testing xsd_exact_small/decimal_to_f64/bounded
+Success
+
+1 benchmark tested; 0 failed
+595044668,,instructions:u,49574800,100.00,,
+xsd_exact_small/integer_add/exact: benchmark
+xsd_exact_small/integer_add/bounded: benchmark
+xsd_exact_small/integer_mul/exact: benchmark
+xsd_exact_small/integer_mul/bounded: benchmark
+xsd_exact_small/decimal_add/exact: benchmark
+xsd_exact_small/decimal_add/bounded: benchmark
+xsd_exact_small/decimal_mul/exact: benchmark
+xsd_exact_small/decimal_mul/bounded: benchmark
+xsd_exact_small/decimal_div/exact: benchmark
+xsd_exact_small/decimal_div/bounded: benchmark
+xsd_exact_small/decimal_parse_canonical/exact: benchmark
+xsd_exact_small/decimal_parse_canonical/bounded: benchmark
+xsd_exact_small/decimal_to_f64/exact: benchmark
+xsd_exact_small/decimal_to_f64/bounded: benchmark
+xsd_exact_growth/add/40: benchmark
+xsd_exact_growth/mul/40: benchmark
+xsd_exact_growth/div_rem/40: benchmark
+xsd_exact_growth/decimal_div_scale18/40: benchmark
+xsd_exact_growth/parse_canonical/40: benchmark
+xsd_exact_growth/to_f64/40: benchmark
+xsd_exact_growth/add/400: benchmark
+xsd_exact_growth/mul/400: benchmark
+xsd_exact_growth/div_rem/400: benchmark
+xsd_exact_growth/decimal_div_scale18/400: benchmark
+xsd_exact_growth/parse_canonical/400: benchmark
+xsd_exact_growth/to_f64/400: benchmark
+xsd_exact_growth/add/4000: benchmark
+xsd_exact_growth/mul/4000: benchmark
+xsd_exact_growth/div_rem/4000: benchmark
+xsd_exact_growth/decimal_div_scale18/4000: benchmark
+xsd_exact_growth/parse_canonical/4000: benchmark
+xsd_exact_growth/to_f64/4000: benchmark
+xsd_exact_growth/add/40000: benchmark
+xsd_exact_growth/mul/40000: benchmark
+xsd_exact_growth/div_rem/40000: benchmark
+xsd_exact_growth/decimal_div_scale18/40000: benchmark
+xsd_exact_growth/parse_canonical/40000: benchmark
+xsd_exact_growth/to_f64/40000: benchmark
+xsd_exact_karatsuba/schoolbook/16: benchmark
+xsd_exact_karatsuba/karatsuba/16: benchmark
+xsd_exact_karatsuba/schoolbook/48: benchmark
+xsd_exact_karatsuba/karatsuba/48: benchmark
+xsd_exact_karatsuba/schoolbook/128: benchmark
+xsd_exact_karatsuba/karatsuba/128: benchmark
+xsd_exact_karatsuba/schoolbook/256: benchmark
+xsd_exact_karatsuba/karatsuba/256: benchmark
+xsd_exact_karatsuba/schoolbook/512: benchmark
+xsd_exact_karatsuba/karatsuba/512: benchmark
+xsd_exact_karatsuba/schoolbook/1024: benchmark
+xsd_exact_karatsuba/karatsuba/1024: benchmark
+xsd_exact_karatsuba/schoolbook/2048: benchmark
+xsd_exact_karatsuba/karatsuba/2048: benchmark
+xsd_exact_fine_products/bounded: benchmark
+xsd_exact_fine_products/tower: benchmark
+
+0 benchmarks listed; 0 failed
+595049102,,instructions:u,50863750,100.00,,

@@ -1,0 +1,10 @@
+Running as unit: run-p2380035-i31749416.scope; invocation ID: 9c8675f763f54b7da5b32b9ba9d612ed
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 17s
+     Running tests/evidence_ingress.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/8429a0eeb37ec341/out/evidence_ingress-8429a0eeb37ec341)
+
+running 1 test
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.01s
+

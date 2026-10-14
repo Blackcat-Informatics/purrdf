@@ -1,0 +1,24 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 14s
+     Running tests/emitter_projections.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-shapes/ceda38ef46f17244/out/emitter_projections-ceda38ef46f17244)
+
+running 1 test
+test observed::json_schema_temporal_bounds_agree_with_validation ... FAILED
+
+failures:
+
+---- observed::json_schema_temporal_bounds_agree_with_validation stdout ----
+
+thread 'observed::json_schema_temporal_bounds_agree_with_validation' (2843677) panicked at crates/shapes/tests/emitter_projections.rs:3844:9:
+assertion `left == right` failed: "24:00:00"^^xsd:time
+  left: (true, true)
+ right: (false, false)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    observed::json_schema_temporal_bounds_agree_with_validation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 1.32s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test emitter_projections`

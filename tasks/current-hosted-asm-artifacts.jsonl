@@ -1,0 +1,7 @@
+{"id":11907600067,"name":"simd-asm-wasm32","size_in_bytes":2437}
+{"id":11906722088,"name":"simd-asm-aarch64","size_in_bytes":2739}
+{"id":11906507344,"name":"asm-diagnostics-x86_64","size_in_bytes":3767827}
+{"id":11906432892,"name":"simd-asm-aarch64-neoverse-v1","size_in_bytes":2811}
+{"id":11906229874,"name":"simd-asm-x86_64-v3","size_in_bytes":3052}
+{"id":11906174419,"name":"simd-asm-x86_64-v4","size_in_bytes":3029}
+{"id":11906129396,"name":"simd-asm-wasm32-simd128","size_in_bytes":2718}

@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running tests/exact_governance.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-xsd/16332b79e4471f84/out/exact_governance-16332b79e4471f84)
+
+running 1 test
+test duration_subtype_cast_admits_kept_seconds_and_drops_other_component ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+

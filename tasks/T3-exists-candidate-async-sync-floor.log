@@ -1,0 +1,26 @@
+✖ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (1131.197198ms)
+ℹ admitted nesting endpoints: {"synchronous":134,"job":134}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1559.206391
+
+✖ failing tests:
+
+test at tests/async-concurrency.test.mjs:390:1
+✖ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (1131.197198ms)
+  AssertionError [ERR_ASSERTION]: 134 levels answer synchronously; 182 did on the build measured
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-wasm/js/tests/async-concurrency.test.mjs:434:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

@@ -1,0 +1,76 @@
+    Finished `test` profile [optimized] target(s) in 0.82s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-xsd/1faeafff57fb3cc8/out/purrdf_xsd-1faeafff57fb3cc8)
+
+running 69 tests
+test numeric::tests::a_float_operand_is_compared_as_the_dyadic_rational_it_is ... ok
+test numeric::tests::add_integer_double_promotes_to_double ... ok
+test numeric::tests::add_decimal_float_promotes_to_float ... ok
+test numeric::tests::add_integer_integer ... ok
+test numeric::tests::an_integer_beyond_the_double_significand_stays_distinct ... ok
+test numeric::tests::add_integer_overflow ... ok
+test numeric::tests::bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not ... ok
+test numeric::tests::bigint_avg_decimal_lexical_answers_exactly_where_bigint_avg_decimal_poisons ... ok
+test numeric::tests::bigint_avg_matches_numeric_div_within_i128_range ... ok
+test numeric::tests::bigint_avg_poisons_when_the_mantissa_still_does_not_fit_i128 ... ok
+test numeric::tests::binary_arithmetic_rounds_once_on_double_rounding_witnesses ... ok
+test numeric::tests::bounded_ieee_canonical_writers_preserve_frozen_extremes ... ok
+test numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush ... ok
+test numeric::tests::cmp_exact_cross_scale_equal ... ok
+test numeric::tests::cmp_exact_cross_scale_strict ... ok
+test numeric::tests::cmp_exact_large_f64_collapse_cross_scale_regression ... ok
+test numeric::tests::cmp_exact_large_f64_collapse_regression ... ok
+test numeric::tests::canonical_lexical_matches_reference_over_mantissa_scale_grid ... ok
+test numeric::tests::cmp_exact_large_mantissa_no_overflow ... ok
+test numeric::tests::cmp_exact_mixed_signs ... ok
+test numeric::tests::cmp_exact_negative_cross_scale ... ok
+test numeric::tests::cmp_exact_zero_any_scale ... ok
+test numeric::tests::decimal_add_exact_no_float_error ... ok
+test numeric::tests::decimal_alignment_overflow_is_exact_and_its_neighbour_adds ... ok
+test numeric::tests::decimal_div_has_no_dead_truncating_branch ... ok
+test numeric::tests::decimal_div_raw_rejects_a_zero_divisor_without_a_callers_precheck ... ok
+test numeric::tests::decimal_exact_comparison_across_scales ... ok
+test numeric::tests::decimal_mantissa_spans_the_whole_i128_range ... ok
+test numeric::tests::decimal_negation_and_abs_of_the_smallest_mantissa_are_exact ... ok
+test numeric::tests::decimal_parse_and_canonical ... ok
+test numeric::tests::decimal_promotion_rounds_once_to_double_and_to_float ... ok
+test numeric::tests::div_1_3_is_18_digit_decimal ... ok
+test numeric::tests::div_4_2_is_decimal_two ... ok
+test numeric::tests::div_decimal_by_zero_is_error ... ok
+test numeric::tests::div_double_by_zero_is_inf_not_error ... ok
+test numeric::tests::div_double_zero_by_zero_is_nan_not_error ... ok
+test numeric::tests::div_integer_by_zero_is_error ... ok
+test numeric::tests::div_integer_integer_returns_decimal ... ok
+test numeric::tests::double_specials_and_canonical ... ok
+test numeric::tests::decimal_to_double_fast_path_rounds_once_on_a_double_rounding_witness ... ok
+test numeric::tests::binary_arithmetic_equals_the_software_reference ... ok
+test numeric::tests::integer_parse_and_bounds ... ok
+test numeric::tests::magnitudes_outside_and_inside_the_aliasing_window_both_decide_exactly ... ok
+test numeric::tests::mul_integer_decimal_promotes_to_decimal ... ok
+test numeric::tests::numeric_promotion ... ok
+test numeric::tests::parse_double_still_accepts_plus_inf ... ok
+test numeric::tests::parse_double_xsd10_accepts_xsd10_lexicals ... ok
+test numeric::tests::parse_double_xsd10_rejects_plus_inf ... ok
+test numeric::tests::parse_float_still_accepts_plus_inf ... ok
+test numeric::tests::parse_float_xsd10_accepts_xsd10_lexicals ... ok
+test numeric::tests::parse_float_xsd10_rejects_plus_inf ... ok
+test numeric::tests::parse_integer_typed_range_checks ... ok
+test numeric::tests::round_decimal_nearest_ties_toward_positive_infinity ... ok
+test numeric::tests::the_bigint_fallback_answers_the_pairs_that_overflow_a_u128 ... ok
+test numeric::tests::bounded_double_writer_round_trips_every_binade_and_refuses_full_sinks ... ok
+test numeric::tests::the_exact_numeric_order_is_a_total_order_over_the_whole_tower ... ok
+test numeric::tests::the_promotion_based_operator_relation_is_untouched ... ok
+test numeric::tests::the_promotion_cycle_at_nineteen_significant_digits_is_closed ... ok
+test numeric::tests::the_specials_and_the_zeroes_order_as_the_value_space_says ... ok
+test numeric::tests::unary_minus_decimal ... ok
+test numeric::tests::unary_minus_double ... ok
+test numeric::tests::unary_minus_float ... ok
+test numeric::tests::unary_minus_integer ... ok
+test numeric::tests::unary_plus_is_identity_for_numerics ... ok
+test numeric::tests::unary_plus_non_numeric_is_error ... ok
+test numeric::tests::value_parse_xsd10_rejects_plus_inf_for_float_and_double ... ok
+test numeric::tests::value_parse_xsd10_unaffected_for_non_float_double_datatypes ... ok
+test numeric::tests::from_f64_closest_matches_the_exact_expansion ... ok
+test numeric::tests::explicit_legacy_decimal_division_matches_the_exact_oracle ... ok
+
+test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 347 filtered out; finished in 5.63s
+

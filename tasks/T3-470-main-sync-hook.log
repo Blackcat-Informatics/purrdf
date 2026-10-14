@@ -1,0 +1,4 @@
+Running as unit: run-p2493312-i31872110.scope; invocation ID: eeb8b222fdd24cf6b4313853a2d36d2a
+OK: non-Rust ratchet: 3 changed non-Rust path(s) in the staged index against 5144f5c1a7dc (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/retrieval/tests/real_producers.rs'.
+[paudley/470-v4-0-exact-tower-only-and-an-exact-or bbaf0e55f] Merge branch 'main' into paudley/470-v4-0-exact-tower-only-and-an-exact-or

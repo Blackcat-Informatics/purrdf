@@ -1,0 +1,55 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/lex)
+    Checking hybrid-array v0.4.15
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-events)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking cfg-if v1.0.4
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/iri)
+    Checking regex-automata v0.4.14
+    Checking digest v0.11.3
+   Compiling libc v0.2.186
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-core)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/cdt)
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/deflate)
+   Compiling rayon-core v1.13.0
+    Checking hashbrown v0.17.1
+    Checking crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking rayon v1.12.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/stack)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-algebra)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+error[E0277]: `&&mut AdmittedVec<(RetainedRow<<D as DatasetView>::Id>, _)>` is not an iterator
+    --> crates/sparql-eval/src/binop.rs:1234:27
+     |
+1234 |     'left: for (mu, r) in &per_row {
+     |                           ^^^^^^^^ `&&mut AdmittedVec<(RetainedRow<<D as DatasetView>::Id>, _)>` is not an iterator
+     |
+     = help: the trait `std::iter::Iterator` is not implemented for `&&mut AdmittedVec<(RetainedRow<<D as DatasetView>::Id>, _)>`
+help: the following other types implement trait `std::iter::IntoIterator`
+    --> crates/sparql-eval/src/workspace.rs:676:1
+     |
+ 676 | impl<'a, T> IntoIterator for &'a AdmittedVec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `&workspace::AdmittedVec<T>`
+...
+1198 | impl<T> IntoIterator for AdmittedVec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `workspace::AdmittedVec<T>`
+     = note: required for `&&mut AdmittedVec<(RetainedRow<<D as DatasetView>::Id>, _)>` to implement `std::iter::IntoIterator`
+     = note: the full name for the type has been written to '/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/45fc8c1efcedf25b/out/purrdf_sparql_eval-45fc8c1efcedf25b.long-type-4699679503746112269.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

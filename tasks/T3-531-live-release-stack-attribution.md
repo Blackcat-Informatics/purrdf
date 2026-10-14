@@ -1,0 +1,33 @@
+# #531 release-path stack attribution (2026-10-13)
+
+Current source at `330c55f8c` had no production diff. A **temporary, now removed** wasm-only `unreachable` at each original low-stack refusal branch (`stack::check` for correlated substitution; `eval_evaluated_with` for a VALUES node) changed only the terminal action from typed error to trap. The final checkout is clean. The first compile failed `-D dead-code` because the trap made `pattern_construct` unused; after retaining that original computation at the refusal site, the same direct standard release `cargo rustc -j1` passed. Both the failed and successful Cargo JSON/log receipts are retained as `T3-531-live-stack-probe{,-retry}-{artifact.jsonl,build.log}`.
+
+The successful Cargo artifact reports `profile.test:false`, unlike the rejected bench diagnostic. Its exact raw WASM is `/opt/.cargo/target/470-v4-0-exact-tower-only-and-an-exact-or-d6e85b64/wasm32-unknown-unknown/release/purrdf_wasm.wasm`, SHA-256 `4354199e3bf4ba8da9946302e332fc575d0e558175fb2cd833ee63d3d005d3c4`. Provided wasm-bindgen, the production `wasm-opt -Oz` feature flags, and provided wasm-link succeeded in the isolated Stage package; linked diagnostic SHA-256 `d1c01942f5f0211e77a22d1679570de59de1a7d8f8a9e7594d2d8eae5dcc5a1b`. A shallow linked query answered. The linker poisons/wraps trap aftermath; generated JS's `finally` then raises a secondary `purrdf_gate:__wbindgen_add_to_stack_pointer` trap that replaces the useful primary Error.stack. This does **not** mean the original query executes through that function on success.
+
+For call-index attribution only, the **same raw release artifact** went through the same bindgen and `-Oz` flags in an isolated Stage package **before** wasm-link (SHA-256 `315d75cd75304003092ab127393a8ed7516b24af1e35d8c1cc4c6a361c1697ad`). Direct generated `Dataset`/`QueryEngine` JS on fresh Node instances answered a shallow query and reproduced adjacent boundaries with the unchanged default wasm shadow stack and 64-KiB refusal reserve: LATERAL depth 234 answered and 235 trapped at the instrumented VALUES refusal; FILTER NOT EXISTS depth 133 answered and 134 trapped at instrumented correlated substitution. Pre-link is a diagnostic, not shipping qualification or a passing floor. Full trap stacks are `T3-531-live-{lateral,notexists}-prelink-stack.log`.
+
+**Index correction.** Node's `wasm-function[N]` is an absolute module index including **53 function imports**, verified by counting `wasm-dis` import declarations in the exact pre-link module. Its WAT defined-function label is `$(N-53)`. An initial provisional read mistakenly treated absolute indices as defined indices; that byte attribution was withdrawn before source changes. The table below is the corrected direct read of the exact optimized module's `global $0` shadow-stack prologues. Each WAT target edge was also checked in the caller's extracted WAT body (`T3-531-wat-defined-*.txt`). Names are deliberately withheld until independently confirmed against source: the production name section is stripped.
+
+| Active shape | Node absolute index | Function imports | WAT defined index | Prologue bytes | Direct WAT target toward next inner frame |
+|---|---:|---:|---:|---:|---:|
+| LATERAL | 871 | 53 | 818 | 1,584 | 2021 |
+| Both | 2074 | 53 | 2021 | 512 | 3643 |
+| Both | 3696 | 53 | 3643 | 336 | 3187 |
+| Both | 3240 | 53 | 3187 | 400 | 9531 |
+| Both | 9584 | 53 | 9531 | 112 | 3176 |
+| Both | 3229 | 53 | 3176 | 480 | 1392 on NOT EXISTS; LATERAL has a separate branch |
+| NOT EXISTS | 1445 | 53 | 1392 | 1,488 | 690 |
+| NOT EXISTS | 743 | 53 | 690 | 656 | 1605 |
+| NOT EXISTS | 1658 | 53 | 1605 | 448 | 1297 |
+| NOT EXISTS | 1350 | 53 | 1297 | 688 | 2021 |
+| NOT EXISTS | 2181 | 53 | 2128 | 656 | 3643 |
+
+The repeating LATERAL segment `[871,2074,3696,3240,9584,3229]` (outer to inner) reserves **3,424 bytes** across those six frames. The NOT EXISTS segment `[2181,3696,3240,9584,3229,1445,743,1658,1350,2074]` reserves **5,776 bytes** across ten frames. These are call-chain sums, **not** measured high-water slopes: transient children can peak between stack checks, and the historical high-water receipts belong to another compiled artifact. The 1,488-byte WAT `$1392` frame is therefore a concrete active function owner, but its Rust source identity still needs independent verification. Do not change its supposed source home by guess.
+
+A rejected bench-profile artifact has a similarly shaped named chain, but its function map uses **52** imports, not this release module's 53. For example, bench WAT `$1228` maps to its absolute function 1280 (`expr::eval_filter::<RdfDataset>`), and `$711` maps to absolute 763 (`Linked::filter::<RdfDataset>`). That topology is a source-name clue only. It does not establish that the corresponding unnamed release functions have those Rust identities or that bench frame sizes qualify the shipped package. Independent release-artifact attribution remains required before a source correction.
+
+The provided linker preserves 53 imports and WAT `$1392`'s five-parameter, 1,488-byte prologue in the **same instrumented diagnostic** linked module. The prior uninstrumented optimized package has a different four-parameter, 1,264-byte function at `$1392`, so indices cannot be carried between compilations. The linked diagnostic's generated JavaScript replaces the primary trap with its `finally` poison, leaving the pre-link trace as the call-index source; neither artifact supplies an uninstrumented shipping stack pass.
+
+The uninstrumented optimized package and original unchanged tests still fail the required floors (last measured synchronous SELECT 135 < 181, LATERAL 234 < 281, and NOT EXISTS 133 < 180). The synchronous SELECT path was not instrumented in this bounded diagnostic; its acceptance remains open. No #531 fix or package acceptance is claimed. The symbol-retaining bench-profile artifact was rejected because Cargo reported `profile.test:true` and provided wasm-link correctly refused its missing production stack-pointer export; see `T3-531-bench-diagnostic-disposition.md`.
+
+An unbuilt source-only idea to extract `eval_filter_sequence`'s forked branch was rejected before compilation. `EvalCtx::may_fork_row_loop` returns compile-time `false` on wasm32, so fork-only scheduler/harvest locals are not evidence of live default-path stack ownership. The temporary one-file draft was reverted and the implementation checkout is clean. The sequential branch's `Linked`, checkpoint, input row iteration and output builder really remain live across `Linked::filter`/EXISTS; moving their code into another frame alone would not release those owners.

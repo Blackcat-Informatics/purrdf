@@ -1,0 +1,10 @@
+{"name":"lateral","depth":2,"bytes":34364,"rows":1,"complete":true}
+{"name":"lateral","depth":4,"bytes":42588,"rows":1,"complete":true}
+{"name":"lateral","depth":8,"bytes":59036,"rows":1,"complete":true}
+{"name":"lateral","depth":16,"bytes":91932,"rows":1,"complete":true}
+{"name":"lateral","depth":32,"bytes":157724,"rows":1,"complete":true}
+{"name":"notExists","depth":2,"bytes":46140,"rows":5,"complete":true}
+{"name":"notExists","depth":4,"bytes":59260,"rows":4,"complete":true}
+{"name":"notExists","depth":8,"bytes":85500,"rows":4,"complete":true}
+{"name":"notExists","depth":16,"bytes":137980,"rows":4,"complete":true}
+{"name":"notExists","depth":32,"bytes":242940,"rows":4,"complete":true}

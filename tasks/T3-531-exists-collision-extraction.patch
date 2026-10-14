@@ -1,0 +1,75 @@
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 70078ee95..95ee55fcf 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -2308,29 +2308,7 @@ fn exists_prepared<D: DatasetView + Sync>(
+     // it is the body the eager copy would have been, reached inside the same window,
+     // and skipped exactly as that copy was.
+     if !ctx.in_substituted_exists {
+-        // The outer-bound variables (a concrete binding in the current row), built
+-        // only for this check: it is the one consumer that needs the set itself.
+-        let outer_bound = VarSchema::from_vars_admitted(
+-            schema
+-                .vars()
+-                .iter()
+-                .enumerate()
+-                .filter(|(i, _)| row[*i].is_some())
+-                .map(|(_, v)| v.clone()),
+-            &ctx.growth,
+-        )?;
+-        // A walk over the whole inner pattern, over a work list, so an `EXISTS` of any
+-        // depth is read to the end before "no collision" is answered.
+-        if let Some((var, intro)) = crate::governor::soundness::exists_row_collision_admitted(
+-            normalized,
+-            &outer_bound,
+-            &ctx.growth,
+-        )? {
+-            return Err(EvalError::ExistsScopeCollision {
+-                variable: ctx.growth.authored_text(var.as_str())?,
+-                intro: intro.as_str(),
+-            });
+-        }
++        check_exists_row_collision_admitted::<D>(normalized, row, schema, &ctx.growth)?;
+     }
+ 
+     // Correlated iff some free variable of the inner is bound in THIS row. Probed
+@@ -2619,6 +2597,39 @@ fn exists_prepared<D: DatasetView + Sync>(
+     }
+ }
+ 
++/// Keep the bounded outer-row schema and whole-pattern collision walk off the
++/// frame that descends through a substituted definition's next `EXISTS`.
++#[inline(never)]
++fn check_exists_row_collision_admitted<D: DatasetView + Sync>(
++    normalized: &GraphPattern,
++    row: &[Option<SolutionTerm<D::Id>>],
++    schema: &VarSchema,
++    growth: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
++    // The outer-bound variables (a concrete binding in the current row), built
++    // only for this check: it is the one consumer that needs the set itself.
++    let outer_bound = VarSchema::from_vars_admitted(
++        schema
++            .vars()
++            .iter()
++            .enumerate()
++            .filter(|(i, _)| row[*i].is_some())
++            .map(|(_, v)| v.clone()),
++        growth,
++    )?;
++    // A walk over the whole inner pattern, over a work list, so an `EXISTS` of any
++    // depth is read to the end before "no collision" is answered.
++    if let Some((var, intro)) =
++        crate::governor::soundness::exists_row_collision_admitted(normalized, &outer_bound, growth)?
++    {
++        return Err(EvalError::ExistsScopeCollision {
++            variable: growth.authored_text(var.as_str())?,
++            intro: intro.as_str(),
++        });
++    }
++    Ok(())
++}
++
+ /// Native restriction of a pure EXISTS relation; `None` keeps the ordinary
+ /// definition/probe strategy for any expression or modifier boundary.
+ #[allow(

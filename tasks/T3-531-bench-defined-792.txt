@@ -1,0 +1,6 @@
+ (func $792 (param $0 i32)
+  (call $19615
+   (local.get $0)
+   (i32.const 2346628)
+  )
+ )

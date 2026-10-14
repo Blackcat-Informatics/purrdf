@@ -1,0 +1,5 @@
+RuntimeError: unreachable
+    at purrdf_gate:__wbindgen_add_to_stack_pointer (wasm://wasm/07ddc1ea:wasm-function[18815]:0x1ddef5b)
+    at QueryEngine.select (file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/.stage/v4-0-exact-tower-only-and-an-exact-or/tasks/T3-531-live-stack-probe-js/pkg/purrdf_wasm.js:4181:18)
+    at QueryEngine.select (file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/.stage/v4-0-exact-tower-only-and-an-exact-or/tasks/T3-531-live-stack-probe-js/index.mjs:1244:46)
+    at file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/.stage/v4-0-exact-tower-only-and-an-exact-or/tasks/T3-531-live-stack-probe-js/[eval1]:1:534

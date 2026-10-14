@@ -1,0 +1,28 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 12s
+     Running tests/lateral_e2e.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/736a0c1c84ccdfa2/out/lateral_e2e-736a0c1c84ccdfa2)
+
+running 20 tests
+test lateral_graph_rhs_is_scoped_per_row ... ok
+test lateral_bnode_bound_variable_in_a_filter ... ok
+test exists_inside_lateral_rhs_correlates ... ok
+test lateral_minus_rhs_disjoint_domain_not_flipped ... ok
+test lateral_inside_exists_pattern_evaluates ... ok
+test lateral_literal_bound_variable_is_injected ... ok
+test lateral_bind_rhs_shared_var ... ok
+test lateral_path_rhs_is_correlated ... ok
+test lateral_predicate_position_is_injected ... ok
+test lateral_optional_rhs_pads_labelless_subject ... ok
+test lateral_shared_variable_is_injected_as_constant ... ok
+test lateral_rhs_schema_union_is_stable ... ok
+test lateral_subselect_nonprojected_var_is_not_correlated ... ok
+test lateral_subselect_star_is_top_1_per_group ... ok
+test lateral_triple_term_bound_variable_in_a_filter ... ok
+test lateral_values_rhs_joins_per_row ... ok
+test nested_lateral_reenters_the_substitution_guard ... ok
+test lateral_truncation_commits_per_left_row ... ok
+test lateral_union_rhs_substitutes_both_branches ... ok
+test lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+

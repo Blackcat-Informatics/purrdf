@@ -1,0 +1,30 @@
+{
+  "issue": 470,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "v4.0: exact tower only, and an exact-or-18-half-even default division policy",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "423": "Arbitrary-precision numeric tower for exact reasoned mathematics",
+    "422": "Bounded numerics that never fail silently: documented xsd:integer/xsd:decimal limits, typed overflow errors, exact comparison at any size"
+  },
+  "related": [
+    {
+      "number": 423,
+      "title": "Arbitrary-precision numeric tower for exact reasoned mathematics",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 25,
+    "semantic-identity-loss": 2,
+    "performance": 2
+  },
+  "coverage": [
+    "issue #470 + 6 comment(s) via github",
+    "link crawl: 2 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['v4.0:', 'exact', 'tower']: 1 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

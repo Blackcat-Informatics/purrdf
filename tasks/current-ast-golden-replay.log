@@ -1,0 +1,9 @@
+    Finished `test` profile [optimized] target(s) in 0.11s
+     Running tests/ast_snapshot.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-algebra/05a1f14c16421db1/out/ast_snapshot-05a1f14c16421db1)
+
+running 2 tests
+test regenerate_ast_snapshot ... ignored, regeneration path: writes the committed golden
+test the_parser_output_over_every_in_repo_request_matches_the_golden ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.10s
+

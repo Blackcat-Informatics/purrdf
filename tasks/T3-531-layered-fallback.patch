@@ -1,0 +1,33 @@
+diff --git crates/sparql-eval/src/binop.rs crates/sparql-eval/src/binop.rs
+index a84f90b90..45f71a60e 100644
+--- crates/sparql-eval/src/binop.rs
++++ crates/sparql-eval/src/binop.rs
+@@ -632,6 +632,19 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
+         }
+         return evaluated;
+     }
++    eval_deferred_lateral_layered(slot, &current, source, ctx)
++}
++
++/// Keep disagreeing-layer work out of the merged-row recursive path. Its
++/// successive copies and placeholders are needed only when merging fails.
++#[inline(never)]
++fn eval_deferred_lateral_layered<D: DatasetView + Sync>(
++    slot: &crate::deferred_exists::DeferredLateral,
++    current: &crate::expr::SubstitutionRow,
++    source: crate::deferred_exists::CorrelatedSource<'_>,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    let site = &slot.site;
+     // Layers that disagree: each is substituted in turn, the row last, every nested
+     // placeholder carried from one copy to the next.
+     let sites = crate::deferred_exists::nested_sites(&site.body, source, ctx)?;
+@@ -639,7 +652,7 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
+     let mut placeholders: Option<
+         crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
+     > = None;
+-    let layered = slot.env.then(&current, &site.vars, &ctx.growth)?;
++    let layered = slot.env.then(current, &site.vars, &ctx.growth)?;
+     for layer in layered.layers(&ctx.growth)? {
+         let from: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
+         let mut deferral = crate::expr::Deferral::new(placeholders.as_deref(), &sites);

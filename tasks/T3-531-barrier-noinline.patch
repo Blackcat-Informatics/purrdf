@@ -1,0 +1,12 @@
+diff --git crates/sparql-eval/src/shapes/barrier.rs crates/sparql-eval/src/shapes/barrier.rs
+index 2d8abcaf7..46b5308a9 100644
+--- crates/sparql-eval/src/shapes/barrier.rs
++++ crates/sparql-eval/src/shapes/barrier.rs
+@@ -335,6 +335,7 @@ fn stopped<D: DatasetView + Sync>(
+ /// Return an indexed original inner for the existing existential publication
+ /// seam, or None for a nonmatch. An accepted producer never retries on failure.
+ /// The caller must continue through existential_evidence/absence/VM negation.
++#[inline(never)]
+ pub(crate) fn inner<D: DatasetView + Sync>(
+     site: usize,
+     pattern: &GraphPattern,

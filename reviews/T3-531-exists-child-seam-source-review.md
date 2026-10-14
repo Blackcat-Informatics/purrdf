@@ -1,0 +1,8 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# #531 EXISTS child seam source review (2026-10-13)
+
+Scoped source parity verdict: **PASS for the current recursive adapter only**. Compared `expr.rs::ExistsChild::run_recursive` with the published `exists_prepared` uncached probe and definition branches. The uncached probe retains its prepared normalized body/source owner and map while it evaluates; it restores the correlated-map scope before the same truncation barrier, `ExistsProbeAnswered` charge, inner storage/index admission, optional cache insertion and evidence/plain answer. The cached probe still bypasses child evaluation. The definition arm selects `witness_wrapped` and its sites only for no-evidence first-witness mode, runs the same Shapes barrier before `eval_correlated`, restores the map before `ExistsDefinitionResume::finish`, and retains its restricted memo key through completion. The `PreparedSite` source owner remains in lexical scope through child and finish. No new default allocation was found in the enum selection itself.
+
+The two `PreparedExists::Pattern` matches return `Ok(false)` for an impossible folded state; current call sites construct `ExistsChild` only after the folded case returns. This is not a demonstrated current-path defect, but a future constructor should fail explicitly if it can pass a folded site. The receipt `tasks/T3-531-exists-child-seam-compile-receipt.md` establishes library compilation only. It does not establish suspended child execution, VM-row resume, first-error parity, or WASM depth.

@@ -1,0 +1,13 @@
+MDBOOK_OUTPUT='{"xgettext": {"pot-file": "messages.pot"}}' mdbook build -d docs/book/po docs/book
+ INFO Book building has started
+ INFO Running the xgettext backend
+ INFO Invoking the "xgettext" renderer
+msgmerge --quiet --update --backup=none docs/book/po/zh-Hans.po docs/book/po/messages.pot
+docs/book/po/zh-Hans.po:9671: duplicate message definition...
+docs/book/po/zh-Hans.po:9653: ...this is the location of the first definition
+docs/book/po/zh-Hans.po:9685: duplicate message definition...
+docs/book/po/zh-Hans.po:9662: ...this is the location of the first definition
+docs/book/po/zh-Hans.po:9689: duplicate message definition...
+docs/book/po/zh-Hans.po:9668: ...this is the location of the first definition
+msgmerge: found 3 fatal errors
+make: *** [Makefile:347: book-po-update] Error 1

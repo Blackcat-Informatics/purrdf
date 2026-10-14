@@ -1,0 +1,65 @@
+{
+  "name": "@blackcatinformatics/purrdf",
+  "version": "3.0.1",
+  "description": "A wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS (DataFactory/Dataset/Stream) API. Quoted-triple terms and directional literals included.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "author": "Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Blackcat-Informatics/purrdf"
+  },
+  "keywords": [
+    "rdf",
+    "rdf-1.2",
+    "rdf-star",
+    "rdfjs",
+    "wasm",
+    "turtle",
+    "n-quads"
+  ],
+  "main": "./index.mjs",
+  "module": "./index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    },
+    "./cloudflare": {
+      "types": "./cloudflare.d.ts",
+      "import": "./cloudflare.mjs"
+    },
+    "./purrdf_wasm_bg.wasm": "./pkg/purrdf_wasm_bg.wasm"
+  },
+  "files": [
+    "licenses/",
+    "README.md",
+    "index.mjs",
+    "index.d.ts",
+    "cloudflare.mjs",
+    "cloudflare.d.ts",
+    "pkg/purrdf_jspi.mjs",
+    "pkg/purrdf_wasm.js",
+    "pkg/purrdf_wasm.d.ts",
+    "pkg/purrdf_wasm_bg.wasm",
+    "pkg/purrdf_wasm_bg.wasm.d.ts"
+  ],
+  "scripts": {
+    "check": "npm run typecheck && npm test && npm run smoke:pack",
+    "smoke:pack": "node tests/pack-smoke.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.types.json"
+  },
+  "devDependencies": {
+    "graphql": "16.14.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "homepage": "https://github.com/Blackcat-Informatics/purrdf/tree/main/crates/rdf-wasm",
+  "bugs": {
+    "url": "https://github.com/Blackcat-Informatics/purrdf/issues"
+  }
+}

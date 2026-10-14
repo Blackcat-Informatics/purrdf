@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.38s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-geo-kernel/a0be4c09f32b19e2/out/purrdf_geo_kernel-a0be4c09f32b19e2)
+
+running 1 test
+test metric::tests::threshold_promotion_refuses_changed_controls_before_conversion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 713 filtered out; finished in 0.00s
+

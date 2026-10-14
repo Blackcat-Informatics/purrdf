@@ -1,0 +1,329 @@
+diff --git crates/sparql-eval/src/binop.rs crates/sparql-eval/src/binop.rs
+index a84f90b90..dfd7a97a8 100644
+--- crates/sparql-eval/src/binop.rs
++++ crates/sparql-eval/src/binop.rs
+@@ -1046,6 +1046,41 @@ impl ApplicationMode for &purrdf_sparql_algebra::algebra::ApplicationPolicy {
+     }
+ }
+ 
++/// The live left-side owners retained while a LATERAL right operand recurses.
++/// Its concrete box and original admission are held by `WorkspaceBox`.
++struct ApplicationContinuation<'p, I: ViewTermId> {
++    per_row: crate::AdmittedVec<(RetainedRow<I>, SolutionSeq<I>)>,
++    right_schema: VarSchema,
++    left_schema: crate::solution::SharedSchema,
++    deferred: Option<crate::deferred_exists::DeferredLateral>,
++    left: SolutionSeq<I>,
++    lift: Option<Lift<'p>>,
++}
++
++/// Construct the retained row state outside the per-row recursive call frame.
++#[inline(never)]
++fn prepare_application_continuation<'p, D: DatasetView + Sync>(
++    left: SolutionSeq<D::Id>,
++    lift: Lift<'p>,
++    deferred: Option<crate::deferred_exists::DeferredLateral>,
++    ctx: &EvalCtx<'_, D>,
++) -> Result<crate::workspace::WorkspaceBox<ApplicationContinuation<'p, D::Id>>, EvalError> {
++    let left_schema = left.schema.clone();
++    let right_schema = VarSchema::default();
++    let per_row = crate::AdmittedVec::with_capacity(left.rows.len(), &ctx.growth)?;
++    crate::workspace::WorkspaceBox::new_admitted(
++        ApplicationContinuation {
++            per_row,
++            right_schema,
++            left_schema,
++            deferred,
++            left,
++            lift: Some(lift),
++        },
++        &ctx.growth,
++    )
++}
++
+ #[inline(never)]
+ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+     node: &GraphPattern,
+@@ -1126,23 +1161,28 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+         ));
+     }
+ 
+-    let left_schema = l.schema.clone();
+-
+     // Evaluate `right` once per left row with μ substituted in; accumulate the
+     // per-row results and the union of their schemas (stable across rows for the
+     // SERVICE ?var use, but computed generally).
+-    let mut right_schema = VarSchema::default();
+-    // Each left row μ paired with the per-row `right` result it drives.
+-    let mut per_row = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
++    // Each left row μ remains paired with the per-row `right` result it drives.
++    let mut state = prepare_application_continuation(l, lift, deferred, ctx)?;
++    let ApplicationContinuation {
++        left,
++        lift,
++        left_schema,
++        right_schema,
++        per_row,
++        deferred,
++    } = &mut *state;
+     let mut emitted = 0usize;
+-    for mu in &l.rows {
++    for mu in &left.rows {
+         let evaluated = if M::DECLARED {
+             let policy = mode
+                 .policy()
+                 .expect("declared application carries its policy");
+-            evaluate_application_row(right, mu, &left_schema, policy, ctx)?
+-        } else if let Some(slot) = &deferred {
+-            eval_deferred_lateral(slot, mu, &left_schema, ctx)?
++            evaluate_application_row(right, mu, left_schema, policy, ctx)?
++        } else if let Some(slot) = deferred.as_ref() {
++            eval_deferred_lateral(slot, mu, left_schema, ctx)?
+         } else {
+             // `right` is a plan node unless this `LATERAL` is itself part of a substituted
+             // copy; only a plan node's nested sites may be kept by its address.
+@@ -1155,7 +1195,7 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+                 sites,
+                 plan_map: None,
+             };
+-            eval_correlated(right, mu, &left_schema, source, ctx)?
++            eval_correlated(right, mu, left_schema, source, ctx)?
+         };
+         let r = match evaluated {
+             Evaluated::Complete(seq) => seq,
+@@ -1164,7 +1204,11 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+                 // discarded entirely rather than emitted short. Absorbing here (rather
+                 // than merging the partial block) is what keeps the surviving rows a
+                 // sound bound instead of a bag with one truncated block inside it.
+-                drop(lift.absorb(1, truncated));
++                drop(
++                    lift.as_mut()
++                        .expect("LATERAL owns its original lift")
++                        .absorb(1, truncated),
++                );
+                 break;
+             }
+         };
+@@ -1181,13 +1225,13 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+     }
+ 
+     let out = left_schema
+-        .union_admitted(&right_schema, &ctx.growth)?
++        .union_admitted(right_schema, &ctx.growth)?
+         .shared_admitted(&ctx.growth)?;
+     let left_len = left_schema.len();
+     let out_len = out.len();
+     let cell_ceiling = ctx.cell_row_ceiling(out_len);
+     let mut rows = RowsBuilder::new(&ctx.growth);
+-    'left: for (mu, r) in &per_row {
++    'left: for (mu, r) in per_row.iter() {
+         let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
+         for nu in &r.rows {
+             // Test compatibility before allocating the joined row. The cell ceiling is
+@@ -1217,6 +1261,7 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+             )?)?;
+         }
+     }
++    let lift = state.lift.take().expect("LATERAL owns its original lift");
+     Ok(lift.finish(SolutionSeq {
+         schema: out,
+         rows: rows.finish()?,
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 70078ee95..a673064c4 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -60,7 +60,10 @@ use crate::error::EvalError;
+ use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
+ use crate::governor::lift::{Evaluated, Lift, Truncation};
+ use crate::scratch::SolutionTerm;
+-use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
++use crate::solution::{
++    RetainedRow, RowBag, RowBagIntoIter, RowsBuilder, SharedSchema, Solution, SolutionSeq,
++    VarSchema,
++};
+ 
+ use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+ use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+@@ -218,6 +221,61 @@ pub(crate) fn filter_evidence<D: DatasetView + Sync>(
+     Ok((value == Some(true) || undecided).then_some(evidence))
+ }
+ 
++/// The state whose owners must survive an expression's recursive EXISTS evaluation.
++/// The concrete box is admitted at construction; its payload dies before that grant.
++enum FilterInput<I: ViewTermId> {
++    Forked(RowBag<I>),
++    Sequential(Option<RowBagIntoIter<I>>),
++}
++
++struct FilterContinuation<'p, 'e, I: ViewTermId> {
++    output: Option<RowsBuilder<I>>,
++    linked: crate::vm::Linked<'e, I>,
++    checkpoint: crate::row_checkpoint::RowCheckpoint,
++    input: FilterInput<I>,
++    schema: SharedSchema,
++    lift: Option<Lift<'p>>,
++}
++
++/// Build the full live FILTER state outside the frame that calls `linked.filter`.
++/// Keep checkpoint, program, link and output preparation in their original order.
++#[inline(never)]
++fn prepare_filter_continuation<'p, 'e, D: DatasetView + Sync>(
++    node: &'p GraphPattern,
++    expr: &'e Expression,
++    seq: SolutionSeq<D::Id>,
++    lift: Lift<'p>,
++    forked: bool,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<crate::workspace::WorkspaceBox<FilterContinuation<'p, 'e, D::Id>>, EvalError> {
++    let schema = seq.schema.clone();
++    let checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
++        ctx,
++        crate::governor::ChargePoint::RowExpressionEvaluation,
++        forked,
++        seq.rows.len(),
++    );
++    let program = crate::vm::program_at(ctx, node, expr)?;
++    let linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
++    let output = (!forked).then(|| RowsBuilder::new(&ctx.growth));
++    let input = if forked {
++        FilterInput::Forked(seq.rows)
++    } else {
++        FilterInput::Sequential(Some(seq.rows.into_iter()))
++    };
++    crate::workspace::WorkspaceBox::new_admitted(
++        FilterContinuation {
++            output,
++            linked,
++            checkpoint,
++            input,
++            schema,
++            lift: Some(lift),
++        },
++        &ctx.growth,
++    )
++}
++
+ // Share the sequence loop without a second call boundary or native result copy.
+ #[allow(clippy::inline_always)]
+ #[inline(always)]
+@@ -228,7 +286,6 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+     lift: Lift<'_>,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    let schema = seq.schema.clone();
+     // The `row-expression-evaluation` charge point, charged **per row** rather than per
+     // sub-expression so that the cost of a `FILTER` is a property of the data it sees
+     // and not of how the planner happened to shape the predicate. Charged before the
+@@ -242,15 +299,22 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+     // `crate::row_checkpoint`): a forked loop records the admissions in its workers and
+     // commits them in source order after the join, so both paths charge the same
+     // sequence and trip at the same row.
+-    let point = crate::governor::ChargePoint::RowExpressionEvaluation;
+     let forked =
+         !ctx.growth.is_bounded() && ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+-    let mut checkpoint =
+-        crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
+-    let program = crate::vm::program_at(ctx, node, expr)?;
+-    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
++    let mut state = prepare_filter_continuation(node, expr, seq, lift, forked, ctx)?;
++    let FilterContinuation {
++        input,
++        schema,
++        checkpoint,
++        linked,
++        output,
++        ..
++    } = &mut *state;
+     let rows = if forked {
+-        let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
++        let FilterInput::Forked(input) = input else {
++            unreachable!("forked FILTER owns its original row bag")
++        };
++        let admissible = &input[..checkpoint.forked_len(input.len())];
+         // Harvesting, not plain: a predicate can reach a property function through an
+         // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
+         // context. Dropping it would make a governed receipt depend on whether the row
+@@ -273,7 +337,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+                 {
+                     return Ok(());
+                 }
+-                let (keep, evidence) = linked.filter(expr, row, &schema, child)?;
++                let (keep, evidence) = linked.filter(expr, row, schema, child)?;
+                 if keep {
+                     acc.push(
+                         row.clone_admitted(&child.growth)?
+@@ -287,7 +351,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+             |worker| {
+                 (
+                     core::mem::take(&mut worker.0.witness),
+-                    worker.1.finish(&mut worker.0, &checkpoint),
++                    worker.1.finish(&mut worker.0, checkpoint),
+                 )
+             },
+         )?;
+@@ -299,14 +363,18 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+         // A worker stopped on what its rows spent, short of what the commit charged for
+         // them: the rest of the loop runs here, in order, as the sequential loop does.
+         if let Some(resume) = resume {
+-            let rest = &seq.rows[resume..];
+-            let mut checkpoint =
+-                crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, false, rest.len());
++            let rest = &input[resume..];
++            let mut checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
++                ctx,
++                crate::governor::ChargePoint::RowExpressionEvaluation,
++                false,
++                rest.len(),
++            );
+             for row in rest {
+                 if checkpoint.pass(ctx).is_err() {
+                     break;
+                 }
+-                let (keep, evidence) = linked.filter(expr, row, &schema, ctx)?;
++                let (keep, evidence) = linked.filter(expr, row, schema, ctx)?;
+                 if keep {
+                     rows.push(
+                         row.clone_admitted(&ctx.growth)?
+@@ -323,17 +391,29 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+         )
+         .finish()?
+     } else {
+-        let mut rows = RowsBuilder::new(&ctx.growth);
+-        for row in seq.rows {
++        let FilterInput::Sequential(input) = input else {
++            unreachable!("sequential FILTER owns its original row iterator")
++        };
++        let rows = output
++            .as_mut()
++            .expect("sequential FILTER owns output builder");
++        for row in input
++            .as_mut()
++            .expect("sequential FILTER owns its original row iterator")
++        {
+             if checkpoint.pass(ctx).is_err() {
+                 break;
+             }
+-            let (keep, evidence) = linked.filter(expr, &row, &schema, ctx)?;
++            let (keep, evidence) = linked.filter(expr, &row, schema, ctx)?;
+             if keep {
+                 rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
+             }
+         }
+-        rows.finish()?
++        drop(input.take());
++        output
++            .take()
++            .expect("sequential FILTER owns output builder")
++            .finish()?
+     };
+     if let Some(tripped) = ctx.expression_barrier.observed() {
+         return Ok(Evaluated::Truncated(Truncation::barred_at(
+@@ -342,6 +422,8 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+             schema.clone(),
+         )));
+     }
++    let schema = schema.clone();
++    let lift = state.lift.take().expect("FILTER owns its original lift");
+     Ok(lift.finish(SolutionSeq { schema, rows }))
+ }
+ 

@@ -1,0 +1,33 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2.83s
+     Running tests/exists_sep0007.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/b742b0f4958912e3/out/exists_sep0007-b742b0f4958912e3)
+
+running 25 tests
+test matrix_is_complete ... ok
+test exists_bare_subselect_inner ... ok
+test exists_over_limit_one_subselect ... ok
+test exists_over_distinct_subselect ... ok
+test exists_optional_beside_a_bgp_answers_per_spec ... ok
+test exists_sep_disconnected_variable_example ... ok
+test exists_bind_fresh_variable_evaluates ... ok
+test exists_over_offset_subselect_commits_per_row ... ok
+test exists_having_sees_only_the_subselect_scope ... ok
+test exists_correlated_graph_variable_e2e ... ok
+test exists_triple_nesting_alternating_polarity ... ok
+test exists_property_function_inner_sees_outer_binding ... ok
+test exists_over_group_by_subselect_correlates ... ok
+test exists_optional_padding_answers_per_spec ... ok
+test exists_graph_iri_name_with_correlated_body ... ok
+test exists_over_order_by_subselect ... ok
+test exists_bare_values_inner ... ok
+test exists_quoted_triple_outer_binding_correlates ... ok
+test exists_blank_node_outer_binding_correlates ... ok
+test exists_unprojected_outer_variable_stays_unseen ... ok
+test exists_sep_count_example_answers ... ok
+test exists_nested_not_exists_correlates ... ok
+test not_exists_optional_padding_does_not_fabricate ... ok
+test exists_sep_minus_example_answers ... ok
+test not_exists_nested_not_exists_correlates ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,14 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Independent public exact API removal review
+
+**Verdict: scoped source PASS; full #443/#470 remains OPEN.** Read-only review of the dirty #470 checkout at HEAD `2a1a15dcef2b97d87f0af29a208253db0b7df596`. Source SHA-256: `crates/xsd/src/numeric.rs` `06c5981be38562753b827896c330d86a24f87210d88da53c4dc35d8968968c5c`, `lib.rs` `d7134194dd1ed5ea4ee2f48735bb8ecfa233f1458b156e43808e49d62cae1884`, `exact/decimal.rs` `0b4b2ea96635cdecc21b585fbd609d3f3b1bcc3756a7eaaf4fdef982f0c3ea24`, `exact/error.rs` `fd19d9289aa37bdd1e7f767b582cda5397dc188b60859cc5e52a68b3fd991c43`, `exact/rational.rs` `e480136c90801a259a42265415849c20c732288df0df0de35a728bdae0a2839b`, and `crates/sparql-eval/src/modifier.rs` `5dfa52d49333aa7a18b4dbf906f66feecf06bb22b5c6a9f4295ff74e2fd85f91`. No build or test was run by this reviewer.
+
+The machine-word `numeric::Decimal` is crate-private and is absent from the XSD root exports. `numeric::parse_decimal` and `decimal_render_cost` instead expose `exact::Decimal`. Exact decimal's bounded conversions are internal and `to_bounded` is a lossless `Option`; only XSD internal callers use them. The old bounded rational module, its public module declaration, and exact rational's bounded conversions are removed together. A workspace source search found no external references to those bounded APIs or removed `BoundedTarget` variants. The remaining public `BoundedTarget::{I128,I64}` retain the FOCA0003 mapping. The changed public tests use exact payload/lexical assertions across the former width boundary rather than the removed variants and narrowings.
+
+Evaluator sort classification now checks exact integer coefficient fit and exact decimal coefficient/scale fit, which matches the former bounded-versus-big dispatch. `MagnitudeBound` treats every wider integer, decimal or duration coefficient as unproved (`u128::MAX`); its saturating merge cannot turn that back into a proof. The duration aggregate finalizer now calls the admitted seconds-copy constructor and transfers its frame grant into the result, instead of building an unadmitted duration from an owned decimal. Storage refusal remains operational; value-space refusal remains an expression error. No material API, semantic, ownership or error-code defect was found in this slice.
+
+Nonblocking prose cleanup: `exact/error.rs` documents `OutOfRange` as though a bounded decimal still exists, leaving a malformed sentence about FOCA0001. This should be corrected before final documentation generation, but the actual public enum and code mapping are coherent.
+
+The source is uncommitted and other numeric/temporal code is moving. This review neither supplies a compilation receipt nor qualifies the exact-or-18 defaults, portable hosts, performance thresholds or full issue contracts.

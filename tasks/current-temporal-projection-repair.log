@@ -1,0 +1,15 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 2m 09s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-shapes/f145aca511cf696c/out/purrdf_shapes-f145aca511cf696c)
+
+running 4 tests
+test json_schema::temporal_order::tests::calendar_arithmetic_round_trips ... ok
+test json_schema::temporal_order::tests::date_patterns_agree_with_the_validator ... ok
+test json_schema::temporal_order::tests::time_patterns_agree_with_the_validator ... ok
+test json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 966 filtered out; finished in 3.46s
+

@@ -1,0 +1,82 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-events)
+   Compiling hybrid-array v0.4.15
+   Compiling cpufeatures v0.3.0
+   Compiling regex-automata v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/lex)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/testkit)
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/alloc-probe)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4m 13s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 39 tests
+test binop::tests::optional_inline_filter_excludes_failing_pairings ... ok
+test engine::tests::filter_not_exists_antijoin_returns_correct_rows ... ok
+test engine::tests::shacl_prebinding_bound_in_filter_only_group ... ok
+test binop::tests::union_filter_unbound_branch_yields_zero_but_query_not_empty ... ok
+test binop::tests::union_filter_true_branch_contributes_unit_solution ... ok
+test eval::tests::filter_exists_builds_inner_index_once_across_outer_rows ... ok
+test engine::tests::shacl_prebinding_union_filter_only_branch ... ok
+test eval::tests::filter_exists_forced_parallel_and_sequential_agree ... ok
+test eval::tests::optional_filter_forced_parallel_and_sequential_agree ... ok
+test eval::tests::filter_regex_and_numeric_forced_parallel_and_sequential_agree ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_filter_certainly_bound ... ok
+test engine::tests::substitute_visible_inside_filter_exists_disjunction ... ok
+test expr::tests::arithmetic_filter_not_exists_survives_empty_inner_group ... ok
+test expr::tests::correlated_filter_exists_memo_off_matches_memo_on ... ok
+test expr::tests::correlated_filter_exists_returns_correct_result ... ok
+test expr::tests::correlated_arithmetic_filter_not_exists_uses_outer_binding ... ok
+test expr::tests::filter_duration_equality_over_bgp ... ok
+test expr::tests::filter_duration_equality_negated_over_bgp ... ok
+test expr::tests::filter_instant_difference_over_bgp ... ok
+test expr::tests::exists_nested_in_a_filter_expression_with_a_lateral_inner_correlates ... ok
+test expr::tests::filter_instant_plus_duration_over_bgp ... ok
+test expr::tests::filter_not_exists_over_bgp ... ok
+test expr::tests::filter_negation_separates_false_from_error ... ok
+test expr::tests::filter_numeric_over_bgp ... ok
+test expr::tests::filter_over_a_bound_duration_round_trips_through_interning ... ok
+test governor::soundness::tests::exists_inside_a_filter_expression_is_found_by_the_walk ... ok
+test parallel::tests::unsafe_inside_nested_exists_filter_is_detected ... ok
+test predicate_use::tests::a_call_reachable_only_through_filter_exists_is_still_found ... ok
+test geo::functions::standard_tests::a_governor_trip_inside_geodesy_withholds_the_filter_or_bind_answer ... ok
+test predicate_use::tests::an_unregistered_iri_inside_filter_exists_is_data ... ok
+test geo::functions::standard_tests::original_carrier_construction_refusal_is_fatal_in_filter_and_bind ... ok
+test geo::functions::standard_tests::a_real_precision_exhaustion_remains_fatal_in_filter_and_bind ... ok
+test user_fn::tests::native_expression_error_in_a_filter_drops_only_that_solution ... ok
+test user_fn::tests::native_score_filter_over_parallel_threshold ... ok
+test user_fn::tests::native_score_in_filter_pushes_down ... ok
+test workspace::owned_row_regressions::certainty_lateral_context_and_filter_requirements_use_original_admitted_home ... ok
+test remote::tests::a_block_a_filter_reads_is_not_moved_past_it_and_is_joined_once ... ok
+test row_checkpoint_gate::a_forked_filter_trips_at_the_sequential_row_under_every_fuel_budget ... ok
+test row_checkpoint_gate::a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 1574 filtered out; finished in 7.61s
+

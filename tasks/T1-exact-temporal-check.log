@@ -1,0 +1,76 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+crates/xsd/src/temporal.rs:1675:27: error[E0425]: cannot find function `align_decimals` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3455:27: error[E0425]: cannot find function `decimal_mul_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3462:27: error[E0425]: cannot find function `decimal_mul_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3469:34: error[E0425]: cannot find function `decimal_mul_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3473:27: error[E0425]: cannot find function `decimal_mul_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3495:28: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3500:27: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3505:35: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3507:27: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3554:43: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3558:45: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3574:5: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:3589:5: error[E0425]: cannot find function `decimal_div_raw` in this scope: not found in this scope
+crates/xsd/src/temporal.rs:43:29: error: unused import: `Integer`
+crates/xsd/src/temporal.rs:44:5: error: unused import: `crate::numeric::Decimal as BoundedDecimal`
+crates/xsd/src/ops.rs:402:44: error[E0308]: mismatched types: expected `decimal::Decimal`, found `numeric::Decimal`
+crates/xsd/src/ops.rs:424:49: error[E0308]: mismatched types: expected `decimal::Decimal`, found `numeric::Decimal`
+crates/xsd/src/ops.rs:428:84: error[E0308]: mismatched types: expected `numeric::Decimal`, found `decimal::Decimal`
+crates/xsd/src/range.rs:581:86: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/range.rs:583:44: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:190:30: error[E0599]: no method named `mantissa` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:260:61: error[E0599]: no method named `mantissa` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:263:56: error[E0599]: no method named `mantissa` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:267:39: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:268:37: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1183:42: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1188:29: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1210:18: error[E0599]: no method named `mantissa` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1216:60: error[E0308]: mismatched types: expected `u8`, found `u32`
+crates/xsd/src/temporal.rs:1452:47: error[E0599]: no method named `cmp_exact` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1498:18: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1504:18: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1508:19: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1511:19: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1528:55: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1529:55: error[E0599]: no method named `whole_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1532:19: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1535:19: error[E0599]: no method named `frac_part` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1581:23: error[E0599]: no method named `cmp_exact` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1621:39: error[E0599]: no method named `cmp_exact` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/temporal.rs:1685:7: error[E0599]: no method named `mantissa` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1687:41: error[E0308]: mismatched types: expected `u8`, found `u32`
+crates/xsd/src/temporal.rs:1701:19: error[E0599]: no method named `whole_part` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1705:24: error[E0599]: no method named `frac_part` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1810:18: error[E0599]: no method named `mantissa` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1812:15: error[E0599]: no method named `mantissa` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1839:64: error[E0308]: mismatched types: expected `u8`, found `u32`
+crates/xsd/src/temporal.rs:1893:18: error[E0599]: no method named `mantissa` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1895:15: error[E0599]: no method named `mantissa` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:1922:35: error[E0308]: mismatched types: expected `u8`, found `u32`
+crates/xsd/src/temporal.rs:2351:28: error[E0599]: no method named `mantissa` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:3654:28: error[E0599]: no method named `whole_part` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:3655:31: error[E0599]: no method named `frac_part` found for reference `&decimal::Decimal` in the current scope: method not found in `&decimal::Decimal`
+crates/xsd/src/temporal.rs:235:9: error[E0507]: cannot move out of `self.seconds` which is behind a shared reference: move occurs because `self.seconds` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:361:29: error[E0507]: cannot move out of `value.second` which is behind a shared reference: move occurs because `value.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:2008:17: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: `dt.second` is moved here
+crates/xsd/src/temporal.rs:2022:25: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: move occurs because `dt.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:2079:17: error[E0507]: cannot move out of `t.second` which is behind a shared reference: `t.second` is moved here
+crates/xsd/src/temporal.rs:2093:25: error[E0507]: cannot move out of `t.second` which is behind a shared reference: move occurs because `t.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:2884:17: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: move occurs because `dt.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3000:68: error[E0507]: cannot move out of `t.second` which is behind a shared reference: move occurs because `t.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3131:17: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: move occurs because `dt.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3154:17: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: move occurs because `dt.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3171:17: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: move occurs because `dt.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3198:17: error[E0507]: cannot move out of `dt.second` which is behind a shared reference: move occurs because `dt.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3277:68: error[E0507]: cannot move out of `t.second` which is behind a shared reference: move occurs because `t.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3291:68: error[E0507]: cannot move out of `t.second` which is behind a shared reference: move occurs because `t.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3310:17: error[E0507]: cannot move out of `a.second` which is behind a shared reference: move occurs because `a.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3317:17: error[E0507]: cannot move out of `b.second` which is behind a shared reference: move occurs because `b.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3338:17: error[E0382]: use of moved value: `zero`: value used here after move
+crates/xsd/src/temporal.rs:3351:17: error[E0507]: cannot move out of `a.second` which is behind a shared reference: move occurs because `a.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3358:17: error[E0507]: cannot move out of `b.second` which is behind a shared reference: move occurs because `b.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3767:9: error[E0507]: cannot move out of `self.second` which is behind a shared reference: move occurs because `self.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+crates/xsd/src/temporal.rs:3831:9: error[E0507]: cannot move out of `self.second` which is behind a shared reference: move occurs because `self.second` has type `decimal::Decimal`, which does not implement the `Copy` trait
+error: could not compile `purrdf-xsd` (lib) due to 74 previous errors

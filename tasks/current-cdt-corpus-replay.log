@@ -1,0 +1,19 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/shapes)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/retrieval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/validate)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/hnsw)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 5m 33s
+     Running tests/cdt_lexical_divergence.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-conformance/c5acf10e1d1f7ea9/out/cdt_lexical_divergence-c5acf10e1d1f7ea9)
+
+running 4 tests
+test the_recovery_resolves_datatypes_the_way_the_parser_does ... ok
+test the_grader_fires_on_each_extended_production ... ok
+test no_expected_results_file_carries_a_composite_literal ... ok
+test corpus_cdt_literals_are_all_inside_sep0009 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+

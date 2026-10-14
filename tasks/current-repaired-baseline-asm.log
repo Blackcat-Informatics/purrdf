@@ -1,0 +1,620 @@
+﻿2026-10-14T15:49:57.5105105Z Current runner version: '2.337.0'
+2026-10-14T15:49:57.5131223Z ##[group]Runner Image Provisioner
+2026-10-14T15:49:57.5132383Z Hosted Compute Agent
+2026-10-14T15:49:57.5133111Z Version: 20261012.601
+2026-10-14T15:49:57.5133826Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-14T15:49:57.5134643Z Build Date: 2026-10-12T17:48:21Z
+2026-10-14T15:49:57.5135384Z Worker ID: {42f63a20-e1dd-481d-b3cd-057ad92889c8}
+2026-10-14T15:49:57.5136113Z Region: eastus2
+2026-10-14T15:49:57.5136800Z Cloud: Azure
+2026-10-14T15:49:57.5137385Z ##[endgroup]
+2026-10-14T15:49:57.5139208Z ##[group]Operating System
+2026-10-14T15:49:57.5139927Z Ubuntu
+2026-10-14T15:49:57.5140485Z 24.04.5
+2026-10-14T15:49:57.5141105Z LTS
+2026-10-14T15:49:57.5141707Z ##[endgroup]
+2026-10-14T15:49:57.5142319Z ##[group]Runner Image
+2026-10-14T15:49:57.5143009Z Image: ubuntu-24.04
+2026-10-14T15:49:57.5143607Z Version: 20261012.334.1
+2026-10-14T15:49:57.5145020Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-14T15:49:57.5146648Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-14T15:49:57.5147696Z ##[endgroup]
+2026-10-14T15:49:57.5149006Z ##[group]GITHUB_TOKEN Permissions
+2026-10-14T15:49:57.5151328Z Contents: read
+2026-10-14T15:49:57.5151957Z Metadata: read
+2026-10-14T15:49:57.5152671Z ##[endgroup]
+2026-10-14T15:49:57.5154737Z Secret source: Actions
+2026-10-14T15:49:57.5156046Z Cache mode: write
+2026-10-14T15:49:57.5156785Z Prepare workflow directory
+2026-10-14T15:49:57.5490384Z Prepare all required actions
+2026-10-14T15:49:57.5538908Z Getting action download info
+2026-10-14T15:49:57.8642992Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-14T15:49:59.0748058Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-14T15:49:59.1999084Z Download action repository 'actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-10-14T15:49:59.2990356Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-10-14T15:49:59.6512874Z Complete job name: simd-asm-config (x86_64)
+2026-10-14T15:49:59.7452142Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-14T15:49:59.7453864Z with:
+2026-10-14T15:49:59.7454754Z   persist-credentials: false
+2026-10-14T15:49:59.7455854Z   repository: Blackcat-Informatics/purrdf
+2026-10-14T15:49:59.7464251Z   token: ***
+2026-10-14T15:49:59.7465122Z   ssh-strict: true
+2026-10-14T15:49:59.7466017Z   ssh-user: git
+2026-10-14T15:49:59.7466879Z   clean: true
+2026-10-14T15:49:59.7467794Z   sparse-checkout-cone-mode: true
+2026-10-14T15:49:59.7468976Z   fetch-depth: 1
+2026-10-14T15:49:59.7469872Z   fetch-tags: false
+2026-10-14T15:49:59.7470776Z   show-progress: true
+2026-10-14T15:49:59.7471736Z   lfs: false
+2026-10-14T15:49:59.7472587Z   submodules: false
+2026-10-14T15:49:59.7473516Z   set-safe-directory: true
+2026-10-14T15:49:59.7474543Z   allow-unsafe-pr-checkout: false
+2026-10-14T15:49:59.7475826Z ##[endgroup]
+2026-10-14T15:49:59.8584504Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-14T15:49:59.8587719Z ##[group]Getting Git version info
+2026-10-14T15:49:59.8589483Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-14T15:49:59.8591581Z [command]/usr/bin/git version
+2026-10-14T15:49:59.8624930Z git version 2.55.0
+2026-10-14T15:49:59.8647303Z ##[endgroup]
+2026-10-14T15:49:59.8657535Z Temporarily overriding HOME='/home/runner/work/_temp/235208cf-d263-4a3c-83cb-93fd3227a848' before making global git config changes
+2026-10-14T15:49:59.8662610Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-14T15:49:59.8666541Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-14T15:49:59.8710012Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-14T15:49:59.8713696Z ##[group]Determining repository object format
+2026-10-14T15:49:59.8715835Z ##[endgroup]
+2026-10-14T15:49:59.8717446Z ##[group]Initializing the repository
+2026-10-14T15:49:59.8719307Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-14T15:49:59.8820628Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-14T15:49:59.8824645Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-14T15:49:59.8826995Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-14T15:49:59.8828984Z hint: call:
+2026-10-14T15:49:59.8829830Z hint:
+2026-10-14T15:49:59.8831030Z hint: 	git config --global init.defaultBranch <name>
+2026-10-14T15:49:59.8832684Z hint:
+2026-10-14T15:49:59.8833877Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-14T15:49:59.8835881Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-14T15:49:59.8837697Z hint:
+2026-10-14T15:49:59.8838850Z hint: 	git branch -m <name>
+2026-10-14T15:49:59.8839875Z hint:
+2026-10-14T15:49:59.8841187Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-14T15:49:59.8843257Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-14T15:49:59.8846636Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-14T15:49:59.8880769Z ##[endgroup]
+2026-10-14T15:49:59.8882606Z ##[group]Disabling automatic garbage collection
+2026-10-14T15:49:59.8884301Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-14T15:49:59.8915554Z ##[endgroup]
+2026-10-14T15:49:59.8917178Z ##[group]Setting up auth
+2026-10-14T15:49:59.8918609Z Removing SSH command configuration
+2026-10-14T15:49:59.8920608Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-14T15:49:59.8951772Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-14T15:49:59.9287861Z Removing HTTP extra header
+2026-10-14T15:49:59.9293013Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-14T15:49:59.9327077Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-14T15:49:59.9551886Z Removing includeIf entries pointing to credentials config files
+2026-10-14T15:49:59.9555294Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-14T15:49:59.9586631Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-14T15:49:59.9819128Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-14T15:49:59.9857687Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:49:59.9891014Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:49:59.9926901Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:49:59.9961986Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:49:59.9991201Z ##[endgroup]
+2026-10-14T15:49:59.9993910Z ##[group]Fetching the repository
+2026-10-14T15:49:59.9998180Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +aa0515fbf40d7a30892cad72869074f3170f005f:refs/remotes/pull/550/merge
+2026-10-14T15:50:03.3703433Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-14T15:50:03.3704479Z  * [new ref]           aa0515fbf40d7a30892cad72869074f3170f005f -> pull/550/merge
+2026-10-14T15:50:03.3709554Z ##[endgroup]
+2026-10-14T15:50:03.3710290Z ##[group]Determining the checkout info
+2026-10-14T15:50:03.3711049Z ##[endgroup]
+2026-10-14T15:50:03.3715674Z [command]/usr/bin/git sparse-checkout disable
+2026-10-14T15:50:03.3767597Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-14T15:50:03.3796513Z ##[group]Checking out the ref
+2026-10-14T15:50:03.3800298Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/550/merge
+2026-10-14T15:50:04.4655348Z Updating files:  61% (11419/18655)
+2026-10-14T15:50:04.4779090Z Updating files:  62% (11567/18655)
+2026-10-14T15:50:04.5040168Z Updating files:  63% (11753/18655)
+2026-10-14T15:50:04.5256925Z Updating files:  64% (11940/18655)
+2026-10-14T15:50:04.5346966Z Updating files:  65% (12126/18655)
+2026-10-14T15:50:04.5413829Z Updating files:  66% (12313/18655)
+2026-10-14T15:50:04.5487415Z Updating files:  67% (12499/18655)
+2026-10-14T15:50:04.5556400Z Updating files:  68% (12686/18655)
+2026-10-14T15:50:04.5622225Z Updating files:  69% (12872/18655)
+2026-10-14T15:50:04.5681751Z Updating files:  70% (13059/18655)
+2026-10-14T15:50:04.5740744Z Updating files:  71% (13246/18655)
+2026-10-14T15:50:04.5807911Z Updating files:  72% (13432/18655)
+2026-10-14T15:50:04.5872045Z Updating files:  73% (13619/18655)
+2026-10-14T15:50:04.5938102Z Updating files:  74% (13805/18655)
+2026-10-14T15:50:04.6003103Z Updating files:  75% (13992/18655)
+2026-10-14T15:50:04.6064962Z Updating files:  76% (14178/18655)
+2026-10-14T15:50:04.6129264Z Updating files:  77% (14365/18655)
+2026-10-14T15:50:04.6195076Z Updating files:  78% (14551/18655)
+2026-10-14T15:50:04.6271944Z Updating files:  79% (14738/18655)
+2026-10-14T15:50:04.6335194Z Updating files:  80% (14924/18655)
+2026-10-14T15:50:04.6397696Z Updating files:  81% (15111/18655)
+2026-10-14T15:50:04.6460182Z Updating files:  82% (15298/18655)
+2026-10-14T15:50:04.6535122Z Updating files:  83% (15484/18655)
+2026-10-14T15:50:04.6613457Z Updating files:  84% (15671/18655)
+2026-10-14T15:50:04.6676456Z Updating files:  85% (15857/18655)
+2026-10-14T15:50:04.6744678Z Updating files:  86% (16044/18655)
+2026-10-14T15:50:04.6808212Z Updating files:  87% (16230/18655)
+2026-10-14T15:50:04.6869970Z Updating files:  88% (16417/18655)
+2026-10-14T15:50:04.6963203Z Updating files:  89% (16603/18655)
+2026-10-14T15:50:04.7026105Z Updating files:  90% (16790/18655)
+2026-10-14T15:50:04.7089021Z Updating files:  91% (16977/18655)
+2026-10-14T15:50:04.7153267Z Updating files:  92% (17163/18655)
+2026-10-14T15:50:04.7218905Z Updating files:  93% (17350/18655)
+2026-10-14T15:50:04.7284025Z Updating files:  94% (17536/18655)
+2026-10-14T15:50:04.7352885Z Updating files:  95% (17723/18655)
+2026-10-14T15:50:04.7424718Z Updating files:  96% (17909/18655)
+2026-10-14T15:50:04.7494369Z Updating files:  97% (18096/18655)
+2026-10-14T15:50:04.7567624Z Updating files:  98% (18282/18655)
+2026-10-14T15:50:04.7637197Z Updating files:  99% (18469/18655)
+2026-10-14T15:50:04.7637741Z Updating files: 100% (18655/18655)
+2026-10-14T15:50:04.7821676Z Updating files: 100% (18655/18655), done.
+2026-10-14T15:50:04.7822080Z Note: switching to 'refs/remotes/pull/550/merge'.
+2026-10-14T15:50:04.7822361Z 
+2026-10-14T15:50:04.7822586Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-14T15:50:04.7823151Z changes and commit them, and you can discard any commits you make in this
+2026-10-14T15:50:04.7823892Z state without impacting any branches by switching back to a branch.
+2026-10-14T15:50:04.7824332Z 
+2026-10-14T15:50:04.7824638Z If you want to create a new branch to retain commits you create, you may
+2026-10-14T15:50:04.7825631Z do so (now or later) by using -c with the switch command. Example:
+2026-10-14T15:50:04.7826051Z 
+2026-10-14T15:50:04.7826223Z   git switch -c <new-branch-name>
+2026-10-14T15:50:04.7826511Z 
+2026-10-14T15:50:04.7826661Z Or undo this operation with:
+2026-10-14T15:50:04.7826905Z 
+2026-10-14T15:50:04.7827060Z   git switch -
+2026-10-14T15:50:04.7827263Z 
+2026-10-14T15:50:04.7827594Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-14T15:50:04.7828084Z 
+2026-10-14T15:50:04.7829038Z HEAD is now at aa0515fb Merge bd4d219bf3fcf5f05c157528e5f9e3669db0f3ec into 541427dc22a4c7b069db2f4c3ee888c3338f1000
+2026-10-14T15:50:04.7861184Z ##[endgroup]
+2026-10-14T15:50:04.7919070Z [command]/usr/bin/git log -1 --format=%H
+2026-10-14T15:50:04.7949059Z aa0515fbf40d7a30892cad72869074f3170f005f
+2026-10-14T15:50:04.7961611Z ##[group]Removing auth
+2026-10-14T15:50:04.7962086Z Removing SSH command configuration
+2026-10-14T15:50:04.7966619Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-14T15:50:04.8003230Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-14T15:50:04.8270471Z Removing HTTP extra header
+2026-10-14T15:50:04.8274699Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-14T15:50:04.8308269Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-14T15:50:04.8572126Z Removing includeIf entries pointing to credentials config files
+2026-10-14T15:50:04.8575278Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-14T15:50:04.8604655Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-14T15:50:04.8605443Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-14T15:50:04.8605911Z includeif.gitdir:/github/workspace/.git.path
+2026-10-14T15:50:04.8606277Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-14T15:50:04.8613910Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-14T15:50:04.8636581Z /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8645779Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8687684Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-14T15:50:04.8709917Z /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8718319Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8756063Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-14T15:50:04.8781942Z /github/runner_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8789159Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8824782Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-14T15:50:04.8848272Z /github/runner_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8855459Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config
+2026-10-14T15:50:04.8888085Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-14T15:50:04.9130042Z Removing credentials config '/home/runner/work/_temp/git-credentials-464a5bc1-c8ac-49e1-a21e-cca47f93dbb1.config'
+2026-10-14T15:50:04.9139006Z ##[endgroup]
+2026-10-14T15:50:04.9449858Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-14T15:50:04.9450281Z with:
+2026-10-14T15:50:04.9450505Z   toolchain: nightly
+2026-10-14T15:50:04.9450827Z   targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+2026-10-14T15:50:04.9451174Z ##[endgroup]
+2026-10-14T15:50:04.9543137Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-14T15:50:04.9587113Z ##[group]Run : parse toolchain version
+2026-10-14T15:50:04.9587507Z [36;1m: parse toolchain version[0m
+2026-10-14T15:50:04.9587808Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-14T15:50:04.9588550Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-14T15:50:04.9589128Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-14T15:50:04.9589437Z [36;1m  exit 1[0m
+2026-10-14T15:50:04.9589826Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-14T15:50:04.9590264Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-14T15:50:04.9590798Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:04.9591322Z [36;1m  else[0m
+2026-10-14T15:50:04.9591766Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:04.9592280Z [36;1m  fi[0m
+2026-10-14T15:50:04.9592649Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-14T15:50:04.9593198Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:04.9593663Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-14T15:50:04.9594178Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:04.9594670Z [36;1melse[0m
+2026-10-14T15:50:04.9594936Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:04.9595250Z [36;1mfi[0m
+2026-10-14T15:50:04.9834031Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:04.9834406Z env:
+2026-10-14T15:50:04.9834631Z   toolchain: nightly
+2026-10-14T15:50:04.9834879Z ##[endgroup]
+2026-10-14T15:50:04.9980439Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=43]
+2026-10-14T15:50:05.0003001Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-14T15:50:05.0028225Z ##[group]Run : construct rustup command line
+2026-10-14T15:50:05.0028816Z [36;1m: construct rustup command line[0m
+2026-10-14T15:50:05.0029283Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:05.0029929Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:05.0030429Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:05.0095135Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:05.0095488Z env:
+2026-10-14T15:50:05.0095787Z   targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+2026-10-14T15:50:05.0096138Z   components: 
+2026-10-14T15:50:05.0096355Z ##[endgroup]
+2026-10-14T15:50:05.0200098Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=19]
+2026-10-14T15:50:05.0203580Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-14T15:50:05.0227666Z ##[group]Run : set $CARGO_HOME
+2026-10-14T15:50:05.0227954Z [36;1m: set $CARGO_HOME[0m
+2026-10-14T15:50:05.0228292Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-14T15:50:05.0295679Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:05.0296037Z ##[endgroup]
+2026-10-14T15:50:05.0394207Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=18]
+2026-10-14T15:50:05.0396497Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-14T15:50:05.0455990Z ##[group]Run : install rustup if needed
+2026-10-14T15:50:05.0456329Z [36;1m: install rustup if needed[0m
+2026-10-14T15:50:05.0456647Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-14T15:50:05.0457411Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-14T15:50:05.0458119Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-14T15:50:05.0458659Z [36;1mfi[0m
+2026-10-14T15:50:05.0526474Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:05.0526829Z env:
+2026-10-14T15:50:05.0527050Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:05.0527320Z ##[endgroup]
+2026-10-14T15:50:05.0621014Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=22]
+2026-10-14T15:50:05.0624999Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-14T15:50:05.0632231Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-14T15:50:05.0635479Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-14T15:50:05.0659962Z ##[group]Run rustup toolchain install nightly --target wasm32-unknown-unknown --target aarch64-unknown-linux-gnu --profile minimal --no-self-update
+2026-10-14T15:50:05.0660974Z [36;1mrustup toolchain install nightly --target wasm32-unknown-unknown --target aarch64-unknown-linux-gnu --profile minimal --no-self-update[0m
+2026-10-14T15:50:05.0727889Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:05.0728229Z env:
+2026-10-14T15:50:05.0728649Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:05.0728953Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-14T15:50:05.0729209Z ##[endgroup]
+2026-10-14T15:50:05.1195600Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-14T15:50:05.2892902Z info: latest update on 2026-10-14 for version 1.101.0-nightly (822182db4 2026-10-13)
+2026-10-14T15:50:05.2893425Z info: downloading 5 components
+2026-10-14T15:50:16.9914447Z 
+2026-10-14T15:50:16.9984930Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (822182db4 2026-10-13)
+2026-10-14T15:50:16.9985349Z 
+2026-10-14T15:50:17.0057199Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=11942]
+2026-10-14T15:50:17.0063504Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-14T15:50:17.0085402Z ##[group]Run rustup default nightly
+2026-10-14T15:50:17.0085720Z [36;1mrustup default nightly[0m
+2026-10-14T15:50:17.0152431Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.0152799Z env:
+2026-10-14T15:50:17.0153027Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.0153298Z ##[endgroup]
+2026-10-14T15:50:17.0280688Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-14T15:50:17.0286185Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-14T15:50:17.0286501Z 
+2026-10-14T15:50:17.0351379Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (822182db4 2026-10-13)
+2026-10-14T15:50:17.0351964Z 
+2026-10-14T15:50:17.0352690Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-14T15:50:17.0368291Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=30]
+2026-10-14T15:50:17.0372968Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-14T15:50:17.0394225Z ##[group]Run : create cachekey
+2026-10-14T15:50:17.0394729Z [36;1m: create cachekey[0m
+2026-10-14T15:50:17.0395256Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-14T15:50:17.0395901Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-14T15:50:17.0396413Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-14T15:50:17.0459240Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.0459603Z env:
+2026-10-14T15:50:17.0459827Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.0460098Z ##[endgroup]
+2026-10-14T15:50:17.0806765Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=43]
+2026-10-14T15:50:17.0809854Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-14T15:50:17.0830641Z ##[group]Run : disable incremental compilation
+2026-10-14T15:50:17.0831015Z [36;1m: disable incremental compilation[0m
+2026-10-14T15:50:17.0831348Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-14T15:50:17.0831697Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-14T15:50:17.0832034Z [36;1mfi[0m
+2026-10-14T15:50:17.0897750Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.0898096Z env:
+2026-10-14T15:50:17.0898310Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.0898762Z ##[endgroup]
+2026-10-14T15:50:17.0983681Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=17]
+2026-10-14T15:50:17.0985935Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-14T15:50:17.1005836Z ##[group]Run : enable colors in Cargo output
+2026-10-14T15:50:17.1006177Z [36;1m: enable colors in Cargo output[0m
+2026-10-14T15:50:17.1006502Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-14T15:50:17.1006870Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-14T15:50:17.1007194Z [36;1mfi[0m
+2026-10-14T15:50:17.1066595Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.1066943Z env:
+2026-10-14T15:50:17.1067164Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.1067436Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:17.1067672Z ##[endgroup]
+2026-10-14T15:50:17.1152809Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=16]
+2026-10-14T15:50:17.1157356Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-14T15:50:17.1177614Z ##[group]Run : enable Cargo sparse registry
+2026-10-14T15:50:17.1177964Z [36;1m: enable Cargo sparse registry[0m
+2026-10-14T15:50:17.1178349Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-14T15:50:17.1179405Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-14T15:50:17.1180145Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-14T15:50:17.1180713Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-14T15:50:17.1181253Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-14T15:50:17.1181757Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-14T15:50:17.1182313Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-14T15:50:17.1182822Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-14T15:50:17.1183351Z [36;1m  fi[0m
+2026-10-14T15:50:17.1183561Z [36;1mfi[0m
+2026-10-14T15:50:17.1242677Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.1243035Z env:
+2026-10-14T15:50:17.1243258Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.1243700Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:17.1243940Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:17.1244180Z ##[endgroup]
+2026-10-14T15:50:17.1561785Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=40]
+2026-10-14T15:50:17.1566137Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-14T15:50:17.1588685Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-14T15:50:17.1589516Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-14T15:50:17.1590210Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-14T15:50:17.1591016Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-14T15:50:17.1591724Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-14T15:50:17.1592157Z [36;1mfi[0m
+2026-10-14T15:50:17.1658518Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.1659169Z env:
+2026-10-14T15:50:17.1659522Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.1659907Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:17.1660332Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:17.1660693Z ##[endgroup]
+2026-10-14T15:50:17.1881741Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=31]
+2026-10-14T15:50:17.1885734Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-14T15:50:17.1906801Z ##[group]Run rustc +nightly --version --verbose
+2026-10-14T15:50:17.1907176Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-14T15:50:17.1969704Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T15:50:17.1970049Z env:
+2026-10-14T15:50:17.1970272Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.1970542Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:17.1970780Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:17.1971024Z ##[endgroup]
+2026-10-14T15:50:17.2157891Z rustc 1.101.0-nightly (822182db4 2026-10-13)
+2026-10-14T15:50:17.2159126Z binary: rustc
+2026-10-14T15:50:17.2159777Z commit-hash: 822182db4c4a1827256881d8c7aa685f0bcf2b11
+2026-10-14T15:50:17.2160456Z commit-date: 2026-10-13
+2026-10-14T15:50:17.2161024Z host: x86_64-unknown-linux-gnu
+2026-10-14T15:50:17.2161610Z release: 1.101.0-nightly
+2026-10-14T15:50:17.2162171Z LLVM version: 23.1.3
+2026-10-14T15:50:17.2175062Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=28]
+2026-10-14T15:50:17.2232907Z ##[group]Run echo "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+2026-10-14T15:50:17.2233515Z [36;1mecho "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"[0m
+2026-10-14T15:50:17.2297542Z shell: /usr/bin/bash -e {0}
+2026-10-14T15:50:17.2297809Z env:
+2026-10-14T15:50:17.2298028Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:17.2298317Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:17.2298797Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:17.2299044Z ##[endgroup]
+2026-10-14T15:50:17.2939064Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-14T15:50:17.4250437Z info: latest update on 2026-10-14 for version 1.101.0-nightly (822182db4 2026-10-13)
+2026-10-14T15:50:17.4374583Z info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+2026-10-14T15:50:17.4375632Z info: component rust-std for target wasm32-unknown-unknown is up to date
+2026-10-14T15:50:17.4383431Z info: downloading 2 components
+2026-10-14T15:50:18.2797830Z ##[group]Run actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+2026-10-14T15:50:18.2798707Z with:
+2026-10-14T15:50:18.2798934Z   path: target/simd-asm
+2026-10-14T15:50:18.2799816Z   key: simd-asm-v1-Linux-x86_64-26317c608d36f3a852be5759bfab91d86af4a56b57e560c8c00ee18f3323049a-61c69f098e997be909c24563f84bfe7cda2b1c38eb243ede516c19127e98ccb4-aa0515fbf40d7a30892cad72869074f3170f005f
+2026-10-14T15:50:18.2801215Z   restore-keys: simd-asm-v1-Linux-x86_64-26317c608d36f3a852be5759bfab91d86af4a56b57e560c8c00ee18f3323049a-61c69f098e997be909c24563f84bfe7cda2b1c38eb243ede516c19127e98ccb4-
+
+2026-10-14T15:50:18.2802024Z   enableCrossOsArchive: false
+2026-10-14T15:50:18.2802301Z   fail-on-cache-miss: false
+2026-10-14T15:50:18.2802550Z   lookup-only: false
+2026-10-14T15:50:18.2802773Z   save-always: false
+2026-10-14T15:50:18.2802983Z env:
+2026-10-14T15:50:18.2803197Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:18.2803467Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:18.2803746Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:18.2803983Z ##[endgroup]
+2026-10-14T15:50:18.3847727Z (node:2559) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-14T15:50:18.3848708Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-14T15:50:18.4751379Z Cache hit for restore-key: simd-asm-v1-Linux-x86_64-26317c608d36f3a852be5759bfab91d86af4a56b57e560c8c00ee18f3323049a-61c69f098e997be909c24563f84bfe7cda2b1c38eb243ede516c19127e98ccb4-541427dc22a4c7b069db2f4c3ee888c3338f1000
+2026-10-14T15:50:18.4855900Z (node:2559) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-14T15:50:19.3809998Z Received 152978707 of 152978707 (100.0%), 167.5 MBs/sec
+2026-10-14T15:50:19.3839467Z Cache Size: ~146 MB (152978707 B)
+2026-10-14T15:50:19.3915053Z [command]/usr/bin/tar -xf /home/runner/work/_temp/0ad91b4e-af1e-4393-9b20-eb423b155403/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+2026-10-14T15:50:20.5909646Z Cache restored successfully
+2026-10-14T15:50:20.6064210Z Cache restored from key: simd-asm-v1-Linux-x86_64-26317c608d36f3a852be5759bfab91d86af4a56b57e560c8c00ee18f3323049a-61c69f098e997be909c24563f84bfe7cda2b1c38eb243ede516c19127e98ccb4-541427dc22a4c7b069db2f4c3ee888c3338f1000
+2026-10-14T15:50:20.7651948Z ##[group]Run mkdir -p target/asm-diagnostics
+2026-10-14T15:50:20.7652380Z [36;1mmkdir -p target/asm-diagnostics[0m
+2026-10-14T15:50:20.7652746Z [36;1mrustc -vV > target/asm-diagnostics/compiler.txt[0m
+2026-10-14T15:50:20.7653201Z [36;1mgit rev-parse HEAD 'HEAD^{tree}' > target/asm-diagnostics/checkout.txt[0m
+2026-10-14T15:50:20.7653724Z [36;1mgit status --porcelain=v1 > target/asm-diagnostics/source-status.txt[0m
+2026-10-14T15:50:20.7654193Z [36;1mtest ! -s target/asm-diagnostics/source-status.txt[0m
+2026-10-14T15:50:20.7654656Z [36;1msha256sum Makefile Cargo.toml Cargo.lock rust-toolchain.toml \[0m
+2026-10-14T15:50:20.7655135Z [36;1m  scripts/check-simd-asm.py scripts/simd_asm_runtime.py \[0m
+2026-10-14T15:50:20.7655609Z [36;1m  scripts/simd-asm-manifest.toml docs/design/purrdf-simd.md \[0m
+2026-10-14T15:50:20.7656018Z [36;1m  > target/asm-diagnostics/inputs.sha256[0m
+2026-10-14T15:50:20.7721472Z shell: /usr/bin/bash -e {0}
+2026-10-14T15:50:20.7721754Z env:
+2026-10-14T15:50:20.7722024Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:20.7722304Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:20.7722553Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:20.7722802Z ##[endgroup]
+2026-10-14T15:50:21.3150646Z ##[group]Run # Bound scalar WASM compilation through the existing Cargo job budget.
+2026-10-14T15:50:21.3151249Z [36;1m# Bound scalar WASM compilation through the existing Cargo job budget.[0m
+2026-10-14T15:50:21.3151725Z [36;1m# Other configurations keep their current scheduling.[0m
+2026-10-14T15:50:21.3152090Z [36;1mif [ "x86_64" = wasm32 ]; then[0m
+2026-10-14T15:50:21.3152388Z [36;1m  export CARGO_BUILD_JOBS=2[0m
+2026-10-14T15:50:21.3152664Z [36;1mfi[0m
+2026-10-14T15:50:21.3153264Z [36;1mmake simd-asm SIMD_ASM_ARGS="--config x86_64 --jobs 1 --report target/asm-reports/x86_64.json"[0m
+2026-10-14T15:50:21.3219895Z shell: /usr/bin/bash -e {0}
+2026-10-14T15:50:21.3220172Z env:
+2026-10-14T15:50:21.3220400Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T15:50:21.3220683Z   CARGO_INCREMENTAL: 0
+2026-10-14T15:50:21.3220931Z   CARGO_TERM_COLOR: always
+2026-10-14T15:50:21.3221189Z ##[endgroup]
+2026-10-14T15:50:21.3952412Z python3 scripts/check-simd-asm.py --doc --config x86_64 --jobs 1 --report target/asm-reports/x86_64.json
+2026-10-14T15:50:24.2589818Z == x86_64: 4 Cargo jobs
+2026-10-14T15:50:24.2593534Z == x86_64 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/3cb14a3b5a0def93c29dd84d3077ed0ea28346c2104ceff518600ba97ad7d034/cargo.graph-0.stderr.log
+2026-10-14T15:58:57.3505642Z == x86_64 graph 1: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/3cb14a3b5a0def93c29dd84d3077ed0ea28346c2104ceff518600ba97ad7d034/cargo.graph-1.stderr.log
+2026-10-14T16:00:11.0880169Z == x86_64: {"analysis_seconds": 16.44802024799992, "build_seconds": 569.909609848, "fresh_artifacts": 106, "lock_seconds": 0.00014194799999245333, "parsed_units": 14, "reused_units": 125, "rustc_invocations": 33, "seconds": 586.8294546100001}
+2026-10-14T16:00:11.4523946Z 
+2026-10-14T16:00:11.4524561Z site                            x86_64
+2026-10-14T16:00:11.4526066Z lex.find-byte2-sparql-string    sse2 v31·f0·r0·req✓ / call site (in run) v0·f0·r0
+2026-10-14T16:00:11.4527297Z lex.find-byte2-line-split       sse2 v31·f0·r0·req✓ / call site (parallel) v0·f0·r0 / call site (lines) v0·f0·r0
+2026-10-14T16:00:11.4528619Z core.xsd-regex-scan             pair sse2 v248·f0·r0·req✓ / range sse2 v573·f0·r0·req✓
+2026-10-14T16:00:11.4529382Z sha2.sha256-compress            sha-ni v126·f0·r0·req✓
+2026-10-14T16:00:11.4531445Z blake3.hash-many-dispatch       sse2 chunks v2520·f0·r0·req✓ / avx2 chunks v2477·f0·r0·req✓ / avx512 tree v584·f0·r0·req✓ / avx512 chunks v605·f0·r0·req✓ / avx512 narrow chunks v1267·f0·r0·req✓ / avx512 four complete chunks v227·f0·r0·req✓ / avx512vl two parents v239·f0·r0·req✓
+2026-10-14T16:00:11.4533830Z blake3.single-block             sse2 v437·f0·r0 / ssse3 v390·f0·r0 / avx2 v367·f0·r0 / avx512 v217·f0·r0 / scalar rotation v0·f0·r0·req✓
+2026-10-14T16:00:11.4535017Z sparql.lexer-trivia             scan sse2 v10·f0·r0·req✓ / call site (in run) v0·f0·r0
+2026-10-14T16:00:11.4535931Z sparql.lexer-iri                scan sse2 v17·f0·r0·req✓ / call site (in run) v0·f0·r0
+2026-10-14T16:00:11.4536564Z sparql.lexer-cursor             peek v8·f0·r0 / cur (in run) v0·f0·r0
+2026-10-14T16:00:11.4537002Z sparql.scope-admission          v0·f0·r0
+2026-10-14T16:00:11.4542742Z rdf.escape-scan                 iri scan sse2 v23·f0·r0·req✓ / iri (in iri_escape::escape) v0·f0·r0 / literal scan sse2 v14·f0·r0·req✓ / literal v0·f0·r0
+2026-10-14T16:00:11.4543445Z rdf.sort-canonical              v0·f0·r0
+2026-10-14T16:00:11.4543951Z iri.delimiter-scan              scheme sse2 v10·f0·r0·req✓ / authority sse2 v7·f0·r0·req✓
+2026-10-14T16:00:11.4544477Z lex.scan-trivia                 sse2 v10·f0·r0·req✓
+2026-10-14T16:00:11.4544866Z lex.scan-iri-body               sse2 v17·f0·r0·req✓
+2026-10-14T16:00:11.4545246Z lex.scan-json-string            sse2 v9·f0·r0·req✓
+2026-10-14T16:00:11.4545637Z lex.json-escape-controls        sse2 v12·f0·r0·req✓
+2026-10-14T16:00:11.4546019Z lex.json-escape-ascii           sse2 v12·f0·r0·req✓
+2026-10-14T16:00:11.4546413Z lex.scan-xml                    sse2 v12·f0·r0·req✓
+2026-10-14T16:00:11.4547278Z iri.validate-component          sse2 v79·f0·r0·req✓
+2026-10-14T16:00:11.4547679Z lex.terminals-in-ranges         table v0·f0·r0
+2026-10-14T16:00:11.4548182Z xsd.whitespace                  replace sse2 v18·f0·r0·req✓ / collapse sse2 v7·f0·r0·req✓
+2026-10-14T16:00:11.4549059Z xsd.canonical-double            v0·f0·r0
+2026-10-14T16:00:11.4549498Z xsd.exact-arith                 mul_fast v0·f0·r0 / div_rem v0·f0·r0
+2026-10-14T16:00:11.4550026Z json.parser-string              scan sse2 v9·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4550725Z json.parser-whitespace          occurrences v0·f0·r0 / tree v2·f0·r0
+2026-10-14T16:00:11.4551131Z core.intern                     v0·f0·r0
+2026-10-14T16:00:11.4551637Z hash.hex-decode                 canonical sse2 v113·f0·r0·req✓ / either-case sse2 v117·f0·r0·req✓
+2026-10-14T16:00:11.4552143Z hash.hex-lower                  sse2 v72·f0·r0·req✓
+2026-10-14T16:00:11.4552551Z core.pack-select-in-word        broadword v0·f0·r0·req✓
+2026-10-14T16:00:11.4552983Z core.pack-rank1                 swar popcount v0·f0·r0
+2026-10-14T16:00:11.4553357Z core.pack-intvector-get         v0·f0·r0
+2026-10-14T16:00:11.4553803Z core.dataset-scan-filter        sse2 v73·f0·r0·req✓ / cursor v104·f0·r0·req✓
+2026-10-14T16:00:11.4554338Z core.pack-triples-intersect     intersect v0·f0·r0 / delta v0·f0·r0
+2026-10-14T16:00:11.4555041Z core.canon-escape               iri scan sse2 v23·f0·r0·req✓ / iri v0·f0·r0 / literal scan sse2 v11·f0·r0·req✓ / literal v0·f0·r0
+2026-10-14T16:00:11.4555740Z core.purremb-f32-decode         fold sse2 v36·f0·r0·req✓ / iterator v0·f0·r0
+2026-10-14T16:00:11.4556179Z core.purremb-norm               v1·f0·r0
+2026-10-14T16:00:11.4556497Z core.paged-map-quad             v0·f0·r0
+2026-10-14T16:00:11.4556927Z core.loss-json-escape           scan sse2 v9·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4557348Z eval.regex-row-alloc            v0·f0·r0
+2026-10-14T16:00:11.4557771Z eval.solution-compatible        compatible v0·f0·r0 / bind_row v0·f0·r0
+2026-10-14T16:00:11.4558215Z eval.bgp-cost-planner           v26·f0·r0
+2026-10-14T16:00:11.4558730Z eval.bgp-join-probe             v42·f0·r0
+2026-10-14T16:00:11.4559351Z eval.aggregate-fold             step v0·f0·r0 / combine v0·f0·r0 / numeric_add v0·f0·r0 / add_i128 v0·f0·r0 / add_assign v0·f0·r0
+2026-10-14T16:00:11.4559951Z datalog.relation-contains       sse2 v25·f0·r0·req✓
+2026-10-14T16:00:11.4560402Z datalog.gallop-leapfrog         gallop v0·f0·r0 / leapfrog v0·f0·r0
+2026-10-14T16:00:11.4560800Z datalog.chase                   v0·f0·r0
+2026-10-14T16:00:11.4561508Z entail.escape                   iri scan sse2 v23·f0·r0·req✓ / iri v0·f0·r0 / literal scan sse2 v11·f0·r0·req✓ / literal (in write_leaf_surface) v0·f0·r0
+2026-10-14T16:00:11.4562203Z entail.classify                 decide v2·f0·r0 / saturate v0·f0·r0
+2026-10-14T16:00:11.4562615Z shapes.frontier-dedup           sse2 v72·f0·r0·req✓
+2026-10-14T16:00:11.4562961Z shapes.path-eval                v0·f0·r0
+2026-10-14T16:00:11.4563301Z shapes.finish-report            v0·f0·r0
+2026-10-14T16:00:11.4563667Z shex.char-count                 std count v38·f0·r0·req✓
+2026-10-14T16:00:11.4564034Z shex.matcher                    v0·f0·r0
+2026-10-14T16:00:11.4564537Z results.xml-escape              scan sse2 v12·f0·r0·req✓ / push_into v0·f0·r0 / writer v0·f0·r0
+2026-10-14T16:00:11.4565162Z core.csv-field                  scan sse2 v34·f0·r0·req✓ / scan avx2 v17·f0·r0·req✓
+2026-10-14T16:00:11.4565708Z results.json-escape             scan sse2 v9·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4566328Z markdown.lines                  scan sse2 v2·f0·r0·req✓ / call site (in analyze) v0·f0·r0
+2026-10-14T16:00:11.4568245Z distance.exact.dot              batch f64×f64 v169·f0·r0·req✓ / batch f64×f64 avx2 v157·f0·r0·req✓ / batch f64×f64 avx512f v117·f0·r0·req✓ / indexed f64×f32 v235·f0·r0·req✓ / indexed f64×f32 avx2 v149·f0·r0·req✓ / indexed f64×f32 avx512f v137·f0·r0·req✓ / indexed f32×f32 v299·f0·r0·req✓ / indexed f32×f32 avx2 v173·f0·r0·req✓ / indexed f32×f32 avx512f v157·f0·r0·req✓
+2026-10-14T16:00:11.4572104Z distance.exact.sqeuclid         bounded f64×f64 v169·f0·r0·req✓ / bounded f64×f64 avx2 v157·f0·r0·req✓ / bounded f64×f64 avx512f v117·f0·r0·req✓ / bounded f32×f32 v201·f0·r0·req✓ / bounded f32×f32 avx2 v125·f0·r0·req✓ / bounded f32×f32 avx512f v89·f0·r0·req✓ / pair f64×f64 v169·f0·r0·req✓ / pair f64×f64 avx2 v157·f0·r0·req✓ / pair f64×f64 avx512f v117·f0·r0·req✓ / pair f32×f32 v201·f0·r0·req✓ / pair f32×f32 avx2 v125·f0·r0·req✓ / pair f32×f32 avx512f v89·f0·r0·req✓
+2026-10-14T16:00:11.4575837Z distance.reassociated.dot       sse2 f64×f64 v70·f0·r0·req✓ / avx2+fma f64×f64 v13·f21·r0·req✓ / avx512f f64×f64 v15·f11·r0·req✓ / sse2 f64×f32 v104·f0·r0·req✓ / avx2+fma f64×f32 v34·f21·r0·req✓ / avx512f f64×f32 v26·f11·r0·req✓ / sse2 f32×f64 v104·f0·r0·req✓ / avx2+fma f32×f64 v34·f21·r0·req✓ / avx512f f32×f64 v26·f11·r0·req✓ / sse2 f32×f32 v138·f0·r0·req✓ / avx2+fma f32×f32 v55·f21·r0·req✓ / avx512f f32×f32 v37·f11·r0·req✓
+2026-10-14T16:00:11.4579613Z distance.reassociated.sqeuclid  sse2 f64×f64 v104·f0·r0·req✓ / avx2+fma f64×f64 v34·f21·r0·req✓ / avx512f f64×f64 v26·f11·r0·req✓ / sse2 f64×f32 v138·f0·r0·req✓ / avx2+fma f64×f32 v55·f21·r0·req✓ / avx512f f64×f32 v37·f11·r0·req✓ / sse2 f32×f64 v138·f0·r0·req✓ / avx2+fma f32×f64 v55·f21·r0·req✓ / avx512f f32×f64 v37·f11·r0·req✓ / sse2 f32×f32 v172·f0·r0·req✓ / avx2+fma f32×f32 v76·f21·r0·req✓ / avx512f f32×f32 v48·f11·r0·req✓
+2026-10-14T16:00:11.4581490Z knn.norm                        v0·f0·r0
+2026-10-14T16:00:11.4582162Z hnsw.search-build               search v0·f0·r0 / build v0·f0·r0 / search reassociated v0·f0·r0 / build reassociated v0·f0·r0
+2026-10-14T16:00:11.4582756Z hnsw.distance-cache             v0·f0·r0
+2026-10-14T16:00:11.4583072Z text.bm25f                      v0·f0·r0
+2026-10-14T16:00:11.4583385Z retrieval.rrf                   v0·f0·r0
+2026-10-14T16:00:11.4583806Z retrieval.fusion-frontier       take v0·f0·r0 / insert v0·f0·r0
+2026-10-14T16:00:11.4584264Z facade.multimodal-read          text lookup v0·f0·r0
+2026-10-14T16:00:11.4584775Z columnar.plain-codec            encode v0·f0·r0·req✓ / decode v0·f0·r0·req✓
+2026-10-14T16:00:11.4585217Z columnar.rle                    v0·f0·r0
+2026-10-14T16:00:11.4585765Z xsd.endpoint-products           interval v6·f0·r0 / sse2 v34·f0·r0 / avx2 v17·f0·r0 / avx512 v18·f0·r0
+2026-10-14T16:00:11.4586295Z geo.exact-limbs                 gcd v0·f0·r0
+2026-10-14T16:00:11.4586702Z geo.relate                      relate v3·f0·r0 / intersect v0·f0·r0
+2026-10-14T16:00:11.4587367Z geo.json-write-string           scan sse2 v9·f0·r0·req✓ / call site (values) v0·f0·r0 / call site (names) v0·f0·r0
+2026-10-14T16:00:11.4587940Z gts.cbor-writer                 v0·f0·r0
+2026-10-14T16:00:11.4588523Z gts.mmr-json-escape             scan sse2 v12·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4589128Z gts.replication-json-string     scan sse2 v12·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4589580Z wasm.term-marshal               v0·f0·r0
+2026-10-14T16:00:11.4590002Z slice.ownership                 analyze v44·f0·r0 / iri refs v0·f0·r0
+2026-10-14T16:00:11.4590538Z slice.prefix-json-string        scan sse2 v9·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4591103Z slice.dsl-stats-json-string     scan sse2 v12·f0·r0·req✓ / call site v0·f0·r0
+2026-10-14T16:00:11.4591551Z cli.pack-input                  v4·f0·r0
+2026-10-14T16:00:11.4591872Z rdf.viz-layout                  v16·f0·r0
+2026-10-14T16:00:11.4592199Z rdf.projections                 v63·f0·r0
+2026-10-14T16:00:12.2074927Z 
+2026-10-14T16:00:12.2075478Z FAIL: 1 problem(s):
+2026-10-14T16:00:12.2076852Z   - row `eval.bgp-join-probe` `x86_64` reads 'v43·f0·r0', measured 'v42·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+2026-10-14T16:00:12.2432581Z lex.percent-encode              reserved sse2 v22·f0·r0·req✓ / simple sse2 v25·f0·r0·req✓
+2026-10-14T16:00:12.2433397Z rdf.csvw-uri-template           call site v0·f0·r0
+2026-10-14T16:00:12.2433967Z core.sssom-tsv                  v7·f0·r0
+2026-10-14T16:00:12.2435060Z shapes.pydantic-emit            v13·f0·r0
+2026-10-14T16:00:12.2435635Z shapes.schema-compile           v0·f0·r0
+2026-10-14T16:00:12.2436317Z deflate.match-copy              copy sse2 v0·f0·r0 / copy avx2 v0·f0·r0
+2026-10-14T16:00:12.2437390Z deflate.match-length            compare sse2 v2·f0·r0·req✓ / compare avx2 v2·f0·r0·req✓ / steps v4·f0·r0·req✓
+2026-10-14T16:00:12.2438275Z deflate.hash-windows            hash avx2 v4·f0·r0·req✓
+2026-10-14T16:00:12.2439204Z hash.sha1-block                 sha-ni v98·f0·r0·req✓
+2026-10-14T16:00:12.2440112Z hash.crc32-update               pclmulqdq v42·f0·r0·req✓
+2026-10-14T16:00:12.2440754Z hash.hex-encode                 ssse3 v7·f0·r0·req✓
+2026-10-14T16:00:12.2441417Z hash.digest-portable            md5 v0·f0·r0 / sha3 v0·f0·r0
+2026-10-14T16:00:12.2442110Z hash.fixed-compress             portable v0·f0·r0
+2026-10-14T16:00:12.2442784Z hash.fixed-terminal             portable frozen lookup v7·f0·r0
+2026-10-14T16:00:12.2443599Z jsonschema.compile-validate     from_document v0·f0·r0 / is_valid v0·f0·r0
+2026-10-14T16:00:12.2444385Z text.unicode-ascii-lower        x86_64 v30·f0·r0·req✓
+2026-10-14T16:00:12.2445097Z xsd.rfc3339-lexical             parse v0·f0·r0 / format x86_64 v20·f0·r0·req✓
+2026-10-14T16:00:12.2446050Z shapes.instance-projection      graph v9·f0·r0 / subject v0·f0·r0 / list index v22·f0·r0
+2026-10-14T16:00:12.2446862Z ed25519.sign                    v0·f0·r0
+2026-10-14T16:00:12.2447374Z ed25519.verify                  v26·f0·r0
+2026-10-14T16:00:12.2448111Z text.dictionary-storage         build v4·f0·r0 / load v8·f0·r0 / lookup v0·f0·r0
+2026-10-14T16:00:12.2449327Z text.dictionary-lattice         lattice entry v0·f0·r0 / prepare v1·f0·r0
+2026-10-14T16:00:12.2450258Z text.emoji-recognition          recognize v4·f0·r0 / finite lookup v0·f0·r0
+2026-10-14T16:00:12.2451211Z text.phonetic-spelling          canonicalize v0·f0·r0 / encode canonical v1·f0·r0
+2026-10-14T16:00:12.2452341Z text.phonetic-distance          prepare band v0·f0·r0 / band v2·f0·r0 / prepare Myers v12·f0·r0 / Myers v0·f0·r0
+2026-10-14T16:00:12.2453313Z text.surface-build              assemble v0·f0·r0
+2026-10-14T16:00:12.2453950Z text.surface-substring          retrieve v0·f0·r0
+2026-10-14T16:00:12.2638263Z make: *** [Makefile:700: simd-asm] Error 1
+2026-10-14T16:00:12.2654650Z ##[error]Process completed with exit code 2.
+2026-10-14T16:00:12.2732126Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-10-14T16:00:12.2732555Z with:
+2026-10-14T16:00:12.2732791Z   name: asm-diagnostics-x86_64
+2026-10-14T16:00:12.2733789Z   path: target/asm-diagnostics/
+target/asm-reports/x86_64.json
+target/simd-asm/contexts/**/purrdf_core*.s
+target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
+target/simd-asm/contexts/**/cargo.graph-*.stderr.log
+target/simd-asm/contexts/**/evidence/*.json
+
+2026-10-14T16:00:12.2734742Z   if-no-files-found: error
+2026-10-14T16:00:12.2735000Z   compression-level: 6
+2026-10-14T16:00:12.2735244Z   overwrite: false
+2026-10-14T16:00:12.2735478Z   include-hidden-files: false
+2026-10-14T16:00:12.2735732Z   archive: true
+2026-10-14T16:00:12.2735944Z env:
+2026-10-14T16:00:12.2736166Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T16:00:12.2736439Z   CARGO_INCREMENTAL: 0
+2026-10-14T16:00:12.2736678Z   CARGO_TERM_COLOR: always
+2026-10-14T16:00:12.2736918Z ##[endgroup]
+2026-10-14T16:00:12.6524166Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-10-14T16:00:12.6525907Z The least common ancestor is /home/runner/work/purrdf/purrdf/target. This will be the root directory of the artifact
+2026-10-14T16:00:12.6526763Z With the provided path, there will be 84 files uploaded
+2026-10-14T16:00:12.6531253Z Artifact name is valid!
+2026-10-14T16:00:12.6531756Z Root directory input is valid!
+2026-10-14T16:00:12.9216868Z Uploading artifact: asm-diagnostics-x86_64.zip
+2026-10-14T16:00:12.9254322Z Beginning upload of artifact content to blob storage
+2026-10-14T16:00:13.7453348Z Uploaded bytes 3767845
+2026-10-14T16:00:13.7636196Z Finished uploading artifact content to blob storage!
+2026-10-14T16:00:13.7637042Z SHA256 digest of uploaded artifact is c6d7072adfbf6f8b2e8fb5de3cbcb4acc38f01a7928ca6763d52386c5512e89e
+2026-10-14T16:00:13.7637692Z Finalizing artifact upload
+2026-10-14T16:00:14.0609644Z Artifact asm-diagnostics-x86_64 successfully finalized. Artifact ID 11909865647
+2026-10-14T16:00:14.0610662Z Artifact asm-diagnostics-x86_64 has been successfully uploaded! Final size is 3767845 bytes. Artifact ID is 11909865647
+2026-10-14T16:00:14.0611835Z Artifact download URL: https://github.com/Blackcat-Informatics/purrdf/actions/runs/38592632449/artifacts/11909865647
+2026-10-14T16:00:14.0839628Z Post job cleanup.
+2026-10-14T16:00:14.1700180Z [command]/usr/bin/git version
+2026-10-14T16:00:14.1737291Z git version 2.55.0
+2026-10-14T16:00:14.1772563Z Temporarily overriding HOME='/home/runner/work/_temp/f102eeb4-ee3d-4b6f-a477-588c2798d263' before making global git config changes
+2026-10-14T16:00:14.1773815Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-14T16:00:14.1776594Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-14T16:00:14.1806759Z Removing SSH command configuration
+2026-10-14T16:00:14.1812940Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-14T16:00:14.1844689Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-14T16:00:14.2094019Z Removing HTTP extra header
+2026-10-14T16:00:14.2099226Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-14T16:00:14.2133096Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-14T16:00:14.2375344Z Removing includeIf entries pointing to credentials config files
+2026-10-14T16:00:14.2381440Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-14T16:00:14.2412512Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-14T16:00:14.2796796Z Cleaning up orphan processes
+2026-10-14T16:00:14.3084482Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

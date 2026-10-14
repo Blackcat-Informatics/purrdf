@@ -1,0 +1,3111 @@
+diff --git crates/sparql-eval/src/binop.rs crates/sparql-eval/src/binop.rs
+index a84f90b90..4a58d0da3 100644
+--- crates/sparql-eval/src/binop.rs
++++ crates/sparql-eval/src/binop.rs
+@@ -456,25 +456,123 @@ fn eval_substituted_with<D: DatasetView + Sync, const DECLARED: bool, const FIRS
+     eval_substituted_delivered::<D, DECLARED, FIRST, _>(pattern, row, source, (), ctx)
+ }
+ 
+-fn eval_substituted_delivered<
+-    D: DatasetView + Sync,
+-    const DECLARED: bool,
+-    const FIRST: bool,
+-    M: crate::eval::RowDelivery<D>,
+->(
++struct SubstitutedFrame {
++    body: crate::expr::PreparedPattern,
++    restore: Option<crate::eval::ScopeRestore>,
++    previous_copied_pattern: Option<crate::expr::PreparedPattern>,
++}
++
++/// One admitted copied-scope stack. The explicit driver can own these frames
++/// without borrowing the evaluation context; the recursive adapter below uses
++/// the same stack and restores it on unwind.
++struct SubstitutionFrames {
++    frames: crate::AdmittedVec<SubstitutedFrame>,
++}
++
++impl SubstitutionFrames {
++    fn enter<D: DatasetView + Sync>(
++        body: crate::expr::CorrelatedPattern,
++        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
++        placeholders: Option<
++            crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
++        >,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<Self, EvalError> {
++        // The copied owner and frame slot are admitted before scope installation.
++        let body = crate::expr::PreparedPattern::new(body, &ctx.growth)?;
++        let frames = crate::AdmittedVec::with_capacity(1, &ctx.growth)?;
++        let mut stack = Self { frames };
++        stack.push_prepared(body, ledger_map, placeholders, ctx)?;
++        Ok(stack)
++    }
++
++    fn push_prepared<D: DatasetView + Sync>(
++        &mut self,
++        body: crate::expr::PreparedPattern,
++        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
++        placeholders: Option<
++            crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
++        >,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<(), EvalError> {
++        self.frames.reserve_next()?;
++        let restore = ctx.begin_substituted_exists(ledger_map, placeholders)?;
++        let previous_copied_pattern = ctx.active_copied_pattern.replace(body.clone());
++        self.frames.push_reserved(SubstitutedFrame {
++            body,
++            restore: Some(restore),
++            previous_copied_pattern,
++        });
++        Ok(())
++    }
++
++    fn body(&self) -> &GraphPattern {
++        &self
++            .frames
++            .last()
++            .expect("installed substituted frame")
++            .body
++    }
++
++    fn unwind<D: DatasetView + Sync>(&mut self, ctx: &mut EvalCtx<'_, D>) {
++        while let Some(mut frame) = self.frames.pop() {
++            if let Some(restore) = frame.restore.take() {
++                restore.restore(ctx);
++            }
++            ctx.active_copied_pattern = frame.previous_copied_pattern.take();
++            // A copied AST may contain addresses named by the restored maps.
++            drop(frame);
++        }
++    }
++}
++
++/// The current recursive caller holds the context only through this adapter.
++/// The continuation runner will own `SubstitutionFrames` alongside its context.
++struct SubstitutionRunner<'ctx, 'd, D: DatasetView + Sync> {
++    ctx: &'ctx mut EvalCtx<'d, D>,
++    stack: SubstitutionFrames,
++}
++
++impl<'ctx, 'd, D: DatasetView + Sync> SubstitutionRunner<'ctx, 'd, D> {
++    fn enter(
++        body: crate::expr::CorrelatedPattern,
++        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
++        placeholders: Option<
++            crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
++        >,
++        ctx: &'ctx mut EvalCtx<'d, D>,
++    ) -> Result<Self, EvalError> {
++        let stack = SubstitutionFrames::enter(body, ledger_map, placeholders, ctx)?;
++        Ok(Self { ctx, stack })
++    }
++
++    fn run<R>(&mut self, run: impl FnOnce(&GraphPattern, &mut EvalCtx<'d, D>) -> R) -> R {
++        run(self.stack.body(), self.ctx)
++    }
++}
++
++impl<D: DatasetView + Sync> Drop for SubstitutionRunner<'_, '_, D> {
++    fn drop(&mut self) {
++        self.stack.unwind(self.ctx);
++    }
++}
++
++/// The one substitution walk prepares a copied child before either the current
++/// recursive caller or an admitted continuation installs its lexical scope.
++struct SubstitutedPreparation {
++    body: crate::expr::CorrelatedPattern,
++    ledger_map: Option<crate::expr::SubstitutionSourceMap>,
++    placeholders: Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
++    first_pushdown:
++        Option<crate::workspace::SharedWorkspace<crate::governor::soundness::CapPushdown>>,
++}
++
++fn prepare_substituted<D: DatasetView + Sync, const DECLARED: bool, const FIRST: bool>(
+     pattern: &GraphPattern,
+     row: &crate::expr::SubstitutionRow,
+     source: crate::deferred_exists::CorrelatedSource<'_>,
+-    mut delivery: M,
+     ctx: &mut EvalCtx<'_, D>,
+-) -> Result<Evaluated<D::Id>, EvalError> {
+-    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+-    #[cfg(test)]
+-    if !DECLARED && crate::deferred_exists::eager_forced() {
+-        let substituted = crate::expr::substitute_pattern_admitted(pattern, row, &ctx.growth)?;
+-        let mut guard = ctx.enter_substituted_exists(None, None)?;
+-        return eval_evaluated(&substituted, &mut guard);
+-    }
++) -> Result<SubstitutedPreparation, EvalError> {
+     let sites;
+     let enclosing_placeholders;
+     let mut deferral = if DECLARED {
+@@ -546,19 +644,55 @@ fn eval_substituted_delivered<
+     } else {
+         None
+     };
+-    let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders)?;
++    Ok(SubstitutedPreparation {
++        body: substituted,
++        ledger_map,
++        placeholders,
++        first_pushdown,
++    })
++}
++
++fn eval_substituted_delivered<
++    D: DatasetView + Sync,
++    const DECLARED: bool,
++    const FIRST: bool,
++    M: crate::eval::RowDelivery<D>,
++>(
++    pattern: &GraphPattern,
++    row: &crate::expr::SubstitutionRow,
++    source: crate::deferred_exists::CorrelatedSource<'_>,
++    mut delivery: M,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
++    #[cfg(test)]
++    if !DECLARED && crate::deferred_exists::eager_forced() {
++        let substituted = crate::expr::substitute_pattern_admitted(pattern, row, &ctx.growth)?;
++        let mut guard = ctx.enter_substituted_exists(None, None)?;
++        return eval_evaluated(&substituted, &mut guard);
++    }
++    let preparation = prepare_substituted::<D, DECLARED, FIRST>(pattern, row, source, ctx)?;
++    let first_pushdown = preparation.first_pushdown;
++    let mut runner = SubstitutionRunner::enter(
++        preparation.body,
++        preparation.ledger_map,
++        preparation.placeholders,
++        ctx,
++    )?;
+     if DECLARED {
+         // Contextual mappings share labelled BNODE identities across the query.
+         // The ordinary specialization retains its per-solution row identity.
+-        guard.current_row = 0;
++        runner.ctx.current_row = 0;
+     }
+     if FIRST {
+-        let previous = std::mem::replace(&mut guard.cap_pushdown, first_pushdown);
+-        let cursor = guard.cap_at;
+-        let evaluated = eval_evaluated(&substituted, &mut guard);
+-        guard.cap_pushdown = previous;
+-        guard.cap_at = cursor;
+-        evaluated
++        runner.run(|body, ctx| {
++            let previous = std::mem::replace(&mut ctx.cap_pushdown, first_pushdown);
++            let cursor = ctx.cap_at;
++            let evaluated = eval_evaluated(body, ctx);
++            ctx.cap_pushdown = previous;
++            ctx.cap_at = cursor;
++            evaluated
++        })
+     } else if M::ACTIVE {
+         let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+             delivery.deliver(rows, ctx)?;
+@@ -568,13 +702,11 @@ fn eval_substituted_delivered<
+                 std::ops::ControlFlow::Continue(())
+             })
+         };
+-        crate::eval::eval_yielding(
+-            &substituted,
+-            &mut crate::eval::RowConsumer::new(&mut consume),
+-            &mut guard,
+-        )
++        runner.run(|body, ctx| {
++            crate::eval::eval_yielding(body, &mut crate::eval::RowConsumer::new(&mut consume), ctx)
++        })
+     } else {
+-        eval_evaluated(&substituted, &mut guard)
++        runner.run(eval_evaluated)
+     }
+ }
+ 
+@@ -1054,8 +1186,10 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+     mode: M,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+-    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
++    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
++    let child = eval_evaluated(left, ctx)?;
++    let mut lift = lift.attach(node);
++    let Some(l) = lift.absorb(0, child) else {
+         return Ok(lift.withheld());
+     };
+     if lift.is_truncated() {
+@@ -3227,6 +3361,58 @@ mod tests {
+     };
+     use purrdf_sparql_algebra::{Chain, Child};
+ 
++    #[test]
++    fn copied_pattern_runner_restores_scope_on_unwind_before_reuse() {
++        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let mut ctx = EvalCtx::new(&*dataset);
++        let body = GraphPattern::empty_bgp();
++        let copied =
++            crate::expr::CorrelatedPattern::copy(&body, &ctx.growth).expect("copied body admitted");
++        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let mut runner = SubstitutionRunner::enter(
++                copied,
++                Some(crate::expr::SubstitutionSourceMap::default()),
++                None,
++                &mut ctx,
++            )
++            .expect("frame admitted before scope");
++            runner.run(|_, _| panic!("unwind inside copied evaluation"));
++        }));
++        assert!(panicked.is_err());
++        assert!(!ctx.in_substituted_exists);
++        assert!(ctx.active_copied_pattern.is_none());
++        assert!(ctx.deferred_exists.is_none());
++        assert_eq!(ctx.correlated_node_maps.iter().count(), 0);
++        assert_eq!(
++            eval(&body, &mut ctx)
++                .expect("context remains reusable")
++                .rows
++                .len(),
++            1
++        );
++    }
++
++    #[test]
++    fn copied_filter_exists_uses_the_runner_owned_tree() {
++        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let mut ctx = EvalCtx::new(&*dataset);
++        let body = GraphPattern::Filter {
++            expr: Expression::Exists(Child::new(GraphPattern::Values {
++                variables: Vec::new(),
++                bindings: vec![Vec::new()],
++            })),
++            inner: Child::new(GraphPattern::Values {
++                variables: Vec::new(),
++                bindings: vec![Vec::new()],
++            }),
++        };
++        let copied = crate::expr::CorrelatedPattern::copy(&body, &ctx.growth).unwrap();
++        let mut runner = SubstitutionRunner::enter(copied, None, None, &mut ctx).unwrap();
++        assert_eq!(runner.run(eval_evaluated).unwrap().rows().len(), 1);
++        drop(runner);
++        assert!(ctx.active_copied_pattern.is_none());
++    }
++
+     // The operators take the algebra node itself (it names the barrier and supplies the
+     // child edge classification), so these tests build the node and drive the ordinary
+     // dispatch — which is also what keeps them testing the wiring rather than a private
+diff --git crates/sparql-eval/src/cdt_agg.rs crates/sparql-eval/src/cdt_agg.rs
+index eed830c9d..0d4571873 100644
+--- crates/sparql-eval/src/cdt_agg.rs
++++ crates/sparql-eval/src/cdt_agg.rs
+@@ -408,9 +408,9 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
+         crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
+     for &i in idxs {
+         let row = &rows[i];
+-        let first = first_arg.term(row, schema, ctx)?;
++        let first = first_arg.term(Some(&agg.args()[0]), row, schema, ctx)?;
+         let second = match second_arg.as_mut() {
+-            Some(expression) => expression.term(row, schema, ctx)?,
++            Some(link) => link.term(Some(&agg.args()[1]), row, schema, ctx)?,
+             None => None,
+         };
+         // Charged for every row `FOLD` inspects, whether or not `DISTINCT` keeps
+@@ -451,8 +451,9 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
+ 
+         // Only a SURVIVOR's sort key is ever needed: `DISTINCT` keeps each value's
+         // first occurrence, so that row's own key is the one the element sorts by.
+-        for key_link in keys.iter_mut() {
+-            let key = key_link.term(row, schema, ctx)?;
++        for (key_link, order) in keys.iter_mut().zip(order_by) {
++            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
++            let key = key_link.term(Some(expression), row, schema, ctx)?;
+             let key = key
+                 .map(|term| crate::expr::owned_value_of(ctx, term))
+                 .transpose()?;
+diff --git crates/sparql-eval/src/cdt_unfold.rs crates/sparql-eval/src/cdt_unfold.rs
+index e39da9b98..4815daaba 100644
+--- crates/sparql-eval/src/cdt_unfold.rs
++++ crates/sparql-eval/src/cdt_unfold.rs
+@@ -186,7 +186,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
+         // expression is evaluated against, and it advances once per input row
+         // however many output rows that row expands to.
+         ctx.current_row = idx as u64;
+-        let Some(value) = composite_of(&mut linked, mu, &seq.schema, ctx)? else {
++        let Some(value) = composite_of(&mut linked, expression, mu, &seq.schema, ctx)? else {
+             // SEP-0009 §12.3, both definitions, verbatim: "If var ∉ dom(μ) and
+             // expr(μ) is an error or an RDF term that is neither a well-formed
+             // cdt:List literal nor a well-formed cdt:Map literal, then
+@@ -296,12 +296,13 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
+ ///
+ /// Any hard failure `expression` itself raises.
+ fn composite_of<D: DatasetView + Sync>(
+-    expression: &mut crate::vm::Linked<'_, D::Id>,
++    linked: &mut crate::vm::Linked<'_, D::Id>,
++    expression: &Expression,
+     mu: &Solution<D::Id>,
+     schema: &VarSchema,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Option<crate::composite_value::CompositeValue>, EvalError> {
+-    let Some(term) = expression.term(mu, schema, ctx)? else {
++    let Some(term) = linked.term(Some(expression), mu, schema, ctx)? else {
+         return Ok(None);
+     };
+     let value = crate::expr::owned_value_of(ctx, term)?;
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index aaf2ffbdb..4070f76fb 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -699,6 +699,10 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+     /// defers are kept elsewhere: on the preparation whose tree holds them, or on
+     /// [`Self::plan_exists_sites`] for a plan node — never under a copy's address.
+     pub(crate) in_substituted_exists: bool,
++    /// The stable owner of the innermost copied substitution window. A VM link
++    /// inside that window records a checked path into this tree instead of
++    /// retaining a borrow into a movable continuation frame.
++    pub(crate) active_copied_pattern: Option<crate::expr::PreparedPattern>,
+     /// Stack of correlated-substitution ledger maps, innermost (most recently entered)
+     /// last — see [`crate::expr::SubstitutionSourceMap`].
+     ///
+@@ -987,18 +991,46 @@ pub(crate) type NodeCursors = (
+ /// [`EvalCtx::correlated_node_maps`] entry, pops exactly that one entry, same as the flag.
+ pub(crate) struct EvalScopeGuard<'ctx, 'd, D: DatasetView + Sync> {
+     ctx: &'ctx mut EvalCtx<'d, D>,
+-    restore: ScopeRestore,
++    restore: Option<ScopeRestore>,
+ }
+ 
+ /// Exactly the state changed by one context scope. Both scopes restore during
+ /// unwinding, before the borrowed temporary tree can drop.
+-enum ScopeRestore {
++#[must_use = "restore the scope before releasing its temporary pattern owner"]
++pub(crate) enum ScopeRestore {
+     Substitution {
+         prev: bool,
+         pushed_map: bool,
+         deferred: Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
+     },
+     PositiveShape(Option<crate::plan::PlanHandle>),
++    CorrelatedMap,
++}
++
++impl ScopeRestore {
++    /// Restore one completed scope. The recursive guard and an explicit
++    /// continuation must consume the same token in nested LIFO order.
++    pub(crate) fn restore<D: DatasetView + Sync>(self, ctx: &mut EvalCtx<'_, D>) {
++        match self {
++            Self::Substitution {
++                prev,
++                pushed_map,
++                deferred,
++            } => {
++                ctx.in_substituted_exists = prev;
++                ctx.deferred_exists = deferred;
++                if pushed_map {
++                    ctx.correlated_node_maps.pop();
++                }
++            }
++            Self::PositiveShape(previous) => {
++                ctx.positive_shape = previous;
++            }
++            Self::CorrelatedMap => {
++                ctx.correlated_node_maps.pop();
++            }
++        }
++    }
+ }
+ 
+ impl<'d, D: DatasetView + Sync> core::ops::Deref for EvalScopeGuard<'_, 'd, D> {
+@@ -1016,21 +1048,8 @@ impl<D: DatasetView + Sync> core::ops::DerefMut for EvalScopeGuard<'_, '_, D> {
+ 
+ impl<D: DatasetView + Sync> Drop for EvalScopeGuard<'_, '_, D> {
+     fn drop(&mut self) {
+-        match &mut self.restore {
+-            ScopeRestore::Substitution {
+-                prev,
+-                pushed_map,
+-                deferred,
+-            } => {
+-                self.ctx.in_substituted_exists = *prev;
+-                self.ctx.deferred_exists = deferred.take();
+-                if *pushed_map {
+-                    self.ctx.correlated_node_maps.pop();
+-                }
+-            }
+-            ScopeRestore::PositiveShape(previous) => {
+-                self.ctx.positive_shape = previous.take();
+-            }
++        if let Some(restore) = self.restore.take() {
++            restore.restore(self.ctx);
+         }
+     }
+ }
+@@ -1346,6 +1365,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             bgp_order_cache: None,
+             constructed: crate::workspace::ConstructedCells::default(),
+             in_substituted_exists: false,
++            active_copied_pattern: None,
+             correlated_node_maps: crate::expr::CorrelatedMaps::default(),
+             deferred_exists: None,
+             plan_exists_sites: None,
+@@ -1413,6 +1433,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+         deferred: Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
+     ) -> Result<EvalScopeGuard<'_, 'd, D>, EvalError> {
++        let restore = self.begin_substituted_exists(ledger_map, deferred)?;
++        Ok(EvalScopeGuard {
++            ctx: self,
++            restore: Some(restore),
++        })
++    }
++
++    /// Install the same scope without retaining an exclusive context borrow.
++    /// The owner must restore this token before dropping the substituted tree.
++    pub(crate) fn begin_substituted_exists(
++        &mut self,
++        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
++        deferred: Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
++    ) -> Result<ScopeRestore, EvalError> {
+         // All fallible growth precedes installation of this substitution window.
+         let pushed_map = ledger_map.is_some();
+         if let Some(map) = ledger_map {
+@@ -1422,29 +1456,53 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         let prev = self.in_substituted_exists;
+         self.in_substituted_exists = true;
+         let previous = std::mem::replace(&mut self.deferred_exists, deferred);
+-        Ok(EvalScopeGuard {
+-            ctx: self,
+-            restore: ScopeRestore::Substitution {
+-                prev,
+-                pushed_map,
+-                deferred: previous,
+-            },
++        Ok(ScopeRestore::Substitution {
++            prev,
++            pushed_map,
++            deferred: previous,
+         })
+     }
+ 
++    /// Install one prepared EXISTS ledger-source layer before its child runs.
++    /// The returned token can be held by a suspended parent and restored after
++    /// the child completes, or by the recursive guard on the current path.
++    pub(crate) fn begin_correlated_map_scope(
++        &mut self,
++        source: &crate::workspace::SharedWorkspace<crate::expr::SubstitutionSourceMap>,
++    ) -> Result<Option<ScopeRestore>, EvalError> {
++        if self.ledger.is_none() || source.is_empty() {
++            return Ok(None);
++        }
++        self.correlated_node_maps
++            .push(source.clone(), &self.growth)?;
++        Ok(Some(ScopeRestore::CorrelatedMap))
++    }
++
++    pub(crate) fn enter_correlated_map_scope(
++        &mut self,
++        source: &crate::workspace::SharedWorkspace<crate::expr::SubstitutionSourceMap>,
++    ) -> Result<EvalScopeGuard<'_, 'd, D>, EvalError> {
++        let restore = self.begin_correlated_map_scope(source)?;
++        Ok(EvalScopeGuard { ctx: self, restore })
++    }
++
+     /// Scope eligibility numbering without changing source numbering or any
+     /// substitution state. The caller keeps the numbered AST alive until drop.
+     fn enter_positive_shape(
+         &mut self,
+         shape: crate::plan::PlanHandle,
+     ) -> EvalScopeGuard<'_, 'd, D> {
+-        let previous = self.positive_shape.replace(shape);
++        let restore = self.begin_positive_shape(shape);
+         EvalScopeGuard {
+             ctx: self,
+-            restore: ScopeRestore::PositiveShape(previous),
++            restore: Some(restore),
+         }
+     }
+ 
++    fn begin_positive_shape(&mut self, shape: crate::plan::PlanHandle) -> ScopeRestore {
++        ScopeRestore::PositiveShape(self.positive_shape.replace(shape))
++    }
++
+     /// Set the evaluation-time value of NOW(). Test-only: production callers get a
+     /// correct wall-clock value for free from [`Self::new`].
+     #[cfg(test)]
+@@ -2857,6 +2915,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             // `correlated_node_maps`, immediately below, which already inherits
+             // rather than resets for the identical reason.
+             in_substituted_exists: self.in_substituted_exists,
++            active_copied_pattern: self.active_copied_pattern.clone(),
+             // SHARED (cheap `Arc` clones), not fresh: a worker evaluating part of a
+             // correlated substituted tree must resolve the SAME ledger identities its
+             // parent would — dropping the stack here would silently reproduce the false-zero
+@@ -3213,6 +3272,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+             bgp_order_cache: self.bgp_order_cache,
+             constructed: crate::workspace::ConstructedCells::default(),
+             in_substituted_exists: false,
++            active_copied_pattern: None,
+             // SHARED, like `ledger`: the body's own nodes never resolve through it (their
+             // addresses are in neither the plan nor any live substitution window, so
+             // `resolve_ledger_ordinal` always misses for them and `ledger_node` stays put —
+@@ -3472,24 +3532,213 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
+     pattern: &GraphPattern,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
++    if matches!(
++        pattern,
++        GraphPattern::Filter { .. } | GraphPattern::Slice { .. }
++    ) {
++        return eval_ordinary_chain(pattern, ctx);
++    }
+     // A correlated substitution or ENF preparation can evaluate a copied AST
+     // outside the source numbering. Number its first reached Join once, rather
+     // than rescanning every suffix of a deep copied join chain. Leaf-only calls
+     // and source-known trees retain their allocation-free eligibility path.
+-    eval_evaluated_with(pattern, ctx, |ctx| {
+-        // The shared wrapper has already checked stop and charged node entry.
+-        if matches!(pattern, GraphPattern::Join { .. }) && ctx.positive_region(pattern).is_none() {
+-            #[cfg(test)]
+-            {
+-                ctx.temporary_positive_numberings += 1;
+-            }
+-            let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
+-            let mut guard = ctx.enter_positive_shape(tree.handle());
+-            eval_node(pattern, &mut guard)
+-        } else {
+-            eval_node(pattern, ctx)
++    eval_evaluated_with(pattern, ctx, |ctx| eval_numbered_node(pattern, ctx))
++}
++
++fn eval_numbered_node<D: DatasetView + Sync>(
++    pattern: &GraphPattern,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    // The shared boundary has already checked stop and charged node entry.
++    // The copied Join's positive scope precedes dictionary and Shapes offers.
++    if matches!(pattern, GraphPattern::Join { .. }) && ctx.positive_region(pattern).is_none() {
++        #[cfg(test)]
++        {
++            ctx.temporary_positive_numberings += 1;
+         }
+-    })
++        let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
++        let mut guard = ctx.enter_positive_shape(tree.handle());
++        eval_node_with(pattern, (), &mut guard)
++    } else {
++        eval_node_with(pattern, (), ctx)
++    }
++}
++
++/// The ordinary graph-child route keeps each entered node's cursor, search
++/// frame and local cap in one admitted worklist while FILTER and Slice descend.
++/// Expression rows and copied EXISTS children use their own suspended states.
++enum OrdinaryAfter<'a> {
++    Filter {
++        expression: &'a purrdf_sparql_algebra::Expression,
++        lift: crate::governor::lift::DetachedLift,
++    },
++    Slice {
++        start: usize,
++        length: Option<usize>,
++        lift: crate::governor::lift::DetachedLift,
++    },
++}
++
++struct OrdinaryFrame<'a> {
++    pattern: &'a GraphPattern,
++    boundary: NodeBoundary,
++    after: OrdinaryAfter<'a>,
++}
++
++/// One owner for every installed ordinary boundary. A panic cannot skip the
++/// node cursor, evidence-search or local-cap restoration when frames move.
++struct OrdinaryRunner<'a, 'ctx, 'd, D: DatasetView + Sync> {
++    ctx: &'ctx mut EvalCtx<'d, D>,
++    active: Option<NodeBoundary>,
++    first: Option<OrdinaryFrame<'a>>,
++    pending: crate::AdmittedVec<OrdinaryFrame<'a>>,
++}
++
++impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
++    fn finish_active(
++        &mut self,
++        pattern: &GraphPattern,
++        evaluated: Result<Evaluated<D::Id>, EvalError>,
++    ) -> Result<Evaluated<D::Id>, EvalError> {
++        let result = self
++            .active
++            .as_mut()
++            .expect("one entered ordinary node")
++            .finish(pattern, self.ctx, evaluated);
++        self.active = None;
++        result
++    }
++
++    fn pop(&mut self) -> Option<OrdinaryFrame<'a>> {
++        self.pending.pop().or_else(|| self.first.take())
++    }
++}
++
++impl<D: DatasetView + Sync> Drop for OrdinaryRunner<'_, '_, '_, D> {
++    fn drop(&mut self) {
++        if let Some(active) = &mut self.active {
++            active.abort(self.ctx);
++        }
++        while let Some(mut frame) = self.pending.pop().or_else(|| self.first.take()) {
++            frame.boundary.abort(self.ctx);
++        }
++    }
++}
++
++fn eval_ordinary_chain<'a, D: DatasetView + Sync>(
++    pattern: &'a GraphPattern,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    // A single ordinary FILTER or Slice keeps its parent inline. Only an
++    // actual nested suspension needs the admitted spill buffer.
++    let mut runner = OrdinaryRunner {
++        pending: crate::AdmittedVec::new(&ctx.growth),
++        ctx,
++        active: None,
++        first: None,
++    };
++    let mut current = pattern;
++    let mut completed = loop {
++        match NodeBoundary::enter(current, runner.ctx) {
++            Ok(boundary) => runner.active = Some(boundary),
++            Err(error) => break Err(error),
++        }
++        match runner
++            .active
++            .as_mut()
++            .expect("entered node")
++            .start(current, runner.ctx)
++        {
++            Ok(Some(early)) => break runner.finish_active(current, Ok(early)),
++            Err(error) => break runner.finish_active(current, Err(error)),
++            Ok(None) => {}
++        }
++        if matches!(current, GraphPattern::Join { .. })
++            && runner.ctx.positive_region(current).is_none()
++        {
++            let evaluated = eval_numbered_node(current, runner.ctx);
++            break runner.finish_active(current, evaluated);
++        }
++        match precomputed_evaluated(current, runner.ctx) {
++            Ok(Some(evaluated)) => break runner.finish_active(current, Ok(evaluated)),
++            Err(error) => break runner.finish_active(current, Err(error)),
++            Ok(None) => {}
++        }
++        let after = match current {
++            GraphPattern::Filter { expr, .. } => {
++                crate::governor::lift::Lift::at_admitted(current, &runner.ctx.growth).map(|lift| {
++                    Some(OrdinaryAfter::Filter {
++                        expression: expr,
++                        lift: lift.detach(),
++                    })
++                })
++            }
++            GraphPattern::Slice { start, length, .. } => {
++                crate::governor::lift::Lift::at_admitted(current, &runner.ctx.growth).map(|lift| {
++                    Some(OrdinaryAfter::Slice {
++                        start: *start,
++                        length: *length,
++                        lift: lift.detach(),
++                    })
++                })
++            }
++            _ => Ok(None),
++        };
++        let after = match after {
++            Ok(after) => after,
++            Err(error) => break runner.finish_active(current, Err(error)),
++        };
++        if let Some(after) = after {
++            let next = match current {
++                GraphPattern::Filter { inner, .. } | GraphPattern::Slice { inner, .. } => inner,
++                _ => unreachable!("only FILTER and Slice suspend a graph child here"),
++            };
++            if runner.first.is_none() {
++                runner.first = Some(OrdinaryFrame {
++                    pattern: current,
++                    boundary: runner.active.take().expect("entered parent"),
++                    after,
++                });
++            } else {
++                if let Err(error) = runner.pending.reserve_next() {
++                    break runner.finish_active(current, Err(error));
++                }
++                runner.pending.push_reserved(OrdinaryFrame {
++                    pattern: current,
++                    boundary: runner.active.take().expect("entered parent"),
++                    after,
++                });
++            }
++            current = next;
++        } else {
++            let evaluated = dispatch_node(current, &mut (), runner.ctx);
++            break runner.finish_active(current, evaluated);
++        }
++    };
++    while let Some(frame) = runner.pop() {
++        let OrdinaryFrame {
++            pattern,
++            boundary,
++            after,
++        } = frame;
++        runner.active = Some(boundary);
++        completed = match (after, completed) {
++            (OrdinaryAfter::Filter { expression, lift }, Ok(child)) => {
++                crate::expr::finish_filter_child(pattern, expression, lift, child, runner.ctx)
++            }
++            (
++                OrdinaryAfter::Slice {
++                    start,
++                    length,
++                    lift,
++                },
++                Ok(child),
++            ) => crate::modifier::finish_slice(pattern, start, length, lift, child, runner.ctx),
++            (_, Err(error)) => Err(error),
++        };
++        completed = runner.finish_active(pattern, completed);
++    }
++    completed
+ }
+ 
+ /// A binding bag delivered to a certified pure positive region. The consumer is
+@@ -3590,78 +3839,173 @@ pub(crate) fn eval_cached_bgp_evaluated<D: DatasetView + Sync>(
+     })
+ }
+ 
++/// Own the entry and completion bookkeeping for one algebra node without
++/// retaining a borrow of the evaluation context across its child evaluation.
++struct NodeBoundary {
++    local_cap: bool,
++    tracking_search: bool,
++    restore: Option<NodeCursors>,
++}
++
++impl NodeBoundary {
++    /// Release the node's installed cursors, evidence search frame and local
++    /// answer cap in their original order. An explicit worklist also calls
++    /// this on unwind, before any copied pattern owner is released.
++    fn abort<D: DatasetView + Sync>(
++        &mut self,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Option<crate::evidence_exec::RowEvidence> {
++        if let Some(restore) = self.restore.take() {
++            ctx.leave_node(restore);
++        }
++        let search = if self.tracking_search {
++            ctx.evidence_search
++                .as_mut()
++                .and_then(crate::AdmittedVec::pop)
++        } else {
++            None
++        };
++        self.tracking_search = false;
++        if self.local_cap {
++            ctx.cap_pushdown = None;
++            self.local_cap = false;
++        }
++        search
++    }
++
++    fn enter<D: DatasetView + Sync>(
++        pattern: &GraphPattern,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<Self, EvalError> {
++        if ctx.dataset.storage_live_budget().is_some()
++            && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
++        {
++            return Err(EvalError::WorkspaceUnpriced(
++                "raw evaluation without an engine drain reservation",
++            ));
++        }
++        if crate::stack::is_low() {
++            return Err(EvalError::StackExhausted {
++                construct: pattern_construct(pattern),
++            });
++        }
++        let local_cap = install_local_slice_pushdown(pattern, ctx)?;
++        if let Some(error) = ctx.dataset.read_error() {
++            if local_cap {
++                ctx.cap_pushdown = None;
++            }
++            return Err(EvalError::source_read(error));
++        }
++        let tracking_search = ctx.may_have_evidence();
++        if tracking_search {
++            let pushed = ctx
++                .evidence_search
++                .get_or_insert_with(|| crate::AdmittedVec::new(&ctx.growth))
++                .push(crate::evidence_exec::RowEvidence::default());
++            if let Err(error) = pushed {
++                if local_cap {
++                    ctx.cap_pushdown = None;
++                }
++                return Err(error);
++            }
++        }
++        Ok(Self {
++            local_cap,
++            tracking_search,
++            restore: None,
++        })
++    }
++
++    fn start<D: DatasetView + Sync>(
++        &mut self,
++        pattern: &GraphPattern,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<Option<Evaluated<D::Id>>, EvalError> {
++        if !ctx.governors_are_engaged() && ctx.ledger.is_none() && ctx.cap_pushdown.is_none() {
++            return Ok(None);
++        }
++        if let Some(tripped) = ctx.stop_check() {
++            return Ok(Some(Evaluated::Truncated(Truncation::origin(
++                SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
++                tripped,
++            ))));
++        }
++        let restore = ctx.enter_node(pattern);
++        if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
++            ctx.leave_node(restore);
++            return Ok(Some(Evaluated::Truncated(Truncation::origin(
++                SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
++                tripped,
++            ))));
++        }
++        self.restore = Some(restore);
++        Ok(None)
++    }
++
++    fn finish<D: DatasetView + Sync>(
++        &mut self,
++        pattern: &GraphPattern,
++        ctx: &mut EvalCtx<'_, D>,
++        mut evaluated: Result<Evaluated<D::Id>, EvalError>,
++    ) -> Result<Evaluated<D::Id>, EvalError> {
++        if self.restore.is_some() {
++            evaluated = evaluated.map(|value| {
++                // A child has restored its own cursor; charge this output at its parent.
++                ctx.enter_node(pattern);
++                let committed = commit_node_output(value, ctx);
++                match (committed, ctx.stop_check()) {
++                    (Evaluated::Complete(rows), Some(tripped)) => {
++                        Evaluated::Truncated(Truncation::origin(rows, tripped))
++                    }
++                    (value, _) => value,
++                }
++            });
++        }
++        let tracking_search = self.tracking_search;
++        let search = self.abort(ctx);
++        if let Some(error) = ctx.dataset.read_error() {
++            return Err(EvalError::source_read(error));
++        }
++        if tracking_search {
++            let search = search
++                .ok_or_else(|| EvalError::internal("original evidence search frame disappeared"))?;
++            if let Ok(outcome) = &mut evaluated {
++                let search = outcome.rows().rows.search_evidence().combine(
++                    &search,
++                    purrdf_core::evidence::EvidenceCombination::Conjunction,
++                )?;
++                outcome
++                    .rows_mut()
++                    .rows
++                    .retain_search_evidence(search.clone());
++                if let Some(parent) = ctx
++                    .evidence_search
++                    .as_mut()
++                    .and_then(|frames| frames.as_mut_slice().last_mut())
++                {
++                    *parent = parent.combine(
++                        &search,
++                        purrdf_core::evidence::EvidenceCombination::Conjunction,
++                    )?;
++                }
++            }
++        }
++        evaluated
++    }
++}
++
+ pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
+     pattern: &GraphPattern,
+     ctx: &mut EvalCtx<'_, D>,
+     evaluate: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    if ctx.dataset.storage_live_budget().is_some()
+-        && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
+-    {
+-        return Err(EvalError::WorkspaceUnpriced(
+-            "raw evaluation without an engine drain reservation",
+-        ));
+-    }
+-    // Every algebra node is one level of this recursion, and the stack that parsed a
+-    // request bounds how many levels it has, not how much stack evaluating them takes:
+-    // see `crate::stack`. The construct is named only on the refusal.
+-    if crate::stack::is_low() {
+-        return Err(EvalError::StackExhausted {
+-            construct: pattern_construct(pattern),
+-        });
+-    }
+-    // A semantic LIMIT is local to its Slice. Install its producer ceiling only while
+-    // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
+-    // all and two independent subquery slices do not overwrite one another.
+-    let local_cap = install_local_slice_pushdown(pattern, ctx)?;
+-    if let Some(error) = ctx.dataset.read_error() {
+-        return Err(EvalError::source_read(error));
+-    }
+-    let tracking_search = ctx.may_have_evidence();
+-    if tracking_search {
+-        ctx.evidence_search
+-            .get_or_insert_with(|| crate::AdmittedVec::new(&ctx.growth))
+-            .push(crate::evidence_exec::RowEvidence::default())?;
+-    }
+-    let mut evaluated = eval_evaluated_inner_with(pattern, ctx, evaluate);
+-    let search = if tracking_search {
+-        ctx.evidence_search
+-            .as_mut()
+-            .and_then(crate::AdmittedVec::pop)
+-    } else {
+-        None
++    let mut boundary = NodeBoundary::enter(pattern, ctx)?;
++    let evaluated = match boundary.start(pattern, ctx) {
++        Ok(Some(early)) => Ok(early),
++        Ok(None) => evaluate(ctx),
++        Err(error) => Err(error),
+     };
+-    if local_cap {
+-        ctx.cap_pushdown = None;
+-    }
+-    if let Some(error) = ctx.dataset.read_error() {
+-        return Err(EvalError::source_read(error));
+-    }
+-    if tracking_search {
+-        let search = search
+-            .ok_or_else(|| EvalError::internal("original evidence search frame disappeared"))?;
+-        if let Ok(outcome) = &mut evaluated {
+-            let search = outcome.rows().rows.search_evidence().combine(
+-                &search,
+-                purrdf_core::evidence::EvidenceCombination::Conjunction,
+-            )?;
+-            outcome
+-                .rows_mut()
+-                .rows
+-                .retain_search_evidence(search.clone());
+-            if let Some(parent) = ctx
+-                .evidence_search
+-                .as_mut()
+-                .and_then(|frames| frames.as_mut_slice().last_mut())
+-            {
+-                *parent = parent.combine(
+-                    &search,
+-                    purrdf_core::evidence::EvidenceCombination::Conjunction,
+-                )?;
+-            }
+-        }
+-    }
+-    evaluated
++    boundary.finish(pattern, ctx, evaluated)
+ }
+ 
+ /// The name a stack refusal at `pattern` reports: the construct a request writes to get
+@@ -3692,71 +4036,6 @@ const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
+     }
+ }
+ 
+-/// The evaluator recursion after any local semantic-Slice ceiling has been installed.
+-fn eval_evaluated_inner_with<D: DatasetView + Sync>(
+-    pattern: &GraphPattern,
+-    ctx: &mut EvalCtx<'_, D>,
+-    evaluate: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
+-) -> Result<Evaluated<D::Id>, EvalError> {
+-    // The ordinary hot path has no stop source, counters, certificate ledger, or producer
+-    // ceiling. Dispatch directly: no node-address cursor, atomic probe, output re-wrap, or
+-    // terminal checkpoint is useful when nothing can truncate. `UNBOUNDED` takes this
+-    // path too; its fixed UDF recursion guard remains enforced inside `child_for_user_fn`.
+-    if !ctx.governors_are_engaged() && ctx.ledger.is_none() && ctx.cap_pushdown.is_none() {
+-        return evaluate(ctx);
+-    }
+-
+-    // Operator-granularity stop observation, before any of this node's work begins.
+-    // Nothing is committed yet, so the truncation originates with an empty bag — which
+-    // is a sound lower bound, and the ancestors that have already committed rows keep
+-    // theirs as the lift carries this upwards.
+-    if let Some(tripped) = ctx.stop_check() {
+-        return Ok(Evaluated::Truncated(Truncation::origin(
+-            SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
+-            tripped,
+-        )));
+-    }
+-    // The `algebra-node-entry` charge point: one unit per node visited, charged before
+-    // the node's own work. A trip here has committed nothing, so the truncation
+-    // originates with an empty bag — a sound lower bound — and the ancestors that have
+-    // already committed rows keep theirs as the lift carries this upwards.
+-    // This node becomes the cursor for the row ceiling the plan pushed to it and for the
+-    // ledger line its charges land on, for the whole of its own evaluation — including
+-    // the charges its operator makes after its children have returned, which is why the
+-    // cursor is restored around the recursion rather than only set before it.
+-    let restore = ctx.enter_node(pattern);
+-    if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
+-        ctx.leave_node(restore);
+-        return Ok(Evaluated::Truncated(Truncation::origin(
+-            SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
+-            tripped,
+-        )));
+-    }
+-    let evaluated = match evaluate(ctx) {
+-        Ok(evaluated) => evaluated,
+-        Err(error) => {
+-            ctx.leave_node(restore);
+-            return Err(error);
+-        }
+-    };
+-    // Back at this node: a child's recursion moved the cursor and restored it, so this
+-    // re-entry is what makes the output charge land on the parent rather than on whichever
+-    // child happened to be evaluated last.
+-    ctx.enter_node(pattern);
+-    let committed = commit_node_output(evaluated, ctx);
+-    // The post-operator checkpoint closes the terminal-node hole: a signal that fires
+-    // while the final operator is running must not be returned as `Complete` merely
+-    // because there is no next node whose entry poll could observe it.
+-    let committed = match (committed, ctx.stop_check()) {
+-        (Evaluated::Complete(rows), Some(tripped)) => {
+-            Evaluated::Truncated(Truncation::origin(rows, tripped))
+-        }
+-        (evaluated, _) => evaluated,
+-    };
+-    ctx.leave_node(restore);
+-    Ok(committed)
+-}
+-
+ /// Lazily install the early-producer ceiling for a semantic `Slice` subtree.
+ ///
+ /// The answer-cap planner starts at the query root because its ceiling is operationally
+@@ -3938,27 +4217,6 @@ fn commit_answer_rows<D: DatasetView + Sync>(
+     }
+ }
+ 
+-/// Dispatch one algebra node to its operator. Split out of [`eval_evaluated`] so that the
+-/// charge points bracketing every node are written once rather than once per variant.
+-///
+-/// # Thin-dispatcher invariant
+-///
+-/// This function must stay a bare `match` whose arms call out-of-line operators: every
+-/// operator it dispatches to carries `#[inline(never)]`. A nested query pays this frame
+-/// (together with [`eval_evaluated`]'s) at every level of nesting — twice per level for
+-/// a `FILTER NOT EXISTS`, once for the filter node and once for its inner pattern — so any
+-/// callee an optimizer inlines here (a deduplicator, a small-vector grow path) is charged
+-/// against the machine stack once per level of every recursive query, not once per call
+-/// of that operator. On wasm32, where the whole evaluation shares one fixed stack, a few
+-/// hundred bytes pulled into this frame cost several levels of admitted nesting depth. A
+-/// new `GraphPattern` arm must therefore call a function marked `#[inline(never)]`.
+-fn eval_node<D: DatasetView + Sync>(
+-    pattern: &GraphPattern,
+-    ctx: &mut EvalCtx<'_, D>,
+-) -> Result<Evaluated<D::Id>, EvalError> {
+-    eval_node_with(pattern, (), ctx)
+-}
+-
+ /// A contextual consumer runs while the producer is yielding its input rows.
+ /// The unit specialization carries no consumer, ABI parameter or runtime test.
+ type YieldFunction<'a, D> = dyn for<'d> FnMut(
+@@ -4174,19 +4432,7 @@ fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
+     mut delivery: M,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    if let Some(seq) = ctx
+-        .expanded_dictionary
+-        .as_ref()
+-        .and_then(|materialized| materialized.get(pattern))
+-        .cloned()
+-    {
+-        let evaluated = Evaluated::Complete(seq);
+-        if M::ACTIVE {
+-            deliver_evaluated(&evaluated, delivery, ctx)?;
+-        }
+-        return Ok(evaluated);
+-    }
+-    if let Some(evaluated) = crate::shapes::eval_shape(pattern, ctx)? {
++    if let Some(evaluated) = precomputed_evaluated(pattern, ctx)? {
+         if M::ACTIVE {
+             deliver_evaluated(&evaluated, delivery, ctx)?;
+         }
+@@ -4217,6 +4463,25 @@ fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
+     Ok(evaluated)
+ }
+ 
++/// The single node prelude, shared by direct and suspended ordinary dispatch.
++fn precomputed_evaluated<D: DatasetView + Sync>(
++    pattern: &GraphPattern,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Option<Evaluated<D::Id>>, EvalError> {
++    if let Some(seq) = ctx
++        .expanded_dictionary
++        .as_ref()
++        .and_then(|materialized| materialized.get(pattern))
++        .cloned()
++    {
++        return Ok(Some(Evaluated::Complete(seq)));
++    }
++    if let Some(evaluated) = crate::shapes::eval_shape(pattern, ctx)? {
++        return Ok(Some(evaluated));
++    }
++    Ok(None)
++}
++
+ /// Literal root dispatch for a physical runtime input. Child nodes still use
+ /// the original numbered native funnel; this root is not charged/selected twice.
+ pub(crate) fn eval_literal_node<D: DatasetView + Sync>(
+@@ -5735,6 +6000,34 @@ mod tests {
+         assert_eq!(rows.rows.len(), 1);
+     }
+ 
++    #[test]
++    fn detached_scope_tokens_restore_nested_map_and_shape_in_lifo_order() {
++        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let pattern = GraphPattern::empty_bgp();
++        let tree = crate::plan::Tree::build(&pattern);
++        let mut ctx = EvalCtx::new(&*dataset);
++        let outer = ctx
++            .begin_substituted_exists(Some(crate::expr::SubstitutionSourceMap::default()), None)
++            .expect("outer map admitted");
++        let inner = ctx
++            .begin_substituted_exists(Some(crate::expr::SubstitutionSourceMap::default()), None)
++            .expect("inner map admitted");
++        let positive = ctx.begin_positive_shape(tree.handle());
++        assert!(ctx.in_substituted_exists);
++        assert_eq!(ctx.correlated_node_maps.iter().count(), 2);
++        assert!(ctx.positive_shape.is_some());
++
++        positive.restore(&mut ctx);
++        inner.restore(&mut ctx);
++        assert!(ctx.positive_shape.is_none());
++        assert!(ctx.in_substituted_exists);
++        assert_eq!(ctx.correlated_node_maps.iter().count(), 1);
++        outer.restore(&mut ctx);
++        assert!(!ctx.in_substituted_exists);
++        assert!(ctx.deferred_exists.is_none());
++        assert_eq!(ctx.correlated_node_maps.iter().count(), 0);
++    }
++
+     #[test]
+     fn late_values_reservation_stops_at_the_first_over_budget_identity() {
+         use purrdf_sparql_algebra::{BlankNode, GroundTerm, SparqlParser};
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 70078ee95..16912bfa7 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -79,7 +79,7 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+     let program = Arc::new(crate::vm::ExprProgram::compile(expr));
+-    crate::vm::Linked::link(program, expr, schema, ctx).term(row, schema, ctx)
++    crate::vm::Linked::link(program, expr, schema, ctx).term(Some(expr), row, schema, ctx)
+ }
+ 
+ /// Evaluate `expr` and reduce it to an effective boolean value (`Ok(None)` =
+@@ -92,7 +92,7 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Option<bool>, EvalError> {
+     let program = Arc::new(crate::vm::ExprProgram::compile(expr));
+-    crate::vm::Linked::link(program, expr, schema, ctx).ebv(row, schema, ctx)
++    crate::vm::Linked::link(program, expr, schema, ctx).ebv(Some(expr), row, schema, ctx)
+ }
+ 
+ /// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
+@@ -124,8 +124,22 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
+     inner: &GraphPattern,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
++    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
++    let child = eval_evaluated(inner, ctx)?;
++    finish_filter_child(node, expr, lift, child, ctx)
++}
++
++/// The ordinary FILTER continuation after its graph child returns. Its
++/// expression row cursor is entered only after this child has been absorbed.
++pub(crate) fn finish_filter_child<D: DatasetView + Sync>(
++    node: &GraphPattern,
++    expr: &Expression,
++    lift: crate::governor::lift::DetachedLift,
++    child: Evaluated<D::Id>,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    let mut lift = lift.attach(node);
++    let Some(seq) = lift.absorb(0, child) else {
+         return Ok(lift.withheld());
+     };
+     eval_filter_sequence(node, expr, seq, lift, ctx)
+@@ -248,7 +262,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+     let mut checkpoint =
+         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
+     let program = crate::vm::program_at(ctx, node, expr)?;
+-    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
++    let mut linked = crate::vm::Linked::link_filter_admitted(program, expr, &schema, ctx)?;
+     let rows = if forked {
+         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
+         // Harvesting, not plain: a predicate can reach a property function through an
+@@ -324,15 +338,24 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
+         .finish()?
+     } else {
+         let mut rows = RowsBuilder::new(&ctx.growth);
++        let mut linked = Some(linked);
++        let mut pending = crate::AdmittedVec::new(&ctx.growth);
+         for row in seq.rows {
+             if checkpoint.pass(ctx).is_err() {
+                 break;
+             }
+-            let (keep, evidence) = linked.filter(expr, &row, &schema, ctx)?;
++            let frame = crate::vm::FilterRowFrame::begin(
++                linked.take().expect("one sequential FILTER link"),
++                row,
++                ctx,
++            )?;
++            let (next_linked, row, keep, evidence) = frame.run(expr, &schema, &mut pending, ctx)?;
++            linked = Some(next_linked);
+             if keep {
+                 rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
+             }
+         }
++        drop(pending);
+         rows.finish()?
+     };
+     if let Some(tripped) = ctx.expression_barrier.observed() {
+@@ -474,7 +497,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
+                     })?;
+                 row.extend_from_slice(in_row);
+                 row.resize(width, None);
+-                let value = linked.term(&row, &schema, child)?;
++                let value = linked.term(Some(expr), &row, &schema, child)?;
+                 row[col] = value;
+                 let row = RetainedRow::from_resident(row).with_optional_evidence(
+                     extend_evidence(in_row, linked.result_evidence()?, expr, var)?,
+@@ -525,7 +548,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
+                 }
+                 let row = RetainedRow::try_build(width, &growth, |row| {
+                     row[..in_row.len()].copy_from_slice(in_row);
+-                    row[col] = linked.term(row, &schema, ctx)?;
++                    row[col] = linked.term(Some(expr), row, &schema, ctx)?;
+                     Ok(())
+                 })?;
+                 rows.push(row.with_optional_evidence(
+@@ -549,7 +572,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
+             ctx.current_row = idx as u64;
+             let row = RetainedRow::try_build(width, &growth, |row| {
+                 row[..in_row.len()].copy_from_slice(&in_row);
+-                row[col] = linked.term(row, &schema, ctx)?;
++                row[col] = linked.term(Some(expr), row, &schema, ctx)?;
+                 Ok(())
+             })?;
+             rows.push_row(row.with_optional_evidence(
+@@ -2205,8 +2228,9 @@ fn exists_recorded<D: DatasetView + Sync>(
+     exists_prepared(
+         PreparedSite {
+             key: address,
+-            prepared: &prepared,
+-            plan_map: ledger_source,
++            plan_map: ledger_source.clone(),
++            prepared,
++            source_owner: None,
+         },
+         row,
+         schema,
+@@ -2217,58 +2241,272 @@ fn exists_recorded<D: DatasetView + Sync>(
+ 
+ /// One `EXISTS` site ready to answer: its preparation and what its evaluation needs to
+ /// know about where the preparation came from.
+-#[derive(Clone, Copy)]
+-struct PreparedSite<'s> {
++#[derive(Clone)]
++struct PreparedSite {
+     /// The address the site's definition-path memo is keyed by.
+     key: usize,
+     /// The site's preparation, which also keeps the sites of the `EXISTS` bodies nested in
+     /// it.
+-    prepared: &'s crate::eval::PreparedExists,
++    prepared: crate::workspace::SharedWorkspace<crate::eval::PreparedExists>,
+     /// The preparation's nodes mapped one hop to the plan nodes the ledger indexes (the
+     /// preparation's own `ledger_source` for a site of the plan).
+-    plan_map: &'s crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
++    plan_map: crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
++    /// Layered deferral prepares an ad-hoc copied body. Its original site key
++    /// points into this immutable owner, which must survive child suspension.
++    source_owner: Option<PreparedPattern>,
++}
++
++/// The per-row definition work that must wait for one copied child result.
++/// Its memo key owns the restricted row and its original admission, so a
++/// suspended evaluator can retain this value without borrowing that row.
++struct ExistsDefinitionResume<I: ViewTermId> {
++    memo_key: Option<crate::eval::ExistsDefinitionMemoKey<I>>,
++}
++
++/// The one uncached probe's work after its graph child has returned. A suspended
++/// caller retains this small key while the child runs; the same completion body
++/// serves the immediate caller below.
++struct ExistsProbeResume<I: ViewTermId> {
++    key: (usize, (u8, Option<I>), u64),
++    cache: bool,
++}
++
++/// One graph child the strategy decision actually needs. The site retains the
++/// immutable ENF body and its source map while a caller suspends this row.
++enum ExistsChild<I: ViewTermId> {
++    Probe {
++        site: PreparedSite,
++        resume: ExistsProbeResume<I>,
++    },
++    Definition {
++        site: PreparedSite,
++        first_witness: bool,
++        resume: ExistsDefinitionResume<I>,
++    },
++}
++
++impl<I: ViewTermId> ExistsChild<I> {
++    /// Current synchronous adapter. An ordinary FILTER worklist enters the
++    /// same child and later calls the same completion bodies below.
++    fn run_recursive<D: DatasetView<Id = I> + Sync>(
++        self,
++        row: &[Option<SolutionTerm<I>>],
++        schema: &VarSchema,
++        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<bool, EvalError> {
++        match self {
++            Self::Probe { site, resume } => {
++                let crate::eval::PreparedExists::Pattern { normalized, .. } =
++                    site.prepared.as_ref()
++                else {
++                    return Err(EvalError::internal(
++                        "a probe child lost its prepared pattern",
++                    ));
++                };
++                let mut ledger_scope = ctx.enter_correlated_map_scope(&site.plan_map)?;
++                let evaluated = eval_evaluated(normalized, &mut ledger_scope);
++                drop(ledger_scope);
++                resume.finish(evaluated?, row, schema, evidence, ctx)
++            }
++            Self::Definition {
++                site,
++                first_witness,
++                resume,
++            } => {
++                let crate::eval::PreparedExists::Pattern {
++                    normalized,
++                    witness_wrapped,
++                    witness_sites,
++                    normalized_sites,
++                    ..
++                } = site.prepared.as_ref()
++                else {
++                    return Err(EvalError::internal(
++                        "a definition child lost its prepared pattern",
++                    ));
++                };
++                let (to_evaluate, sites) = if first_witness {
++                    (witness_wrapped.as_ref(), witness_sites)
++                } else {
++                    (normalized.as_ref(), normalized_sites)
++                };
++                let mut ledger_scope = ctx.enter_correlated_map_scope(&site.plan_map)?;
++                let source = crate::deferred_exists::CorrelatedSource {
++                    sites: crate::deferred_exists::SiteSlot::Prepared(sites),
++                    plan_map: Some(site.plan_map.as_ref()),
++                };
++                let inner_result = match crate::shapes::barrier::inner(
++                    site.key,
++                    normalized,
++                    site.plan_map.as_ref(),
++                    row,
++                    schema,
++                    &mut ledger_scope,
++                ) {
++                    Ok(Some(inner)) => Ok(inner),
++                    Ok(None) => crate::binop::eval_correlated(
++                        to_evaluate,
++                        row,
++                        schema,
++                        source,
++                        &mut ledger_scope,
++                    ),
++                    Err(error) => Err(error),
++                };
++                drop(ledger_scope);
++                resume.finish(inner_result?, evidence, ctx)
++            }
++        }
++    }
++}
++
++impl<I: ViewTermId> ExistsProbeResume<I> {
++    fn finish<D: DatasetView<Id = I> + Sync>(
++        self,
++        evaluated: Evaluated<I>,
++        row: &[Option<SolutionTerm<I>>],
++        schema: &VarSchema,
++        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<bool, EvalError> {
++        if let Evaluated::Truncated(truncation) = &evaluated {
++            ctx.record_barrier(truncation.tripped());
++            return Ok(false);
++        }
++        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
++            return Ok(false);
++        }
++        let inner = crate::workspace::SharedWorkspace::new_admitted(
++            evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
++                unreachable!("a non-truncated result is complete by construction")
++            }),
++            &ctx.growth,
++        )?;
++        let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
++        let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
++        let entry = crate::workspace::SharedWorkspace::new_admitted(
++            crate::eval::ExistsInner {
++                inner,
++                shared,
++                keyed,
++                wild,
++            },
++            &ctx.growth,
++        )?;
++        if self.cache {
++            ctx.exists_inner_cache
++                .insert_admitted(self.key, entry.clone(), &ctx.growth)?;
++        }
++        answer_probe_entry(row, &entry, evidence, ctx)
++    }
++}
++
++fn answer_probe_entry<D: DatasetView + Sync>(
++    row: &[Option<SolutionTerm<D::Id>>],
++    entry: &crate::workspace::SharedWorkspace<crate::eval::ExistsInner<D::Id>>,
++    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<bool, EvalError> {
++    if let Some(output) = evidence {
++        let (found, record) = crate::binop::probe_evidence(row, entry, ctx)?;
++        *output = record;
++        return Ok(found);
++    }
++    crate::binop::probe_has_match(
++        row,
++        &entry.shared,
++        &entry.keyed,
++        &entry.wild,
++        &entry.inner.rows,
++        &ctx.growth,
++    )
++}
++
++impl<I: ViewTermId> ExistsDefinitionResume<I> {
++    fn finish<D: DatasetView<Id = I> + Sync>(
++        self,
++        inner: Evaluated<I>,
++        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<bool, EvalError> {
++        if let Evaluated::Truncated(truncation) = &inner {
++            ctx.record_barrier(truncation.tripped());
++            return Ok(false);
++        }
++        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
++            return Ok(false);
++        }
++        let consumed = inner.rows().len();
++        for _ in 0..consumed {
++            if charge_exists_evidence(
++                ctx,
++                crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
++            ) {
++                return Ok(false);
++            }
++        }
++        let answer = if evidence.is_some() {
++            inner
++                .rows()
++                .rows
++                .iter()
++                .any(|row| !row.evidence().is_undecided())
++        } else {
++            !inner.rows().is_empty()
++        };
++        if evidence.is_some() {
++            let record = ctx.existential_evidence(
++                inner.rows().rows.iter().map(RetainedRow::evidence),
++                inner.rows().rows.search_evidence(),
++            )?;
++            if !record.is_virtual()
++                && let Some(key) = &self.memo_key
++            {
++                ctx.exists_evidence_memo.insert_admitted(
++                    (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
++                    record.clone(),
++                    &ctx.growth,
++                )?;
++            }
++            if let Some(output) = evidence {
++                *output = record;
++            }
++        }
++        if let Some(key) = self.memo_key {
++            ctx.exists_definition_memo
++                .insert_admitted(key, answer, &ctx.growth)?;
++        }
++        Ok(answer)
++    }
+ }
+ 
+ /// Answer an `EXISTS` for the current row from its preparation: the strategy decision,
+ /// the memoized probe and the per-row definition, as [`exists`] documents them.
+ fn exists_prepared<D: DatasetView + Sync>(
+-    site: PreparedSite<'_>,
++    site: PreparedSite,
+     row: &[Option<SolutionTerm<D::Id>>],
+     schema: &VarSchema,
+     ctx: &mut EvalCtx<'_, D>,
+     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+ ) -> Result<bool, EvalError> {
+-    let ledger_source = site.plan_map;
+-    let (
+-        normalized,
+-        witness_wrapped,
+-        analysis,
+-        free_vars,
+-        stateful,
+-        witness_sites,
+-        normalized_sites,
+-    ) = match site.prepared {
++    let PreparedSite {
++        key,
++        prepared,
++        plan_map: ledger_source,
++        source_owner,
++    } = site;
++    let (normalized, analysis, free_vars, stateful) = match prepared.as_ref() {
+         // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
+         // every μ — the whole EXISTS is constant `false`, no evaluation needed.
+         crate::eval::PreparedExists::FoldedFalse => return Ok(false),
+         crate::eval::PreparedExists::Pattern {
+             normalized,
+-            witness_wrapped,
+             analysis,
+             free_vars,
+             stateful,
+-            witness_sites,
+-            normalized_sites,
+             ..
+-        } => (
+-            normalized,
+-            witness_wrapped,
+-            analysis,
+-            free_vars,
+-            *stateful,
+-            witness_sites,
+-            normalized_sites,
+-        ),
++        } => (normalized, analysis, free_vars, *stateful),
+     };
+ 
+     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
+@@ -2355,15 +2593,8 @@ fn exists_prepared<D: DatasetView + Sync>(
+     let native_positive =
+         native_positive && FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get).is_none();
+     if native_positive
+-        && let Some(answer) = exists_positive_seeded(
+-            site.key,
+-            normalized,
+-            free_vars,
+-            ledger_source,
+-            row,
+-            schema,
+-            ctx,
+-        )?
++        && let Some(answer) =
++            exists_positive_seeded(key, normalized, free_vars, &ledger_source, row, schema, ctx)?
+     {
+         return Ok(answer);
+     }
+@@ -2386,99 +2617,36 @@ fn exists_prepared<D: DatasetView + Sync>(
+         // `ctx.in_substituted_exists` is already set means `pattern` is itself part
+         // of an outer per-row substituted temporary, so skip both the cache get and
+         // the insert and build the entry fresh, unshared.
+-        let key = (
++        let cache_key = (
+             std::ptr::from_ref::<GraphPattern>(normalized.as_ref()) as usize,
+             ctx.graph_key(),
+             crate::eval::schema_fingerprint(schema),
+         );
+         let cached = if ctx.options.exists_memo && !ctx.in_substituted_exists {
+-            ctx.exists_inner_cache.get(&key).cloned()
++            ctx.exists_inner_cache.get(&cache_key).cloned()
+         } else {
+             None
+         };
+-        let entry = match cached {
+-            Some(entry) => entry,
++        match cached {
++            Some(entry) => answer_probe_entry(row, &entry, evidence, ctx),
+             None => {
+-                // Push this site's ledger-source correspondence around the ONE evaluation
+-                // this arm ever runs, same mechanism and same reason the definition path
+-                // pushes it around its own (per-row) `eval_correlated` call below: without
+-                // it, every node `eval_evaluated` walks below `normalized` resolves to no
+-                // real plan address at all (`normalized` is a fresh ENF clone, never a
+-                // plan node itself), so `EvalCtx::resolve_ledger_ordinal` falls through to
+-                // `None` and every charge folds into the enclosing `FILTER`/`BIND` instead
+-                // of attributing to the inner's own nodes — even though the probe path
+-                // evaluates `normalized` UNSUBSTITUTED (no per-row copy, hence no
+-                // `eval_correlated`/`enter_substituted_exists` push of its own). Gated
+-                // identically to the definition path's push: nothing to resolve against
+-                // without a ledger, and `ledger_source_map` may have declined to track a
+-                // `Project`/`Union`-shaped site (see its doc), leaving nothing to push.
+-                // Popped manually (not via a guard) because the only fallible call in this
+-                // scope is the one line below, and its `?` is applied after the pop — the
+-                // probe runs exactly once per site, so these charges attribute once, which
+-                // is correct: this is scoped to a single evaluation of the definition path,
+-                // not to every outer row the probe later serves.
+-                let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
+-                if track_ledger {
+-                    ctx.correlated_node_maps
+-                        .push(ledger_source.clone(), &ctx.growth)?;
+-                }
+-                let evaluated = eval_evaluated(normalized, ctx);
+-                if track_ledger {
+-                    ctx.correlated_node_maps.pop();
+-                }
+-                let evaluated = evaluated?;
+-                if let Evaluated::Truncated(truncation) = &evaluated {
+-                    ctx.record_barrier(truncation.tripped());
+-                    return Ok(false);
+-                }
+-                if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
+-                    return Ok(false);
+-                }
+-                let inner = crate::workspace::SharedWorkspace::new_admitted(
+-                    evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
+-                        unreachable!("a non-truncated result is complete by construction")
+-                    }),
+-                    &ctx.growth,
+-                )?;
+-                // `shared` is computed against the FULL outer schema (not just the
+-                // row's bound vars), so one index serves every row: an outer var
+-                // unbound in a given row is `None` in the probe and matches anything
+-                // via `compatible`, exactly as the definition path's substitution would.
+-                let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
+-                let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+-                let entry = crate::workspace::SharedWorkspace::new_admitted(
+-                    crate::eval::ExistsInner {
+-                        inner,
+-                        shared,
+-                        keyed,
+-                        wild,
++                // The normalized child is entered under this site's ledger map,
++                // once per site; its full outer schema is used for the index.
++                ExistsChild::Probe {
++                    site: PreparedSite {
++                        key,
++                        plan_map: ledger_source,
++                        prepared,
++                        source_owner,
++                    },
++                    resume: ExistsProbeResume {
++                        key: cache_key,
++                        cache: ctx.options.exists_memo && !ctx.in_substituted_exists,
+                     },
+-                    &ctx.growth,
+-                )?;
+-                if ctx.options.exists_memo && !ctx.in_substituted_exists {
+-                    ctx.exists_inner_cache
+-                        .insert_admitted(key, entry.clone(), &ctx.growth)?;
+                 }
+-                entry
++                .run_recursive(row, schema, evidence, ctx)
+             }
+-        };
+-
+-        // Existence-only probe of the full outer row against the reused index.
+-        if evidence.is_some() {
+-            let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
+-            if let Some(output) = evidence {
+-                *output = record;
+-            }
+-            return Ok(found);
+         }
+-        crate::binop::probe_has_match(
+-            row,
+-            &entry.shared,
+-            &entry.keyed,
+-            &entry.wild,
+-            &entry.inner.rows,
+-            &ctx.growth,
+-        )
+     } else {
+         // ---- Per-row definition path, with the μ-restriction memo ----
+         //
+@@ -2498,7 +2666,7 @@ fn exists_prepared<D: DatasetView + Sync>(
+         let memo_key = if use_memo {
+             let restriction = definition_restriction_key(row, schema, free_vars, &ctx.growth)?;
+             Some((
+-                site.key,
++                key,
+                 ctx.graph_key(),
+                 crate::eval::schema_fingerprint(schema),
+                 restriction,
+@@ -2525,12 +2693,7 @@ fn exists_prepared<D: DatasetView + Sync>(
+         // Ordinary queries use this in production. Evidence queries retain all
+         // witnesses: emptiness preservation does not preserve information joins.
+         // [`suppress_first_witness_wrap_for_test`] compares ordinary consumption.
+-        let (to_evaluate, sites): (&GraphPattern, _) =
+-            if evidence.is_none() && exists_apply_first_witness_wrap() {
+-                (witness_wrapped, witness_sites)
+-            } else {
+-                (normalized, normalized_sites)
+-            };
++        let first_witness = evidence.is_none() && exists_apply_first_witness_wrap();
+         // Push this site's ledger-source correspondence (`PreparedExists::Pattern::
+         // ledger_source` — `crate::enf::ledger_source_map`) as the enclosing window
+         // `eval_correlated` reads BEFORE pushing its own per-row map: that is what makes
+@@ -2541,81 +2704,19 @@ fn exists_prepared<D: DatasetView + Sync>(
+         // a plan address. Gated on a ledger actually being installed (nothing to resolve
+         // against otherwise) and on the map being non-empty (`ledger_source_map` declines to
+         // track a `Project`/`Union`-shaped site — see its doc — so there is nothing to push).
+-        // Popped manually, not via a guard, because the only fallible call in this scope is
+-        // the one line below and its `?` is applied AFTER the pop.
+-        let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
+-        if track_ledger {
+-            ctx.correlated_node_maps
+-                .push(ledger_source.clone(), &ctx.growth)?;
++        // The layer belongs to this child interval. A suspended parent retains
++        // the same restoration token and pops it after the child completes.
++        ExistsChild::Definition {
++            site: PreparedSite {
++                key,
++                plan_map: ledger_source,
++                prepared,
++                source_owner,
++            },
++            first_witness,
++            resume: ExistsDefinitionResume { memo_key },
+         }
+-        let source = crate::deferred_exists::CorrelatedSource {
+-            sites: crate::deferred_exists::SiteSlot::Prepared(sites),
+-            plan_map: Some(ledger_source.as_ref()),
+-        };
+-        let inner_result = match crate::shapes::barrier::inner(
+-            site.key,
+-            normalized,
+-            ledger_source.as_ref(),
+-            row,
+-            schema,
+-            ctx,
+-        ) {
+-            Ok(Some(inner)) => Ok(inner),
+-            Ok(None) => crate::binop::eval_correlated(to_evaluate, row, schema, source, ctx),
+-            Err(error) => Err(error),
+-        };
+-        if track_ledger {
+-            ctx.correlated_node_maps.pop();
+-        }
+-        let inner = inner_result?;
+-        if let Evaluated::Truncated(truncation) = &inner {
+-            ctx.record_barrier(truncation.tripped());
+-            return Ok(false);
+-        }
+-        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
+-            return Ok(false);
+-        }
+-        let consumed = inner.rows().len();
+-        for _ in 0..consumed {
+-            if charge_exists_evidence(
+-                ctx,
+-                crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
+-            ) {
+-                return Ok(false);
+-            }
+-        }
+-        let answer = if evidence.is_some() {
+-            inner
+-                .rows()
+-                .rows
+-                .iter()
+-                .any(|row| !row.evidence().is_undecided())
+-        } else {
+-            !inner.rows().is_empty()
+-        };
+-        if evidence.is_some() {
+-            let record = ctx.existential_evidence(
+-                inner.rows().rows.iter().map(RetainedRow::evidence),
+-                inner.rows().rows.search_evidence(),
+-            )?;
+-            if !record.is_virtual()
+-                && let Some(key) = &memo_key
+-            {
+-                ctx.exists_evidence_memo.insert_admitted(
+-                    (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
+-                    record.clone(),
+-                    &ctx.growth,
+-                )?;
+-            }
+-            if let Some(output) = evidence {
+-                *output = record;
+-            }
+-        }
+-        if let Some(key) = memo_key {
+-            ctx.exists_definition_memo
+-                .insert_admitted(key, answer, &ctx.growth)?;
+-        }
+-        Ok(answer)
++        .run_recursive(row, schema, evidence, ctx)
+     }
+ }
+ 
+@@ -2769,8 +2870,9 @@ fn exists_deferred<D: DatasetView + Sync>(
+             return exists_prepared(
+                 PreparedSite {
+                     key: std::ptr::from_ref(normalized.as_ref()) as usize,
+-                    prepared: &site.prepared,
+-                    plan_map: &site.plan_map,
++                    prepared: site.prepared.clone(),
++                    plan_map: site.plan_map.clone(),
++                    source_owner: None,
+                 },
+                 row,
+                 schema,
+@@ -2920,20 +3022,27 @@ fn exists_layered<D: DatasetView + Sync>(
+         let from: &GraphPattern = copy.as_deref().unwrap_or(normalized);
+         copy = Some(substitute_pattern_admitted(from, layer, &ctx.growth)?);
+     }
+-    let body: &GraphPattern = copy.as_deref().unwrap_or(normalized);
+-    let prepared = crate::eval::PreparedExists::build_with_evidence_admitted(
+-        body,
+-        ctx.may_have_evidence(),
++    let source_owner = copy
++        .map(|body| PreparedPattern::new(body, &ctx.growth))
++        .transpose()?;
++    let body: &GraphPattern = source_owner.as_deref().unwrap_or(normalized);
++    let prepared = crate::workspace::SharedWorkspace::new_admitted(
++        crate::eval::PreparedExists::build_with_evidence_admitted(
++            body,
++            ctx.may_have_evidence(),
++            &ctx.growth,
++        )?,
+         &ctx.growth,
+     )?;
+-    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = &prepared else {
++    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
+         return Ok(false);
+     };
+     exists_prepared(
+         PreparedSite {
+             key: std::ptr::from_ref(body) as usize,
+-            prepared: &prepared,
+-            plan_map: ledger_source,
++            plan_map: ledger_source.clone(),
++            prepared,
++            source_owner,
+         },
+         row,
+         schema,
+@@ -7569,6 +7678,24 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn node_entry_releases_local_slice_cap_on_latched_source_failure() {
++        let view = FaultView {
++            inner: RdfDatasetBuilder::new().freeze().expect("empty dataset"),
++            refused: None,
++            refuse_reverse: false,
++            failed: std::sync::atomic::AtomicBool::new(true),
++        };
++        let slice = GraphPattern::Slice {
++            inner: Child::new(GraphPattern::empty_bgp()),
++            start: 0,
++            length: Some(1),
++        };
++        let mut ctx = EvalCtx::new(&view);
++        assert!(eval_evaluated(&slice, &mut ctx).is_err());
++        assert!(ctx.cap_pushdown.is_none());
++    }
++
+     #[test]
+     fn operational_expression_reads_fail_instead_of_becoming_unbound() {
+         let mut builder = RdfDatasetBuilder::new();
+diff --git crates/sparql-eval/src/governor/lift.rs crates/sparql-eval/src/governor/lift.rs
+index 4df881b32..20577003e 100644
+--- crates/sparql-eval/src/governor/lift.rs
++++ crates/sparql-eval/src/governor/lift.rs
+@@ -484,7 +484,38 @@ pub(crate) struct Lift<'p> {
+     schema: Option<crate::solution::SharedSchema>,
+ }
+ 
++/// The already-admitted child composition while an immutable copied pattern
++/// is retained by an explicit evaluator frame. Reattach the checked node
++/// before absorbing its child; the certificate still uses the one Lift home.
++#[must_use]
++pub(crate) struct DetachedLift {
++    edges: ChildEdges,
++    certificate: Option<Certificate>,
++    schema: Option<crate::solution::SharedSchema>,
++}
++
++impl DetachedLift {
++    pub(crate) fn attach(self, node: &GraphPattern) -> Lift<'_> {
++        Lift {
++            node,
++            edges: self.edges,
++            certificate: self.certificate,
++            schema: self.schema,
++        }
++    }
++}
++
+ impl<'p> Lift<'p> {
++    /// Keep the pre-child edge admission while releasing the node borrow for
++    /// a movable continuation. The owning frame retains the immutable node.
++    pub(crate) fn detach(self) -> DetachedLift {
++        DetachedLift {
++            edges: self.edges,
++            certificate: self.certificate,
++            schema: self.schema,
++        }
++    }
++
+     /// A lift for `node`, reading its child classification from
+     /// [`crate::governor::soundness::child_edges_admitted`].
+     #[cfg(test)]
+diff --git crates/sparql-eval/src/modifier.rs crates/sparql-eval/src/modifier.rs
+index 7d2b0cc55..f6a196d02 100644
+--- crates/sparql-eval/src/modifier.rs
++++ crates/sparql-eval/src/modifier.rs
+@@ -494,8 +494,23 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
+     length: Option<usize>,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
++    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
++    let child = eval_evaluated(inner, ctx)?;
++    finish_slice(node, start, length, lift, child, ctx)
++}
++
++/// Complete the original slice after its child returns. The ordinary node
++/// worklist retains `lift` and the local cap while that child is suspended.
++pub(crate) fn finish_slice<D: DatasetView + Sync>(
++    node: &GraphPattern,
++    start: usize,
++    length: Option<usize>,
++    lift: crate::governor::lift::DetachedLift,
++    child: Evaluated<D::Id>,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    let mut lift = lift.attach(node);
++    let Some(seq) = lift.absorb(0, child) else {
+         return Ok(lift.withheld());
+     };
+     let mut rows = RowsBuilder::new(&ctx.growth);
+@@ -655,8 +670,9 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
+     }
+     let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
+     for row in &seq.rows {
+-        for key in linked.as_mut_slice() {
+-            let term = key.term(row, &schema, ctx)?;
++        for (key, order) in linked.as_mut_slice().iter_mut().zip(exprs) {
++            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
++            let term = key.term(Some(expression), row, &schema, ctx)?;
+             values.push(
+                 term.map(|t| {
+                     ctx.scratch
+@@ -2904,11 +2920,13 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
+                                 agg.args().len(),
+                                 &ctx.growth.clone(),
+                                 |probe| {
+-                                    for (slot, link) in probe
++                                    for ((slot, link), expression) in probe
+                                         .iter_mut()
+                                         .zip(&mut links.as_mut_slice()[..agg.args().len()])
++                                        .zip(agg.args())
+                                     {
+-                                        *slot = link.term(row, &seq.schema, ctx)?;
++                                        *slot =
++                                            link.term(Some(expression), row, &seq.schema, ctx)?;
+                                     }
+                                     Ok(())
+                                 },
+@@ -2922,11 +2940,12 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
+                         identity(row)?
+                     } else {
+                         RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |terms| {
+-                            for (slot, link) in terms
++                            for ((slot, link), expression) in terms
+                                 .iter_mut()
+                                 .zip(&mut links.as_mut_slice()[..agg.args().len()])
++                                .zip(agg.args())
+                             {
+-                                *slot = link.term(row, &seq.schema, ctx)?;
++                                *slot = link.term(Some(expression), row, &seq.schema, ctx)?;
+                             }
+                             Ok(())
+                         })?
+@@ -3470,7 +3489,7 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+             ChargePoint::AggregateAccumulation,
+         );
+         for &i in idxs {
+-            let Some(term) = first_arg.term(&rows[i], schema, ctx)? else {
++            let Some(term) = first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)? else {
+                 continue;
+             };
+             if let Err(tripped) = checkpoint.pass(ctx) {
+@@ -3832,8 +3851,8 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
+     for &i in idxs {
+         let mut tuple = AggregateSurvivors::new(&ctx.growth);
+         let mut every_position_bound = true;
+-        for argument in &mut links[..agg.args().len()] {
+-            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
++        for (argument, expression) in links[..agg.args().len()].iter_mut().zip(agg.args()) {
++            let Some(term) = argument.term(Some(expression), &rows[i], schema, ctx)? else {
+                 every_position_bound = false;
+                 break;
+             };
+diff --git crates/sparql-eval/src/property_fn_eval.rs crates/sparql-eval/src/property_fn_eval.rs
+index 4c93e59c5..3eaad8c2f 100644
+--- crates/sparql-eval/src/property_fn_eval.rs
++++ crates/sparql-eval/src/property_fn_eval.rs
+@@ -4191,7 +4191,7 @@ impl CallCursor {
+                             )?);
+                         }
+                         let linked = link.as_mut().expect("the admitted link was initialized");
+-                        if linked.ebv(&row, schema, ctx)? != Some(true) {
++                        if linked.ebv(None, &row, schema, ctx)? != Some(true) {
+                             continue 'pull;
+                         }
+                     }
+diff --git crates/sparql-eval/src/shapes/barrier.rs crates/sparql-eval/src/shapes/barrier.rs
+index 2d8abcaf7..3a0efa808 100644
+--- crates/sparql-eval/src/shapes/barrier.rs
++++ crates/sparql-eval/src/shapes/barrier.rs
+@@ -534,7 +534,7 @@ pub(crate) fn inner<D: DatasetView + Sync>(
+             }),
+             &growth,
+         )?;
+-        if linked.ebv(&probe, &combined, ctx)? == Some(true) {
++        if linked.ebv(Some(expr), &probe, &combined, ctx)? == Some(true) {
+             rows.push_row(original.clone_admitted(&growth)?)?;
+         }
+     }
+diff --git crates/sparql-eval/src/vm/mod.rs crates/sparql-eval/src/vm/mod.rs
+index f74a60ad5..9f3ef3fbd 100644
+--- crates/sparql-eval/src/vm/mod.rs
++++ crates/sparql-eval/src/vm/mod.rs
+@@ -243,17 +243,17 @@ impl RegexSlot {
+ }
+ 
+ /// What an instruction that may re-enter the evaluator produced.
+-pub(crate) enum VmStep<'e, 'd, I> {
++pub(crate) enum VmStep<'d, I> {
+     /// The instruction's value.
+     Value(Option<SolutionTerm<I>>),
+     /// The instruction needs pattern evaluation before it has a value.
+-    Suspend(Suspend<'e, 'd>),
++    Suspend(Suspend<'d>),
+ }
+ 
+ /// A pattern evaluation an instruction is waiting on.
+-pub(crate) enum Suspend<'e, 'd> {
+-    /// `EXISTS` over `pattern`, for the current row.
+-    Exists(&'e GraphPattern),
++pub(crate) enum Suspend<'d> {
++    /// `EXISTS` at the compiler's pre-order site, for the current row.
++    Exists(u32),
+     /// A SPARQL-bodied function call: the declaration, the prepared body, the call's
+     /// entry in the program's call table, and the evaluated arguments.
+     SparqlUdf {
+@@ -280,8 +280,10 @@ pub(crate) struct Linked<'e, I: Copy> {
+     consts: purrdf_core::SmallVec<[ConstCell<I>; 4]>,
+     /// Each regex slot's pattern.
+     regexes: Vec<RegexSlot>,
+-    /// Each `EXISTS`'s pattern, in the expression's pre-order.
+-    exists: Vec<&'e GraphPattern>,
++    /// Each `EXISTS`'s owner-relative operand path, in compiled pre-order.
++    /// The expression owner stays with the caller, so this VM can be moved
++    /// beside a copied tree without borrowing its own frame.
++    exists: Option<crate::workspace::SharedWorkspace<ExistsSites<'e>>>,
+     stack: ValStack<I>,
+     /// Born only for an explicit evidence query; ordinary stacks are unchanged.
+     evidence: Option<crate::workspace::SharedWorkspace<std::sync::Mutex<evidence::Records>>>,
+@@ -290,7 +292,369 @@ pub(crate) struct Linked<'e, I: Copy> {
+     args: Arguments,
+     // The linked buffers are destroyed before their physical admission.
+     _allocation: Option<crate::WorkspaceAllocation>,
+-    _exists_allocation: Option<crate::WorkspaceAllocation>,
++}
++
++struct ExistsSite {
++    steps: Vec<usize>,
++    _allocation: Option<crate::WorkspaceAllocation>,
++}
++
++struct ExistsSites<'e> {
++    owner: ExpressionOwner<'e>,
++    sites: Vec<ExistsSite>,
++    _allocation: Option<crate::WorkspaceAllocation>,
++}
++
++impl ExistsSites<'_> {
++    /// Resolve the compiled ordinal against its retained immutable expression
++    /// owner. Both the immediate VM and a suspended row use this one path.
++    fn pattern<'a>(
++        &'a self,
++        site: u32,
++        expression: Option<&Expression>,
++    ) -> Result<&'a GraphPattern, EvalError> {
++        let site = self.sites.get(site as usize).ok_or_else(|| {
++            EvalError::internal(
++                "an EXISTS instruction was run by a link that holds no pattern for it",
++            )
++        })?;
++        let mut node = self.owner.expression(expression)?;
++        for &index in &site.steps {
++            let mut child = None;
++            let mut at = 0usize;
++            compile::visit_operands(node, |operand| {
++                if at == index {
++                    child = Some(operand);
++                }
++                at += 1;
++            });
++            node = child.ok_or_else(|| {
++                EvalError::internal("an EXISTS site no longer names its linked expression")
++            })?;
++        }
++        let Expression::Exists(pattern) = node else {
++            return Err(EvalError::internal(
++                "an EXISTS site no longer names its linked expression",
++            ));
++        };
++        Ok(pattern)
++    }
++}
++
++enum ExpressionOwner<'e> {
++    Borrowed(&'e Expression),
++    Copied {
++        pattern: crate::expr::PreparedPattern,
++        steps: Vec<usize>,
++        _allocation: Option<crate::WorkspaceAllocation>,
++    },
++}
++
++impl ExpressionOwner<'_> {
++    fn expression<'a>(
++        &'a self,
++        supplied: Option<&Expression>,
++    ) -> Result<&'a Expression, EvalError> {
++        use purrdf_sparql_algebra::NodeRef;
++        let expression = match self {
++            Self::Borrowed(expression) => *expression,
++            Self::Copied { pattern, steps, .. } => {
++                let mut node = NodeRef::Pattern(pattern);
++                for &index in steps {
++                    let mut at = 0usize;
++                    let mut child = None;
++                    node.for_each_child(|next| {
++                        if at == index {
++                            child = Some(next);
++                        }
++                        at += 1;
++                    });
++                    node = child.ok_or_else(|| {
++                        EvalError::internal("copied expression path no longer names a child")
++                    })?;
++                }
++                let NodeRef::Expr(expression) = node else {
++                    return Err(EvalError::internal(
++                        "copied expression path no longer names an expression",
++                    ));
++                };
++                expression
++            }
++        };
++        if let Some(supplied) = supplied
++            && !std::ptr::eq(supplied, expression)
++        {
++            return Err(EvalError::internal(
++                "an EXISTS link was run with a different expression owner",
++            ));
++        }
++        if supplied.is_none() && matches!(self, Self::Borrowed(_)) {
++            return Err(EvalError::internal(
++                "an EXISTS link was run without its expression owner",
++            ));
++        }
++        Ok(expression)
++    }
++}
++
++/// Locate an attached expression in the one immutable copied tree. The
++/// algebra walk supplies the exhaustive child order; only the path survives.
++type CopiedExpressionPath = (Vec<usize>, Option<crate::WorkspaceAllocation>);
++
++fn copied_expression_path(
++    pattern: &crate::expr::PreparedPattern,
++    target: &Expression,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<Option<CopiedExpressionPath>, EvalError> {
++    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, WalkError, try_walk_pre_post};
++    let mut ancestors_allocation = None;
++    let mut ancestors: Vec<usize> = Vec::new();
++    let mut steps_allocation = None;
++    let mut steps = Vec::new();
++    let mut found = false;
++    let walked = try_walk_pre_post(
++        NodeRef::Pattern(pattern),
++        |phase, node| match phase {
++            Visit::Enter => {
++                if let Some(next_child) = ancestors.last_mut() {
++                    let at = *next_child;
++                    *next_child = (*next_child)
++                        .checked_add(1)
++                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                    let required = steps
++                        .len()
++                        .checked_add(1)
++                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                    workspace.reserve_vec(&mut steps, &mut steps_allocation, required)?;
++                    steps.push(at);
++                }
++                if let NodeRef::Expr(expression) = node
++                    && std::ptr::eq(expression, target)
++                {
++                    found = true;
++                    return Ok(Flow::Stop);
++                }
++                let required = ancestors
++                    .len()
++                    .checked_add(1)
++                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                workspace.reserve_vec(&mut ancestors, &mut ancestors_allocation, required)?;
++                ancestors.push(0usize);
++                Ok(Flow::Descend)
++            }
++            Visit::Exit => {
++                ancestors.pop();
++                if !ancestors.is_empty() {
++                    steps.pop();
++                }
++                Ok(Flow::Descend)
++            }
++        },
++        |bytes| {
++            workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
++        },
++    );
++    match walked {
++        Ok(_) if found => Ok(Some((steps, steps_allocation))),
++        Ok(_) => Ok(None),
++        Err(WalkError::Visitor(error)) => Err(error),
++        Err(WalkError::Allocation(_)) => Err(EvalError::AllocationFailed {
++            construct: "copied expression site walk",
++        }),
++        Err(WalkError::LayoutOverflow) => Err(EvalError::WorkspaceBoundOverflow),
++    }
++}
++
++/// Instruction position retained across a recursive suspension. The value
++/// stack and evidence remain in the corresponding `Linked` owner.
++#[must_use]
++pub(crate) struct TermCursor {
++    pc: usize,
++}
++
++/// One FILTER row's VM continuation. Its program counter survives every
++/// `EXISTS` suspension; the linked owner retains the value stack and evidence.
++pub(crate) struct FilterRowState {
++    cursor: TermCursor,
++}
++
++/// The actual sequential FILTER row suspended while its EXISTS child runs.
++/// The link retains the copied pattern owner and the row retains its grants;
++/// neither is borrowed from this movable frame.
++pub(crate) struct FilterRowFrame<'e, I: purrdf_core::ViewTermId> {
++    linked: Linked<'e, I>,
++    row: crate::solution::RetainedRow<I>,
++    state: FilterRowState,
++}
++
++pub(crate) type CompletedFilterRow<'e, I> = (
++    Linked<'e, I>,
++    crate::solution::RetainedRow<I>,
++    bool,
++    Option<crate::evidence_exec::RowEvidence>,
++);
++
++pub(crate) enum FilterRowStep<'e, I: purrdf_core::ViewTermId> {
++    Complete(CompletedFilterRow<'e, I>),
++    Exists(FilterRowFrame<'e, I>, u32),
++}
++
++pub(crate) enum FilterPoll<I> {
++    Complete(Option<SolutionTerm<I>>),
++    Exists(u32),
++}
++
++impl FilterRowState {
++    pub(crate) fn begin<D: DatasetView + Sync>(
++        linked: &mut Linked<'_, D::Id>,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<Self, EvalError> {
++        linked.begin_term(ctx)?;
++        Ok(Self {
++            cursor: TermCursor { pc: 0 },
++        })
++    }
++
++    /// Stop before entering an EXISTS child. The caller may retain this
++    /// cursor and the linked value stack in its admitted worklist frame.
++    pub(crate) fn poll<D: DatasetView + Sync>(
++        &mut self,
++        linked: &mut Linked<'_, D::Id>,
++        expression: &Expression,
++        row: &crate::solution::RetainedRow<D::Id>,
++        schema: &VarSchema,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<FilterPoll<D::Id>, EvalError> {
++        loop {
++            match linked.advance_term(&mut self.cursor, row, ctx)? {
++                VmStep::Value(value) => return Ok(FilterPoll::Complete(value)),
++                VmStep::Suspend(Suspend::Exists(site)) => return Ok(FilterPoll::Exists(site)),
++                VmStep::Suspend(suspend @ Suspend::SparqlUdf { .. }) => {
++                    let (value, record) = resolve(
++                        suspend,
++                        linked.exists.as_deref(),
++                        Some(expression),
++                        &linked.program,
++                        row,
++                        schema,
++                        ctx,
++                    )?;
++                    self.resume(linked, value, record, ctx)?;
++                }
++            }
++        }
++    }
++
++    pub(crate) fn resume<D: DatasetView + Sync>(
++        &self,
++        linked: &mut Linked<'_, D::Id>,
++        value: Option<SolutionTerm<D::Id>>,
++        record: Option<crate::evidence_exec::RowEvidence>,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<(), EvalError> {
++        linked.resume_term(value, record, &self.cursor, ctx)
++    }
++
++    fn finish<D: DatasetView + Sync>(
++        self,
++        linked: &mut Linked<'_, D::Id>,
++        expression: &Expression,
++        row: &crate::solution::RetainedRow<D::Id>,
++        schema: &VarSchema,
++        value: Option<SolutionTerm<D::Id>>,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<(bool, Option<crate::evidence_exec::RowEvidence>), EvalError> {
++        let value = match value {
++            Some(term) => helpers::ebv_term(ctx, term)?,
++            None => None,
++        };
++        linked.finish_filter_value(value, expression, row, schema, ctx)
++    }
++}
++
++impl<'e, I: purrdf_core::ViewTermId> FilterRowFrame<'e, I> {
++    pub(crate) fn begin<D: DatasetView<Id = I> + Sync>(
++        mut linked: Linked<'e, I>,
++        row: crate::solution::RetainedRow<I>,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<Self, EvalError> {
++        let state = FilterRowState::begin(&mut linked, ctx)?;
++        Ok(Self { linked, row, state })
++    }
++
++    pub(crate) fn run<D: DatasetView<Id = I> + Sync>(
++        mut self,
++        expression: &Expression,
++        schema: &VarSchema,
++        pending: &mut crate::AdmittedVec<Self>,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<CompletedFilterRow<'e, I>, EvalError> {
++        loop {
++            match self.step(expression, schema, ctx)? {
++                FilterRowStep::Complete(completed) => return Ok(completed),
++                FilterRowStep::Exists(frame, site) => {
++                    // Admission precedes child entry. On error or unwind the
++                    // pending frame drops before the enclosing copied window
++                    // restores its lexical scope.
++                    pending.push(frame)?;
++                    let resolved = {
++                        let frame = pending.last().expect("one suspended FILTER row");
++                        resolve(
++                            Suspend::Exists(site),
++                            frame.linked.exists.as_deref(),
++                            Some(expression),
++                            &frame.linked.program,
++                            &frame.row,
++                            schema,
++                            ctx,
++                        )
++                    };
++                    self = pending.pop().expect("one suspended FILTER row");
++                    let (value, record) = resolved?;
++                    self.resume(value, record, ctx)?;
++                }
++            }
++        }
++    }
++
++    pub(crate) fn step<D: DatasetView<Id = I> + Sync>(
++        mut self,
++        expression: &Expression,
++        schema: &VarSchema,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<FilterRowStep<'e, I>, EvalError> {
++        match self
++            .state
++            .poll(&mut self.linked, expression, &self.row, schema, ctx)?
++        {
++            FilterPoll::Exists(site) => Ok(FilterRowStep::Exists(self, site)),
++            FilterPoll::Complete(value) => {
++                let (keep, evidence) = self.state.finish(
++                    &mut self.linked,
++                    expression,
++                    &self.row,
++                    schema,
++                    value,
++                    ctx,
++                )?;
++                Ok(FilterRowStep::Complete((
++                    self.linked,
++                    self.row,
++                    keep,
++                    evidence,
++                )))
++            }
++        }
++    }
++
++    pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        value: Option<SolutionTerm<I>>,
++        record: Option<crate::evidence_exec::RowEvidence>,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<(), EvalError> {
++        self.state.resume(&mut self.linked, value, record, ctx)
++    }
+ }
+ 
+ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+@@ -310,51 +674,187 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+         expr: &'e Expression,
+         schema: &VarSchema,
+         ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<Self, EvalError> {
++        Self::link_with_owner(
++            program.into(),
++            expr,
++            ExpressionOwner::Borrowed(expr),
++            schema,
++            ctx,
++        )
++    }
++
++    /// A FILTER in a copied window chooses the same immutable owner the
++    /// substitution runner retains. The owned link itself has no borrow into
++    /// that window, so it can move with a suspended worklist frame.
++    pub(crate) fn link_filter_admitted<D: DatasetView<Id = I> + Sync>(
++        program: impl Into<crate::workspace::SharedWorkspace<ExprProgram>>,
++        expr: &'e Expression,
++        schema: &VarSchema,
++        ctx: &mut EvalCtx<'_, D>,
+     ) -> Result<Self, EvalError> {
+         let program = program.into();
+-        let mut exists = Vec::new();
++        if program.has_exists()
++            && let Some(pattern) = ctx.active_copied_pattern.clone()
++            && let Some((steps, allocation)) = copied_expression_path(&pattern, expr, &ctx.growth)?
++        {
++            return Self::link_copied_filter_admitted(
++                program, expr, pattern, steps, allocation, schema, ctx,
++            );
++        }
++        Self::link_admitted(program, expr, schema, ctx)
++    }
++
++    /// Link against an explicitly retained copied tree. A suspension frame may
++    /// own the returned link without borrowing the temporary `expr` used to
++    /// compile it. The caller derives the path with the one copied-tree walk.
++    pub(crate) fn link_copied_filter_admitted<D: DatasetView<Id = I> + Sync>(
++        program: crate::workspace::SharedWorkspace<ExprProgram>,
++        expr: &Expression,
++        pattern: crate::expr::PreparedPattern,
++        steps: Vec<usize>,
++        allocation: Option<crate::WorkspaceAllocation>,
++        schema: &VarSchema,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<Linked<'static, I>, EvalError> {
++        Self::link_with_owner(
++            program,
++            expr,
++            ExpressionOwner::Copied {
++                pattern,
++                steps,
++                _allocation: allocation,
++            },
++            schema,
++            ctx,
++        )
++    }
++
++    fn link_with_owner<'owner, D: DatasetView<Id = I> + Sync>(
++        program: crate::workspace::SharedWorkspace<ExprProgram>,
++        expr: &Expression,
++        owner: ExpressionOwner<'owner>,
++        schema: &VarSchema,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<Linked<'owner, I>, EvalError> {
+         let mut exists_allocation = None;
++        let mut exists = Vec::new();
+         if program.has_exists() {
+-            let mut pending = Vec::new();
++            struct WalkFrame<'x> {
++                expr: &'x Expression,
++                child_start: usize,
++                child_count: usize,
++                next: usize,
++                entered: bool,
++            }
+             let mut pending_allocation = None;
++            let mut pending = Vec::new();
+             ctx.growth
+                 .reserve_vec(&mut pending, &mut pending_allocation, 1)?;
+-            pending.push(expr);
+-            while let Some(expr) = pending.pop() {
+-                if let Expression::Exists(pattern) = expr {
+-                    let required = exists
++            pending.push(WalkFrame {
++                expr,
++                child_start: 0,
++                child_count: 0,
++                next: 0,
++                entered: false,
++            });
++            let mut children_allocation = None;
++            let mut children = Vec::new();
++            let mut path_allocation = None;
++            let mut path = Vec::new();
++            while let Some(frame) = pending.last_mut() {
++                if !frame.entered {
++                    if matches!(frame.expr, Expression::Exists(_)) {
++                        let required = exists
++                            .len()
++                            .checked_add(1)
++                            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                        ctx.growth
++                            .reserve_vec(&mut exists, &mut exists_allocation, required)?;
++                        let mut allocation = None;
++                        let mut steps = Vec::new();
++                        ctx.growth
++                            .reserve_vec(&mut steps, &mut allocation, path.len())?;
++                        steps.extend_from_slice(&path);
++                        exists.push(ExistsSite {
++                            steps,
++                            _allocation: allocation,
++                        });
++                    }
++                    frame.child_start = children.len();
++                    let mut failure = None;
++                    compile::visit_operands(frame.expr, |operand| {
++                        if failure.is_some() {
++                            return;
++                        }
++                        let Some(required) = children.len().checked_add(1) else {
++                            failure = Some(EvalError::WorkspaceBoundOverflow);
++                            return;
++                        };
++                        match ctx.growth.reserve_vec(
++                            &mut children,
++                            &mut children_allocation,
++                            required,
++                        ) {
++                            Ok(()) => children.push(operand),
++                            Err(error) => failure = Some(error),
++                        }
++                    });
++                    if let Some(error) = failure {
++                        return Err(error);
++                    }
++                    frame.child_count = children.len() - frame.child_start;
++                    frame.entered = true;
++                }
++                if frame.next < frame.child_count {
++                    let next = frame.next;
++                    let child = children[frame.child_start + next];
++                    frame.next += 1;
++                    let required_pending = pending
++                        .len()
++                        .checked_add(1)
++                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                    ctx.growth.reserve_vec(
++                        &mut pending,
++                        &mut pending_allocation,
++                        required_pending,
++                    )?;
++                    let required_path = path
+                         .len()
+                         .checked_add(1)
+                         .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                     ctx.growth
+-                        .reserve_vec(&mut exists, &mut exists_allocation, required)?;
+-                    exists.push(&**pattern);
+-                }
+-                let start = pending.len();
+-                let mut failure = None;
+-                compile::visit_operands(expr, |operand| {
+-                    if failure.is_some() {
+-                        return;
++                        .reserve_vec(&mut path, &mut path_allocation, required_path)?;
++                    path.push(next);
++                    pending.push(WalkFrame {
++                        expr: child,
++                        child_start: 0,
++                        child_count: 0,
++                        next: 0,
++                        entered: false,
++                    });
++                } else {
++                    let done = pending.pop().expect("nonempty DFS stack");
++                    children.truncate(done.child_start);
++                    if !pending.is_empty() {
++                        path.pop();
+                     }
+-                    let Some(required) = pending.len().checked_add(1) else {
+-                        failure = Some(EvalError::WorkspaceBoundOverflow);
+-                        return;
+-                    };
+-                    match ctx
+-                        .growth
+-                        .reserve_vec(&mut pending, &mut pending_allocation, required)
+-                    {
+-                        Ok(()) => pending.push(operand),
+-                        Err(error) => failure = Some(error),
+-                    }
+-                });
+-                if let Some(error) = failure {
+-                    return Err(error);
+                 }
+-                pending[start..].reverse();
+             }
+         }
+-        Self::link_parts(program, exists, exists_allocation, schema, ctx)
++        let exists = if exists.is_empty() {
++            None
++        } else {
++            Some(crate::workspace::SharedWorkspace::new_admitted(
++                ExistsSites {
++                    owner,
++                    sites: exists,
++                    _allocation: exists_allocation,
++                },
++                &ctx.growth,
++            )?)
++        };
++        Linked::link_parts(program, exists, schema, ctx)
+     }
+ 
+     /// Link a program whose expression is not at hand. An `EXISTS` in it has no
+@@ -364,13 +864,12 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+         schema: &VarSchema,
+         ctx: &mut EvalCtx<'_, D>,
+     ) -> Result<Self, EvalError> {
+-        Self::link_parts(program.into(), Vec::new(), None, schema, ctx)
++        Self::link_parts(program.into(), None, schema, ctx)
+     }
+ 
+     fn link_parts<D: DatasetView<Id = I> + Sync>(
+         program: crate::workspace::SharedWorkspace<ExprProgram>,
+-        exists: Vec<&'e GraphPattern>,
+-        exists_allocation: Option<crate::WorkspaceAllocation>,
++        exists: Option<crate::workspace::SharedWorkspace<ExistsSites<'e>>>,
+         schema: &VarSchema,
+         ctx: &mut EvalCtx<'_, D>,
+     ) -> Result<Self, EvalError> {
+@@ -460,7 +959,6 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+             args,
+             program,
+             _allocation: Some(allocation),
+-            _exists_allocation: exists_allocation,
+         })
+     }
+ 
+@@ -477,7 +975,6 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+             evidence: None,
+             args: Arguments::new(&crate::WorkspaceCapability::resident()),
+             _allocation: None,
+-            _exists_allocation: None,
+         }
+     }
+ 
+@@ -485,11 +982,12 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+     /// unbound).
+     pub(crate) fn ebv<D: DatasetView<Id = I> + Sync>(
+         &mut self,
++        expression: Option<&Expression>,
+         row: &[Option<SolutionTerm<I>>],
+         schema: &VarSchema,
+         ctx: &mut EvalCtx<'_, D>,
+     ) -> Result<Option<bool>, EvalError> {
+-        match self.term(row, schema, ctx)? {
++        match self.term(expression, row, schema, ctx)? {
+             Some(term) => Ok(helpers::ebv_term(ctx, term)?),
+             None => Ok(None),
+         }
+@@ -505,10 +1003,18 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+         schema: &VarSchema,
+         ctx: &mut EvalCtx<'_, D>,
+     ) -> Result<(bool, Option<crate::evidence_exec::RowEvidence>), EvalError> {
+-        let value = self.ebv(row, schema, ctx)?;
+-        // The completed VM owns every computed witness. With no such owner,
+-        // no source declaration and no row attachment, filtering needs only
+-        // its original boolean decision, including rejected rows.
++        let value = self.ebv(Some(expression), row, schema, ctx)?;
++        self.finish_filter_value(value, expression, row, schema, ctx)
++    }
++
++    fn finish_filter_value<D: DatasetView<Id = I> + Sync>(
++        &self,
++        value: Option<bool>,
++        expression: &Expression,
++        row: &crate::solution::RetainedRow<I>,
++        schema: &VarSchema,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<(bool, Option<crate::evidence_exec::RowEvidence>), EvalError> {
+         if self.evidence.is_none() && ctx.evidence_input.is_none() && !row.has_evidence_attachment()
+         {
+             return Ok((value == Some(true), None));
+@@ -522,10 +1028,38 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+     /// unbound, `Err` a hard failure. `schema` is the schema the program was linked to.
+     pub(crate) fn term<D: DatasetView<Id = I> + Sync>(
+         &mut self,
++        expression: Option<&Expression>,
+         row: &[Option<SolutionTerm<I>>],
+         schema: &VarSchema,
+         ctx: &mut EvalCtx<'_, D>,
+     ) -> Result<Option<SolutionTerm<I>>, EvalError> {
++        self.begin_term(ctx)?;
++        let mut cursor = TermCursor { pc: 0 };
++        loop {
++            match self.advance_term(&mut cursor, row, ctx)? {
++                VmStep::Value(value) => return Ok(value),
++                VmStep::Suspend(suspend) => {
++                    let (value, record) = resolve(
++                        suspend,
++                        self.exists.as_deref(),
++                        expression,
++                        &self.program,
++                        row,
++                        schema,
++                        ctx,
++                    )?;
++                    self.resume_term(value, record, &cursor, ctx)?;
++                }
++            }
++        }
++    }
++
++    /// Start one expression exactly once; a suspended execution retains its
++    /// program counter and stack instead of replaying any previous instruction.
++    fn begin_term<D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<(), EvalError> {
+         self.stack.clear();
+         if ctx.may_have_evidence()
+             && self.evidence.is_none()
+@@ -542,31 +1076,41 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+         if let Some(owner) = &self.evidence {
+             owner.lock().map_err(|_| evidence_poisoned())?.clear();
+         }
+-        let mut pc = 0;
+-        loop {
+-            let step = if self.evidence.is_some() {
+-                self.advance::<true, D>(&mut pc, row, ctx)?
+-            } else {
+-                self.advance::<false, D>(&mut pc, row, ctx)?
+-            };
+-            match step {
+-                VmStep::Value(value) => return Ok(value),
+-                VmStep::Suspend(suspend) => {
+-                    let (value, record) = resolve(suspend, &self.program, row, schema, ctx)?;
+-                    self.stack.push(Val::Term(value));
+-                    if let Some(owner) = &self.evidence {
+-                        owner.lock().map_err(|_| evidence_poisoned())?.resume(
+-                            self.stack.len() - 1,
+-                            record,
+-                            pc,
+-                            &ctx.growth,
+-                        )?;
+-                    }
+-                }
+-            }
++        Ok(())
++    }
++
++    fn advance_term<'d, D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        cursor: &mut TermCursor,
++        row: &[Option<SolutionTerm<I>>],
++        ctx: &mut EvalCtx<'d, D>,
++    ) -> Result<VmStep<'d, I>, EvalError> {
++        if self.evidence.is_some() {
++            self.advance::<true, D>(&mut cursor.pc, row, ctx)
++        } else {
++            self.advance::<false, D>(&mut cursor.pc, row, ctx)
+         }
+     }
+ 
++    fn resume_term<D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        value: Option<SolutionTerm<I>>,
++        record: Option<crate::evidence_exec::RowEvidence>,
++        cursor: &TermCursor,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<(), EvalError> {
++        self.stack.push(Val::Term(value));
++        if let Some(owner) = &self.evidence {
++            owner.lock().map_err(|_| evidence_poisoned())?.resume(
++                self.stack.len() - 1,
++                record,
++                cursor.pc,
++                &ctx.growth,
++            )?;
++        }
++        Ok(())
++    }
++
+     /// Borrowed-value execution's original evidence, never an expression replay.
+     pub(crate) fn result_evidence(
+         &self,
+@@ -590,7 +1134,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+         pc: &mut usize,
+         row: &[Option<SolutionTerm<I>>],
+         ctx: &mut EvalCtx<'d, D>,
+-    ) -> Result<VmStep<'e, 'd, I>, EvalError> {
++    ) -> Result<VmStep<'d, I>, EvalError> {
+         let Self {
+             program,
+             slots,
+@@ -803,16 +1347,19 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+                     )?));
+                 }
+                 Op::Exists(site) => {
+-                    let pattern = exists.get(site as usize).copied().ok_or_else(|| {
+-                        EvalError::internal(
+-                            "an EXISTS instruction was run by a link that holds no pattern \
++                    exists
++                        .as_ref()
++                        .and_then(|sites| sites.sites.get(site as usize))
++                        .ok_or_else(|| {
++                            EvalError::internal(
++                                "an EXISTS instruction was run by a link that holds no pattern \
+                              for it",
+-                        )
+-                    })?;
++                            )
++                        })?;
+                     if let Some(records) = &mut records {
+                         records.suspend(record);
+                     }
+-                    return Ok(VmStep::Suspend(Suspend::Exists(pattern)));
++                    return Ok(VmStep::Suspend(Suspend::Exists(site)));
+                 }
+                 Op::Call { call, argc, regex } => {
+                     pop_values(stack, argc, ctx, args)?;
+@@ -1016,12 +1563,12 @@ fn compare<D: DatasetView + Sync>(
+ /// A caller-registered function call over its evaluated arguments, probed in the order
+ /// the registry documents: SPARQL-bodied (which suspends), native, expression-bodied,
+ /// then an XSD constructor cast; an IRI none of them names is unsupported.
+-fn call_custom<'e, 'd, D: DatasetView + Sync>(
++fn call_custom<'d, D: DatasetView + Sync>(
+     program: &ExprProgram,
+     call: u32,
+     vals: &mut Arguments,
+     ctx: &mut EvalCtx<'d, D>,
+-) -> Result<VmStep<'e, 'd, D::Id>, EvalError> {
++) -> Result<VmStep<'d, D::Id>, EvalError> {
+     let Function::Custom(iri) = &program.calls[call as usize] else {
+         return Err(EvalError::internal(
+             "a custom-call instruction names a built-in function",
+@@ -1046,14 +1593,22 @@ type Resolved<I> = (
+ );
+ 
+ fn resolve<D: DatasetView + Sync>(
+-    suspend: Suspend<'_, '_>,
++    suspend: Suspend<'_>,
++    exists: Option<&ExistsSites<'_>>,
++    expression: Option<&Expression>,
+     program: &ExprProgram,
+     row: &[Option<SolutionTerm<D::Id>>],
+     schema: &VarSchema,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Resolved<D::Id>, EvalError> {
+     match suspend {
+-        Suspend::Exists(pattern) => {
++        Suspend::Exists(site) => {
++            let sites = exists.ok_or_else(|| {
++                EvalError::internal(
++                    "an EXISTS instruction was run by a link that holds no pattern for it",
++                )
++            })?;
++            let pattern = sites.pattern(site, expression)?;
+             if ctx.may_have_evidence() {
+                 let (found, record) = helpers::exists_evidence(pattern, row, schema, ctx)?;
+                 Ok((Some(helpers::intern_boolean(ctx, found)?), Some(record)))
+diff --git crates/sparql-eval/src/vm/tests.rs crates/sparql-eval/src/vm/tests.rs
+index b4176ac67..a58d07d8a 100644
+--- crates/sparql-eval/src/vm/tests.rs
++++ crates/sparql-eval/src/vm/tests.rs
+@@ -547,9 +547,9 @@ fn run_vm(expr: &Expression, ebv: bool, ds: &Arc<RdfDataset>, now: &purrdf_xsd::
+         for (index, row) in rows.iter().enumerate() {
+             ctx.current_row = index as u64;
+             outcomes.push(if ebv {
+-                ebv_outcome(linked.ebv(row, &schema, &mut ctx))
++                ebv_outcome(linked.ebv(Some(expr), row, &schema, &mut ctx))
+             } else {
+-                let result = linked.term(row, &schema, &mut ctx);
++                let result = linked.term(Some(expr), row, &schema, &mut ctx);
+                 outcome(&ctx, result)
+             });
+         }
+@@ -1160,7 +1160,9 @@ fn evaluate(expr: &Expression) -> Option<TermValue> {
+     let schema = VarSchema::default();
+     let program = Arc::new(ExprProgram::compile(expr));
+     let mut linked = Linked::link(program, expr, &schema, &mut ctx);
+-    let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
++    let term = linked
++        .term(Some(expr), &[], &schema, &mut ctx)
++        .expect("no hard error");
+     term.map(|term| helpers::value_of(&ctx, term).unwrap())
+ }
+ 
+@@ -1201,7 +1203,9 @@ fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
+         let schema = VarSchema::default();
+         let program = Arc::new(ExprProgram::compile(&expr));
+         let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
+-        let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
++        let term = linked
++            .term(Some(&expr), &[], &schema, &mut ctx)
++            .expect("no hard error");
+         let value = term.map(|term| helpers::value_of(&ctx, term).unwrap());
+         let computed = ctx.scratch.computed_count();
+         drop(linked);
+@@ -1293,6 +1297,79 @@ fn a_deep_not_nest_evaluates_on_a_small_stack() {
+ // linking
+ // ---------------------------------------------------------------------------
+ 
++#[test]
++fn exists_link_refuses_a_different_expression_owner() {
++    let ds = dataset();
++    let mut ctx = EvalCtx::new(&ds);
++    let schema = VarSchema::default();
++    let expr = Expression::Exists(Child::new(GraphPattern::Values {
++        variables: Vec::new(),
++        bindings: vec![Vec::new()],
++    }));
++    let other = expr.clone();
++    let program = Arc::new(ExprProgram::compile(&expr));
++    let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
++    assert_eq!(
++        linked.ebv(Some(&expr), &[], &schema, &mut ctx).unwrap(),
++        Some(true)
++    );
++    assert!(matches!(
++        linked.ebv(Some(&other), &[], &schema, &mut ctx),
++        Err(EvalError::Internal(_))
++    ));
++}
++
++#[test]
++fn copied_filter_exists_resolves_through_its_retained_pattern_owner() {
++    let ds = dataset();
++    let mut ctx = EvalCtx::new(&ds);
++    let source = GraphPattern::Filter {
++        expr: Expression::Exists(Child::new(GraphPattern::Values {
++            variables: Vec::new(),
++            bindings: vec![Vec::new()],
++        })),
++        inner: Child::new(GraphPattern::Values {
++            variables: Vec::new(),
++            bindings: vec![Vec::new()],
++        }),
++    };
++    let copied = crate::expr::CorrelatedPattern::copy(&source, &ctx.growth).unwrap();
++    let owner = crate::expr::PreparedPattern::new(copied, &ctx.growth).unwrap();
++    let GraphPattern::Filter { expr, .. } = owner.as_ref() else {
++        unreachable!("the copied filter keeps its variant")
++    };
++    ctx.active_copied_pattern = Some(owner.clone());
++    let schema = VarSchema::default();
++    let program = Arc::new(ExprProgram::compile(expr));
++    let mut linked = Linked::link_filter_admitted(program, expr, &schema, &mut ctx).unwrap();
++    assert_eq!(
++        linked.ebv(None, &[], &schema, &mut ctx).unwrap(),
++        Some(true)
++    );
++    let other = expr.clone();
++    assert!(matches!(
++        linked.ebv(Some(&other), &[], &schema, &mut ctx),
++        Err(EvalError::Internal(_))
++    ));
++}
++
++#[test]
++fn two_ordered_exists_sites_resolve_with_their_original_patterns() {
++    let present = GraphPattern::Values {
++        variables: Vec::new(),
++        bindings: vec![Vec::new()],
++    };
++    let absent = GraphPattern::Values {
++        variables: Vec::new(),
++        bindings: Vec::new(),
++    };
++    let expr = Expression::and(
++        Expression::Exists(Child::new(present)),
++        Expression::Not(Child::new(Expression::Exists(Child::new(absent)))),
++    );
++    assert_eq!(evaluate(&expr), Some(literal("true", "boolean")));
++}
++
+ #[test]
+ fn a_link_resolves_each_variable_once_not_once_per_row() {
+     let ds = dataset();
+@@ -1316,7 +1393,9 @@ fn a_link_resolves_each_variable_once_not_once_per_row() {
+     let linked_calls = VarSchema::index_of_call_count();
+     for _ in 0..100 {
+         assert_eq!(
+-            linked.ebv(&[one, two], &schema, &mut ctx).expect("ebv"),
++            linked
++                .ebv(Some(&expr), &[one, two], &schema, &mut ctx)
++                .expect("ebv"),
+             Some(true)
+         );
+     }

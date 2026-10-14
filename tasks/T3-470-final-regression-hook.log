@@ -1,0 +1,4 @@
+Running as unit: run-p3071492-i32457201.scope; invocation ID: ef4626418652434cb1113b88a9bf5fd8
+OK: non-Rust ratchet: 3 changed non-Rust path(s) in the staged index against 5144f5c1a7dc (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/470-v4-0-exact-tower-only-and-an-exact-or 3b05f4343] tests: align exact numeric transcript and i686 environment evidence
+ 2 files changed, 3 insertions(+), 6 deletions(-)

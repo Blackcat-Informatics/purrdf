@@ -1,0 +1,68 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/binop.rs:1183:49
+     |
+1183 |             evaluate_application_row(right, mu, &left_schema, policy, ctx)?
+     |                                                 ^^^^^^^^^^^^ help: change this to: `left_schema`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+     = note: `-D clippy::needless-borrow` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/binop.rs:1185:45
+     |
+1185 |             eval_deferred_lateral(slot, mu, &left_schema, ctx)?
+     |                                             ^^^^^^^^^^^^ help: change this to: `left_schema`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/binop.rs:1198:40
+     |
+1198 |             eval_correlated(right, mu, &left_schema, source, ctx)?
+     |                                        ^^^^^^^^^^^^ help: change this to: `left_schema`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/binop.rs:1228:25
+     |
+1228 |         .union_admitted(&right_schema, &ctx.growth)?
+     |                         ^^^^^^^^^^^^^ help: change this to: `right_schema`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr.rs:340:65
+    |
+340 |                 let (keep, evidence) = linked.filter(expr, row, &schema, child)?;
+    |                                                                 ^^^^^^^ help: change this to: `schema`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr.rs:354:52
+    |
+354 |                     worker.1.finish(&mut worker.0, &checkpoint),
+    |                                                    ^^^^^^^^^^^ help: change this to: `checkpoint`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr.rs:377:65
+    |
+377 |                 let (keep, evidence) = linked.filter(expr, row, &schema, ctx)?;
+    |                                                                 ^^^^^^^ help: change this to: `schema`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr.rs:407:62
+    |
+407 |             let (keep, evidence) = linked.filter(expr, &row, &schema, ctx)?;
+    |                                                              ^^^^^^^ help: change this to: `schema`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 8 previous errors

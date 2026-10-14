@@ -1,0 +1,8 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+crates/xsd/src/numeric.rs:3923:50: error[E0308]: mismatched types: expected `decimal::Decimal`, found `numeric::Decimal`
+crates/xsd/src/numeric.rs:3987:32: error[E0308]: mismatched types: expected `decimal::Decimal`, found `numeric::Decimal`
+crates/xsd/src/numeric.rs:3988:32: error[E0308]: mismatched types: expected `decimal::Decimal`, found `numeric::Decimal`
+crates/xsd/src/numeric.rs:4011:26: error[E0599]: no method named `cmp_exact` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/numeric.rs:4120:24: error[E0599]: no method named `mantissa` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+crates/xsd/src/numeric.rs:4124:28: error[E0599]: no method named `mantissa` found for struct `decimal::Decimal` in the current scope: method not found in `decimal::Decimal`
+error: could not compile `purrdf-xsd` (lib test) due to 6 previous errors

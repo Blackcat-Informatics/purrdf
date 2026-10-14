@@ -1,0 +1,23 @@
+note: .stage is 527 MB; archiving all evidence
+gpg: Signature made Wed Oct 14 13:09:19 2026 MDT
+gpg:                using EDDSA key AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11
+gpg: Good signature from "Patrick Audley (GitHub signing) <paudley@blackcatinformatics.ca>" [ultimate]
+Staged artifacts captured: 1004 files, tree 4aca626c17e4
+From ssh://ssh.github.com:443/Blackcat-Informatics/purrdf
+ * [new ref]             refs/notes/ghprsq -> refs/notes/ghprsq-work/tmp.3d7OTms3lW
+gpg: Signature made Wed Oct 14 13:09:23 2026 MDT
+gpg:                using EDDSA key AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11
+gpg: Good signature from "Patrick Audley (GitHub signing) <paudley@blackcatinformatics.ca>" [ultimate]
+gpg: Signature made Wed Oct 14 13:09:23 2026 MDT
+gpg:                using EDDSA key AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11
+gpg: Good signature from "Patrick Audley (GitHub signing) <paudley@blackcatinformatics.ca>" [ultimate]
+Stage Git guard: Git hygiene check failed (diff-tree): value-merged.probe:313: leftover conflict marker
+value-merged.probe:327: leftover conflict marker
+value-merged.probe:341: leftover conflict marker
+value-merged.probe:345: leftover conflict marker
+value-merged.probe:369: leftover conflict marker
+value-merged.probe:400: leftover conflict marker
+value-merged.probe:424: leftover conflict marker
+value-merged.probe:425: leftover conflict marker
+error: failed to push some refs to 'ssh://ssh.github.com:443/Blackcat-Informatics/purrdf.git'
+Merge failed while atomically pushing structured squash commit, notes, and audit refs; squash file preserved at: /home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or.squash_notes

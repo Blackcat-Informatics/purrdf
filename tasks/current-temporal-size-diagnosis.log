@@ -1,0 +1,31 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 38s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-shapes/f145aca511cf696c/out/purrdf_shapes-f145aca511cf696c)
+
+running 4 tests
+test json_schema::temporal_order::tests::calendar_arithmetic_round_trips ... ok
+test json_schema::temporal_order::tests::date_patterns_agree_with_the_validator ... ok
+test json_schema::temporal_order::tests::time_patterns_agree_with_the_validator ... FAILED
+test json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator ... FAILED
+
+failures:
+
+---- json_schema::temporal_order::tests::time_patterns_agree_with_the_validator stdout ----
+
+thread 'json_schema::temporal_order::tests::time_patterns_agree_with_the_validator' (2824182) panicked at crates/shapes/src/json_schema/temporal_order.rs:728:17:
+pattern of 628682 bytes: ^[\t\n\r ]*(?:(?:14:(?:4[6-9]|5[0-9])|(?:1[5-9]|2[0-2]):[0-9]{2}|23:(?:0[0-9]|[1-4][0-9]|5[0-9])):[0-9.]+|14:45:(?:(?:3[1-9]|4[0-9]|5[0-9])(?:\.[0-9]+)?|30(?:\.(?:1234567890123456789010*[1-9][0-9]*)|\ (Rust admission: Some(CompiledTooBig(10485760)))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator stdout ----
+
+thread 'json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator' (2824181) panicked at crates/shapes/src/json_schema/temporal_order.rs:728:17:
+pattern of 1107217 bytes: ^[\t\n\r ]*(?:(?:(?:\+?(?:0*(?:[1-9][0-9]{4,}|[3-9][0-9]{3}|2[1-9][0-9]{2}|20[3-9][0-9]{1}|202[1-9][0-9]{0})))-[0-9]{2}-[0-9]{2}|0*2020-(?:0[4-9]|1[0-2])-[0-9]{2}|0*2020-03-(?:0[2-9]|[1-2][0-9]|3[0-1] (Rust admission: Some(CompiledTooBig(10485760)))
+
+
+failures:
+    json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator
+    json_schema::temporal_order::tests::time_patterns_agree_with_the_validator
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 966 filtered out; finished in 1.52s
+
+error: test failed, to rerun pass `-p purrdf-shapes --lib`

@@ -1,0 +1,111 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 26s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-shapes/f145aca511cf696c/out/purrdf_shapes-f145aca511cf696c)
+
+running 91 tests
+test json_schema::numeric_order::tests::integer_ranges_round_toward_the_admitted_side ... ok
+test json_schema::temporal_order::tests::calendar_arithmetic_round_trips ... ok
+test json_schema::temporal_order::tests::date_patterns_agree_with_the_validator ... ok
+test json_schema::numeric_order::tests::double_bounds_compare_through_rounding ... ok
+test json_schema::tests::caller_owned_namespaces_exclude_implicit_builtins ... ok
+test json_schema::tests::closed_world_rejects_incomplete_typed_node ... ok
+test json_schema::tests::coverage_report_json_canonicalizes_public_collection_order ... ok
+test json_schema::tests::cross_namespace_local_name_twins_never_dangle_a_ref ... ok
+test json_schema::tests::emitted_schema_compiles_with_its_metaschema_and_names_it_when_absent ... ok
+test json_schema::tests::every_ref_resolves ... ok
+test json_schema::tests::every_target_kind_either_emits_a_def_or_records_a_loss_never_silent ... ok
+test json_schema::tests::external_object_class_projects_to_node_ref_not_string ... ok
+test json_schema::tests::generic_properties_preserve_declared_custom_datatype_ranges ... ok
+test json_schema::tests::implicit_class_shape_emits_def_and_records_no_loss ... ok
+test json_schema::tests::logic_target_class_keyed_by_curie ... ok
+test json_schema::tests::non_purrdf_primary_namespace_compiles ... ok
+test json_schema::tests::ontology_class_named_after_reserved_key_is_disambiguated ... ok
+test json_schema::tests::ontology_class_range_accepts_identifier_only_or_full_class_values ... ok
+test json_schema::tests::ontology_complete_compilation_emits_optional_open_carriers ... ok
+test json_schema::tests::ontology_range_union_and_conjunction_remain_load_bearing ... ok
+test json_schema::tests::ontology_request_returns_typed_target_key_errors_in_both_modes ... ok
+test json_schema::tests::ontology_request_returns_typed_value_vocab_key_errors_in_both_modes ... ok
+test json_schema::tests::ontology_request_shaped_only_is_legacy_byte_exact ... ok
+test json_schema::tests::ontology_surface_preserves_direct_shacl_and_closed_shape_authority ... ok
+test json_schema::tests::primary_class_named_annotation_is_disambiguated_from_the_reserved_def ... ok
+test json_schema::tests::schema_compilation_key_covers_every_request_input ... ok
+test json_schema::tests::sh_in_over_iris_round_trips_through_projection ... ok
+test json_schema::tests::sh_in_over_iris_uses_id_object_members ... ok
+test json_schema::tests::sparql_target_shape_records_loss_instead_of_silent_exclusion ... ok
+test json_schema::tests::target_node_shape_records_loss_instead_of_silent_exclusion ... ok
+test json_schema::tests::target_objects_of_shape_records_loss_instead_of_silent_exclusion ... ok
+test json_schema::tests::target_subjects_of_shape_records_loss_instead_of_silent_exclusion ... ok
+test json_schema::tests::test_annotation_def_present_and_root_envelope ... ok
+test json_schema::tests::test_closed_additional_properties_false ... ok
+test json_schema::tests::test_curie_compaction_and_local_name ... ok
+test json_schema::tests::test_datatype_type_and_format ... ok
+test json_schema::tests::test_deactivated_shape_skipped ... ok
+test json_schema::tests::test_determinism_byte_stable ... ok
+test json_schema::tests::test_enum_from_sh_in ... ok
+test json_schema::tests::test_namespaces_context_object_carries_all_prefixes ... ok
+test json_schema::tests::test_namespaces_doc_declaration_wins_over_builtin ... ok
+test json_schema::tests::test_namespaces_primary_and_def_key ... ok
+test json_schema::tests::test_namespaces_unresolved_primary_prefix_is_err ... ok
+test json_schema::tests::test_not_class_accepts_own_instance ... ok
+test json_schema::tests::test_not_class_multi_disjoint ... ok
+test json_schema::tests::test_not_class_without_nodeshape ... ok
+test json_schema::tests::test_not_mixed_inner_records_loss ... ok
+test json_schema::tests::test_not_multi_conjunct_inner ... ok
+test json_schema::tests::test_not_nodekind_records_loss_no_vacuous_not ... ok
+test json_schema::tests::test_not_property_datatype_array_records_loss ... ok
+test json_schema::tests::test_not_property_datatype_records_loss ... ok
+test json_schema::tests::test_not_property_hasvalue_records_loss ... ok
+test json_schema::tests::test_not_property_in_records_loss ... ok
+test json_schema::tests::test_not_property_languagein_records_loss ... ok
+test json_schema::tests::test_not_property_maxcount_records_loss ... ok
+test json_schema::tests::test_not_property_mincount_maxcount_records_loss ... ok
+test json_schema::tests::test_not_property_nodekind_records_loss ... ok
+test json_schema::tests::test_not_property_numeric_bound_records_loss ... ok
+test json_schema::tests::test_not_property_pattern_records_loss ... ok
+test json_schema::tests::test_not_self_disjoint ... ok
+test json_schema::tests::test_not_structural_property_preserved ... ok
+test json_schema::tests::test_not_undeclared_namespace_class_records_loss ... ok
+test json_schema::tests::test_object_property_uses_ref ... ok
+test json_schema::tests::test_openapi_embeds_components_schemas ... ok
+test json_schema::tests::test_pattern ... ok
+test json_schema::tests::test_required_from_min_count_and_array_vs_single ... ok
+test json_schema::tests::test_sparql_constraint_records_loss_and_comment ... ok
+test json_schema::tests::unknown_namespace_target_class_hard_fails - should panic ... ok
+test json_schema::tests::value_vocab_blank_node_member_is_dropped_with_loss ... ok
+test json_schema::tests::value_vocab_description_selection_is_load_order_independent ... ok
+test json_schema::tests::value_vocab_empty_records_loss_and_empty_enum ... ok
+test json_schema::tests::value_vocab_enum_def_appears_in_both_surfaces ... ok
+test json_schema::tests::value_vocab_enum_is_load_bearing_with_parallel_metadata_arrays ... ok
+test json_schema::tests::value_vocab_enum_key_class_def_key_clash_hard_fails ... ok
+test json_schema::tests::value_vocab_local_name_twins_hard_fail ... ok
+test json_schema::tests::value_vocab_metadata_free_omits_descriptions ... ok
+test json_schema::tests::value_vocab_multi_range_is_conjunctive_and_deterministic ... ok
+test json_schema::tests::value_vocab_none_and_zero_match_equal_plain_compile ... ok
+test json_schema::tests::value_vocab_output_is_byte_deterministic ... ok
+test json_schema::tests::value_vocab_projected_instance_round_trips_through_enum ... ok
+test json_schema::tests::value_vocab_projection_leaves_the_live_validator_open ... ok
+test json_schema::tests::value_vocab_rdfs_range_declared_shapes_side_still_resolves ... ok
+test json_schema::tests::value_vocab_rdfs_range_open_property_emits_ref ... ok
+test json_schema::tests::value_vocab_sh_class_multi_wraps_ref_in_array ... ok
+test json_schema::tests::value_vocab_sh_class_single_emits_scalar_ref ... ok
+test json_schema::tests::value_vocab_sh_class_wins_over_conflicting_range ... ok
+test json_schema::tests::value_vocab_standalone_enum_def_even_when_unreferenced ... ok
+test json_schema::tests::value_vocab_undeclared_namespace_class_hard_fails ... ok
+test json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator ... FAILED
+test json_schema::temporal_order::tests::time_patterns_agree_with_the_validator ... ok
+test json_schema::numeric_order::tests::order_patterns_agree_with_exact_comparison ... ok
+
+failures:
+
+---- json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator stdout ----
+
+thread 'json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator' (2830851) panicked at crates/shapes/src/json_schema/temporal_order.rs:728:17:
+pattern of 733591 bytes: ^[\t\n\r ]*(?:(?:(?:\+?(?:0*(?:[1-9][0-9]{4,}|[3-9][0-9]{3}|2[1-9][0-9]{2}|20[3-9][0-9]{1}|202[1-9][0-9]{0})))-[0-9]{2}-[0-9]{2}|0*2020-(?:0[4-9]|1[0-2])-[0-9]{2}|0*2020-03-(?:0[2-9]|[1-2][0-9]|3[0-1]
+
+
+failures:
+    json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator
+
+test result: FAILED. 90 passed; 1 failed; 0 ignored; 0 measured; 879 filtered out; finished in 11.38s
+
+error: test failed, to rerun pass `-p purrdf-shapes --lib`

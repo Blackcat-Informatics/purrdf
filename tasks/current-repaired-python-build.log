@@ -1,0 +1,10 @@
+Resolved 107 packages in 7ms
+   Building purrdf @ file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/bindings/python
+      Built purrdf @ file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/bindings/python
+Prepared 1 package in 22m 05s
+Uninstalled 1 package in 8ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 30ms
+ ~ purrdf==3.0.1 (from file:///home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/bindings/python)

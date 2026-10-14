@@ -1,0 +1,1845 @@
+diff --git crates/xsd/src/bigint.rs crates/xsd/src/bigint.rs
+index 5ba87fec0..720486e35 100644
+--- crates/xsd/src/bigint.rs
++++ crates/xsd/src/bigint.rs
+@@ -10,6 +10,7 @@
+ use core::{cmp::Ordering, fmt};
+ mod compat;
+ pub use compat::KARATSUBA_THRESHOLD;
++pub(crate) use compat::TOOM3_THRESHOLD;
+ #[cfg(test)]
+ mod arithmetic_tests;
+ pub(crate) mod scratch;
+@@ -565,34 +566,175 @@ fn mag_sqrt_floor(value: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
+     Ok(x)
+ }
+ 
+-/// Accumulates a run of ASCII digit bytes into a magnitude.
+-///
+-/// The caller must have already established that every byte is an ASCII digit.
++const DECIMAL_TREE_START_RANK: usize = 5;
++const DECIMAL_TREE_START_GROUPS: usize = 1 << DECIMAL_TREE_START_RANK;
++
++/// The one validating reader for both the small Horner and large tree paths.
++/// Leading zeros consume input but form no group, matching parse admission's
++/// significant-digit bound. An invalid suffix still refuses an all-zero run.
++struct DecimalGroupReader<I> {
++    digits: I,
++    any: bool,
++    significant: bool,
++}
++
++impl<I: Iterator<Item = u8>> DecimalGroupReader<I> {
++    fn next_group(&mut self) -> Result<Option<(u64, usize)>, ()> {
++        let mut value = 0_u64;
++        let mut length = 0;
++        loop {
++            let Some(byte) = self.digits.next() else {
++                return Ok((length != 0).then_some((value, length)));
++            };
++            if !byte.is_ascii_digit() {
++                return Err(());
++            }
++            self.any = true;
++            if !self.significant && byte == b'0' {
++                continue;
++            }
++            self.significant = true;
++            value = value * 10 + u64::from(byte - b'0');
++            length += 1;
++            if length == DECIMAL_CHUNK {
++                return Ok(Some((value, length)));
++            }
++        }
++    }
++}
++
++/// Accumulates a run of ASCII digit bytes into a magnitude. Ordinary values
++/// retain the original two-destination Horner path and its small stack frame.
+ fn mag_from_digit_bytes(
+     digits: impl Iterator<Item = u8>,
+     storage: &impl Allocate,
+ ) -> Result<Option<Mag>, LimbScratchError> {
++    let mut reader = DecimalGroupReader {
++        digits,
++        any: false,
++        significant: false,
++    };
+     let mut acc = Mag::new();
+-    let mut any = false;
+-    let mut chunk_value = 0u64;
+-    let mut chunk_len = 0usize;
+-    for byte in digits {
+-        if !byte.is_ascii_digit() {
++    let mut full_groups = 0_usize;
++    loop {
++        let Ok(group) = reader.next_group() else {
+             return Ok(None);
++        };
++        let Some((value, length)) = group else {
++            return Ok(reader.any.then_some(acc));
++        };
++        if length != DECIMAL_CHUNK {
++            acc = mag_mul_small_add(&acc, POW10_U64[length], value, storage)?;
++            return Ok(Some(acc));
+         }
+-        any = true;
+-        chunk_value = chunk_value * 10 + u64::from(byte - b'0');
+-        chunk_len += 1;
+-        if chunk_len == DECIMAL_CHUNK {
+-            acc = mag_mul_small_add(&acc, CHUNK_BASE, chunk_value, storage)?;
+-            chunk_value = 0;
+-            chunk_len = 0;
++        full_groups = full_groups
++            .checked_add(1)
++            .ok_or(LimbScratchError::SizeOverflow)?;
++        if full_groups == DECIMAL_TREE_START_GROUPS + 1 {
++            return mag_from_large_digit_groups(reader, acc, value, storage);
++        }
++        acc = mag_mul_small_add(&acc, CHUNK_BASE, value, storage)?;
++    }
++}
++
++fn decimal_tree_insert(
++    slots: &mut [Option<BigInt>; usize::BITS as usize],
++    powers: &mut [Option<BigInt>; usize::BITS as usize],
++    mut block: BigInt,
++    storage: &impl Allocate,
++) -> Result<(), LimbScratchError> {
++    for (rank, slot) in slots.iter_mut().enumerate().skip(DECIMAL_TREE_START_RANK) {
++        if let Some(high) = slot.take() {
++            let power = decimal_group_power(powers, rank, storage)?;
++            let shifted = high.mul_fast_using(power, storage)?;
++            block = shifted.add_using(&block, storage)?;
++        } else {
++            *slot = Some(block);
++            return Ok(());
+         }
+     }
+-    if chunk_len > 0 {
+-        acc = mag_mul_small_add(&acc, POW10_U64[chunk_len], chunk_value, storage)?;
++    Err(LimbScratchError::SizeOverflow)
++}
++
++/// The larger frame is entered only after the 33rd complete group exists.
++fn mag_from_large_digit_groups(
++    mut reader: DecimalGroupReader<impl Iterator<Item = u8>>,
++    first_32: Mag,
++    next_group: u64,
++    storage: &impl Allocate,
++) -> Result<Option<Mag>, LimbScratchError> {
++    let mut slots: [Option<BigInt>; usize::BITS as usize] = core::array::from_fn(|_| None);
++    let mut powers: [Option<BigInt>; usize::BITS as usize] = core::array::from_fn(|_| None);
++    slots[DECIMAL_TREE_START_RANK] = Some(BigInt::from_parts(false, first_32));
++    powers[0] = Some(BigInt::from_u128(u128::from(CHUNK_BASE)));
++    let mut pending = [0_u64; DECIMAL_TREE_START_GROUPS];
++    pending[0] = next_group;
++    let mut pending_len = 1;
++    let mut tail = None;
++    loop {
++        match reader.next_group() {
++            Ok(Some((value, DECIMAL_CHUNK))) => {
++                pending[pending_len] = value;
++                pending_len += 1;
++                if pending_len == DECIMAL_TREE_START_GROUPS {
++                    let mut block = Mag::new();
++                    for &group in &pending {
++                        block = mag_mul_small_add(&block, CHUNK_BASE, group, storage)?;
++                    }
++                    decimal_tree_insert(
++                        &mut slots,
++                        &mut powers,
++                        BigInt::from_parts(false, block),
++                        storage,
++                    )?;
++                    pending_len = 0;
++                }
++            }
++            Ok(Some(group)) => {
++                tail = Some(group);
++                break;
++            }
++            Ok(None) => break,
++            Err(()) => return Ok(None),
++        }
+     }
+-    Ok(any.then_some(acc))
++    // Higher slots are earlier decimal groups. Concatenate occupied blocks
++    // in that order, using the cached power for the lower block's width.
++    let mut result: Option<BigInt> = None;
++    for rank in (0..slots.len()).rev() {
++        if let Some(block) = slots[rank].take() {
++            result = Some(if let Some(high) = result {
++                let power = decimal_group_power(&mut powers, rank, storage)?;
++                high.mul_fast_using(power, storage)?
++                    .add_using(&block, storage)?
++            } else {
++                block
++            });
++        }
++    }
++    let mut acc = result.expect("more than 32 groups have a block").magnitude;
++    for &group in &pending[..pending_len] {
++        acc = mag_mul_small_add(&acc, CHUNK_BASE, group, storage)?;
++    }
++    if let Some((value, length)) = tail {
++        acc = mag_mul_small_add(&acc, POW10_U64[length], value, storage)?;
++    }
++    Ok(Some(acc))
++}
++
++/// Cache B^(2^rank), B=10^19, for the balanced decimal group reader.
++fn decimal_group_power<'a>(
++    powers: &'a mut [Option<BigInt>; usize::BITS as usize],
++    rank: usize,
++    storage: &impl Allocate,
++) -> Result<&'a BigInt, LimbScratchError> {
++    for at in 1..=rank {
++        if powers[at].is_none() {
++            let previous = powers[at - 1].as_ref().expect("base power exists");
++            powers[at] = Some(previous.mul_fast_using(previous, storage)?);
++        }
++    }
++    Ok(powers[rank].as_ref().expect("requested power exists"))
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -2083,4 +2225,36 @@ mod tests {
+         assert!(BigInt::from_decimal_bytes(b"12x".iter().copied()).is_none());
+         assert!(BigInt::from_decimal_bytes(b"-1".iter().copied()).is_none());
+     }
++
++    #[test]
++    fn balanced_decimal_group_parse_replays_original_decimal_spelling() {
++        for digits in [
++            607, 608, 609, 626, 627, 628, 1_196, 1_197, 1_198, 1_215, 1_216, 1_217, 1_234, 1_235,
++            1_236, 1_824, 4_000, 40_000,
++        ] {
++            let mut lexical = String::with_capacity(digits);
++            lexical.push('7');
++            for at in 1..digits {
++                lexical.push(char::from(b'0' + (at % 10) as u8));
++            }
++            let parsed = BigInt::try_from_decimal_bytes(lexical.bytes(), false)
++                .unwrap()
++                .unwrap();
++            assert_eq!(parsed.to_string(), lexical, "{digits} digits");
++        }
++        let padded = format!("{}123456789", "0".repeat(627));
++        assert_eq!(
++            BigInt::try_from_decimal_bytes(padded.bytes(), false)
++                .unwrap()
++                .unwrap()
++                .to_string(),
++            "123456789"
++        );
++        let invalid = format!("{}x", "7".repeat(627));
++        assert!(
++            BigInt::try_from_decimal_bytes(invalid.bytes(), false)
++                .unwrap()
++                .is_none()
++        );
++    }
+ }
+diff --git crates/xsd/src/bigint/compat.rs crates/xsd/src/bigint/compat.rs
+index 432d70c26..7bc73741f 100644
+--- crates/xsd/src/bigint/compat.rs
++++ crates/xsd/src/bigint/compat.rs
+@@ -8,6 +8,8 @@ use std::ops::{Add, Mul, Neg, Sub};
+ 
+ /// Balanced binary products switch to Karatsuba at this limb count.
+ pub const KARATSUBA_THRESHOLD: usize = 32;
++/// Balanced products switch to three-way evaluation above the Karatsuba range.
++pub(crate) const TOOM3_THRESHOLD: usize = 512;
+ 
+ impl BigInt {
+     /// The number of binary magnitude limbs, zero for zero.
+@@ -298,14 +300,14 @@ impl BigInt {
+         self.add(other)
+     }
+ 
+-    /// Schoolbook small products and recursive Karatsuba large products.
++    /// Schoolbook small products, then Karatsuba and balanced Toom-3 products.
+     #[must_use]
+     pub fn mul_fast(&self, other: &Self) -> Self {
+         self.mul_fast_using(other, &super::Unbounded)
+             .expect("unbounded integer storage")
+     }
+ 
+-    /// The same Karatsuba/schoolbook implementation with explicit destinations.
++    /// The same schoolbook/Karatsuba/Toom-3 dispatch with explicit destinations.
+     pub(crate) fn mul_fast_using(
+         &self,
+         other: &Self,
+@@ -316,6 +318,18 @@ impl BigInt {
+             return self.mul_using(other, storage);
+         }
+         let split = self.limb_len().max(other.limb_len()) / 2;
++        // A three-way split is useful only when both top chunks are populated.
++        // Keep asymmetric products on the existing chunked Karatsuba route.
++        if self.limb_len().min(other.limb_len()) >= TOOM3_THRESHOLD
++            && self.limb_len().min(other.limb_len())
++                > self
++                    .limb_len()
++                    .max(other.limb_len())
++                    .div_ceil(3)
++                    .saturating_mul(2)
++        {
++            return self.mul_toom3_using(other, storage);
++        }
+         let (long, short) = if self.limb_len() >= other.limb_len() {
+             (self, other)
+         } else {
+@@ -335,20 +349,7 @@ impl BigInt {
+                 let offset = piece_index
+                     .checked_mul(short.limb_len())
+                     .ok_or(SizeOverflow)?;
+-                let mut carry = 0_u128;
+-                let mut at = offset;
+-                for &word in piece.magnitude.iter() {
+-                    let sum = u128::from(output[at]) + u128::from(word) + carry;
+-                    output[at] = sum as u64;
+-                    carry = sum >> 64;
+-                    at += 1;
+-                }
+-                while carry != 0 {
+-                    let sum = u128::from(output[at]) + carry;
+-                    output[at] = sum as u64;
+-                    carry = sum >> 64;
+-                    at += 1;
+-                }
++                add_scaled_magnitude_at(&mut output, offset, &piece.magnitude, 1)?;
+             }
+             super::mag_trim(&mut output);
+             return Ok(Self::from_parts(
+@@ -394,6 +395,171 @@ impl BigInt {
+         let magnitude = lower.add_using(&shifted_high, storage)?;
+         Ok(magnitude.with_sign(self.is_negative() != other.is_negative()))
+     }
++
++    /// Evaluate at 0, 1, -1, 2 and infinity, then interpolate the exact
++    /// integer coefficients. Each recursive product has at most one third of
++    /// the balanced input limbs plus carry; every destination uses `storage`.
++    fn mul_toom3_using(
++        &self,
++        other: &Self,
++        storage: &impl super::Allocate,
++    ) -> Result<Self, super::LimbScratchError> {
++        let width = self.limb_len().max(other.limb_len()).div_ceil(3);
++        let split = |value: &Self| -> Result<[Self; 3], super::LimbScratchError> {
++            let words = &value.magnitude[..];
++            let first = width.min(words.len());
++            let second = width.saturating_mul(2).min(words.len());
++            Ok([
++                Self::from_parts(false, storage.copy(&words[..first])?),
++                Self::from_parts(false, storage.copy(&words[first..second])?),
++                Self::from_parts(false, storage.copy(&words[second..])?),
++            ])
++        };
++        let [a0, a1, a2] = split(self)?;
++        let [b0, b1, b2] = split(other)?;
++        let r0 = a0.mul_fast_using(&b0, storage)?;
++        let r4 = a2.mul_fast_using(&b2, storage)?;
++        let (even, odd) = {
++            let p1 = {
++                let left = eval_positive_point([&a0, &a1, &a2], 1, storage)?;
++                let right = eval_positive_point([&b0, &b1, &b2], 1, storage)?;
++                left.mul_fast_using(&right, storage)?
++            };
++            let pm1 = {
++                let left = a0.sub_using(&a1, storage)?.add_using(&a2, storage)?;
++                let right = b0.sub_using(&b1, storage)?.add_using(&b2, storage)?;
++                left.mul_fast_using(&right, storage)?
++            };
++            (
++                exact_div_small(&p1.add_using(&pm1, storage)?, 2, storage)?,
++                exact_div_small(&p1.sub_using(&pm1, storage)?, 2, storage)?,
++            )
++        };
++        let r2 = even.sub_using(&r0, storage)?.sub_using(&r4, storage)?;
++        let p2_odd = {
++            let p2 = {
++                let left = eval_positive_point([&a0, &a1, &a2], 2, storage)?;
++                let right = eval_positive_point([&b0, &b1, &b2], 2, storage)?;
++                left.mul_fast_using(&right, storage)?
++            };
++            let r4_times_16 = r4.shl_using(4, storage)?;
++            exact_div_small(
++                &p2.sub_using(&r0, storage)?
++                    .sub_using(&r4_times_16, storage)?,
++                2,
++                storage,
++            )?
++        };
++        drop((a0, a1, a2, b0, b1, b2));
++        let r3 = exact_div_small(
++            &p2_odd
++                .sub_using(&r2.shl_using(1, storage)?, storage)?
++                .sub_using(&odd, storage)?,
++            3,
++            storage,
++        )?;
++        let r1 = odd.sub_using(&r3, storage)?;
++
++        // The polynomial coefficients are sums of products of nonnegative
++        // chunks. Add each at its binary-limb offset into one admitted result
++        // instead of copying a growing prefix through four shifts and sums.
++        let result_len = self
++            .limb_len()
++            .checked_add(other.limb_len())
++            .ok_or(super::LimbScratchError::SizeOverflow)?;
++        let mut output = storage.destination(result_len, result_len)?;
++        for (power, coefficient) in [&r0, &r1, &r2, &r3, &r4].into_iter().enumerate() {
++            // r[k] is the sum of a[i]*b[j] at i+j=k. The source chunks
++            // are magnitudes, so these interpolated coefficients are
++            // nonnegative even when the outer product is signed.
++            debug_assert!(!coefficient.is_negative());
++            let offset = width
++                .checked_mul(power)
++                .ok_or(super::LimbScratchError::SizeOverflow)?;
++            add_scaled_magnitude_at(&mut output, offset, &coefficient.magnitude, 1)?;
++        }
++        super::mag_trim(&mut output);
++        Ok(Self::from_parts(
++            self.is_negative() != other.is_negative(),
++            output,
++        ))
++    }
++}
++
++/// Form a positive Toom point directly in one admitted destination. The
++/// coefficients are magnitudes, and the only callers evaluate at 1 and 2.
++fn eval_positive_point(
++    chunks: [&BigInt; 3],
++    point: u64,
++    storage: &impl super::Allocate,
++) -> Result<BigInt, super::LimbScratchError> {
++    use super::LimbScratchError::SizeOverflow;
++    debug_assert!(point == 1 || point == 2);
++    let length = chunks
++        .iter()
++        .map(|chunk| chunk.limb_len())
++        .max()
++        .unwrap_or(0)
++        .checked_add(2)
++        .ok_or(SizeOverflow)?;
++    let mut output = storage.destination(length, length)?;
++    for (chunk, factor) in chunks.into_iter().zip([1, point, point * point]) {
++        add_scaled_magnitude_at(&mut output, 0, &chunk.magnitude, factor)?;
++    }
++    super::mag_trim(&mut output);
++    Ok(BigInt::from_parts(false, output))
++}
++
++/// Carry-add a scaled magnitude into an initialized destination. The chunked
++/// product, three-way reconstruction and positive evaluation share this body.
++fn add_scaled_magnitude_at(
++    output: &mut [u64],
++    offset: usize,
++    words: &[u64],
++    factor: u64,
++) -> Result<(), super::LimbScratchError> {
++    use super::LimbScratchError::SizeOverflow;
++    let end = offset.checked_add(words.len()).ok_or(SizeOverflow)?;
++    if end > output.len() {
++        return Err(SizeOverflow);
++    }
++    let mut carry = 0_u128;
++    for (slot, &word) in output[offset..end].iter_mut().zip(words) {
++        let sum = u128::from(*slot) + u128::from(word) * u128::from(factor) + carry;
++        *slot = sum as u64;
++        carry = sum >> 64;
++    }
++    let mut at = end;
++    while carry != 0 {
++        let slot = output.get_mut(at).ok_or(SizeOverflow)?;
++        let sum = u128::from(*slot) + carry;
++        *slot = sum as u64;
++        carry = sum >> 64;
++        at += 1;
++    }
++    Ok(())
++}
++
++fn exact_div_small(
++    value: &BigInt,
++    divisor: i128,
++    storage: &impl super::Allocate,
++) -> Result<BigInt, super::LimbScratchError> {
++    if divisor == 2 {
++        // Every interpolation numerator is even. The general one-limb
++        // division path performs quotient/remainder division for each limb;
++        // an exact signed shift uses the same admitted destination instead.
++        assert_eq!(value.magnitude.first().copied().unwrap_or(0) & 1, 0);
++        return value.shr_using(1, storage);
++    }
++    let (quotient, remainder) = value
++        .div_rem_using(&BigInt::from_i128(divisor), storage)?
++        .expect("nonzero interpolation divisor");
++    assert!(
++        remainder.is_zero(),
++        "Toom interpolation must divide exactly"
++    );
++    Ok(quotient)
+ }
+ 
+ impl Add<&BigInt> for &BigInt {
+@@ -426,3 +592,42 @@ impl Neg for BigInt {
+         self.negated()
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::{BigInt, TOOM3_THRESHOLD};
++
++    fn operand(limbs: usize, seed: u64, negative: bool) -> BigInt {
++        let words: Vec<u64> = (0..limbs)
++            .map(|index| {
++                let step = u64::try_from(index).expect("test length");
++                seed.wrapping_add(step.wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1
++            })
++            .collect();
++        BigInt::from_parts(negative, super::super::Mag::Heap(words))
++    }
++
++    #[test]
++    fn toom3_balanced_products_match_schoolbook_across_cutoffs_and_signs() {
++        for (left_len, right_len) in [
++            (TOOM3_THRESHOLD - 1, TOOM3_THRESHOLD - 1),
++            (TOOM3_THRESHOLD, TOOM3_THRESHOLD),
++            (TOOM3_THRESHOLD + 1, TOOM3_THRESHOLD + 2),
++            (TOOM3_THRESHOLD * 2, TOOM3_THRESHOLD * 2 + 1),
++            (TOOM3_THRESHOLD * 8, TOOM3_THRESHOLD * 8),
++            (TOOM3_THRESHOLD, TOOM3_THRESHOLD * 2),
++        ] {
++            for (left_negative, right_negative) in
++                [(false, false), (true, false), (false, true), (true, true)]
++            {
++                let left = operand(left_len, 0x1234_5678_9abc_def0, left_negative);
++                let right = operand(right_len, 0xfedc_ba98_7654_3210, right_negative);
++                assert_eq!(
++                    left.mul_fast(&right),
++                    left.mul(&right),
++                    "{left_len}/{right_len} limbs, signs {left_negative}/{right_negative}"
++                );
++            }
++        }
++    }
++}
+diff --git crates/xsd/src/exact/cost.rs crates/xsd/src/exact/cost.rs
+index ad1d0ae93..2297aa981 100644
+--- crates/xsd/src/exact/cost.rs
++++ crates/xsd/src/exact/cost.rs
+@@ -15,8 +15,8 @@
+ //! * [`Cost::work`] is an upper bound on binary `u64` limb operations (one
+ //!   multiply-add, compare or division step). Decimal parsing and rendering
+ //!   include their quadratic base conversion; arithmetic uses the operand lengths
+-//!   for multiplication (Karatsuba stays below it from
+-//!   [`crate::bigint::KARATSUBA_THRESHOLD`] limbs up); quotient length times
++//!   for multiplication (Karatsuba and the balanced three-way recursion stay
++//!   below it above [`crate::bigint::KARATSUBA_THRESHOLD`]); quotient length times
+ //!   divisor length for division; quadratic in the result for powers.
+ //! * [`Cost::bytes`] is an upper bound on the heap bytes of the value the
+ //!   operation produces — the memory it mints and hands back.
+@@ -206,9 +206,14 @@ pub fn integer_operation_layout(
+             if la.min(lb) < crate::bigint::KARATSUBA_THRESHOLD as u64 {
+                 return NumericOperationLayout::words(result, result);
+             }
+-            // Native Karatsuba's established eight-result working law. The
+-            // fallible shared body retains exact-capacity destinations; the
+-            // original numerical recursion and threshold are unchanged.
++            // The recursive multiplication paths share this eight-result
++            // working envelope. At a three-way node, n is the longer input,
++            // s = ceil(n/3), and the shorter input exceeds 2s. The six split
++            // owners, retained point values and one recursive child reserve
++            // need at most 2n + 28s + 64 words. Scoped point products are
++            // released before one-destination recombination, which needs less. For n >= 512,
++            // both fit below 8 * (n + shorter); asymmetric operands keep the
++            // established two-way/chunked path.
+             let peak = result.checked_mul(8).ok_or(SizeOverflow)?;
+             // Recombination adds one explicit carry word to the output.
+             let retained = result.checked_add(1).ok_or(SizeOverflow)?;
+@@ -531,8 +536,15 @@ fn invalid_parse_layout(error_code: Option<crate::ErrorCode>) -> NumericParseLay
+     }
+ }
+ 
+-/// The two native decimal-chunk destinations. Each asks for previous len + 1;
+-/// original and replacement buffers coexist. Three-limb magnitudes stay inline.
++/// Native decimal parsing keeps two chunk destinations for up to 32 groups.
++/// For G >= 33 complete groups, let K=floor(log2(G)) and R be the result limb
++/// bound below (including its spare limb). Cached B^(2^rank) powers occupy at
++/// most 2G+K limbs, and occupied tree slots plus the carried block at most
++/// G+K. A recursive product's eight-result envelope is at most 16(G+K);
++/// the shifted product, sum, and returned value add at most 3(G+K). Thus the
++/// live bound is 22G+21K limbs. Here K <= G/5 and G < 64R/63, so it is less
++/// than 32R. This includes cached owners, multiplication scratch and result;
++/// the three-limb inline cases need no heap admission.
+ fn magnitude_parse_layout(
+     digits: usize,
+ ) -> Result<NumericParseLayout, crate::bigint::LimbScratchError> {
+@@ -547,8 +559,9 @@ fn magnitude_parse_layout(
+         .checked_add(1)
+         .ok_or(SizeOverflow)?;
+     let retained_bytes = words.checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
++    let peak_factor = if digits >= 33 * 19 { 32 } else { 2 };
+     let peak_bytes = retained_bytes
+-        .checked_add(retained_bytes)
++        .checked_mul(peak_factor)
+         .ok_or(SizeOverflow)?;
+     Ok(NumericParseLayout {
+         peak_bytes,
+@@ -558,6 +571,24 @@ fn magnitude_parse_layout(
+     })
+ }
+ 
++/// Significant coefficient digits after XSD decimal normalization. Integral
++/// trailing zeros remain coefficient digits; only fractional trailing zeros
++/// lower the scale.
++pub(crate) fn decimal_coefficient_digits(
++    lexical: &str,
++) -> Result<usize, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
++    let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
++    let whole = whole.trim_start_matches('0');
++    let fraction = fraction.trim_end_matches('0');
++    if whole.is_empty() {
++        Ok(fraction.trim_start_matches('0').len())
++    } else {
++        whole.len().checked_add(fraction.len()).ok_or(SizeOverflow)
++    }
++}
++
+ /// Physical storage for the fallible native numeric reader
+ /// [`crate::value::try_parse_numeric`]. Invalid classification is part of this
+ /// plan; the caller must not invoke an owned-error parser for an invalid plan.
+@@ -570,13 +601,12 @@ pub fn numeric_parse_layout(
+     datatype: crate::XsdDatatype,
+     xsd10: bool,
+ ) -> Result<Option<NumericParseLayout>, crate::bigint::LimbScratchError> {
+-    use crate::bigint::LimbScratchError::SizeOverflow;
+     use crate::numeric::NumericReadError;
+     use crate::{ErrorCode, XsdDatatype as D};
+     if datatype.is_integer_family() {
+         match crate::numeric::read_integer_typed(lexical, datatype) {
+             Ok(_) => return Ok(Some(inline_parse_layout())),
+-            Err(NumericReadError::Invalid(_)) => {
++            Err(NumericReadError::Invalid) => {
+                 return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
+             }
+             Err(NumericReadError::OutOfRange(reason)) => {
+@@ -611,26 +641,17 @@ pub fn numeric_parse_layout(
+         D::Decimal => {
+             match crate::numeric::read_decimal(lexical) {
+                 Ok(_) => return Ok(Some(inline_parse_layout())),
+-                Err(NumericReadError::Invalid(_)) => {
++                Err(NumericReadError::Invalid) => {
+                     return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
+                 }
+                 Err(NumericReadError::OutOfRange(_)) => {}
+             }
+             let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+-            let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
++            let (_, fraction) = body.split_once('.').unwrap_or((body, ""));
+             if u32::try_from(fraction.len()).is_err() {
+                 return Ok(Some(invalid_parse_layout(Some(ErrorCode::Foar0002))));
+             }
+-            let whole = whole.trim_start_matches('0');
+-            let fraction = fraction.trim_end_matches('0');
+-            let digits = if whole.is_empty() {
+-                fraction.trim_start_matches('0').len()
+-            } else {
+-                whole
+-                    .len()
+-                    .checked_add(fraction.len())
+-                    .ok_or(SizeOverflow)?
+-            };
++            let digits = decimal_coefficient_digits(lexical)?;
+             magnitude_parse_layout(digits).map(Some)
+         }
+         D::Float | D::Double => {
+@@ -738,17 +759,28 @@ pub(crate) const fn add(la: u64, lb: u64) -> Cost {
+     Cost::new(result, limb_bytes(result))
+ }
+ 
+-/// `a × b`. Karatsuba's recursion holds its half-size sums and partial products
+-/// beside the result along one path of the recursion — a geometric series under
+-/// the top level's — so its working set is a constant multiple of the result's.
++/// `a × b`. Two-way and balanced three-way recursion retain the live split
++/// values, partial products and recombination destinations along one path.
++/// Their working sets are geometric series under the top level's result size.
+ #[must_use]
+ pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
+     let result = la.saturating_add(lb);
++    let shorter = if la < lb { la } else { lb };
++    // At the three-way cutoff n >= 512, s = ceil(n/3) >= 171. Five
++    // recursive products have at most s + 3 limbs per side. The split,
++    // evaluation, exact interpolation and offset carry-add passes touch at most
++    // 128s + 128 limbs locally. For the admitted balanced shape, shorter > 2s,
++    // so their sum fits n*shorter + 16*(n+shorter). Keep that small linear
++    // allowance on asymmetric shapes too rather than undercharge a boundary.
++    let linear = if shorter >= crate::bigint::TOOM3_THRESHOLD as u64 {
++        16
++    } else {
++        8
++    };
+     let work = la
+         .saturating_mul(lb)
+-        .saturating_add(result.saturating_mul(8))
++        .saturating_add(result.saturating_mul(linear))
+         .saturating_add(1);
+-    let shorter = if la < lb { la } else { lb };
+     let working = if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
+         8
+     } else {
+diff --git crates/xsd/tests/exact_governance.rs crates/xsd/tests/exact_governance.rs
+index a2ca21212..22ee71044 100644
+--- crates/xsd/tests/exact_governance.rs
++++ crates/xsd/tests/exact_governance.rs
+@@ -51,9 +51,11 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
+     }
+     use XsdDatatype as D;
+     let huge_integer = "7".repeat(4096);
++    let very_large_integer = "7".repeat(40_000);
+     let huge_decimal = format!("1.{}1", "0".repeat(4096));
+     let fixtures = [
+         (D::Integer, huge_integer.as_str()),
++        (D::Integer, very_large_integer.as_str()),
+         (D::Decimal, huge_decimal.as_str()),
+         (D::Long, "-9223372036854775808"),
+         (D::Int, "2147483647"),
+@@ -116,6 +118,35 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
+             "{datatype:?}"
+         );
+     }
++    let padded_integer = format!("{}123", "0".repeat(1_000));
++    let zero_integer = "0".repeat(1_000);
++    let padded_fraction = format!("0.{}1", "0".repeat(1_000));
++    for (datatype, lexical) in [
++        (D::Integer, padded_integer.as_str()),
++        (D::Integer, zero_integer.as_str()),
++        (D::Decimal, padded_fraction.as_str()),
++    ] {
++        let mut account = ParseAccount::default();
++        let (answer, measurement) = measured(|| {
++            try_parse_with_memory(lexical, datatype, false, &mut Memory::new(&mut account))
++        });
++        assert!(matches!(answer, Ok(ParsedValue::Value(_))));
++        assert_eq!(measurement.allocations, 0, "{datatype:?} {lexical}");
++        assert_eq!(account.peak, 0);
++    }
++    let invalid_suffix = format!("{zero_integer}x");
++    let mut account = ParseAccount::default();
++    let (answer, measurement) = measured(|| {
++        try_parse_with_memory(
++            &invalid_suffix,
++            D::Integer,
++            false,
++            &mut Memory::new(&mut account),
++        )
++    });
++    assert!(matches!(answer, Ok(ParsedValue::Invalid(_))));
++    assert_eq!(measurement.allocations, 0);
++    assert_eq!(account.peak, 0);
+     for (datatype, lexical) in [
+         (D::Integer, "invalid"),
+         (D::Decimal, "invalid"),
+@@ -139,6 +170,7 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
+     }
+     for (datatype, lexical) in [
+         (D::Integer, huge_integer.as_str()),
++        (D::Integer, very_large_integer.as_str()),
+         (D::Decimal, huge_decimal.as_str()),
+         (D::String, "owned"),
+         (D::HexBinary, "abcd"),
+@@ -153,6 +185,893 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
+     }
+ }
+ 
++#[test]
++fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
++    use purrdf_lex::allocation::{Admission, Memory, StorageError};
++    use purrdf_xsd::value::{ParsedValue, try_parse_with_memory};
++
++    #[derive(Default)]
++    struct Account {
++        live: usize,
++        peak: usize,
++        limit: usize,
++    }
++    impl Admission for Account {
++        fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
++            if bytes > self.limit {
++                return Err(StorageError::AdmissionFailed);
++            }
++            self.live = bytes;
++            self.peak = self.peak.max(bytes);
++            Ok(())
++        }
++    }
++
++    let wide = "9".repeat(1000);
++    let samples = [
++        (XsdDatatype::Time, format!("12:34:56.{}1", "0".repeat(999))),
++        (
++            XsdDatatype::DateTime,
++            format!("2024-01-02T03:04:05.{}1Z", "0".repeat(999)),
++        ),
++        (
++            XsdDatatype::Duration,
++            format!("P{wide}DT{wide}H{wide}M1.{}1S", "0".repeat(999)),
++        ),
++        (XsdDatatype::DayTimeDuration, format!("P{wide}D")),
++        (XsdDatatype::Duration, format!("P1DT{}S", "9".repeat(5000))),
++        (XsdDatatype::Duration, format!("P1DT1{}S", "0".repeat(5000))),
++        (
++            XsdDatatype::Duration,
++            format!("P{wide}DT1.{}1S", "0".repeat(4999)),
++        ),
++        (XsdDatatype::DayTimeDuration, format!("-PT{wide}.1S")),
++        (
++            XsdDatatype::DayTimeDuration,
++            format!("-PT1{}S", "0".repeat(5000)),
++        ),
++    ];
++    for (datatype, lexical) in samples {
++        let mut account = Account {
++            limit: 1_000_000,
++            ..Account::default()
++        };
++        let measurement = {
++            let mut memory = Memory::new(&mut account);
++            let (result, measurement) =
++                measured(|| try_parse_with_memory(&lexical, datatype, false, &mut memory));
++            let ParsedValue::Value(value) = result.unwrap() else {
++                panic!("valid {datatype:?}");
++            };
++            let retained = memory.admitted_bytes();
++            assert_eq!(
++                retained,
++                usize::try_from(measurement.retained_bytes).unwrap(),
++                "{datatype:?}"
++            );
++            drop(value);
++            memory.release_bytes(retained).unwrap();
++            measurement
++        };
++        let admitted = account.peak;
++        assert!(
++            admitted >= usize::try_from(measurement.peak_working_bytes).unwrap(),
++            "{datatype:?}: admitted {admitted}, measured {}",
++            measurement.peak_working_bytes
++        );
++        assert_eq!(account.live, 0);
++
++        let mut refused = Account {
++            limit: admitted - 1,
++            ..Account::default()
++        };
++        let (answer, measurement) = measured(|| {
++            try_parse_with_memory(&lexical, datatype, false, &mut Memory::new(&mut refused))
++        });
++        assert!(
++            matches!(answer, Err(StorageError::AdmissionFailed)),
++            "{datatype:?}: {answer:?}"
++        );
++        assert_eq!(measurement.allocations, 0, "{datatype:?}");
++        assert_eq!(refused.live, 0);
++    }
++
++    // A malformed suffix after a very wide, otherwise valid component is a
++    // lexical refusal before any numeric scratch is admitted or allocated.
++    for (datatype, lexical) in [
++        (XsdDatatype::Time, format!("12:34:56.{}1x", "0".repeat(999))),
++        (XsdDatatype::Duration, format!("P{wide}Dx")),
++    ] {
++        let mut account = Account::default();
++        let (answer, measurement) = measured(|| {
++            try_parse_with_memory(&lexical, datatype, false, &mut Memory::new(&mut account))
++        });
++        assert!(
++            matches!(answer, Ok(ParsedValue::Invalid(_))),
++            "{datatype:?}: {answer:?}"
++        );
++        assert_eq!(measurement.allocations, 0, "{datatype:?}");
++        assert_eq!(account.peak, 0);
++    }
++}
++
++#[test]
++fn temporal_comparison_admits_wide_alignment_before_allocating() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::ops::{value_cmp_admitted, value_equal_admitted};
++
++    let tiny_tail = format!("1{}1", "0".repeat(1000));
++    for (datatype, left, right) in [
++        (
++            XsdDatatype::Time,
++            "12:00:56.1".to_owned(),
++            format!("12:00:56.{tiny_tail}"),
++        ),
++        (
++            XsdDatatype::DateTime,
++            "2024-01-02T12:00:56.1Z".to_owned(),
++            format!("2024-01-02T12:00:56.{tiny_tail}Z"),
++        ),
++        (
++            XsdDatatype::DayTimeDuration,
++            "PT56.1S".to_owned(),
++            format!("PT56.{tiny_tail}S"),
++        ),
++    ] {
++        let a = purrdf_xsd::parse(&left, datatype).unwrap();
++        let b = purrdf_xsd::parse(&right, datatype).unwrap();
++        let mut admitted = 0;
++        let (order, measurement) = measured(|| {
++            value_cmp_admitted(&a, &b, &mut |layout| {
++                admitted = admitted.max(layout.required_bytes());
++                Ok(())
++            })
++        });
++        assert!(order.unwrap().is_some(), "{datatype:?}");
++        assert!(admitted > 0, "{datatype:?}");
++        assert!(
++            usize::try_from(measurement.peak_working_bytes).unwrap() <= admitted,
++            "{datatype:?}"
++        );
++        let (refused, measurement) = measured(|| {
++            value_cmp_admitted(&a, &b, &mut |_| Err(LimbScratchError::AllocationFailed))
++        });
++        assert!(
++            matches!(refused, Err(LimbScratchError::AllocationFailed)),
++            "{datatype:?}"
++        );
++        assert_eq!(measurement.allocations, 0, "{datatype:?}");
++        if datatype == XsdDatatype::DayTimeDuration {
++            let (refused, measurement) = measured(|| {
++                value_equal_admitted(&a, &b, &mut |_| Err(LimbScratchError::AllocationFailed))
++            });
++            assert!(matches!(refused, Err(LimbScratchError::AllocationFailed)));
++            assert_eq!(measurement.allocations, 0);
++        }
++    }
++}
++
++#[test]
++fn calendar_text_prepares_wide_seconds_under_original_admission() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::temporal::prepare_calendar_text;
++
++    for (datatype, lexical) in [
++        (
++            XsdDatatype::Time,
++            format!("12:34:56.{}1Z", "0".repeat(2000)),
++        ),
++        (
++            XsdDatatype::DateTime,
++            format!("2024-01-02T12:34:56.{}1Z", "0".repeat(2000)),
++        ),
++    ] {
++        let value = purrdf_xsd::parse(&lexical, datatype).unwrap();
++        let mut admitted = 0;
++        let (prepared, measurement) = measured(|| {
++            prepare_calendar_text(&value, &mut |layout| {
++                admitted = admitted.max(layout.required_bytes());
++                Ok(())
++            })
++        });
++        let prepared = prepared.unwrap().unwrap();
++        assert!(admitted >= prepared.temporary_bytes(), "{datatype:?}");
++        assert!(
++            usize::try_from(measurement.peak_working_bytes).unwrap() <= admitted,
++            "{datatype:?}"
++        );
++        assert_eq!(prepared.to_string(), lexical);
++        let (refused, measurement) = measured(|| {
++            prepare_calendar_text(&value, &mut |_| Err(LimbScratchError::AllocationFailed))
++        });
++        assert!(matches!(refused, Err(LimbScratchError::AllocationFailed)));
++        assert_eq!(measurement.allocations, 0, "{datatype:?}");
++    }
++}
++
++#[test]
++fn duration_subtype_cast_admits_kept_seconds_and_drops_other_component() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::temporal::{cast_duration_admitted, parse_duration};
++
++    let wide = format!("P1Y1DT{}S", "9".repeat(2000));
++    let source = parse_duration(XsdDatatype::Duration, &wide).unwrap();
++    let (refused, measurement) = measured(|| {
++        cast_duration_admitted(&source, XsdDatatype::DayTimeDuration, &mut |_| {
++            Err(LimbScratchError::AllocationFailed)
++        })
++    });
++    assert!(matches!(refused, Err(purrdf_xsd::XsdError::Storage(_))));
++    assert_eq!(measurement.allocations, 0);
++
++    let mut admitted = 0;
++    let (kept, measurement) = measured(|| {
++        cast_duration_admitted(&source, XsdDatatype::DayTimeDuration, &mut |layout| {
++            admitted = admitted.max(layout.required_bytes());
++            Ok(())
++        })
++    });
++    let kept = kept.unwrap().unwrap();
++    assert_eq!(kept.months(), 0);
++    assert!(admitted > 0);
++    assert!(usize::try_from(measurement.peak_working_bytes).unwrap() <= admitted);
++    let (dropped, measurement) = measured(|| {
++        cast_duration_admitted(&source, XsdDatatype::YearMonthDuration, &mut |_| {
++            Err(LimbScratchError::AllocationFailed)
++        })
++    });
++    assert_eq!(dropped.unwrap().unwrap().months(), 12);
++    assert_eq!(measurement.allocations, 0);
++}
++
++#[test]
++fn duration_add_sub_admit_seconds_before_allocation() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
++    use purrdf_xsd::temporal::parse_duration;
++
++    let left = XsdValue::Duration(
++        parse_duration(
++            XsdDatatype::DayTimeDuration,
++            &format!("PT{}.5S", "8".repeat(2000)),
++        )
++        .unwrap(),
++    );
++    let right = XsdValue::Duration(
++        parse_duration(
++            XsdDatatype::DayTimeDuration,
++            &format!("PT{}.25S", "1".repeat(2000)),
++        )
++        .unwrap(),
++    );
++    assert!(numeric_cost(&left, &right, CostOp::Add).work() > 0);
++    let tiny_left =
++        XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT1.5S").unwrap());
++    let tiny_right =
++        XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT0.25S").unwrap());
++    assert_eq!(
++        numeric_cost(&tiny_left, &tiny_right, CostOp::Add),
++        Cost::ZERO
++    );
++    let edge = XsdValue::Duration(
++        parse_duration(XsdDatatype::DayTimeDuration, &format!("PT{}S", i128::MAX)).unwrap(),
++    );
++    let one = XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT1S").unwrap());
++    assert!(numeric_cost(&edge, &one, CostOp::Add).work() > 0);
++    let (refused, measurement) = measured(|| {
++        purrdf_xsd::ops::value_binary_admitted(
++            &edge,
++            &one,
++            NumericBinaryOperator::Add,
++            DivisionPolicy::xsd_default(),
++            &mut |_| Err(LimbScratchError::AllocationFailed),
++        )
++    });
++    assert!(matches!(refused, Err(NumericOperationError::Storage(_))));
++    assert_eq!(measurement.allocations, 0);
++    for op in [NumericBinaryOperator::Add, NumericBinaryOperator::Subtract] {
++        let (refused, measurement) = measured(|| {
++            purrdf_xsd::ops::value_binary_admitted(
++                &left,
++                &right,
++                op,
++                DivisionPolicy::xsd_default(),
++                &mut |_| Err(LimbScratchError::AllocationFailed),
++            )
++        });
++        assert!(matches!(refused, Err(NumericOperationError::Storage(_))));
++        assert_eq!(measurement.allocations, 0);
++
++        let (admitted, _) = measured(|| {
++            purrdf_xsd::ops::value_binary_admitted(
++                &left,
++                &right,
++                op,
++                DivisionPolicy::xsd_default(),
++                &mut |_| Ok(()),
++            )
++        });
++        let resident = match op {
++            NumericBinaryOperator::Add => purrdf_xsd::value_add(&left, &right),
++            NumericBinaryOperator::Subtract => purrdf_xsd::value_sub(&left, &right),
++            _ => unreachable!(),
++        };
++        let admitted = admitted.unwrap();
++        let resident = resident.unwrap();
++        assert_eq!(admitted.datatype(), resident.datatype());
++        assert_eq!(admitted.canonical_lexical(), resident.canonical_lexical());
++    }
++}
++
++#[test]
++fn duration_scale_and_ratio_admit_borrowed_exact_parts() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
++    use purrdf_xsd::temporal::parse_duration;
++
++    let wide = XsdValue::Duration(
++        parse_duration(
++            XsdDatatype::DayTimeDuration,
++            &format!("PT{}S", "7".repeat(2000)),
++        )
++        .unwrap(),
++    );
++    let two = purrdf_xsd::parse("2", XsdDatatype::Integer).unwrap();
++    let wide_factor = purrdf_xsd::parse(&"7".repeat(2000), XsdDatatype::Integer).unwrap();
++    let two_seconds =
++        XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT2S").unwrap());
++    for (left, right, op) in [
++        (&two_seconds, &wide_factor, NumericBinaryOperator::Multiply),
++        (&wide, &two, NumericBinaryOperator::Divide),
++        (&wide, &two_seconds, NumericBinaryOperator::Divide),
++    ] {
++        let (refused, measurement) = measured(|| {
++            purrdf_xsd::ops::value_binary_admitted(
++                left,
++                right,
++                op,
++                DivisionPolicy::Exact,
++                &mut |_| Err(LimbScratchError::AllocationFailed),
++            )
++        });
++        assert!(matches!(refused, Err(NumericOperationError::Storage(_))));
++        assert_eq!(measurement.allocations, 0);
++        let admitted = purrdf_xsd::ops::value_binary_admitted(
++            left,
++            right,
++            op,
++            DivisionPolicy::Exact,
++            &mut |_| Ok(()),
++        )
++        .unwrap();
++        let resident = match op {
++            NumericBinaryOperator::Multiply => purrdf_xsd::value_mul(left, right),
++            NumericBinaryOperator::Divide => purrdf_xsd::value_div(left, right),
++            _ => unreachable!(),
++        }
++        .unwrap();
++        assert_eq!(admitted.datatype(), resident.datatype());
++        assert_eq!(admitted.canonical_lexical(), resident.canonical_lexical());
++    }
++
++    let one = XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT1S").unwrap());
++    let three = XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT3S").unwrap());
++    let exact_request = purrdf_xsd::ops::value_binary_admitted(
++        &one,
++        &three,
++        NumericBinaryOperator::Divide,
++        DivisionPolicy::Exact,
++        &mut |_| Ok(()),
++    )
++    .unwrap();
++    assert_eq!(exact_request.canonical_lexical(), "0.333333333333333333");
++}
++
++#[test]
++fn duration_unary_minus_admits_wide_seconds_before_copy() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::numeric::{
++        NumericOperationError, NumericUnaryOperator, numeric_unary_admitted,
++    };
++    use purrdf_xsd::temporal::parse_duration;
++
++    let wide = XsdValue::Duration(
++        parse_duration(
++            XsdDatatype::DayTimeDuration,
++            &format!("PT{}S", "9".repeat(2000)),
++        )
++        .unwrap(),
++    );
++    assert!(numeric_unary_cost(&wide).work() > 0);
++    let (refused, measurement) = measured(|| {
++        numeric_unary_admitted(&wide, NumericUnaryOperator::Minus, &mut |_| {
++            Err(LimbScratchError::AllocationFailed)
++        })
++    });
++    assert!(matches!(refused, Err(NumericOperationError::Storage(_))));
++    assert_eq!(measurement.allocations, 0);
++    let result =
++        numeric_unary_admitted(&wide, NumericUnaryOperator::Minus, &mut |_| Ok(())).unwrap();
++    assert_eq!(
++        result.canonical_lexical(),
++        purrdf_xsd::value_unary_minus(&wide)
++            .unwrap()
++            .canonical_lexical(),
++    );
++    let tiny = XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT1S").unwrap());
++    assert_eq!(numeric_unary_cost(&tiny), Cost::ZERO);
++}
++
++#[test]
++fn calendar_duration_arithmetic_admits_exact_seconds_before_allocation() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
++    use purrdf_xsd::temporal::parse_duration;
++
++    let fraction = "1".repeat(2000);
++    let duration = XsdValue::Duration(
++        parse_duration(XsdDatatype::DayTimeDuration, &format!("PT0.{fraction}S")).unwrap(),
++    );
++    for (datatype, lexical) in [
++        (XsdDatatype::DateTime, "2024-01-02T12:34:56Z"),
++        (XsdDatatype::Date, "2024-01-02Z"),
++        (XsdDatatype::Time, "12:34:56Z"),
++    ] {
++        let calendar = purrdf_xsd::parse(lexical, datatype).unwrap();
++        for op in [NumericBinaryOperator::Add, NumericBinaryOperator::Subtract] {
++            let (refused, measurement) = measured(|| {
++                purrdf_xsd::ops::value_binary_admitted(
++                    &calendar,
++                    &duration,
++                    op,
++                    DivisionPolicy::xsd_default(),
++                    &mut |layout| {
++                        if layout.required_bytes() == 0 {
++                            Ok(())
++                        } else {
++                            Err(LimbScratchError::AllocationFailed)
++                        }
++                    },
++                )
++            });
++            assert!(
++                matches!(refused, Err(NumericOperationError::Storage(_))),
++                "{datatype:?} {op:?}"
++            );
++            assert_eq!(measurement.allocations, 0, "{datatype:?} {op:?}");
++            let admitted = purrdf_xsd::ops::value_binary_admitted(
++                &calendar,
++                &duration,
++                op,
++                DivisionPolicy::xsd_default(),
++                &mut |_| Ok(()),
++            )
++            .unwrap();
++            let resident = match op {
++                NumericBinaryOperator::Add => purrdf_xsd::value_add(&calendar, &duration),
++                NumericBinaryOperator::Subtract => purrdf_xsd::value_sub(&calendar, &duration),
++                _ => unreachable!(),
++            }
++            .unwrap();
++            assert_eq!(admitted.datatype(), resident.datatype());
++            assert_eq!(admitted.canonical_lexical(), resident.canonical_lexical());
++        }
++    }
++}
++
++#[test]
++fn named_duration_calendar_operations_use_the_exact_general_path() {
++    use purrdf_xsd::temporal::{
++        add_day_time_duration_to_date, add_day_time_duration_to_datetime,
++        add_day_time_duration_to_time, add_duration_to_date, add_duration_to_datetime,
++        add_duration_to_time, add_year_month_duration_to_date, add_year_month_duration_to_datetime,
++        parse_date, parse_datetime, parse_duration, parse_time,
++        subtract_day_time_duration_from_date, subtract_day_time_duration_from_datetime,
++        subtract_day_time_duration_from_time, subtract_duration_from_date,
++        subtract_duration_from_datetime, subtract_duration_from_time,
++        subtract_year_month_duration_from_date, subtract_year_month_duration_from_datetime,
++    };
++
++    let fraction = "7".repeat(512);
++    let datetime = parse_datetime(&format!("2024-01-31T12:34:56.{fraction}Z")).unwrap();
++    let date = parse_date("2024-01-31Z").unwrap();
++    let time = parse_time(&format!("12:34:56.{fraction}Z")).unwrap();
++    let months = parse_duration(XsdDatatype::YearMonthDuration, "P1M").unwrap();
++    let seconds =
++        parse_duration(XsdDatatype::DayTimeDuration, &format!("PT0.{fraction}S")).unwrap();
++
++    macro_rules! same_value {
++        ($named:expr, $general:expr $(,)?) => {
++            assert_eq!(
++                $named.unwrap().canonical_lexical(),
++                $general.unwrap().canonical_lexical(),
++            )
++        };
++    }
++
++    same_value!(
++        add_year_month_duration_to_datetime(&datetime, &months),
++        add_duration_to_datetime(&datetime, &months),
++    );
++    same_value!(
++        subtract_year_month_duration_from_datetime(&datetime, &months),
++        subtract_duration_from_datetime(&datetime, &months),
++    );
++    same_value!(
++        add_day_time_duration_to_datetime(&datetime, &seconds),
++        add_duration_to_datetime(&datetime, &seconds),
++    );
++    same_value!(
++        subtract_day_time_duration_from_datetime(&datetime, &seconds),
++        subtract_duration_from_datetime(&datetime, &seconds),
++    );
++    same_value!(
++        add_year_month_duration_to_date(&date, &months),
++        add_duration_to_date(&date, &months),
++    );
++    same_value!(
++        subtract_year_month_duration_from_date(&date, &months),
++        subtract_duration_from_date(&date, &months),
++    );
++    same_value!(
++        add_day_time_duration_to_date(&date, &seconds),
++        add_duration_to_date(&date, &seconds),
++    );
++    same_value!(
++        subtract_day_time_duration_from_date(&date, &seconds),
++        subtract_duration_from_date(&date, &seconds),
++    );
++    same_value!(
++        add_day_time_duration_to_time(&time, &seconds),
++        add_duration_to_time(&time, &seconds),
++    );
++    same_value!(
++        subtract_day_time_duration_from_time(&time, &seconds),
++        subtract_duration_from_time(&time, &seconds),
++    );
++    assert!(add_year_month_duration_to_datetime(&datetime, &seconds).is_err());
++    assert!(add_day_time_duration_to_datetime(&datetime, &months).is_err());
++}
++
++#[test]
++fn instant_difference_borrows_wide_seconds_and_admits_each_total() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
++
++    let fraction = "1".repeat(2000);
++    for (datatype, left, right) in [
++        (
++            XsdDatatype::DateTime,
++            format!("2024-01-02T12:34:56.{fraction}Z"),
++            "2024-01-01T12:34:56Z".to_owned(),
++        ),
++        (
++            XsdDatatype::Time,
++            format!("12:34:56.{fraction}Z"),
++            "12:34:55Z".to_owned(),
++        ),
++    ] {
++        let a = purrdf_xsd::parse(&left, datatype).unwrap();
++        let b = purrdf_xsd::parse(&right, datatype).unwrap();
++        let (refused, measurement) = measured(|| {
++            purrdf_xsd::ops::value_binary_admitted(
++                &a,
++                &b,
++                NumericBinaryOperator::Subtract,
++                DivisionPolicy::xsd_default(),
++                &mut |layout| {
++                    if layout.required_bytes() == 0 {
++                        Ok(())
++                    } else {
++                        Err(LimbScratchError::AllocationFailed)
++                    }
++                },
++            )
++        });
++        assert!(matches!(refused, Err(NumericOperationError::Storage(_))));
++        assert_eq!(measurement.allocations, 0);
++        let admitted = purrdf_xsd::ops::value_binary_admitted(
++            &a,
++            &b,
++            NumericBinaryOperator::Subtract,
++            DivisionPolicy::xsd_default(),
++            &mut |_| Ok(()),
++        )
++        .unwrap();
++        assert_eq!(
++            admitted.canonical_lexical(),
++            purrdf_xsd::value_sub(&a, &b).unwrap().canonical_lexical()
++        );
++    }
++
++    let zoned = purrdf_xsd::parse(&format!("12:34:56.{fraction}Z"), XsdDatatype::Time).unwrap();
++    let unzoned = purrdf_xsd::parse("12:34:56", XsdDatatype::Time).unwrap();
++    let (indeterminate, measurement) = measured(|| {
++        purrdf_xsd::ops::value_binary_admitted(
++            &zoned,
++            &unzoned,
++            NumericBinaryOperator::Subtract,
++            DivisionPolicy::xsd_default(),
++            &mut |_| panic!("timezone mix must fail before admission"),
++        )
++    });
++    assert!(matches!(
++        indeterminate,
++        Err(NumericOperationError::Value(
++            purrdf_xsd::XsdError::Indeterminate { .. }
++        ))
++    ));
++    assert_eq!(measurement.allocations, 0);
++}
++
++#[test]
++fn timezone_adjustment_admits_wide_seconds_before_copy_or_shift() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::temporal::{
++        adjust_datetime_to_timezone, adjust_datetime_to_timezone_admitted, adjust_time_to_timezone,
++        adjust_time_to_timezone_admitted, parse_datetime, parse_time,
++    };
++
++    let fraction = "1".repeat(2000);
++    let datetime = parse_datetime(&format!("2024-01-02T12:34:56.{fraction}Z")).unwrap();
++    let time = parse_time(&format!("12:34:56.{fraction}Z")).unwrap();
++    for offset in [None, Some(3600)] {
++        let (refused, measurement) = measured(|| {
++            adjust_datetime_to_timezone_admitted(&datetime, offset, &mut |layout| {
++                if layout.required_bytes() == 0 {
++                    Ok(())
++                } else {
++                    Err(LimbScratchError::AllocationFailed)
++                }
++            })
++        });
++        assert!(matches!(refused, Err(purrdf_xsd::XsdError::Storage(_))));
++        assert_eq!(measurement.allocations, 0);
++        let admitted =
++            adjust_datetime_to_timezone_admitted(&datetime, offset, &mut |_| Ok(())).unwrap();
++        assert_eq!(
++            admitted.canonical_lexical(),
++            adjust_datetime_to_timezone(&datetime, offset)
++                .unwrap()
++                .canonical_lexical()
++        );
++
++        let (refused, measurement) = measured(|| {
++            adjust_time_to_timezone_admitted(&time, offset, &mut |layout| {
++                if layout.required_bytes() == 0 {
++                    Ok(())
++                } else {
++                    Err(LimbScratchError::AllocationFailed)
++                }
++            })
++        });
++        assert!(matches!(refused, Err(purrdf_xsd::XsdError::Storage(_))));
++        assert_eq!(measurement.allocations, 0);
++        let admitted = adjust_time_to_timezone_admitted(&time, offset, &mut |_| Ok(())).unwrap();
++        assert_eq!(
++            admitted.canonical_lexical(),
++            adjust_time_to_timezone(&time, offset)
++                .unwrap()
++                .canonical_lexical()
++        );
++    }
++}
++
++#[test]
++fn gregorian_whole_days_admits_wide_duration_before_division() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
++    use purrdf_xsd::temporal::{parse_duration, parse_gregorian};
++
++    let calendar =
++        XsdValue::Gregorian(parse_gregorian(XsdDatatype::GMonthDay, "--03-15Z").unwrap());
++    let wide = XsdValue::Duration(
++        parse_duration(
++            XsdDatatype::DayTimeDuration,
++            &format!("P{}D", "9".repeat(2000)),
++        )
++        .unwrap(),
++    );
++    for op in [NumericBinaryOperator::Add, NumericBinaryOperator::Subtract] {
++        let (refused, measurement) = measured(|| {
++            purrdf_xsd::ops::value_binary_admitted(
++                &calendar,
++                &wide,
++                op,
++                DivisionPolicy::xsd_default(),
++                &mut |layout| {
++                    if layout.required_bytes() == 0 {
++                        Ok(())
++                    } else {
++                        Err(LimbScratchError::AllocationFailed)
++                    }
++                },
++            )
++        });
++        assert!(matches!(refused, Err(NumericOperationError::Storage(_))));
++        assert_eq!(measurement.allocations, 0);
++    }
++    let ordinary = XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "P1D").unwrap());
++    let admitted = purrdf_xsd::ops::value_binary_admitted(
++        &calendar,
++        &ordinary,
++        NumericBinaryOperator::Add,
++        DivisionPolicy::xsd_default(),
++        &mut |_| Ok(()),
++    )
++    .unwrap();
++    assert_eq!(
++        admitted.canonical_lexical(),
++        purrdf_xsd::value_add(&calendar, &ordinary)
++            .unwrap()
++            .canonical_lexical()
++    );
++}
++
++#[test]
++fn calendar_exact_work_cost_tracks_wide_seconds_and_keeps_tiny_zero() {
++    use purrdf_xsd::numeric::{temporal_subtract_cost, timezone_adjust_cost};
++    use purrdf_xsd::temporal::parse_duration;
++
++    let fraction = "1".repeat(2000);
++    let wide_datetime = purrdf_xsd::parse(
++        &format!("2024-01-02T12:34:56.{fraction}Z"),
++        XsdDatatype::DateTime,
++    )
++    .unwrap();
++    let tiny_datetime = purrdf_xsd::parse("2024-01-02T12:34:56Z", XsdDatatype::DateTime).unwrap();
++    let tiny_duration =
++        XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT1S").unwrap());
++    let wide_duration = XsdValue::Duration(
++        parse_duration(XsdDatatype::DayTimeDuration, &format!("PT0.{fraction}S")).unwrap(),
++    );
++    assert_eq!(
++        numeric_cost(&tiny_datetime, &tiny_duration, CostOp::Add),
++        Cost::ZERO
++    );
++    assert!(numeric_cost(&tiny_datetime, &wide_duration, CostOp::Add).work() > 0);
++    assert!(numeric_cost(&wide_datetime, &tiny_duration, CostOp::Add).work() > 0);
++    assert!(temporal_subtract_cost(&wide_datetime, &tiny_datetime).work() > 0);
++    assert_eq!(
++        temporal_subtract_cost(&tiny_datetime, &tiny_datetime),
++        Cost::ZERO
++    );
++    assert_eq!(
++        numeric_cost(&wide_datetime, &tiny_datetime, CostOp::Add),
++        Cost::ZERO,
++        "invalid calendar addition keeps its type error ahead of any exact-work charge"
++    );
++    assert_eq!(
++        temporal_subtract_cost(&wide_duration, &tiny_datetime),
++        Cost::ZERO,
++        "invalid duration-minus-calendar keeps its type error ahead of fuel"
++    );
++    let max_duration = XsdValue::Duration(
++        parse_duration(XsdDatatype::DayTimeDuration, &format!("PT{}S", i128::MAX)).unwrap(),
++    );
++    assert!(
++        numeric_cost(&tiny_datetime, &max_duration, CostOp::Add).work() > 0,
++        "hour/minute base plus inline maximum spills after the first seconds stage"
++    );
++    assert_eq!(timezone_adjust_cost(&tiny_datetime, Some(3600)), Cost::ZERO);
++    assert!(timezone_adjust_cost(&wide_datetime, Some(3600)).work() > 0);
++    assert!(timezone_adjust_cost(&wide_datetime, None).work() > 0);
++    assert_eq!(
++        timezone_adjust_cost(&wide_datetime, Some(15 * 3600)),
++        Cost::ZERO,
++        "invalid timezone reaches its typed XSD error before exact work"
++    );
++}
++
++#[test]
++fn calendar_exact_work_bounds_actual_native_traffic() {
++    use purrdf_xsd::numeric::{temporal_subtract_cost, timezone_adjust_cost};
++    use purrdf_xsd::temporal::{adjust_datetime_to_timezone, parse_datetime, parse_duration};
++
++    let fraction = "1".repeat(2000);
++    let wide =
++        XsdValue::DateTime(parse_datetime(&format!("2024-01-02T12:34:56.{fraction}Z")).unwrap());
++    let tiny = purrdf_xsd::parse("2024-01-01T12:34:56Z", XsdDatatype::DateTime).unwrap();
++    let duration =
++        XsdValue::Duration(parse_duration(XsdDatatype::DayTimeDuration, "PT1S").unwrap());
++    let (result, allocation) = measured(|| purrdf_xsd::value_add(&wide, &duration));
++    result.unwrap();
++    assert_bounded(
++        "calendar plus duration",
++        numeric_cost(&wide, &duration, CostOp::Add),
++        allocation,
++    );
++
++    let (result, allocation) = measured(|| purrdf_xsd::value_sub(&wide, &tiny));
++    result.unwrap();
++    assert_bounded(
++        "instant difference",
++        temporal_subtract_cost(&wide, &tiny),
++        allocation,
++    );
++
++    let XsdValue::DateTime(datetime) = &wide else {
++        unreachable!()
++    };
++    let (result, allocation) = measured(|| adjust_datetime_to_timezone(datetime, Some(3600)));
++    result.unwrap();
++    assert_bounded(
++        "timezone adjustment",
++        timezone_adjust_cost(&wide, Some(3600)),
++        allocation,
++    );
++}
++
++#[test]
++fn invalid_temporal_pairs_keep_type_error_ahead_of_admission() {
++    use purrdf_xsd::numeric::{NumericBinaryOperator, NumericOperationError};
++    use purrdf_xsd::temporal::parse_duration;
++
++    let fraction = "1".repeat(2000);
++    let calendar = purrdf_xsd::parse(
++        &format!("2024-01-02T12:34:56.{fraction}Z"),
++        XsdDatatype::DateTime,
++    )
++    .unwrap();
++    let duration = XsdValue::Duration(
++        parse_duration(XsdDatatype::DayTimeDuration, &format!("PT0.{fraction}S")).unwrap(),
++    );
++    for (left, right, op) in [
++        (&calendar, &calendar, NumericBinaryOperator::Add),
++        (&duration, &calendar, NumericBinaryOperator::Subtract),
++    ] {
++        let (result, allocation) = measured(|| {
++            purrdf_xsd::ops::value_binary_admitted(
++                left,
++                right,
++                op,
++                DivisionPolicy::xsd_default(),
++                &mut |_| panic!("invalid operand pair must fail before native admission"),
++            )
++        });
++        assert!(matches!(
++            result,
++            Err(NumericOperationError::Value(
++                purrdf_xsd::XsdError::TypeMismatch { .. }
++            ))
++        ));
++        assert_eq!(allocation.allocations, 0);
++    }
++}
++
++#[test]
++fn duration_text_prepares_wide_days_and_fraction_without_quotient_owner() {
++    use purrdf_xsd::bigint::LimbScratchError;
++    use purrdf_xsd::temporal::{parse_duration, prepare_duration_text};
++
++    for lexical in [
++        format!("PT{}S", "9".repeat(3000)),
++        format!("-PT{}.{:0<width$}1S", "9".repeat(1000), "", width = 2000),
++        "P1Y1DT2.5S".to_owned(),
++    ] {
++        let source = parse_duration(XsdDatatype::Duration, &lexical).unwrap();
++        let mut admitted = 0;
++        let (prepared, measurement) = measured(|| {
++            prepare_duration_text(&source, &mut |layout| {
++                admitted = admitted.max(layout.required_bytes());
++                Ok(())
++            })
++        });
++        let prepared = prepared.unwrap();
++        assert!(admitted >= prepared.temporary_bytes());
++        assert!(usize::try_from(measurement.peak_working_bytes).unwrap() <= admitted);
++        let text = prepared.to_string();
++        let reread = parse_duration(XsdDatatype::Duration, &text).unwrap();
++        assert_eq!(reread.months(), source.months());
++        assert_eq!(reread.seconds_ref(), source.seconds_ref());
++        let (refused, measurement) = measured(|| {
++            prepare_duration_text(&source, &mut |_| Err(LimbScratchError::AllocationFailed))
++        });
++        assert!(matches!(refused, Err(LimbScratchError::AllocationFailed)));
++        assert_eq!(measurement.allocations, 0);
++    }
++}
++
+ #[test]
+ fn admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal() {
+     use purrdf_xsd::bigint::LimbScratchError;
+@@ -250,6 +1169,46 @@ fn a_lopsided_product_costs_what_it_is_charged() {
+     assert_bounded("10032 × 10032 limbs", cost, measurement);
+ }
+ 
++/// The staged physical layout must include the live three-way evaluation and
++/// interpolation destinations, not just the final product.
++#[test]
++fn balanced_large_products_fit_their_admitted_peak() {
++    for (digits, limbs) in [
++        (2_429, 127),
++        (2_448, 128),
++        (2_468, 129),
++        (5_000, 260),
++        (9_827, 511),
++        (9_846, 512),
++        (9_866, 513),
++        (10_000, 520),
++        (19_691, 1023),
++        (19_711, 1024),
++        (19_730, 1025),
++        (40_000, 2077),
++    ] {
++        let a: Decimal = "7".repeat(digits).parse().expect("integer-valued decimal");
++        let b: Decimal = "3".repeat(digits).parse().expect("integer-valued decimal");
++        assert_eq!(a.limb_len(), limbs);
++        assert_eq!(b.limb_len(), limbs);
++        let mut admitted_peak = 0;
++        let (answer, measurement) = measured(|| {
++            a.try_mul_admitted(&b, &mut |layout| {
++                admitted_peak = admitted_peak.max(layout.required_bytes());
++                Ok(())
++            })
++        });
++        let product = answer.expect("sufficient admission");
++        assert_eq!(product.canonical_lexical().len(), digits * 2);
++        assert!(
++            usize::try_from(measurement.peak_working_bytes).expect("test-sized peak")
++                <= admitted_peak,
++            "{digits} digits: measured {measurement:?}, admitted {admitted_peak}"
++        );
++        assert_bounded("balanced Toom product", a.mul_cost(&b), measurement);
++    }
++}
++
+ /// A decimal of one digit at a scale of millions renders, converts and compares at
+ /// the price its estimates state: the text it becomes is charged, and the float
+ /// conversion and the comparison with a double never form `10^scale` when the
+@@ -299,14 +1258,14 @@ fn alignment_is_charged_at_the_scale_gap() {
+     let scale = 2_000_000;
+     let small = big_decimal(tiny(scale));
+     let one = XsdValue::Integer {
+-        value: 1,
++        value: Integer::from_i128(1),
+         datatype: XsdDatatype::Integer,
+     };
+     let add = numeric_cost(&small, &one, CostOp::Add);
+     assert!(add.bytes() >= scale as u64 / 3, "{add:?}");
+     let (sum, measurement) = measured(|| purrdf_xsd::numeric_add(&small, &one));
+     assert_bounded("1e-2000000 + 1", add, measurement);
+-    assert!(matches!(sum, Ok(XsdValue::BigDecimal(_))));
++    assert!(matches!(sum, Ok(XsdValue::Decimal(value)) if value.scale() > 18));
+ 
+     let compare = numeric_cost(&small, &one, CostOp::Compare);
+     assert_eq!(
+@@ -325,11 +1284,11 @@ fn alignment_is_charged_at_the_scale_gap() {
+ #[test]
+ fn division_is_charged_at_its_policy() {
+     let one = XsdValue::Integer {
+-        value: 1,
++        value: Integer::from_i128(1),
+         datatype: XsdDatatype::Integer,
+     };
+     let three = XsdValue::Integer {
+-        value: 3,
++        value: Integer::from_i128(3),
+         datatype: XsdDatatype::Integer,
+     };
+     let policy = DivisionPolicy::scale(200_000, Rounding::TowardZero);
+@@ -514,7 +1473,21 @@ fn temporal_native_values_and_deferred_refusals_allocate_no_heap() {
+     // Construct hostile authored input outside each measured execution window.
+     let zeros = "0".repeat(8192);
+     check(D::Time, &format!("00:00:00.{zeros}Z"), Value("00:00:00Z"));
+-    check(D::Time, &format!("00:00:00.{zeros}1Z"), Range);
++    let long_fraction = format!("00:00:00.{zeros}1Z");
++    let (parsed, allocation) = measured(|| read_temporal(&long_fraction, D::Time));
++    assert_eq!(
++        allocation.requested_bytes, 0,
++        "inline exact second parser traffic"
++    );
++    assert_eq!(
++        allocation.peak_working_bytes, 0,
++        "inline exact second parser peak"
++    );
++    let XsdValue::Time(time) = parsed.unwrap().unwrap() else {
++        panic!("wide fractional seconds must remain a Time");
++    };
++    assert_eq!(time.second().scale(), 8193);
++    assert_eq!(time.second().unscaled().as_i128(), Some(1));
+     // A deferred range refusal cannot hide a later lexical failure.
+     check(D::Time, &format!("25:00:00.{zeros}1Z"), Invalid);
+     let wide_year = "9".repeat(8192);
+diff --git crates/xsd/tests/exact_wasm_determinism.rs crates/xsd/tests/exact_wasm_determinism.rs
+index bfd1b427b..2e617ef72 100644
+--- crates/xsd/tests/exact_wasm_determinism.rs
++++ crates/xsd/tests/exact_wasm_determinism.rs
+@@ -37,12 +37,19 @@
+ //!   `tests/vectors/exact_numeric_vectors.txt`, generated from the exact rational
+ //!   oracle, replayed through the `XsdValue` operators (`+ − ×`, both division
+ //!   policies, comparison, the conversions to `f64`/`f32` and canonical forms).
++//! * `large_binary_products_match_the_schoolbook_oracle`: binary-limb sizes
++//!   around the recursive cutoffs and above them, including asymmetric and
++//!   signed products, checked against the independent schoolbook kernel.
++//! * `large_decimal_group_parse_replays_on_this_target`: streaming decimal
++//!   groups around the balanced-reader boundary and at 40,000 digits, checked
++//!   against the separate division-based decimal renderer.
+ 
+ use std::fmt::Write as _;
+ use std::str::FromStr;
+ 
+ use purrdf_testkit::harness::assert_transcript_digest;
+ use purrdf_testkit::rng::splitmix64_next;
++use purrdf_xsd::bigint::BigInt;
+ use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rational, Rounding};
+ 
+ /// The transcript's FNV-1a digest, as both targets compute it.
+@@ -266,8 +273,70 @@ fn the_oracle_vectors_replay_on_this_target() {
+     assert!(replayed > 7_000, "{replayed} records");
+ }
+ 
++fn large_binary_products_match_the_schoolbook_oracle() {
++    let mut transcript = String::new();
++    let operand = |limbs: usize, mut state: u64| {
++        let mut value = BigInt::from_i128(1);
++        for _ in 1..limbs {
++            value = value.shl(64).add(&BigInt::from_i128(i128::from(
++                splitmix64_next(&mut state) | 1,
++            )));
++        }
++        assert_eq!(value.limb_len(), limbs);
++        value
++    };
++    for (left_limbs, right_limbs) in [
++        (511, 511),
++        (512, 512),
++        (513, 514),
++        (1024, 1024),
++        (2048, 2048),
++        (512, 1024),
++        (1025, 2048),
++    ] {
++        let left = operand(left_limbs, 0x1234_5678_9abc_def0);
++        let right = operand(right_limbs, 0xfedc_ba98_7654_3210);
++        let schoolbook = left.mul(&right);
++        assert_eq!(left.mul_fast(&right), schoolbook);
++        writeln!(transcript, "{left_limbs}/{right_limbs} {schoolbook}").expect("a String");
++        if left_limbs == 512 && right_limbs == 512 {
++            for (a, b) in [
++                (left.neg(), right.clone()),
++                (left.clone(), right.neg()),
++                (left.neg(), right.neg()),
++            ] {
++                let schoolbook = a.mul(&b);
++                assert_eq!(a.mul_fast(&b), schoolbook);
++                writeln!(transcript, "signed {schoolbook}").expect("a String");
++            }
++        }
++    }
++    // Independently multiplied and decimal-rendered with Python's arbitrary
++    // precision integer, then FNV-folded over the 325,271 transcript bytes.
++    assert_transcript_digest("exact-large-products", &transcript, 0x6017_91f9_7aa1_152f);
++}
++
++fn large_decimal_group_parse_replays_on_this_target() {
++    for digits in [
++        607, 608, 609, 626, 627, 628, 1_196, 1_197, 1_198, 1_215, 1_216, 1_217, 1_234, 1_235,
++        1_236, 4_000, 40_000,
++    ] {
++        let mut lexical = String::with_capacity(digits);
++        lexical.push('7');
++        for at in 1..digits {
++            lexical.push(char::from(b'0' + (at % 10) as u8));
++        }
++        let parsed = BigInt::try_from_decimal_bytes(lexical.bytes(), false)
++            .unwrap()
++            .unwrap();
++        assert_eq!(parsed.to_string(), lexical, "{digits} digits");
++    }
++}
++
+ purrdf_testkit::harness_main!(
+     the_hand_values_are_reproduced_on_this_target,
+     the_transcript_digest_is_reproduced_on_this_target,
+     the_oracle_vectors_replay_on_this_target,
++    large_binary_products_match_the_schoolbook_oracle,
++    large_decimal_group_parse_replays_on_this_target,
+ );

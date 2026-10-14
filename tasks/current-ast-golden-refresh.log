@@ -1,0 +1,10 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/testkit)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-algebra)
+    Finished `test` profile [optimized] target(s) in 10.83s
+     Running tests/ast_snapshot.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-algebra/05a1f14c16421db1/out/ast_snapshot-05a1f14c16421db1)
+
+running 1 test
+test regenerate_ast_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.11s
+

@@ -1,0 +1,5 @@
+{"depth":2,"lateralBytes":34300,"lateralRows":1,"walkBytes":47180,"walkRows":5}
+{"depth":4,"lateralBytes":42460,"lateralRows":1,"walkBytes":61388,"walkRows":4}
+{"depth":8,"lateralBytes":58780,"lateralRows":1,"walkBytes":89804,"walkRows":4}
+{"depth":16,"lateralBytes":91420,"lateralRows":1,"walkBytes":146636,"walkRows":4}
+{"depth":32,"lateralBytes":156700,"lateralRows":1,"walkBytes":260300,"walkRows":4}

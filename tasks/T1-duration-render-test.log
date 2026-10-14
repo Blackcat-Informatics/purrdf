@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 29.62s
+     Running tests/exact_governance.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-xsd/16332b79e4471f84/out/exact_governance-16332b79e4471f84)
+
+running 1 test
+test duration_text_prepares_wide_days_and_fraction_without_quotient_owner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+

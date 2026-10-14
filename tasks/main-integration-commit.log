@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the staged index against 2995a146ead9 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'CHANGELOG.md'.
+Recorded resolution for 'docs/book/po/zh-Hans.po'.
+[paudley/470-v4-0-exact-tower-only-and-an-exact-or 18c7da046] Integrate current host and evaluator changes with exact numeric defaults

@@ -1,0 +1,2 @@
+Running as unit: run-p1170557-i34675785.scope; invocation ID: 7c70891d14b14fd4925cce8b32d1fe90
+FAIL: job `bigint` variant `purrdf_xsd::numeric::Decimal::cmp_exact`: the symbol does not resolve to a defined item

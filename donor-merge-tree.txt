@@ -1,0 +1,82 @@
+4a01fdc7b8dac6801b4a948784eefdf6a98a368c
+100644 6fc7f34093575adc644263a547ce7acc4000eb12 1	crates/cdt/src/functions.rs
+100644 f7877d87778e6ca11f96a4ee692a51247d9094f6 2	crates/cdt/src/functions.rs
+100644 1a7ca7281f2d129f0f5687bf8344c5fe3ee1446b 3	crates/cdt/src/functions.rs
+100644 72833818ad418eb680f8188d4da257b77453f0f3 1	crates/sparql-eval/src/expr.rs
+100644 45e19eec9f1d4a9f23f894c5746973933f9ab10c 2	crates/sparql-eval/src/expr.rs
+100644 4889fbef1407f81de0555cc97137777da2961ffb 3	crates/sparql-eval/src/expr.rs
+100644 9d3746f21240079ccfd0ba0adca2cf05329a6a17 1	crates/sparql-eval/src/knn/invocation.rs
+100644 4f25cc2939274861ef6ce8306bd12f1e7a4f3036 2	crates/sparql-eval/src/knn/invocation.rs
+100644 afd4e00211c3b983399bb9acb05a28708a259d04 3	crates/sparql-eval/src/knn/invocation.rs
+100644 e5f7beb324767755e0d82dca8fada52a0238fe86 1	crates/sparql-eval/src/list_fn.rs
+100644 b10883f6cb336c73ea4b5760bcdef1c32ece93d5 2	crates/sparql-eval/src/list_fn.rs
+100644 21ae46c3b6bf986d9199e7ce4b2617c233adcc73 3	crates/sparql-eval/src/list_fn.rs
+100644 7e8ae273ac3d96caa16bf8f998001238946c281a 1	crates/sparql-eval/src/modifier.rs
+100644 f1a46a24b0504b56dc03b11be1e771e0a83fc54b 2	crates/sparql-eval/src/modifier.rs
+100644 3f780249133a5cba87506ada3a1099736ecf3412 3	crates/sparql-eval/src/modifier.rs
+100644 8a38f4b5f58343825a0ee60d660244db5cc70a4a 1	crates/sparql-eval/src/stat_agg.rs
+100644 5f9ffb0cd501a4648e0b2042ecc3c4cf7103cb7d 2	crates/sparql-eval/src/stat_agg.rs
+100644 aab7fe27ce6cc38bc17302c92dc00632fca77cb2 3	crates/sparql-eval/src/stat_agg.rs
+100644 8df5096c9e5e612487a11fd3c8138805d606fcf7 1	crates/xsd/src/exact/cost.rs
+100644 1cd0d7d75a5087bebfcd7cb0bf1fc02404986976 2	crates/xsd/src/exact/cost.rs
+100644 2d1ab6784bd54d2284f27b1255834a39c42e7dd4 3	crates/xsd/src/exact/cost.rs
+100644 37adba888c832a5f4ea899f69c8104596709a7ba 1	crates/xsd/src/exact/decimal.rs
+100644 59d97e61456413d0d7af8c46dcf687a7161fffcb 2	crates/xsd/src/exact/decimal.rs
+100644 4ed99bea3c35742642fcc271398e5ec852ec35f7 3	crates/xsd/src/exact/decimal.rs
+100644 346f4283cf7bc1e333f8390adc7155526d788fb0 1	crates/xsd/src/numeric.rs
+100644 8b8f707a0028f6c0c3977956219925432a8fb6f5 2	crates/xsd/src/numeric.rs
+100644 bc1529ce652b8d05c0bff311648f64a467b2aade 3	crates/xsd/src/numeric.rs
+100644 8dc9df31a4bd850b2b0fd8716677610fb0731d95 1	crates/xsd/src/numeric/exact_path.rs
+100644 1874adb6ddf7363d2df8d7568fb3685c06d1b37e 2	crates/xsd/src/numeric/exact_path.rs
+100644 daf3f4c3cb412879bfbba85ef0b8d48bce46624f 3	crates/xsd/src/numeric/exact_path.rs
+100644 024505af0da3da4ba89fc37df5f7b3a5b92c4a63 1	crates/xsd/src/ops.rs
+100644 7138c8d67e363b5638a2a0091537478b9de1e0bc 2	crates/xsd/src/ops.rs
+100644 870bd2fb9e897b88ad13f3c6db8e53de22402e5a 3	crates/xsd/src/ops.rs
+100644 506a3ae73682e7071c47f4d66018bd092cc50d32 1	crates/xsd/src/temporal.rs
+100644 afd78666c2c9f0bdefe1a3f35cdb3c8f70370887 2	crates/xsd/src/temporal.rs
+100644 5c644bcec99549043d5dc343c96a0354fe2f540d 3	crates/xsd/src/temporal.rs
+100644 73363dc61c00a56271567db6afb1906067bebdd2 1	crates/xsd/src/value.rs
+100644 18c8a30c87050859de6460ecb96aada9d88d8b96 2	crates/xsd/src/value.rs
+100644 558a49177742efdf4928a331b8ed6dcfef7b39ba 3	crates/xsd/src/value.rs
+
+Auto-merging crates/cdt/src/functions.rs
+CONFLICT (content): Merge conflict in crates/cdt/src/functions.rs
+Auto-merging crates/entail/src/owl_dl/data.rs
+Auto-merging crates/shapes/src/shapes/parser/node_expr.rs
+Auto-merging crates/shex/src/exact.rs
+Auto-merging crates/shex/src/validate/node.rs
+Auto-merging crates/sparql-eval/src/expr.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/expr.rs
+Auto-merging crates/sparql-eval/src/expr/cast_rounding_tests.rs
+Auto-merging crates/sparql-eval/src/knn/invocation.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/knn/invocation.rs
+Auto-merging crates/sparql-eval/src/list_fn.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/list_fn.rs
+Auto-merging crates/sparql-eval/src/modifier.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/modifier.rs
+Auto-merging crates/sparql-eval/src/stat_agg.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/stat_agg.rs
+Auto-merging crates/xsd/benches/exact.rs
+Auto-merging crates/xsd/src/exact/cost.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/exact/cost.rs
+Auto-merging crates/xsd/src/exact/decimal.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/exact/decimal.rs
+Auto-merging crates/xsd/src/exact/error.rs
+Auto-merging crates/xsd/src/exact/rational.rs
+Auto-merging crates/xsd/src/lib.rs
+Auto-merging crates/xsd/src/numeric.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/numeric.rs
+Auto-merging crates/xsd/src/numeric/exact_path.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/numeric/exact_path.rs
+Auto-merging crates/xsd/src/ops.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/ops.rs
+Auto-merging crates/xsd/src/range.rs
+Auto-merging crates/xsd/src/temporal.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/temporal.rs
+Auto-merging crates/xsd/src/value.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/value.rs
+Auto-merging crates/xsd/tests/exact_governance.rs
+Auto-merging crates/xsd/tests/exact_tower.rs
+Auto-merging crates/xsd/tests/exact_values.rs
+Auto-merging crates/xsd/tests/numeric_error_codes.rs
+Auto-merging docs/WASM_TESTING.md

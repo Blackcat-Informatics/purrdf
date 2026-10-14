@@ -1,0 +1,70 @@
+Running as unit: run-p2980557-i32308937.scope; invocation ID: 962e1a31c77a47209b1f9153afe6b54c
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/lex)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling libc v0.2.186
+   Compiling digest v0.11.3
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-core)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/cdt)
+   Compiling regex v1.12.4
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/testkit)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/deflate)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/alloc-probe)
+   Compiling hashbrown v0.17.1
+    Finished `test` profile [optimized] target(s) in 6m 30s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/i686-unknown-linux-gnu/debug/build/purrdf-core/97e97ce0b6b1a4c5/out/purrdf_core-97e97ce0b6b1a4c5)
+
+running 37 tests
+test distance::binary64_tests::the_reference_rounds_twice_the_way_the_x87_does ... ok
+test distance::reassociated_tests::a_recorded_code_of_another_arithmetic_is_unknown ... ok
+test distance::binary64_tests::every_double_rounding_row_is_a_witness_and_no_other_row_is ... ok
+test distance::reassociated_tests::a_recorded_path_resolves_whenever_the_host_runs_it ... ok
+test distance::reassociated_tests::evidence_text_pinned ... ok
+test distance::reassociated_tests::no_substitution_exact_never_fast ... ok
+test distance::reassociated_tests::reassociated_bounded_agrees_with_full ... ok
+test distance::binary64_tests::exact_kernels_and_the_norm_equal_the_software_reference_on_witnesses ... ok
+test distance::reassociated_tests::reassociated_overflow_is_nonfinite ... ok
+test distance::reassociated_tests::reassociated_resolves_the_path_the_processor_predicts ... ok
+test distance::reassociated_tests::reassociated_deterministic_per_path ... ok
+test distance::reassociated_tests::the_reassociated_identity_is_pinned ... ok
+test distance::shape::tests::a_relevant_feature_changes_the_shape_and_an_irrelevant_one_does_not ... ok
+test distance::reassociated_tests::every_required_dispatch_path_executes ... ok
+test distance::shape::tests::the_display_names_the_architecture_and_features ... ok
+test distance::shape::tests::the_encoder_is_deterministic_and_order_free ... ok
+test distance::shape::tests::the_identity_is_deterministic_and_moves_with_every_input ... ok
+test distance::shape::tests::the_identity_text_names_the_compiler_cpu_and_level ... ok
+test distance::shape::tests::this_build_encodes_as_the_encoder_would ... ok
+test distance::shape::tests::this_build_records_its_own_identity ... ok
+test distance::tests::a_misshapen_matrix_is_refused_and_a_well_shaped_one_is_not ... ok
+test distance::shape::tests::the_table_fits_the_layout ... ok
+test distance::tests::default_float_environment_resolves ... ok
+test distance::tests::bounded_matches_full ... ok
+test distance::tests::every_refusal_renders_a_distinct_sentence ... ok
+test distance::tests::every_probe_row_is_distinct_and_names_its_departure ... ok
+test distance::tests::family_contract_digest_unchanged_by_arithmetic ... ok
+test distance::tests::nonfinite_checked_before_bound ... ok
+test distance::tests::order_is_the_lane_tree ... ok
+test distance::tests::resolve_refuses_every_mxcsr_departure_and_answers_the_default ... ok
+test distance::tests::resolving_distances_uses_the_shared_trap_refusal_before_probing ... ok
+test distance::tests::the_default_environment_passes_every_probe_row ... ok
+test distance::reassociated_tests::reassociated_within_error_bound ... ok
+test distance::tests::the_exact_identity_is_pinned ... ok
+test distance::tests::the_probe_alone_refuses_every_mxcsr_departure ... ok
+test distance::binary64_tests::binary64_operations_equal_the_software_reference ... ok
+test distance::tests::exact_paths_agree_bitwise ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 1260 filtered out; finished in 2.21s
+

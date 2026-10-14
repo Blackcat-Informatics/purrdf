@@ -1,0 +1,21 @@
+✔ an engine starts exact for terminating quotients and rounds repeating ones (45.739217ms)
+✔ exact answers a terminating quotient and leaves a non-terminating one unbound (1.918672ms)
+✔ a rounded policy rounds in its named direction (5.074007ms)
+✔ an unreadable policy is refused and the previous one stays in force (1.184364ms)
+✔ the policy reaches the governed, update and entailment entries (62.972269ms)
+✔ governed evidence counts each absorbed expression error by its F&O code (2.485745ms)
+✔ an asynchronous job takes the policy and reports its expression errors (9.051028ms)
+✔ an integer past i128 has its exact canonical lexical form (2.308921ms)
+✔ a long decimal has its exact canonical lexical form (0.411088ms)
+✔ a malformed lexical has no canonical form, and its well-formed neighbour does (0.225824ms)
+✔ long integers compare exactly (0.543634ms)
+✔ malformed and incomparable values have no order, and their neighbours do (0.405188ms)
+✔ a SPARQL sum past i128 returns its exact lexical form (41.191623ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 393.864616

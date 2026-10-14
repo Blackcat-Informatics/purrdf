@@ -1,0 +1,85 @@
+Running as unit: run-p2736473-i32067006.scope; invocation ID: f0fa26989e1a4f8fa4b6f17dbbad087e
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-events)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/cdt)
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/deflate)
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-algebra)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/stack)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/testkit)
+    Finished `test` profile [optimized] target(s) in 9m 34s
+     Running tests/numeric_wasm_determinism.rs (/opt/.cargo/db/d5382e37f60111/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/0d7d209c52ff253c/out/numeric_wasm_determinism-0d7d209c52ff253c.wasm)
+
+running 2 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=sparql-numeric-transcript digest=3704a65139127bbd corpus_len=2822
+FAILED
+
+failures:
+
+---- the_numeric_transcript_digest_is_reproduced_on_this_target stdout ----
+thread 'the_numeric_transcript_digest_is_reproduced_on_this_target' panicked at crates/testkit/src/harness.rs:645:5:
+assertion `left == right` failed: sparql-numeric-transcript: transcript digest 3704a65139127bbd over 2822 bytes:
+exact-or-18:half-even
+170141183460469231731687303715884105728^^integer | 100000000000000000000000000000000000000000000000000000000000140000000000000000000000000000000000000000000000000000000000049^^integer | 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000009^^decimal | 9999999999999999999999829858816539530768268312696284115894280^^integer | -10000000000000000000000000000000000000000000000000000000000007^^integer
+exact-or-18:half-even
+0.125^^decimal | 0.666666666666666667^^decimal | 1428571428571428571428571428571428571428571428571428571428572.428571428571428571^^decimal | 0.000000000000000000000000000000000000000001875^^decimal | 3333333333333333333333333333333333333333333333333333333333336.666666666666666667^^decimal
+exact
+0.125^^decimal | - | - | 0.000000000000000000000000000000000000000001875^^decimal | -
+err:FOAR0002×3
+40:half-even
+0.125^^decimal | 0.6666666666666666666666666666666666666667^^decimal | 1428571428571428571428571428571428571428571428571428571428572.4285714285714285714285714285714285714286^^decimal | 0^^decimal | 3333333333333333333333333333333333333333333333333333333333336.6666666666666666666666666666666666666667^^decimal
+3:ceiling
+0.125^^decimal | 0.667^^decimal | 1428571428571428571428571428571428571428571428571428571428572.429^^decimal | 0.001^^decimal | 3333333333333333333333333333333333333333333333333333333333336.667^^decimal
+exact-or-18:half-even
+0.1000000000000000055511151231257827021181583404541015625^^decimal | 0.000000000000000000000000000001000000000000000083336420607585985350931336026868654502364509783548862515410206308619223136702203191816806793212890625^^decimal | 10000000000000000303786028427003666890752^^integer | 1.0E61^^double | 3.0E-41^^float | 0^^integer | 10000000000000000000000000000000000000000000000000000000000007^^string | 1.0E61^^double
+exact-or-18:half-even
+-10000000000000000000000000000000000000000000000000000000000007^^integer
+0.00000000000000000000000000000000000000003^^decimal
+1.5^^decimal
+7^^byte
+170141183460469231731687303715884105727^^integer
+10000000000000000000000000000000000000000000000000000000000007^^integer
+1.0e300^^double
+exact-or-18:half-even
+170141183460469231731687303715884105728.50000000000000000000000000000000000000003^^decimal | -10000000000000000000000000000000000000000000000000000000000007^^integer | 10000000000000000000000000000000000000000000000000000000000007^^integer | 5^^integer
+exact-or-18:half-even
+10000000000000000000000000000000000000000000000000000000000007^^integer | 1^^decimal | -1^^decimal | 3^^decimal | 170141183460469231731687303715884105728^^decimal | true^^boolean | true^^boolean
+exact-or-18:half-even
+- | - | - | -
+err:FOAR0001×1
+err:FOCA0002×1
+err:FORG0001×1
+err:XPTY0004×1
+fuel
+refused: fuel
+1^^integer
+scratch-bytes
+refused: scratch-bytes
+1^^integer
+
+  left: 3964476439772953533
+ right: 15724600300715361452
+
+
+failures:
+    the_numeric_transcript_digest_is_reproduced_on_this_target
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test numeric_wasm_determinism`

@@ -1,0 +1,12 @@
+Running as unit: run-p2961637-i32318721.scope; invocation ID: d9e63ff15e644a70aa2fb654a57dad34
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 7.19s
+     Running tests/numeric_wasm_determinism.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/8ea4f0ac3efe4e92/out/numeric_wasm_determinism-8ea4f0ac3efe4e92)
+
+running 2 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+determinism-digest case=sparql-numeric-transcript digest=3704a65139127bbd corpus_len=2822
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

@@ -1,0 +1,55 @@
+18484:test json_schema::temporal_order::tests::time_patterns_agree_with_the_validator ... FAILED
+18633:test json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator ... FAILED
+19169:failures:
+19171:---- json_schema::temporal_order::tests::time_patterns_agree_with_the_validator stdout ----
+19173:thread 'json_schema::temporal_order::tests::time_patterns_agree_with_the_validator' (2705183) panicked at crates/shapes/src/json_schema/temporal_order.rs:809:17:
+19174:assertion `left == right` failed: Time MinInclusive "12:00:00": value "24:00:00"
+19179:---- json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator stdout ----
+19181:thread 'json_schema::temporal_order::tests::date_time_patterns_agree_with_the_validator' (2705182) panicked at crates/shapes/src/json_schema/temporal_order.rs:809:17:
+19182:assertion `left == right` failed: DateTime MaxInclusive "2020-03-01T00:00:00": value "2020-01-01T12:00:00.1234567890123456789"
+19187:failures:
+19191:test result: FAILED. 968 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.01s
+19193:error: test failed, to rerun pass `-p purrdf-shapes --lib`
+19616:test observed::json_schema_temporal_bounds_agree_with_validation ... FAILED
+19618:failures:
+19620:---- observed::json_schema_temporal_bounds_agree_with_validation stdout ----
+19622:thread 'observed::json_schema_temporal_bounds_agree_with_validation' (2706743) panicked at crates/shapes/tests/emitter_projections.rs:3844:9:
+19623:assertion `left == right` failed: "24:00:00"^^xsd:time
+19629:failures:
+19632:test result: FAILED. 138 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+19634:error: test failed, to rerun pass `-p purrdf-shapes --test emitter_projections`
+21890:test the_parser_output_over_every_in_repo_request_matches_the_golden ... FAILED
+21892:failures:
+21894:---- the_parser_output_over_every_in_repo_request_matches_the_golden stdout ----
+21896:thread 'the_parser_output_over_every_in_repo_request_matches_the_golden' (2716202) panicked at crates/sparql-algebra/tests/ast_snapshot.rs:258:5:
+21905:failures:
+21908:test result: FAILED. 0 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.17s
+21910:error: test failed, to rerun pass `-p purrdf-sparql-algebra --test ast_snapshot`
+22275:test corpus_cdt_literals_are_all_inside_sep0009 ... FAILED
+22277:failures:
+22279:---- corpus_cdt_literals_are_all_inside_sep0009 stdout ----
+22281:thread 'corpus_cdt_literals_are_all_inside_sep0009' (2726047) panicked at crates/sparql-conformance/tests/cdt_lexical_divergence.rs:273:5:
+22282:assertion `left == right` failed: the scan tokenized 4122 corpus files, not the pinned 4119 — the corpus moved, or the file-kind filter did
+22288:failures:
+22291:test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+22293:error: test failed, to rerun pass `-p purrdf-sparql-conformance --test cdt_lexical_divergence`
+22369:test the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden ... FAILED
+22371:failures:
+22373:---- the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden stdout ----
+22375:thread 'the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden' (2726331) panicked at crates/sparql-conformance/tests/evaluator_trace.rs:727:5:
+22412:failures:
+22415:test result: FAILED. 1 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 12.52s
+22417:error: test failed, to rerun pass `-p purrdf-sparql-conformance --test evaluator_trace`
+23102:test expr::cast_rounding_tests::float_and_double_casts_to_decimal_are_their_exact_binary_values ... FAILED
+23137:test expr::tests::calendar_constructor_casts_use_values_and_refuse_invalid_sources ... FAILED
+24357:failures:
+24359:---- expr::cast_rounding_tests::float_and_double_casts_to_decimal_are_their_exact_binary_values stdout ----
+24361:thread 'expr::cast_rounding_tests::float_and_double_casts_to_decimal_are_their_exact_binary_values' (2728431) panicked at crates/sparql-eval/src/expr/cast_rounding_tests.rs:310:5:
+24362:assertion `left == right` failed: 1e-1: Decimal(Decimal(0.1000000000000000055511151231257827021181583404541015625)) is in the bounded variant exactly when that holds it
+24366:---- expr::tests::calendar_constructor_casts_use_values_and_refuse_invalid_sources stdout ----
+24368:thread 'expr::tests::calendar_constructor_casts_use_values_and_refuse_invalid_sources' (2728518) panicked at crates/sparql-eval/src/expr.rs:10409:13:
+24369:assertion `left == right` failed: DateTime 2026-10-04T12:00:00Z → DateTimeStamp
+24374:failures:
+24378:test result: FAILED. 1628 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.32s
+24380:error: test failed, to rerun pass `-p purrdf-sparql-eval --lib`
+26795:thread '<unnamed>' (2752592) panicked at crates/stack/tests/on_stack.rs:99:13:

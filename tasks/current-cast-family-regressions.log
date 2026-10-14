@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 5m 30s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 7 tests
+test expr::cast_rounding_tests::decimal_casts_to_float_and_double_round_once_to_nearest_even ... ok
+test expr::cast_rounding_tests::double_casts_to_float_round_to_nearest_even ... ok
+test expr::tests::calendar_constructor_casts_use_values_and_refuse_invalid_sources ... ok
+test vm::tests::the_vm_matches_the_tree_walk_over_numeric_casts ... ok
+test expr::cast_rounding_tests::integer_casts_to_float_and_double_round_once_to_nearest_even ... ok
+test expr::cast_rounding_tests::float_double_and_decimal_casts_to_integer_types_truncate_toward_zero ... ok
+test expr::cast_rounding_tests::float_and_double_casts_to_decimal_are_their_exact_binary_values ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1623 filtered out; finished in 19.83s
+

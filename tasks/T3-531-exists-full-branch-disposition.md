@@ -1,0 +1,9 @@
+# Complete EXISTS branch split — rejected
+
+The single-file `expr.rs` patch `T3-531-exists-full-branch-split.patch` (SHA-256 `ef2db4a4de07311b11f7f6ee8d8da22f9564564613430e98c9e4d3a9f4e50421`) moved the complete memoized-probe and per-row-definition bodies out of `exists_prepared`, leaving collision admission, positive-path selection and strategy dispatch in place. It was source-reviewed as preserving owner, ledger, memo, error and evidence order. Warning-denied evaluator all-target Clippy and 126 focused native tests passed (`T3-531-exists-split-native.log`).
+
+The standard default-directory release Cargo build passed (`T3-531-exists-split-default-dir-{build.log,artifact.jsonl}`), selecting raw WASM SHA-256 `de1c8088051c52828366e17226fcd066112f0f28f3e58b6fa11ebcebac79ec65`. Provided wasm-bindgen, wasm-opt and wasm-link passed; linked SHA-256 `0cef94454eed5c5eefebfa06f7ec69d9afa0553687aed40ab2d15afc5996360a`, with 423,764 SIMD opcode matches. Source `expr.rs` SHA-256 was `b5ba609726831a6188307d527767104299b4b432697f150b0eb8c090c4f5e426`.
+
+The unchanged original floor tests FAILED on that linked package (`T3-531-exists-split-original-floors.log`): LATERAL 234 < 281 and FILTER NOT EXISTS 133 < 180; the synchronous/job test passed. An independent governed async readback (`T3-531-exists-split-stack-bytes.log`) measured depths 2/4/8/16/32 at LATERAL 34,300/42,460/58,780/91,420/156,700 bytes (4,080 per level) and nine-edge NOT EXISTS 47,180/61,388/89,804/146,636/260,300 bytes (7,104 per level). The expected stack reduction is absent on the shipping optimizer.
+
+The patch was preserved and reverse-applied with `git apply -p0 --reverse --check` before reverse application. The checkout returned to published HEAD `330c55f8c` with no dirty tracked source. The installed package remains an artifact of the rejected candidate and is not current-source acceptance evidence. No floor, reserve, test, ledger, tooling or budget was changed.

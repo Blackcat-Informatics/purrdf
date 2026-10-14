@@ -1,0 +1,17 @@
+    Finished `test` profile [optimized] target(s) in 0.09s
+     Running tests/evaluation_stack.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/622cd6fbec512942/out/evaluation_stack-622cd6fbec512942)
+
+running 10 tests
+test a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_computation_intact ... ok
+test a_deep_forwarded_body_answers_or_is_the_typed_refusal_under_silent ... ok
+test an_update_on_a_small_stack_applies_whole_or_is_refused_and_applies_nothing ... ok
+test an_in_process_service_on_a_small_stack_answers_or_its_refusal_is_not_silenced ... ok
+test a_deep_request_on_a_small_stack_answers_or_is_the_typed_refusal_and_answers_on_a_large_one ... ok
+test the_small_stack_still_answers_a_shallow_request_after_a_deep_one ... ok
+test the_deep_answers_equal_their_shallow_twins ... ok
+test the_whole_request_path_answers_or_refuses_a_flat_spine_on_a_small_stack ... ok
+test a_thousand_nested_laterals_answer_inside_an_allocation_ceiling ... ok
+test every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_counts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s
+

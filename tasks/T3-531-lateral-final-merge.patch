@@ -1,0 +1,54 @@
+diff --git crates/sparql-eval/src/binop.rs crates/sparql-eval/src/binop.rs
+index a84f90b90..0c6062a3c 100644
+--- crates/sparql-eval/src/binop.rs
++++ crates/sparql-eval/src/binop.rs
+@@ -1032,6 +1032,8 @@ trait ApplicationMode: Copy {
+     fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy>;
+ }
+ 
++type ApplicationPairs<I> = crate::AdmittedVec<(RetainedRow<I>, SolutionSeq<I>)>;
++
+ impl ApplicationMode for () {
+     const DECLARED: bool = false;
+     fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
+@@ -1133,7 +1135,8 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+     // SERVICE ?var use, but computed generally).
+     let mut right_schema = VarSchema::default();
+     // Each left row μ paired with the per-row `right` result it drives.
+-    let mut per_row = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
++    let mut per_row: ApplicationPairs<D::Id> =
++        crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
+     let mut emitted = 0usize;
+     for mu in &l.rows {
+         let evaluated = if M::DECLARED {
+@@ -1180,14 +1183,28 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+         }
+     }
+ 
++    finish_application_output::<D, M>(lift, &left_schema, &right_schema, &per_row, ctx)
++}
++
++/// Assemble a completed application only after every recursive right child returns.
++/// The admitted driver/result pairs remain with the caller and are read without
++/// cloning their row owners.
++#[inline(never)]
++fn finish_application_output<D: DatasetView + Sync, M: ApplicationMode>(
++    lift: Lift<'_>,
++    left_schema: &crate::solution::SharedSchema,
++    right_schema: &VarSchema,
++    per_row: &ApplicationPairs<D::Id>,
++    ctx: &EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
+     let out = left_schema
+-        .union_admitted(&right_schema, &ctx.growth)?
++        .union_admitted(right_schema, &ctx.growth)?
+         .shared_admitted(&ctx.growth)?;
+     let left_len = left_schema.len();
+     let out_len = out.len();
+     let cell_ceiling = ctx.cell_row_ceiling(out_len);
+     let mut rows = RowsBuilder::new(&ctx.growth);
+-    'left: for (mu, r) in &per_row {
++    'left: for (mu, r) in per_row {
+         let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
+         for nu in &r.rows {
+             // Test compatibility before allocating the joined row. The cell ceiling is

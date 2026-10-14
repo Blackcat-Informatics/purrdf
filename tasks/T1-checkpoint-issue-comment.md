@@ -1,0 +1,5 @@
+Exact-only numeric and temporal source is now committed and pushed as `fff66a72e`. The unqualified #443 Toom/parser experiments were removed from this branch and retained under the existing Stage task evidence for their separate full contract.
+
+On the current source, strict XSD Clippy and the complete XSD crate suite passed (412 library tests, 30 exact-governance tests, 53 doctests and the other targets). The ordinary frozen governor profile v18 replay passed 15 tests with its regeneration test intentionally ignored. Final-source CLI exact numeric tests passed 8/8, and the 154 generated documentation claims agree. The normal commit hook, including the staged non-Rust ratchet, and the push passed.
+
+This is a partial checkpoint. The C/Python/WASM packages need rebuilding and their current-source host suites, cross-host lexical/error comparison, portable release checks, generated conformance document, complete repository gates and final independent review remain. No PR or issue closure is claimed yet.

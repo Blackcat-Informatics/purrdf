@@ -1,0 +1,93 @@
+Running as unit: run-p2374941-i31758863.scope; invocation ID: f2ef58fc6b794606ab4f5b731371f2b5
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 47s
+     Running unittests src/lib.rs (/opt/.cargo/db/d5382e37f60111/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 84 tests
+test enf::tests::preserved_exists_maps_optional_nodes_and_the_synthetic_witness_wrapper ... ok
+test eval::tests::filter_exists_builds_inner_index_once_across_outer_rows ... ok
+test engine::tests::filter_not_exists_antijoin_returns_correct_rows ... ok
+test engine::tests::substitute_visible_inside_filter_exists_disjunction ... ok
+test exists_admission_gate::tests::exists_collision_shape_hard_errors_without_the_parser ... ok
+test eval::tests::filter_exists_forced_parallel_and_sequential_agree ... ok
+test exists_admission_gate::tests::exists_collision_shape_hard_errors_without_the_parser_values_twin ... ok
+test exists_admission_gate::tests::exists_collision_shape_hard_errors_without_the_parser_fresh_target_control ... ok
+test exists_admission_gate::tests::exists_hard_errors_on_extend_collision_regardless_of_strategy ... ok
+test exists_admission_gate::tests::exists_definition_path_injects_a_doubly_nested_exists_without_a_false_collision ... ok
+test exists_admission_gate::tests::exists_hard_errors_on_non_adjacent_group_extend_collision ... ok
+test exists_admission_gate::tests::exists_error_parity_across_strategies ... ok
+test exists_admission_gate::tests::exists_hard_errors_on_values_collision_regardless_of_strategy ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_bgp ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_distinct ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_extend_fresh_target ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_graph_iri_name ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_filter_certainly_bound ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_graph_variable_name ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_path ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_order_by ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_join ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_project ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_reduced ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_values ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_union ... ok
+test exists_admission_gate::tests::exists_silent_service_swallow_point_parity ... ok
+test exists_admission_gate::tests::fresh_values_column_inner_probe_admits ... ok
+test exists_admission_gate::tests::fresh_extend_target_inner_probe_admits ... ok
+test exists_admission_gate::tests::nested_exists_definition_path_attributes_depth_two_ledger_charges ... ok
+test exists_admission_gate::tests::nested_exists_with_disjoint_free_vars_probe_admits ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_lateral ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_minus ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_group ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_property_function ... ok
+test exists_admission_gate::tests::service_variable_inner_classifies_inadmissible ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_slice ... ok
+test exists_admission_gate::tests::probe_would_fabricate_on_left_join ... ok
+test exists_admission_gate::tests::stateful_builtin_inner_classifies_inadmissible ... ok
+test exists_admission_gate::tests::stateful_nested_exists_classifies_inadmissible ... ok
+test expr::tests::arithmetic_filter_not_exists_survives_empty_inner_group ... ok
+test expr::tests::a_truncated_exists_inner_is_never_memoized ... ok
+test expr::tests::correlated_exists_substitution_ignores_address_keyed_caches ... ok
+test expr::tests::correlated_arithmetic_filter_not_exists_uses_outer_binding ... ok
+test expr::tests::correlated_filter_exists_memo_off_matches_memo_on ... ok
+test expr::tests::correlated_filter_exists_returns_correct_result ... ok
+test expr::tests::correlated_not_exists_inverts_correctly ... ok
+test expr::tests::exists_correlated_graph_variable_restricts_to_the_bound_graph ... ok
+test expr::tests::exists_definition_memo_distinguishes_restrictions ... ok
+test expr::tests::exists_definition_memo_evaluates_once_per_distinct_restriction ... ok
+test expr::tests::exists_definition_path_stops_at_first_witness ... ok
+test expr::tests::exists_graph_name_bound_to_a_blank_node_restricts_correctly ... ok
+test expr::tests::exists_inner_charges_attribute_to_real_plan_nodes ... ok
+test expr::tests::exists_memo_matches_naive_not_exists ... ok
+test expr::tests::exists_memo_matches_naive_positive ... ok
+test expr::tests::exists_memo_populates_cache_once ... ok
+test expr::tests::exists_memo_uncorrelated_inner ... ok
+test expr::tests::exists_nested_inner_triple_position_correlates ... ok
+test expr::tests::exists_nested_in_a_filter_expression_with_a_lateral_inner_correlates ... ok
+test expr::tests::filter_not_exists_over_bgp ... ok
+test expr::tests::exists_over_a_lateral_limit_correlates_through_a_triple_position ... ok
+test expr::tests::nested_exists_prepare_is_cached_across_rows ... ok
+test exists_admission_gate::tests::truncated_correlated_inner_withholds_per_certificate ... ok
+test expr::tests::not_exists_correlated_graph_variable_matches_the_positive_polarity ... ok
+test expr::tests::uncorrelated_exists_fast_path_still_uses_cache ... ok
+test expr::tests::not_exists_nested_inner_triple_position_correlates ... ok
+test governor::soundness::tests::exists_inside_a_filter_expression_is_found_by_the_walk ... ok
+test expr::tests::uncorrelated_stateful_exists_takes_the_definition_path ... ok
+test nested_exists_gate::an_explained_nested_exists_substitutes_each_outer_row ... ok
+test nested_exists_gate::disagreeing_layers_answer_as_the_full_substitution_does ... ok
+test nested_exists_gate::deferred_substitution_matches_the_full_substitution ... ok
+test nested_exists_gate::alternating_nested_exists_answers_the_pinned_rows ... ok
+test parallel::tests::parallel_safety_descends_into_exists_pattern_positions ... ok
+test parallel::tests::parallel_safety_pure_exists_inner_stays_safe ... ok
+test parallel::tests::unsafe_inside_nested_exists_filter_is_detected ... ok
+test predicate_use::tests::a_call_inside_not_exists_is_found_too ... ok
+test predicate_use::tests::a_call_reachable_only_through_filter_exists_is_still_found ... ok
+test predicate_use::tests::an_unregistered_iri_inside_filter_exists_is_data ... ok
+test property_fn_eval::tests::a_call_inside_a_correlated_exists_sees_the_outer_binding ... ok
+test substitute::tests::a_call_inside_an_exists_body_is_driven_in_a_scope_of_its_own ... ok
+test nested_exists_gate::two_hundred_nested_levels_answer_within_a_governor_bound ... ok
+test substitute::walk_tests::two_thousand_nested_exists_bodies_are_substituted_on_a_128_kib_thread ... ok
+test exists_admission_gate::tests::bounded_exhaustive_exists_shape_generator ... ok
+test nested_exists_gate::nested_exists_per_row_work_is_linear_in_depth ... ok
+
+test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 1529 filtered out; finished in 2.61s
+

@@ -1,0 +1,11 @@
+# Independent review: public decimal reader slice
+
+VERDICT: PASS for committing this logical partial slice. This is not a completion verdict for the exact-only value or temporal contract.
+
+The public `numeric::parse_decimal` now returns `exact::Decimal` through the existing exact lexical parser. That parser calls the same decimal lexical recognizer, preserves arbitrary coefficient size and fractional scale up to the exact tower's `u32` scale bound, and reports malformed lexical input through `XsdError::Exact` with `FORG0001`. Values beyond the old 18-place or `i128` bound no longer receive the old narrowing code from this public entry point; explicit narrowing still owns those codes. The new error-code test covers a long fractional value, a coefficient beyond `i128`, and an exponent refusal. The owner reports 69/69 numeric and 6/6 error-code tests passed; I inspected the changes but did not rerun them.
+
+Direct Rust consumers were propagated. The geo metric wrapper now accepts exact decimals and normalizes through `XsdValue::from_exact_decimal`, so values representable by the bounded hybrid variant still use it and larger values retain `BigDecimal`. The owner reports XSD and geo all-target checks plus the focused geo metric test passed. The small exact benchmark constructs hybrid values through the same normalization, and its parse lane is labeled `public` rather than `bounded`; its comment explicitly says historical bounded instruction counts require a baseline checkout. The lexical benchmark now measures the public exact reader under its existing `parse_canonical` label, consistent with that benchmark's documented public primitive.
+
+The hybrid `value::parse`, native physical parsing, and temporal seconds parsing intentionally keep the private `read_decimal` until their exact-only migration. The temporal tests alias that private reader; the public temporal doctest now constructs the bounded `Duration` input directly. No production caller silently narrows the new public reader result. `git diff --check` passes.
+
+No broad gate, cross-target replay, performance threshold, or full issue acceptance was independently run in this review. The existing bounded `XsdValue`/temporal representation and its physical admission remain to be migrated and qualified.

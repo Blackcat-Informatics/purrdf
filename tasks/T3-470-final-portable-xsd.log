@@ -1,0 +1,29 @@
+Running as unit: run-p2733036-i32054859.scope; invocation ID: 7dddee74c7a14dc394d72e7049d25d6a
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/hash)
+   Compiling unicode-ident v1.0.24
+   Compiling digest v0.11.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling once_cell v1.21.4
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/lex)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/xsd)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/470-v4-0-exact-tower-only-and-an-exact-or/crates/alloc-probe)
+    Finished `test` profile [optimized] target(s) in 1m 13s
+     Running tests/exact_wasm_determinism.rs (/opt/.cargo/db/d5382e37f60111/wasm32-unknown-unknown/debug/build/purrdf-xsd/b02b0ba327fad33a/out/exact_wasm_determinism-b02b0ba327fad33a.wasm)
+
+running 3 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+ok
+test the_oracle_vectors_replay_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
