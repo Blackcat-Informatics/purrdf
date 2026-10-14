@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 16
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 18
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -185,7 +185,7 @@ units mean nothing outside this build.
 | `committed-output-row` | 1 | row committed to an operator's output |
 | `bgp-candidate-quad` | 1 | candidate quad examined while matching a basic graph pattern |
 | `path-frontier-expansion` | 1 | property-path frontier node expanded |
-| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes); in addition, one per binary `u64` limb operation of every `xsd:integer`/`xsd:decimal` operation that runs on the arbitrary-precision tower — arithmetic, comparison, the unary functions, a cast, the rendering of a result, a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY`/statistical fold over such values, and any division under a non-default division policy — charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs |
+| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes); in addition, one per binary `u64` limb operation of every `xsd:integer`/`xsd:decimal` operation that runs on the arbitrary-precision tower — arithmetic, comparison, the unary functions, a cast, the rendering of a result, a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY`/statistical fold over such values, and decimal division under every policy — charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs |
 | `user-function-invocation` | 1 | user-defined function invocation |
 | `remote-request-issued` | 1 | request issued to a remote endpoint |
 | `remote-row-ingested` | 1 | row ingested from a remote endpoint's response |
@@ -525,7 +525,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `16` |
+| `GOVERNOR_PROFILE_VERSION` | `18` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -542,7 +542,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n16\n'
+{ printf 'purrdf-sparql-governors\n18\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -551,7 +551,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work native-function-work
 } | sha256sum
-# a62e6e30a5ad78c6c25253fd6d0757c7bee48900a6a9001e06178d87d5c66e53
+# 37dc8ab3f6505ede9167817441a9162852fd2453bfdaa29b967d213f065d9674
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -594,7 +594,7 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 50 cases total, of which 42 form zero, boundary, or over-bound lanes and the
+are 54 cases total, of which 46 form zero, boundary, or over-bound lanes and the
 remaining 8 are transport, relation, charge-seam, `EXISTS`-evidence, and wall-clock
 cases.
 
@@ -636,7 +636,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = 160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb
+GOVERNOR_CORPUS_DIGEST = 6f856ca8ab7274b85908ac329bff7d8b806ac9e18f91f479ddb002bd07090a2f
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -692,6 +692,8 @@ increment it. That restraint is what makes the number worth pinning.
 | **14** | The schedule is unchanged. Exact arithmetic uses the workspace's shared binary `u64` integer engine. Numeric costs account for eight-byte limbs, multiplication and division working storage, and the decimal parsing/rendering base conversions. Admission reads constant-time binary size bounds; an uncertain decimal digit bound cannot trigger an exact-exponent shortcut. Machine-word dispatch and its inline `i128` operations remain unchanged. Remeasure arbitrary-precision fuel and scratch ceilings against the regenerated corpus. |
 | **15** | The schedule is unchanged. Evidence-bearing `EXISTS`/`NOT EXISTS` retains the original body and every alternative witness rather than using the ordinary definition path's synthetic first-witness `Slice`; node/output charges follow the actual body. |
 | **16** | Appends `native-function-work`. A native extension kernel admits its physical storage and charges its documented internal work chunks through the same caller's governor, polling between chunks. The previous seventeen labels retain their order and unit costs. Queries without these native calls retain their schedule. Remeasure ceilings for the selected kernel and profile. |
+| **17** | The schedule is unchanged. Default exact-branch division now keeps a terminating quotient at its full scale and otherwise rounds to eighteen fractional digits, half to even. Its tower work and AVG's final division can move fuel and scratch cut points even for operands that previously took the bounded numeric path. Remeasure numeric ceilings against the new default. |
+| **18** | The schedule is unchanged. Exact-only numeric values and exact temporal seconds flow through admitted evaluator arithmetic, comparison, timezone adjustment and rendering. Those operations now charge their arbitrary-precision work and retained scratch rather than the former bounded or zero-cost path. Remeasure fuel and scratch ceilings for numeric and temporal queries, including unchanged answers. |
 
 Version **15** keeps the charge schedule unchanged. Evidence-bearing
 `EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative
@@ -709,7 +711,7 @@ ceilings and stop cut points.
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `16` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `18` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
@@ -747,7 +749,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `16` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `18` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

@@ -15,7 +15,8 @@ use crate::status::PurrdfStatus;
 /// The handle also carries the precision every SPARQL query and UPDATE run over it
 /// forms an `xsd:integer`/`xsd:decimal` quotient at (`/` and `AVG`), set with
 /// `purrdf_dataset_set_division_policy`. Every handle the library returns starts at
-/// [`DivisionPolicy::xsd_default`]: eighteen fractional digits, truncated toward zero.
+/// [`DivisionPolicy::xsd_default`]: exact when terminating, otherwise eighteen
+/// fractional digits rounded half to even.
 #[derive(Debug)]
 pub struct PurrdfDataset(pub(crate) DatasetHandle, pub(crate) DivisionPolicy);
 

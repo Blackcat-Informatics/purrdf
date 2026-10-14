@@ -107,8 +107,8 @@ impl XsdDoubleMetres {
     /// # Errors
     ///
     /// Refuses an incompatible floating environment or a nonfinite promoted result.
-    pub fn from_decimal(value: numeric::Decimal) -> Result<Self, GeoError> {
-        Self::from_xsd(&XsdValue::Decimal(value))
+    pub fn from_decimal(value: purrdf_xsd::exact::Decimal) -> Result<Self, GeoError> {
+        Self::from_xsd(&XsdValue::from_exact_decimal(value))
     }
 
     /// Promote an XSD integer through the shared numeric home.
@@ -118,7 +118,7 @@ impl XsdDoubleMetres {
     /// Refuses an incompatible floating environment or a nonfinite promoted result.
     pub fn from_integer(value: i128) -> Result<Self, GeoError> {
         Self::from_xsd(&XsdValue::Integer {
-            value,
+            value: purrdf_xsd::exact::Integer::from_i128(value),
             datatype: XsdDatatype::Integer,
         })
     }
@@ -836,7 +836,7 @@ mod tests {
                 let changed = control::mxcsr();
                 for value in [
                     purrdf_xsd::XsdValue::Integer {
-                        value: 9_007_199_254_740_993,
+                        value: 9_007_199_254_740_993_i128.into(),
                         datatype: purrdf_xsd::XsdDatatype::Integer,
                     },
                     purrdf_xsd::XsdValue::Float(f32::from_bits(1)),

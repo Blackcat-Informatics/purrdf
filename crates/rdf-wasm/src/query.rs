@@ -1369,7 +1369,7 @@ impl QueryEngine {
     /// The precision every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
     /// engine forms is computed at, in its one text form: `"exact"`, or `"N:ROUNDING"`
     /// — `N` fractional digits rounded in the named direction. The default is
-    /// `"18:toward-zero"`, XSD's eighteen fractional digits truncated toward zero.
+    /// `"exact-or-18:half-even"`: exact when terminating, otherwise rounded.
     ///
     /// Under `"exact"` a quotient with no finite decimal expansion (`1/3`) is not
     /// rounded: it is a SPARQL expression error, unbound like `1/0` and counted as
@@ -1384,7 +1384,8 @@ impl QueryEngine {
     }
 
     /// Set [`Self::division_policy`] from its text form: `"exact"`, `"N"` (`N`
-    /// fractional digits truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one
+    /// fractional digits truncated toward zero), `"N:ROUNDING"`, or
+    /// `"exact-or-N[:ROUNDING]"`, with `ROUNDING` one
     /// of `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
     /// `half-away-from-zero`, `half-toward-zero`, `half-ceiling` or `half-floor`.
     ///
@@ -2067,7 +2068,7 @@ impl Dataset {
     /// requires; see this module's federation note.
     ///
     /// It runs on a fresh `QueryEngine`, so under the default division policy
-    /// (`"18:toward-zero"`); set `divisionPolicy` on a `QueryEngine` for another.
+    /// (`"exact-or-18:half-even"`); set `divisionPolicy` on a `QueryEngine` for another.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(
@@ -3009,7 +3010,7 @@ mod tests {
             .value()
     }
 
-    /// An engine starts at XSD's eighteen digits truncated toward zero; `exact` answers
+    /// An engine starts with exact terminating or rounded repeating division; `exact` answers
     /// a terminating quotient exactly, and `5:half-even` rounds. Text in no policy form
     /// is refused through the reader and leaves the policy in force: the getter is
     /// unchanged and the next query still rounds by it. (The refused text is a thrown
@@ -3018,8 +3019,9 @@ mod tests {
     #[test]
     fn an_engine_carries_its_division_policy_into_every_query() {
         let engine = QueryEngine::new();
-        assert_eq!(engine.division_policy(), "18:toward-zero");
-        assert_eq!(quotient(&engine, "2/3"), "0.666666666666666666");
+        assert_eq!(engine.division_policy(), "exact-or-18:half-even");
+        assert_eq!(quotient(&engine, "2/3"), "0.666666666666666667");
+        assert_eq!(quotient(&engine, "1/1048576"), "0.00000095367431640625");
 
         engine.set_division("exact").expect("exact is a policy");
         assert_eq!(engine.division_policy(), "exact");

@@ -1798,7 +1798,7 @@ fn integer_argument_with_memory(
     Ok(match value {
         crate::literal::NativeLiteralValue::Xsd(value) => {
             let integer = match &value {
-                XsdValue::Integer { value, .. } => Some(*value),
+                XsdValue::Integer { value, .. } => value.to_i128().ok(),
                 _ => None,
             };
             let bytes = value.owned_heap_bytes().ok_or(StorageError::SizeOverflow)?;

@@ -1,0 +1,5 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=1762	consumed=1763
+certificate	certain	positional-prefix=true
+variables	terminating	repeating
+row	"0.0000000000000000000008470329472543003390683225006796419620513916015625"^^<http://www.w3.org/2001/XMLSchema#decimal>	"0.166666666666666667"^^<http://www.w3.org/2001/XMLSchema#decimal>

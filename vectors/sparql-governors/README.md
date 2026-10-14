@@ -59,6 +59,20 @@ Several cases share one `(data, query)` pair — that is the point of the band
 matrix: the *only* thing that differs between `fuel-zero`, `fuel-boundary` and
 `fuel-over-bound` is the ceiling.
 
+The `numeric-default-fuel-*` pair pins profile v17's exact-first division:
+`1 / 2^70` retains its full terminating decimal, while `1 / 6` rounds half to
+even at eighteen fractional digits. Its fuel ceiling is measured from the same
+query and checked at the completing boundary and one unit below it. A scratch
+ceiling cannot use the metered retained-byte total as its boundary for this
+query because transient numeric working storage also needs admission.
+
+The `temporal-exact-fuel-*` pair pins profile v18's exact seconds and their
+governed evaluator work. It adds a 21-place fractional `dayTimeDuration` to a
+21-place fractional `dateTime`, then extracts `SECONDS` from the result. The
+frozen answer retains the full exact fraction; the completing and one-below
+fuel ceilings are derived from the same metered execution. This makes a moved
+temporal charge visible even when the value remains byte-identical.
+
 ## Three records, not one
 
 Each case pins three facts, and keeping them apart is deliberate:

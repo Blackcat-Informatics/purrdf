@@ -311,7 +311,7 @@ fn operation(
 fn negate(value: &XsdValue, workspace: &WorkspaceCapability) -> Result<ParsedValue, EvalError> {
     operation(
         &XsdValue::Integer {
-            value: 0,
+            value: purrdf_xsd::exact::Integer::ZERO,
             datatype: XsdDatatype::Integer,
         },
         value,

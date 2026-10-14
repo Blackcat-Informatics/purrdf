@@ -186,6 +186,24 @@ fn body_reading_an_undeclared_argument_is_a_load_error() {
     assert!(err.contains("declared parameters"), "got: {err}");
 }
 
+#[test]
+fn exact_argument_indices_preserve_the_u64_boundary() {
+    let shape = |index: u128| {
+        format!(
+            "ex:f a sh:ListParameterExpressionFunction ; \
+             sh:bodyExpression [ shnex:arg {index} ] ; \
+             sh:parameter [ sh:path shnex:arg0 ] ."
+        )
+    };
+
+    let largest = turtle::load_error(PREFIXES, &shape(u128::from(u64::MAX)));
+    assert!(largest.contains("declared parameters"), "got: {largest}");
+    assert!(!largest.contains("exceeds u64"), "got: {largest}");
+
+    let too_large = turtle::load_error(PREFIXES, &shape(u128::from(u64::MAX) + 1));
+    assert!(too_large.contains("exceeds u64"), "got: {too_large}");
+}
+
 /// §6.2 declares the argument parameters as the contiguous `shnex:arg0 …` block, so
 /// a call with the wrong number of arguments has no reading at all and is refused at
 /// shapes-load rather than quietly binding nothing.

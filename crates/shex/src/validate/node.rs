@@ -251,7 +251,7 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
 fn facet_value(bound: NumericLiteral) -> XsdValue {
     match bound {
         NumericLiteral::Integer(i) => XsdValue::Integer {
-            value: i128::from(i),
+            value: i128::from(i).into(),
             datatype: XsdDatatype::Integer,
         },
         NumericLiteral::Fractional(f) => XsdValue::Double(f),
@@ -336,9 +336,7 @@ fn check_numeric_facets(
 /// facets fail on float/double).
 fn decimal_digits(value: &XsdValue) -> Option<(u64, u64)> {
     let canonical = match value {
-        XsdValue::Integer { value, .. } => value.unsigned_abs().to_string(),
-        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) => value.canonical_lexical(),
-        XsdValue::BigInteger { value, .. } => value.abs().canonical_lexical(),
+        XsdValue::Integer { .. } | XsdValue::Decimal(_) => value.canonical_lexical(),
         _ => return None,
     };
     let unsigned = canonical.trim_start_matches('-');

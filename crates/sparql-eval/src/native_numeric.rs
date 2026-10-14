@@ -22,6 +22,28 @@ pub(crate) struct NumericText {
     _allocation: Option<WorkspaceAllocation>,
 }
 
+pub(crate) struct CalendarText<'a> {
+    text: purrdf_xsd::temporal::PreparedCalendarText<'a>,
+    _allocation: Option<WorkspaceAllocation>,
+}
+
+pub(crate) struct DurationText<'a> {
+    text: purrdf_xsd::temporal::PreparedDurationText<'a>,
+    _allocation: Option<WorkspaceAllocation>,
+}
+
+impl core::fmt::Display for DurationText<'_> {
+    fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.text, output)
+    }
+}
+
+impl core::fmt::Display for CalendarText<'_> {
+    fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.text, output)
+    }
+}
+
 impl NumericText {
     pub(crate) fn len(&self) -> usize {
         self.text.len()
@@ -116,28 +138,75 @@ impl<'a> NumericFrame<'a> {
 
     /// Prepared native groups are owned until their final lexical write.
     pub(crate) fn finish_text(
-        mut self,
+        self,
         result: Result<Option<purrdf_xsd::numeric::PreparedNumericText>, LimbScratchError>,
     ) -> Result<Option<NumericText>, EvalError> {
+        self.finish_prepared(
+            result,
+            purrdf_xsd::numeric::PreparedNumericText::temporary_bytes,
+        )
+        .map(|result| {
+            result.map(|(text, allocation)| NumericText {
+                text,
+                _allocation: allocation,
+            })
+        })
+    }
+
+    pub(crate) fn finish_calendar_text(
+        self,
+        result: Result<Option<purrdf_xsd::temporal::PreparedCalendarText<'_>>, LimbScratchError>,
+    ) -> Result<Option<CalendarText<'_>>, EvalError> {
+        self.finish_prepared(
+            result,
+            purrdf_xsd::temporal::PreparedCalendarText::temporary_bytes,
+        )
+        .map(|result| {
+            result.map(|(text, allocation)| CalendarText {
+                text,
+                _allocation: allocation,
+            })
+        })
+    }
+
+    pub(crate) fn finish_duration_text(
+        self,
+        result: Result<purrdf_xsd::temporal::PreparedDurationText<'_>, LimbScratchError>,
+    ) -> Result<DurationText<'_>, EvalError> {
+        self.finish_prepared(
+            result.map(Some),
+            purrdf_xsd::temporal::PreparedDurationText::temporary_bytes,
+        )
+        .map(|result| {
+            let (text, allocation) = result.expect("duration preparation returns a value");
+            DurationText {
+                text,
+                _allocation: allocation,
+            }
+        })
+    }
+
+    fn finish_prepared<T>(
+        mut self,
+        result: Result<Option<T>, LimbScratchError>,
+        temporary_bytes: impl Fn(&T) -> usize,
+    ) -> Result<Option<(T, Option<WorkspaceAllocation>)>, EvalError> {
         if self.failure.is_some() {
             drop(result);
             return Err(self.failure.take().expect("checked stored failure"));
         }
         match result {
             Ok(Some(text)) => {
-                if text.temporary_bytes() > self.admitted_bytes {
+                if temporary_bytes(&text) > self.admitted_bytes {
                     drop(text);
                     return Err(EvalError::WorkspaceBoundOverflow);
                 }
-                Ok(Some(NumericText {
-                    text,
-                    _allocation: self.allocation.take(),
-                }))
+                Ok(Some((text, self.allocation.take())))
             }
             Ok(None) => Ok(None),
             Err(LimbScratchError::SizeOverflow) => Err(EvalError::WorkspaceBoundOverflow),
             Err(_) => Err(EvalError::AllocationFailed {
-                construct: "native numeric render groups",
+                construct: "native exact render groups",
             }),
         }
     }

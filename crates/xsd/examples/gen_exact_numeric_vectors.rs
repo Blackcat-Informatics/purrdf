@@ -15,8 +15,8 @@
 //!
 //! * `add`, `sub`, `mul` — `op:numeric-add/-subtract/-multiply`, the canonical
 //!   lexical form of the exact result;
-//! * `div` — `op:numeric-divide` at eighteen fractional digits truncated toward
-//!   zero (the default division precision), or `division-by-zero`;
+//! * `div` — `op:numeric-divide` under the default policy: exact when terminating,
+//!   otherwise eighteen fractional digits rounded half to even, or `division-by-zero`;
 //! * `div-exact` — the exact quotient, or `non-terminating`, or `division-by-zero`;
 //! * `cmp` — `<`, `=` or `>`;
 //! * `double`, `float` — the correctly rounded `xs:double`/`xs:float` bit pattern of
@@ -125,11 +125,17 @@ fn main() {
                 record(["div-exact", a, b, "division-by-zero"]);
             }
             Some(quotient) => {
-                let truncated = quotient.round_to_scale(18, Direction::TowardZero);
-                record(["div", a, b, &truncated.canonical_terminating()]);
                 let exact = quotient
                     .to_canonical_decimal()
                     .unwrap_or_else(|| "non-terminating".to_owned());
+                let default = if exact == "non-terminating" {
+                    quotient
+                        .round_to_scale(18, Direction::HalfEven)
+                        .canonical_terminating()
+                } else {
+                    exact.clone()
+                };
+                record(["div", a, b, &default]);
                 record(["div-exact", a, b, &exact]);
             }
         }
