@@ -312,7 +312,8 @@ jobs:
   test-shard:
     name: test (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # First-party library compilation can consume the former thirty-minute budget.
+    timeout-minutes: 45
     strategy:
       # One red shard must not cancel the others: each reports a disjoint slice of
       # the suite, and a cancelled slice is a slice nobody saw.
@@ -581,9 +582,10 @@ jobs:
 
   wasm-package:
     runs-on: ubuntu-latest
-    # Main 9febd07c measured 19m10s including 12m21s of async tests.
-    # Thirty minutes gives 1.5x headroom; schema oracles run independently below.
-    timeout-minutes: 30
+    # Optimized package checks and identity ABI compilation can consume thirty
+    # minutes before the Worker recipe starts; retain headroom for that check.
+    # Schema oracles run independently below.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1272,7 +1274,8 @@ jobs:
   # opt-in top-level `rdflib` shadow package is never installed in this env.
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Leave headroom for wheel compilation, tests and the cache-save post steps.
+    timeout-minutes: 45
     env:
       # Exercise the declared minimum; uv's moving latest can outrun wheel support.
       UV_PYTHON: "3.13"

@@ -2400,7 +2400,7 @@ pub(crate) fn render(
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 #[cfg(test)]
-mod owned_row_regressions {
+pub(crate) mod owned_row_regressions {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -2412,15 +2412,15 @@ mod owned_row_regressions {
     use purrdf_core::{TermId, WorkspaceReservation};
 
     #[derive(Debug)]
-    struct Ledger {
-        live: AtomicU64,
-        clones: Arc<AtomicUsize>,
+    pub(crate) struct Ledger {
+        pub(crate) live: AtomicU64,
+        pub(crate) clones: Arc<AtomicUsize>,
         limit: u64,
     }
 
     #[derive(Debug)]
-    struct Refusal {
-        identity: u64,
+    pub(crate) struct Refusal {
+        pub(crate) identity: u64,
         clones: Arc<AtomicUsize>,
     }
     impl Clone for Refusal {
@@ -2462,7 +2462,7 @@ mod owned_row_regressions {
         }
     }
 
-    fn account(limit: u64) -> (QueryWorkspace<Refusal>, Arc<Ledger>, u64) {
+    pub(crate) fn account(limit: u64) -> (QueryWorkspace<Refusal>, Arc<Ledger>, u64) {
         let base = QueryWorkspace::<Refusal>::control_bytes().expect("concrete account layout");
         assert!(base <= limit);
         let ledger = Arc::new(Ledger {
